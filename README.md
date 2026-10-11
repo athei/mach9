@@ -143,9 +143,10 @@ running it again for the same tag.
 
 A change confined to `compatdb/` (new rules, a fix in the library) can go out
 as `compatdb-*`. Anything that needs the Wine side to change, such as a new
-ntdll export for compatdb to call or a new tree under `lib/wine`, needs a
-`cx-*` release. Tag `cx-*` from a `main` that already contains the compatdb
-changes, since that release builds `compatdb.so` from its own commit.
+ntdll export for compatdb to call, a new compatdb export for ntdll to call or
+a new tree under `lib/wine`, needs a `cx-*` release. Tag `cx-*` from a
+`main` that already contains the compatdb changes, since that release builds
+`compatdb.so` from its own commit.
 
 A published `compatdb-*` release can become the one GitHub marks as Latest.
 Anything that fetches the latest release has to filter by tag prefix rather
@@ -310,8 +311,13 @@ name and version resource, resolves the rules that match, and applies them:
   fingerprint can match.
 - `arguments`: text appended to the command line unless already present,
   which leaves a Chromium child that inherited its parent's switches alone.
-- `env`: `NAME=value` entries written into the process's environment block
-  and its unix environment; an empty value removes the variable.
+- `env`: `NAME=value` entries; an empty value removes the variable. ntdll
+  asks for them through `compatdb_query_env` before it starts the process and
+  sets them in the unix environment right before the exec, so whatever runs
+  ahead of the program sees them too: its x87sidecar (the `X87_*` variables)
+  and Rosetta. That query matches the executable's file the same way as for
+  `x87_sidecar`. When the library loads into the process, it writes the
+  entries into the environment block and the unix environment again.
 
 Rules match on the image basename (case-insensitive, or `*` for every
 process) plus optional case-insensitive substrings of the version resource's
@@ -448,9 +454,13 @@ line with the executable, its fingerprint and the `x87_sidecar (rule)` value
 it answered with; it comes from the process that is starting the new one, so
 it appears before that process's own block. Both show only what the rules say:
 ntdll still skips the sidecar when `ROSETTA_X87_PATH` is empty, when there is
-no executable sidecar, for a 64-bit process, or when it lacks the query. A
-first launch by a DOS path that ntdll cannot resolve to a unix path is
-matched by basename alone.
+no executable sidecar, for a 64-bit process, or when it lacks the query. Each
+`compatdb_query_env` call that hands entries to ntdll adds one `env query`
+line with the executable, its fingerprint and the `NAME=value` entries in the
+order ntdll sets them. It also comes from the process that is starting the
+new one; a query that finds no entries logs nothing. A first launch by a DOS
+path that ntdll cannot resolve to a unix path is matched by basename alone,
+in both queries.
 ntdll's own `attaching rosettax87` log line is what shows that the sidecar was
 started. To confirm a tree took effect, look at the running process's mapped
 files (`lsof -p <pid> | grep -i dxgi.dll`): a path under
@@ -519,6 +529,14 @@ The patched tree at athei/wine carries the glue:
   `compatdb_preinit_query`, which tells the library's initializer to do
   nothing. CrossOver's own ntdll lacks the export, so the initializer runs as
   usual there.
+- The same two files ask compatdb.so's `compatdb_query_env` export for the
+  rule environment of a process before they start it, at the same two points
+  (in the parent before the fork, and in the first process before ntdll is
+  initialized), and set the entries in the unix environment right before the
+  exec. The library writes the entries into a buffer ntdll provides, since
+  ntdll may `dlclose` it right after an early query. Under an ntdll without
+  this query the entries are still set when the library loads into the
+  process, but too late for the x87sidecar and Rosetta.
 - `dlls/ntdll/loader.c` decides no-execute from the main executable alone
   instead of turning it off for the process as soon as any module lacks
   `NX_COMPAT`, and `dlls/ntdll/unix/process.c` keeps it permanently on under

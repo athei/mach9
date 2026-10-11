@@ -2,7 +2,8 @@
 //! `<ntdll_dir>/compatdb.so` in every process (the slot `CrossOver` hack 24067
 //! provides), before any PE code runs. Its main entry point is a Mach-O
 //! initializer; ntdll also calls [`compatdb_query_x87`] to decide whether a
-//! process starts under the x87sidecar.
+//! process starts under the x87sidecar, and [`compatdb_query_env`] for the
+//! rule environment to set before it execs a process.
 //!
 //! It holds the built-in rules, overlays the ones passed in
 //! [`ENV_VAR`](compatdb_table::ENV_VAR), resolves the rules that match this
@@ -32,7 +33,7 @@ use std::{
     path::Path,
 };
 
-use compatdb_table::{Arch, Dxgi, ENV_VAR, Table, VersionInfo, basename_of};
+use compatdb_table::{Arch, Dxgi, ENV_VAR, Resolution, Table, VersionInfo, basename_of};
 
 use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TEB_PEB_OFFSET};
 
@@ -43,7 +44,8 @@ static INIT: extern "C" fn() = init;
 
 extern "C" fn init() {
     // ntdll can load the library before it is initialized itself, only to
-    // call compatdb_query_x87, and says so through compatdb_preinit_query.
+    // call compatdb_query_x87 and compatdb_query_env, and says so through
+    // compatdb_preinit_query.
     // Nothing here would work then, so do nothing. dyld does not unload this
     // library on dlclose, and a later dlopen of it does not run INIT again,
     // so skipping here would also skip the real run in this process. That is
@@ -96,10 +98,142 @@ pub unsafe extern "C" fn compatdb_query_x87(unix_path: *const c_char) -> c_int {
     ret
 }
 
+/// The rule environment of the executable at `path`, for ntdll to set in the
+/// unix environment right before it execs the process.
+///
+/// The process gets its environment block and unix environment from compatdb
+/// only once it runs, which is too late for what starts ahead of it: the
+/// x87sidecar reads its `X87_*` variables before it execs Wine, and Rosetta
+/// reads its own at exec.
+///
+/// Writes the entries into `buf` as `NAME=value\0` strings in resolution
+/// order, so a later entry for the same name wins, followed by one more `\0`.
+/// An empty value means the variable is to be removed. Entries whose name is
+/// empty or holds `=` or NUL, or whose value holds NUL, are left out.
+///
+/// Returns the number of bytes the entries need, including the final `\0`.
+/// When that is more than `size`, or `buf` is null, nothing is written and the
+/// caller retries with a buffer that large. Returns 0 when no entry applies
+/// (no rule sets one, or the path names no file) and -1 for a null path or
+/// entries too large for an `int`.
+///
+/// The path is read as [`compatdb_query_x87`] reads it, under the same
+/// constraints: this can run before ntdll is initialized and keeps no state.
+/// ntdll may `dlclose` the library right after a pre-init query, which is why
+/// the answer goes into the caller's buffer and nothing points into this
+/// library.
+///
+/// # Safety
+/// `path` must be null or point at a NUL-terminated string that stays valid
+/// for the duration of the call. `buf` must be null or point at `size`
+/// writable bytes that do not overlap `path`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn compatdb_query_env(
+    path: *const c_char,
+    buf: *mut c_char,
+    size: usize,
+) -> c_int {
+    if path.is_null() {
+        log::line("env query without a path");
+        return -1;
+    }
+    // SAFETY: the caller passes a NUL-terminated string that stays valid for
+    // the call; it is copied out before anything else happens.
+    let path = unsafe { CStr::from_ptr(path) }.to_bytes().to_vec();
+    let (table, _) = load_table();
+    // SAFETY: the caller guarantees `buf` is null or covers `size` writable
+    // bytes.
+    unsafe { answer_env(&table, &path, buf, size) }
+}
+
+/// [`compatdb_query_env`] against `table`, once the path is copied out.
+///
+/// # Safety
+/// `buf` must be null or point at `size` writable bytes.
+unsafe fn answer_env(table: &Table, path: &[u8], buf: *mut c_char, size: usize) -> c_int {
+    let Some((exe, version, env)) = query_env(table, path) else {
+        return 0;
+    };
+    if env.is_empty() {
+        return 0;
+    }
+    let block = encode_env(&env);
+    let Ok(needed) = c_int::try_from(block.len()) else {
+        log::line(&format!(
+            "env query {exe}{}: entries too large to return",
+            fingerprint(&version)
+        ));
+        return -1;
+    };
+    if buf.is_null() || block.len() > size {
+        return needed;
+    }
+    // SAFETY: `buf` is non-null and covers `size` writable bytes, at least
+    // `block.len()` of them; `block` is this function's own allocation, so
+    // the two do not overlap.
+    unsafe {
+        std::ptr::copy_nonoverlapping(block.as_ptr(), buf.cast::<u8>(), block.len());
+    }
+    let list: Vec<String> = env
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect();
+    log::line(&format!(
+        "env query {exe}{}: {}",
+        fingerprint(&version),
+        list.join(", ")
+    ));
+    needed
+}
+
 /// Resolve `x87_sidecar` for the executable at `path`, a unix path or a DOS
 /// one. Returns the basename and version fingerprint it matched on along with
 /// the value, or `None` when the path names no file.
 fn query_x87(table: &Table, path: &[u8]) -> Option<(String, VersionInfo, Option<bool>)> {
+    let (exe, version, resolution) = query(table, path)?;
+    Some((exe, version, resolution.x87_sidecar))
+}
+
+/// `NAME`/value pairs as [`Resolution::env`] holds them.
+type EnvEntries = Vec<(String, String)>;
+
+/// Resolve the `env` entries for the executable at `path`, a unix path or a
+/// DOS one, leaving out the ones that cannot go into a unix environment.
+/// Returns the basename and version fingerprint it matched on along with the
+/// entries in resolution order, or `None` when the path names no file.
+fn query_env(table: &Table, path: &[u8]) -> Option<(String, VersionInfo, EnvEntries)> {
+    let (exe, version, resolution) = query(table, path)?;
+    let env = resolution
+        .env
+        .into_iter()
+        .filter(|(name, value)| {
+            !name.is_empty() && !name.contains(['=', '\0']) && !value.contains('\0')
+        })
+        .collect();
+    Some((exe, version, env))
+}
+
+/// `NAME=value\0` for each entry, then one more `\0`; empty for no entries.
+/// The entries must already be free of NUL, and the names of `=`.
+fn encode_env(entries: &[(String, String)]) -> Vec<u8> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut block = Vec::new();
+    for (name, value) in entries {
+        block.extend_from_slice(name.as_bytes());
+        block.push(b'=');
+        block.extend_from_slice(value.as_bytes());
+        block.push(0);
+    }
+    block.push(0);
+    block
+}
+
+/// Resolve the rules for the executable at `path`, a unix path or a DOS one.
+/// Returns the basename and version fingerprint it matched on along with the
+/// resolution, or `None` when the path names no file.
+fn query(table: &Table, path: &[u8]) -> Option<(String, VersionInfo, Resolution)> {
     let path_utf16: Vec<u16> = String::from_utf8_lossy(path).encode_utf16().collect();
     let exe = basename_of(&path_utf16);
     if exe.is_empty() {
@@ -114,8 +248,8 @@ fn query_x87(table: &Table, path: &[u8]) -> Option<(String, VersionInfo, Option<
     } else {
         VersionInfo::default()
     };
-    let x87 = table.resolve(&exe, &version).x87_sidecar;
-    Some((exe, version, x87))
+    let resolution = table.resolve(&exe, &version);
+    Some((exe, version, resolution))
 }
 
 /// The built-in rules with the overrides from [`ENV_VAR`] laid on top, plus
@@ -223,6 +357,10 @@ fn run() {
             .collect();
         log::line(&format!("  env = {}", env.join(", ")));
     }
+    // ntdll may already have set the same entries in the unix environment
+    // before it exec'd the process (compatdb_query_env). Setting them again
+    // is harmless and covers an ntdll without that query. The environment
+    // block needs them either way.
     apply::rewrite_params(&nt, &process, &resolution);
     apply::unix_env(&resolution.env);
 }
@@ -434,5 +572,145 @@ mod tests {
         let path = c"/nonexistent/games/game.exe";
         // SAFETY: a valid NUL-terminated string.
         assert_eq!(unsafe { compatdb_query_x87(path.as_ptr()) }, 1);
+    }
+
+    fn pair(name: &str, value: &str) -> (String, String) {
+        (name.into(), value.into())
+    }
+
+    fn env_table() -> Table {
+        Table {
+            rules: vec![
+                Rule {
+                    name: "game".into(),
+                    exe: "Game.exe".into(),
+                    env: vec![
+                        pair("B", "2"),
+                        pair("A", "3"),
+                        pair("C", ""),
+                        pair("", "empty-name"),
+                        pair("D=E", "x"),
+                        pair("F\0", "y"),
+                        pair("G", "a\0b"),
+                        pair("H", "x=y"),
+                    ],
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "defaults".into(),
+                    exe: ANY_EXE.into(),
+                    env: vec![pair("A", "1")],
+                    ..Rule::default()
+                },
+            ],
+        }
+    }
+
+    const GAME_BLOCK: &[u8] = b"A=1\0B=2\0A=3\0C=\0H=x=y\0\0";
+
+    /// [`answer_env`] into a buffer of `size` bytes prefilled with 0xAA,
+    /// returning the answer and the buffer.
+    fn answer(table: &Table, path: &str, size: usize) -> (c_int, Vec<u8>) {
+        let mut buf = vec![0xAA_u8; size];
+        // SAFETY: `buf` covers `size` writable bytes.
+        let ret = unsafe { answer_env(table, path.as_bytes(), buf.as_mut_ptr().cast(), size) };
+        (ret, buf)
+    }
+
+    #[test]
+    fn the_env_query_matches_on_the_basename_of_a_unix_or_a_dos_path() {
+        let table = env_table();
+        for path in [
+            "/nonexistent/games/game.exe",
+            "C:\\Games\\GAME.EXE",
+            "Game.exe",
+        ] {
+            let (exe, version, env) = query_env(&table, path.as_bytes()).unwrap();
+            assert_eq!(exe.to_ascii_lowercase(), "game.exe");
+            assert_eq!(version, VersionInfo::default());
+            assert_eq!(
+                env,
+                [
+                    pair("A", "1"),
+                    pair("B", "2"),
+                    pair("A", "3"),
+                    pair("C", ""),
+                    pair("H", "x=y")
+                ]
+            );
+        }
+        let (_, _, env) = query_env(&table, b"/nonexistent/games/other.exe").unwrap();
+        assert_eq!(env, [pair("A", "1")]);
+    }
+
+    #[test]
+    fn the_env_block_keeps_order_duplicates_and_empty_values() {
+        let table = env_table();
+        let (ret, buf) = answer(&table, "/nonexistent/games/game.exe", 64);
+        assert_eq!(usize::try_from(ret).unwrap(), GAME_BLOCK.len());
+        assert_eq!(buf.get(..GAME_BLOCK.len()), Some(GAME_BLOCK));
+        assert!(
+            buf.get(GAME_BLOCK.len()..)
+                .unwrap()
+                .iter()
+                .all(|&b| b == 0xAA)
+        );
+        // Exactly the needed size is enough.
+        let (ret, buf) = answer(&table, "C:\\Games\\Game.exe", GAME_BLOCK.len());
+        assert_eq!(usize::try_from(ret).unwrap(), GAME_BLOCK.len());
+        assert_eq!(buf, GAME_BLOCK);
+        assert_eq!(encode_env(&[]), b"");
+        assert_eq!(encode_env(&[pair("X", "")]), b"X=\0\0");
+    }
+
+    #[test]
+    fn a_short_buffer_gets_nothing_and_learns_the_size() {
+        let table = env_table();
+        let (ret, buf) = answer(&table, "game.exe", GAME_BLOCK.len() - 1);
+        assert_eq!(usize::try_from(ret).unwrap(), GAME_BLOCK.len());
+        assert!(buf.iter().all(|&b| b == 0xAA));
+        // SAFETY: a null buffer with size 0 is part of the contract.
+        let ret = unsafe { answer_env(&table, b"game.exe", std::ptr::null_mut(), 0) };
+        assert_eq!(usize::try_from(ret).unwrap(), GAME_BLOCK.len());
+    }
+
+    #[test]
+    fn the_env_query_is_empty_without_a_match_a_file_name_or_a_path() {
+        assert_eq!(answer(&env_table(), "", 64).0, 0);
+        assert_eq!(answer(&env_table(), "C:\\Games\\", 64).0, 0);
+        assert_eq!(answer(&table(), "/nonexistent/games/game.exe", 64).0, 0);
+        assert_eq!(answer(&Table::default(), "game.exe", 64).0, 0);
+        let invalid_only = Table {
+            rules: vec![Rule {
+                name: "invalid".into(),
+                exe: ANY_EXE.into(),
+                env: vec![pair("", "x"), pair("A=B", "x")],
+                ..Rule::default()
+            }],
+        };
+        let (ret, buf) = answer(&invalid_only, "game.exe", 64);
+        assert_eq!(ret, 0);
+        assert!(buf.iter().all(|&b| b == 0xAA));
+        // SAFETY: a null path and a null buffer are part of the contract.
+        let ret = unsafe { compatdb_query_env(std::ptr::null(), std::ptr::null_mut(), 0) };
+        assert_eq!(ret, -1);
+    }
+
+    #[test]
+    fn the_builtin_rules_set_no_env() {
+        // The exported function reads WINE_COMPATDB, which a developer's shell
+        // may set; the answer is only predictable without it.
+        if std::env::var_os(ENV_VAR).is_some() {
+            return;
+        }
+        let path = c"/nonexistent/games/game.exe";
+        let mut buf = [0xAA_u8; 16];
+        // SAFETY: a valid NUL-terminated string and a buffer of its length.
+        let ret = unsafe { compatdb_query_env(path.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
+        assert_eq!(ret, 0);
+        assert!(buf.iter().all(|&b| b == 0xAA));
+        // SAFETY: a valid NUL-terminated string and a null buffer of size 0.
+        let ret = unsafe { compatdb_query_env(path.as_ptr(), std::ptr::null_mut(), 0) };
+        assert_eq!(ret, 0);
     }
 }

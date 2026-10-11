@@ -136,15 +136,20 @@ check_no_usr_local() {
 }
 
 # check_query_export: fail unless the installed compatdb.so exports
-# compatdb_query_x87. ntdll reads a missing export as no opinion, which means
-# attaching the x87sidecar to every i386 process, so a stripped or renamed
-# export would otherwise go unnoticed.
+# compatdb_query_x87 and compatdb_query_env. ntdll reads a missing
+# compatdb_query_x87 as no opinion, which means attaching the x87sidecar to
+# every i386 process, and without compatdb_query_env a rule's env reaches the
+# process too late for its x87sidecar and Rosetta. Either way a stripped or
+# renamed export would otherwise go unnoticed.
 check_query_export() {
-    if ! nm -gU "$unix64/compatdb.so" 2>/dev/null | grep -q '_compatdb_query_x87$'; then
-        echo "Error: x86_64-unix/compatdb.so does not export compatdb_query_x87"
-        exit 1
-    fi
-    echo "  compatdb.so exports compatdb_query_x87."
+    local sym
+    for sym in compatdb_query_x87 compatdb_query_env; do
+        if ! nm -gU "$unix64/compatdb.so" 2>/dev/null | grep -q "_${sym}\$"; then
+            echo "Error: x86_64-unix/compatdb.so does not export $sym"
+            exit 1
+        fi
+        echo "  compatdb.so exports $sym."
+    done
 }
 
 # check_x87sidecar_binary: fail unless bin/x87sidecar is an executable arm64
