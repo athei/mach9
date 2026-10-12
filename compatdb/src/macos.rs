@@ -349,6 +349,6 @@ mod tests {
         let release = sysctl_string(c"kern.osrelease").unwrap();
         assert!(Version::parse(&release).is_some(), "{release:?}");
         assert!(sysctl_int(c"kern.system_version_compat").is_some());
-        assert!(!host().name.is_empty());
+        assert_ne!(host().name, "");
     }
 }

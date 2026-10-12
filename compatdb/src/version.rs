@@ -572,6 +572,6 @@ mod tests {
             version.original_filename.to_ascii_lowercase(),
             "kernel32.dll"
         );
-        assert!(!version.company.is_empty());
+        assert_ne!(version.company, "");
     }
 }

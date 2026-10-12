@@ -1023,7 +1023,7 @@ mod tests {
     #[test]
     fn parse_rejects_a_foreign_header() {
         let (table, diagnostics) = Table::parse("v=2\nname=x;exe=x.exe");
-        assert!(table.rules.is_empty());
+        assert_eq!(table.rules, []);
         assert_eq!(diagnostics.len(), 1);
     }
 
@@ -1032,7 +1032,7 @@ mod tests {
         // A process started before the format change still holds a `v=4`
         // value; it must be dropped whole rather than half understood.
         let (table, diagnostics) = Table::parse("v=4\nname=x;exe=x.exe");
-        assert!(table.rules.is_empty());
+        assert_eq!(table.rules, []);
         assert_eq!(diagnostics.len(), 1);
         let (table, diagnostics) = Table::parse("v=5\nname=x;exe=x.exe");
         assert_eq!(table.rules.len(), 1);
@@ -1072,7 +1072,7 @@ mod tests {
             }],
         });
         assert_eq!(unmatched, vec!["typo".to_string()]);
-        assert!(base.rules.is_empty());
+        assert_eq!(base.rules, []);
     }
 
     #[test]
@@ -1217,12 +1217,12 @@ mod tests {
         let (over, diagnostics) =
             Table::parse(&format!("{HEADER}\nname=defaults;dll_overrides=a="));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(base.overlay(over).is_empty());
+        assert_eq!(base.overlay(over), [] as [String; 0]);
         assert_eq!(base.rules.first().unwrap().dpi_aware, Some(true));
         // One that sets it replaces it.
         let (over, diagnostics) = Table::parse(&format!("{HEADER}\nname=defaults;dpi_aware=false"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(base.overlay(over).is_empty());
+        assert_eq!(base.overlay(over), [] as [String; 0]);
         assert_eq!(base.rules.first().unwrap().dpi_aware, Some(false));
         assert_eq!(
             base.resolve("x.exe", &VersionInfo::default()).dpi_aware,
@@ -1369,14 +1369,14 @@ mod tests {
         let (over, diagnostics) =
             Table::parse(&format!("{HEADER}\nname=defaults;dll_overrides=a="));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(base.overlay(over).is_empty());
+        assert_eq!(base.overlay(over), [] as [String; 0]);
         let rule = base.rules.first().unwrap();
         assert_eq!(rule.large_address_aware, Some(true));
         assert_eq!(rule.x87_sidecar, Some(true));
         let (over, diagnostics) =
             Table::parse(&format!("{HEADER}\nname=defaults;x87_sidecar=false"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(base.overlay(over).is_empty());
+        assert_eq!(base.overlay(over), [] as [String; 0]);
         let rule = base.rules.first().unwrap();
         assert_eq!(rule.large_address_aware, Some(true));
         assert_eq!(rule.x87_sidecar, Some(false));
@@ -1571,7 +1571,7 @@ mod tests {
                 },
             ],
         });
-        assert!(unmatched.is_empty());
+        assert_eq!(unmatched, [] as [String; 0]);
         let launcher = base
             .rules
             .iter()
@@ -1634,7 +1634,7 @@ mod tests {
             }],
         });
         assert_eq!(unmatched, vec!["gone".to_string()]);
-        assert!(base.rules.is_empty());
+        assert_eq!(base.rules, []);
     }
 
     #[test]
@@ -1653,8 +1653,8 @@ mod tests {
                 ..Rule::default()
             }],
         });
-        assert!(unmatched.is_empty());
-        assert!(base.rules.is_empty());
+        assert_eq!(unmatched, [] as [String; 0]);
+        assert_eq!(base.rules, []);
     }
 
     #[test]
@@ -1769,11 +1769,11 @@ mod tests {
         );
         assert_eq!(table.resolve("Launcher.exe", &acme).dxgi, Some(Dxgi::Dxmt));
         // A third program of that name matches neither.
-        assert!(
+        assert_eq!(
             table
                 .resolve("Launcher.exe", &VersionInfo::default())
-                .matched
-                .is_empty()
+                .matched,
+            [] as [String; 0]
         );
     }
 
