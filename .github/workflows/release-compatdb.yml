@@ -109,7 +109,7 @@ jobs:
         run: rustup target add x86_64-apple-darwin
 
       - name: Replace compatdb.so
-        run: scripts/bundle-wine.sh --compatdb-only --dest "$GITHUB_WORKSPACE/dist"
+        run: scripts/bundle-wine.sh --compatdb-only --strict-floor --dest "$GITHUB_WORKSPACE/dist"
 
       - name: Create tarball
         run: |

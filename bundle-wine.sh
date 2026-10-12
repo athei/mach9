@@ -13,25 +13,40 @@ MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 DIST_DIR=""
 RUNTIME_ONLY=0
 COMPATDB_ONLY=0
+STRICT_FLOOR=0
 
 # `make install` may rebuild any stale targets, including PE modules that need mingw.
 if [ -d "$MINGW_DIR/bin" ]; then
     export PATH="$PATH:$MINGW_DIR/bin"
 fi
 
+# The macOS floor check_minos holds the bundle to: the deployment target
+# build-wine.sh builds with, under the same default.
+MACOS_FLOOR="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
+# The floor for Apple's D3DMetal.framework, which is copied in unmodified and
+# needs a newer macOS than the rest. Must equal GPTK_MIN in
+# compatdb/src/macos.rs, which is where compatdb.so decides that gptk can load.
+GPTK_FLOOR=26.4
+
 usage() {
-    echo "Usage: $0 --dest <dir> [--runtime-only] [--compatdb-only]"
+    echo "Usage: $0 --dest <dir> [--runtime-only] [--compatdb-only] [--strict-floor]"
     exit 1
 }
 
 # --compatdb-only replaces compatdb.so in the bundle already at <dir>/wine and
 # leaves everything else alone. --runtime-only is accepted alongside it and
-# ignored, since it only affects what a full bundle installs.
+# ignored, since it only affects what a full bundle installs. --strict-floor
+# turns a Mach-O that needs a newer macOS than MACOS_FLOOR into an error
+# instead of a warning. CI passes it: its libraries come from the deps
+# tarball package-deps.sh builds, which meets the floor. A local build copies
+# whatever Homebrew has in /usr/local, which on a newer macOS can carry a newer
+# minos, and is not distributed.
 while [ $# -gt 0 ]; do
     case "$1" in
         --dest) [ $# -ge 2 ] || usage; DIST_DIR="$2"; shift 2 ;;
         --runtime-only) RUNTIME_ONLY=1; shift ;;
         --compatdb-only) COMPATDB_ONLY=1; shift ;;
+        --strict-floor) STRICT_FLOOR=1; shift ;;
         *) usage ;;
     esac
 done
@@ -101,12 +116,12 @@ fetch() {
 
 # build_compatdb: build the compatdb/ crate and install it as
 # $unix64/compatdb.so. Cargo reads .cargo/config.toml relative to the working
-# directory, not to --manifest-path, and that file is what pins the macOS
-# floor to 26.0; run from anywhere else, the library gets the toolchain's
-# default floor (minos 10.12). Hence the subshell in $SCRIPT_DIR. The new file
-# is copied next to the old one and renamed over it, so a Wine process that
-# has the old library mapped keeps a valid mapping instead of a file that
-# changes underneath it.
+# directory, not to --manifest-path, and that file pins the macOS floor when
+# MACOSX_DEPLOYMENT_TARGET is not already set; run from anywhere else, the
+# library gets the toolchain's default floor (minos 10.12). Hence the subshell
+# in $SCRIPT_DIR. The new file is copied next to the old one and renamed over
+# it, so a Wine process that has the old library mapped keeps a valid mapping
+# instead of a file that changes underneath it.
 build_compatdb() {
     if ! command -v cargo >/dev/null; then
         echo "Error: cargo not found (compatdb.so needs a Rust toolchain with the"
@@ -133,6 +148,73 @@ check_no_usr_local() {
             LEAKED=1
         fi
     done
+}
+
+# macos_newer <a> <b>: succeed when macOS version <a> is newer than <b>.
+# Major, minor and patch are compared as numbers and a missing part counts as
+# 0, so 26.4 is newer than 15.0 and 15 is not newer than 15.0.
+macos_newer() {
+    local a1 a2 a3 b1 b2 b3
+    IFS=. read -r a1 a2 a3 <<< "$1"
+    IFS=. read -r b1 b2 b3 <<< "$2"
+    [ $(( ${a1:-0} * 10000 + ${a2:-0} * 100 + ${a3:-0} )) -gt \
+      $(( ${b1:-0} * 10000 + ${b2:-0} * 100 + ${b3:-0} )) ]
+}
+
+# check_minos <path>...: report every Mach-O under the paths whose minos is
+# newer than its floor, then exit with --strict-floor or warn without it.
+# Like package-deps.sh, this looks at executables, .dylib and .so files, and
+# skips files with no LC_BUILD_VERSION (not Mach-O, or too old to have one).
+# For a universal file the newest slice counts. The floor is MACOS_FLOOR,
+# except for lib/external/D3DMetal.framework: its libdxccontainer.dylib needs
+# macOS 26.4, so those files are held to GPTK_FLOOR, and below that compatdb.so
+# gives 64-bit processes DXMT instead. libd3dshared.dylib is not part of that:
+# ntdll loads it in every process that runs a game executable, so it has to
+# meet MACOS_FLOOR. If no file had a minos at all, nothing was checked, which
+# is an error with or without --strict-floor.
+check_minos() {
+    local f rel minos floor bad=0 checked=0
+    if ! command -v otool >/dev/null; then
+        echo "Error: otool not found (it comes with the Xcode command line tools)"
+        exit 1
+    fi
+    while IFS= read -r f; do
+        rel=${f#"$WINE_DIR"/}
+        case "$rel" in
+            lib/external/D3DMetal.framework/*) floor=$GPTK_FLOOR ;;
+            *) floor=$MACOS_FLOOR ;;
+        esac
+        minos=$(otool -arch all -l "$f" 2>/dev/null | awk '
+            $1 == "cmd" && $2 == "LC_BUILD_VERSION" { v = 1 }
+            v && $1 == "minos" {
+                split($2, p, ".")
+                k = p[1] * 10000 + p[2] * 100 + p[3]
+                if (k > max) { max = k; s = $2 }
+                v = 0
+            }
+            END { if (s != "") print s }')
+        [ -n "$minos" ] || continue
+        checked=$((checked + 1))
+        if macos_newer "$minos" "$floor"; then
+            echo "  too new: minos $minos, floor $floor  $rel"
+            bad=1
+        fi
+    done < <(find "$@" -type f \( -perm +111 -o -name '*.dylib' -o -name '*.so' \))
+    if [ "$checked" -eq 0 ]; then
+        echo "Error: no Mach-O with an LC_BUILD_VERSION found under $*"
+        echo "(otool -l printed no minos for any file, so nothing was checked)"
+        exit 1
+    fi
+    if [ "$bad" -eq 0 ]; then
+        echo "  $checked Mach-O files meet their floor (macOS $MACOS_FLOOR, D3DMetal $GPTK_FLOOR)."
+        return 0
+    fi
+    if [ "$STRICT_FLOOR" -eq 1 ]; then
+        echo "Error: the above need a newer macOS than their floor"
+        exit 1
+    fi
+    echo "  WARNING: the above need a newer macOS than their floor and will not"
+    echo "  load on older systems (--strict-floor makes this an error)"
 }
 
 # check_query_export: fail unless the installed compatdb.so exports
@@ -171,7 +253,7 @@ check_x87sidecar_binary() {
 # smoke_test: run the bundled wine and check that compatdb.so loads in it, and
 # that an i386 process starts under the bundled x87sidecar.
 smoke_test() {
-    local version smoke_log x87_log want
+    local version smoke_log x87_log want dxgi_want
     version=$("$WINE_DIR/bin/wine" --version) || {
         echo "Error: bundled wine failed to run"
         exit 1
@@ -242,7 +324,14 @@ smoke_test() {
 
     # The server is persistent, so it has to be told to go rather than waited for.
     WINEPREFIX="$TMP_DIR/prefix" "$WINE_DIR/bin/wineserver" -k 2>/dev/null || true
-    for want in "dxgi = gptk (from" "d3d9 = mtld3d (from"; do
+    # D3DMetal needs macOS $GPTK_FLOOR or later, and below that compatdb.so
+    # gives the 64-bit cmd.exe DXMT instead, so on an older host that is the
+    # line to expect.
+    dxgi_want="dxgi = gptk (from"
+    if macos_newer "$GPTK_FLOOR" "$(sw_vers -productVersion)"; then
+        dxgi_want="dxgi = dxmt (from"
+    fi
+    for want in "$dxgi_want" "d3d9 = mtld3d (from"; do
         if ! grep -q "compatdb: .*$want" "$smoke_log"; then
             echo "Error: compatdb.so did not report '$want'"
             grep "compatdb:" "$smoke_log" || echo "  (no compatdb lines at all)"
@@ -297,6 +386,9 @@ if [ "$COMPATDB_ONLY" -eq 1 ]; then
         echo "Error: compatdb.so is not self-contained"
         exit 1
     fi
+    # Only compatdb.so: the rest of the bundle was not built here, and a base
+    # release keeps whatever floor it shipped with.
+    check_minos "$unix64/compatdb.so"
     check_query_export
     smoke_test
 
@@ -813,6 +905,11 @@ if [ $MISSING -ne 0 ]; then
 fi
 echo "  D3DMetal, DXMT, mtld3d, wined3d, compatdb.so and x87sidecar in place."
 check_query_export
+
+# After everything above is in place, so the copied-in redistributables and
+# compatdb.so are checked as well as what Wine built.
+echo "  Checking every Mach-O against macOS $MACOS_FLOOR..."
+check_minos "$WINE_DIR"
 # smoke_test checks that bin/x87sidecar is an arm64 executable before it
 # starts the i386 process, for this mode and --compatdb-only alike.
 
