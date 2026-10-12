@@ -105,9 +105,17 @@ fn utf16_runs(blob: &[u16]) -> Vec<String> {
 /// D3D10, D3D10.1, D3D11 and D3D12 travel together because they all create
 /// their device through one `dxgi.dll`, and each implementation's modules only
 /// work with its own.
+///
+/// `gptk` cannot load everywhere: there is no 32-bit `D3DMetal`, and the
+/// 64-bit one needs macOS 26.4 or later. Where it cannot load, a process that
+/// would get it, by default or by a rule, gets `dxmt` instead (see
+/// [`Dxgi::effective`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dxgi {
-    /// Apple's `D3DMetal` (Game Porting Toolkit). `x86_64` only.
+    /// Apple's `D3DMetal` (Game Porting Toolkit). `x86_64` only, and only on
+    /// macOS 26.4 or later: it links the `libdxccontainer.dylib` that ships
+    /// inside the bundled `D3DMetal.framework` non-weak, and that library is
+    /// built for macOS 26.4 at the earliest.
     Gptk,
     /// DXMT.
     Dxmt,
@@ -137,7 +145,9 @@ impl Dxgi {
         }
     }
 
-    /// What a process gets when no rule names an implementation.
+    /// What a process gets when no rule names an implementation, on a host
+    /// where that implementation can load. [`Dxgi::effective`] is what it
+    /// actually loads.
     #[must_use]
     pub const fn default_for(arch: Arch) -> Self {
         match arch {
@@ -146,21 +156,32 @@ impl Dxgi {
         }
     }
 
-    /// Whether the implementation exists for `arch` at all. Apple ships no
-    /// 32-bit `D3DMetal`, so `gptk` on i386 has to fall back to the default.
+    /// Whether the implementation can load for `arch`. `gptk_loads` says
+    /// whether the host's macOS can load `D3DMetal` (26.4 or later); the
+    /// caller finds that out, since this crate does no I/O. Apple ships no
+    /// 32-bit `D3DMetal`, so `gptk` never loads on i386.
     #[must_use]
-    pub const fn available_for(self, arch: Arch) -> bool {
-        !matches!((self, arch), (Self::Gptk, Arch::I386))
+    pub const fn available_for(self, arch: Arch, gptk_loads: bool) -> bool {
+        match self {
+            Self::Gptk => gptk_loads && matches!(arch, Arch::X86_64),
+            Self::Dxmt | Self::Wined3d => true,
+        }
     }
 
     /// The implementation a process actually loads: the requested one, or the
-    /// arch default when nothing was requested or the request does not exist
-    /// for this arch.
+    /// arch default when nothing was requested. When that one cannot load
+    /// (see [`Dxgi::available_for`]), the process gets `dxmt`, which loads on
+    /// both architectures and every supported macOS.
     #[must_use]
-    pub const fn effective(requested: Option<Self>, arch: Arch) -> Self {
-        match requested {
-            Some(want) if want.available_for(arch) => want,
-            _ => Self::default_for(arch),
+    pub const fn effective(requested: Option<Self>, arch: Arch, gptk_loads: bool) -> Self {
+        let want = match requested {
+            Some(want) => want,
+            None => Self::default_for(arch),
+        };
+        if want.available_for(arch, gptk_loads) {
+            want
+        } else {
+            Self::Dxmt
         }
     }
 }
@@ -257,7 +278,13 @@ pub struct Rule {
     pub dll_overrides: Vec<String>,
     /// Text appended to the command line, unless already present.
     pub arguments: Vec<String>,
-    /// Environment entries; an empty value removes the variable.
+    /// Environment entries; an empty value removes the variable. The library
+    /// sets them in the process's environment block and unix environment once
+    /// it runs. It also returns them through `compatdb_query_env`, which an
+    /// ntdll that has the query calls before it execs the process, so that
+    /// what starts ahead of the process (the x87sidecar, Rosetta) sees them
+    /// in the unix environment. An entry whose name is empty or holds `=`, or
+    /// whose name or value holds NUL, is left out of that answer.
     pub env: Vec<(String, String)>,
     /// `WINEDEBUG` channels for this process. Applied by the launcher through
     /// wine's own `WINEDEBUG=<exe>:` prefix, not by the library, because the
@@ -1854,16 +1881,39 @@ mod tests {
     fn dxgi_defaults_are_per_arch_and_gptk_degrades_on_i386() {
         assert_eq!(Dxgi::default_for(Arch::X86_64), Dxgi::Gptk);
         assert_eq!(Dxgi::default_for(Arch::I386), Dxgi::Dxmt);
-        assert_eq!(Dxgi::effective(None, Arch::X86_64), Dxgi::Gptk);
-        assert_eq!(Dxgi::effective(None, Arch::I386), Dxgi::Dxmt);
-        assert_eq!(Dxgi::effective(Some(Dxgi::Gptk), Arch::I386), Dxgi::Dxmt);
+        assert_eq!(Dxgi::effective(None, Arch::X86_64, true), Dxgi::Gptk);
+        assert_eq!(Dxgi::effective(None, Arch::I386, true), Dxgi::Dxmt);
         assert_eq!(
-            Dxgi::effective(Some(Dxgi::Wined3d), Arch::I386),
+            Dxgi::effective(Some(Dxgi::Gptk), Arch::I386, true),
+            Dxgi::Dxmt
+        );
+        assert_eq!(
+            Dxgi::effective(Some(Dxgi::Wined3d), Arch::I386, true),
             Dxgi::Wined3d
         );
         assert_eq!(Dxgi::Wined3d.as_str(), "wined3d");
         assert_eq!(Dxgi::parse("GPTK"), Some(Dxgi::Gptk));
         assert_eq!(Dxgi::parse("default"), None);
+    }
+
+    #[test]
+    fn gptk_degrades_to_dxmt_where_the_host_cannot_load_it() {
+        // Both the 64-bit default and an explicit gptk rule.
+        for requested in [None, Some(Dxgi::Gptk)] {
+            assert_eq!(Dxgi::effective(requested, Arch::X86_64, false), Dxgi::Dxmt);
+            assert_eq!(Dxgi::effective(requested, Arch::X86_64, true), Dxgi::Gptk);
+            assert_eq!(Dxgi::effective(requested, Arch::I386, false), Dxgi::Dxmt);
+        }
+        // The other implementations do not depend on it.
+        for other in [Dxgi::Dxmt, Dxgi::Wined3d] {
+            for arch in [Arch::X86_64, Arch::I386] {
+                assert!(other.available_for(arch, false));
+                assert_eq!(Dxgi::effective(Some(other), arch, false), other);
+            }
+        }
+        assert!(Dxgi::Gptk.available_for(Arch::X86_64, true));
+        assert!(!Dxgi::Gptk.available_for(Arch::X86_64, false));
+        assert!(!Dxgi::Gptk.available_for(Arch::I386, true));
     }
 
     #[test]

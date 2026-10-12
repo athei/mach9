@@ -23,6 +23,7 @@
 mod apply;
 mod builtin;
 mod log;
+mod macos;
 mod ntdll;
 mod version;
 
@@ -288,10 +289,7 @@ fn run() {
         return;
     };
     let resolution = table.resolve(&process.exe, &process.version);
-    let arch = match process.arch {
-        Arch::X86_64 => "x86_64",
-        Arch::I386 => "i386",
-    };
+    let arch = arch_name(process.arch);
     log::line(&format!(
         "{} [{arch}]{}",
         process.exe,
@@ -306,17 +304,13 @@ fn run() {
     }
 
     // Every process gets one tree of each family prepended: a rule's choice,
-    // or the arch default. Purely additive: the default dirs hold nothing that
-    // could conflict, so nothing is ever disabled.
-    let dxgi = Dxgi::effective(resolution.dxgi, process.arch);
-    if let Some(want) = resolution.dxgi
-        && want != dxgi
-    {
-        log::line(&format!(
-            "  dxgi = {} not available on {arch}, using {}",
-            want.as_str(),
-            dxgi.as_str()
-        ));
+    // or the arch default, with dxmt in place of gptk where gptk cannot load.
+    // Purely additive: the default dirs hold nothing that could conflict, so
+    // nothing is ever disabled.
+    let host = macos::host();
+    let dxgi = Dxgi::effective(resolution.dxgi, process.arch, host.gptk_loads);
+    if let Some(note) = dxgi_fallback(resolution.dxgi, process.arch, &host.name, dxgi) {
+        log::line(&note);
     }
     apply::tree(&nt, process.arch, "dxgi", dxgi.as_str());
     let d3d9 = resolution.d3d9.unwrap_or_default();
@@ -363,6 +357,38 @@ fn run() {
     // block needs them either way.
     apply::rewrite_params(&nt, &process, &resolution);
     apply::unix_env(&resolution.env);
+}
+
+/// The arch as the log prints it.
+const fn arch_name(arch: Arch) -> &'static str {
+    match arch {
+        Arch::X86_64 => "x86_64",
+        Arch::I386 => "i386",
+    }
+}
+
+/// The log line for a process that gets another DXGI implementation than the
+/// one it asked for (`requested`) or, without a rule, than the arch default.
+/// `dxgi` is what [`Dxgi::effective`] chose and `host` the release it was
+/// decided on ([`macos::Host::name`]). `None` when the process gets what it
+/// asked for.
+fn dxgi_fallback(requested: Option<Dxgi>, arch: Arch, host: &str, dxgi: Dxgi) -> Option<String> {
+    let want = requested.unwrap_or_else(|| Dxgi::default_for(arch));
+    if want == dxgi {
+        return None;
+    }
+    // Only gptk ever falls back. When it exists for the arch, the macOS
+    // release is what keeps it from loading.
+    let place = if want.available_for(arch, true) {
+        format!("{host} (needs macOS {})", macos::GPTK_MIN_TEXT)
+    } else {
+        arch_name(arch).to_owned()
+    };
+    Some(format!(
+        "  dxgi = {} not available on {place}, using {}",
+        want.as_str(),
+        dxgi.as_str()
+    ))
 }
 
 /// A compact `company="..." product="..." original_filename="..."` suffix,
@@ -694,6 +720,67 @@ mod tests {
         // SAFETY: a null path and a null buffer are part of the contract.
         let ret = unsafe { compatdb_query_env(std::ptr::null(), std::ptr::null_mut(), 0) };
         assert_eq!(ret, -1);
+    }
+
+    #[test]
+    fn gptk_falls_back_to_dxmt_below_macos_26_4_and_says_why() {
+        // The 64-bit default and an explicit gptk rule alike.
+        for requested in [None, Some(Dxgi::Gptk)] {
+            let old = macos::decide(Some("15.7.1"), false, Some("24.6.0"));
+            let dxgi = Dxgi::effective(requested, Arch::X86_64, old.gptk_loads);
+            assert_eq!(dxgi, Dxgi::Dxmt);
+            assert_eq!(
+                dxgi_fallback(requested, Arch::X86_64, &old.name, dxgi).as_deref(),
+                Some("  dxgi = gptk not available on macOS 15.7.1 (needs macOS 26.4), using dxmt")
+            );
+            // Decided on the Darwin release when the product version is shimmed.
+            let shimmed = macos::decide(Some("16.0"), true, Some("25.3.0"));
+            let dxgi = Dxgi::effective(requested, Arch::X86_64, shimmed.gptk_loads);
+            assert_eq!(dxgi, Dxgi::Dxmt);
+            assert_eq!(
+                dxgi_fallback(requested, Arch::X86_64, &shimmed.name, dxgi).as_deref(),
+                Some("  dxgi = gptk not available on Darwin 25.3.0 (needs macOS 26.4), using dxmt")
+            );
+            for new in [
+                macos::decide(Some("26.4"), false, Some("25.4.0")),
+                macos::decide(Some("16.0"), true, Some("25.4.0")),
+                // A version that cannot be read keeps gptk.
+                macos::decide(None, false, None),
+            ] {
+                let dxgi = Dxgi::effective(requested, Arch::X86_64, new.gptk_loads);
+                assert_eq!(dxgi, Dxgi::Gptk);
+                assert_eq!(
+                    dxgi_fallback(requested, Arch::X86_64, &new.name, dxgi),
+                    None
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_i386_fallback_line_names_the_arch_whatever_the_macos() {
+        for gptk_loads in [true, false] {
+            let dxgi = Dxgi::effective(Some(Dxgi::Gptk), Arch::I386, gptk_loads);
+            assert_eq!(dxgi, Dxgi::Dxmt);
+            assert_eq!(
+                dxgi_fallback(Some(Dxgi::Gptk), Arch::I386, "macOS 15.7.1", dxgi).as_deref(),
+                Some("  dxgi = gptk not available on i386, using dxmt")
+            );
+        }
+        // The i386 default is dxmt already, and the other implementations
+        // load everywhere, so neither logs a fallback.
+        assert_eq!(
+            dxgi_fallback(None, Arch::I386, "macOS 15.7.1", Dxgi::Dxmt),
+            None
+        );
+        for other in [Dxgi::Dxmt, Dxgi::Wined3d] {
+            let dxgi = Dxgi::effective(Some(other), Arch::X86_64, false);
+            assert_eq!(dxgi, other);
+            assert_eq!(
+                dxgi_fallback(Some(other), Arch::X86_64, "macOS 15.7.1", dxgi),
+                None
+            );
+        }
     }
 
     #[test]

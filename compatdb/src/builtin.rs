@@ -98,18 +98,23 @@ pub fn table() -> Table {
             // paint into a window owned by another process under winemac, so
             // the sign-in page stays blank. Keeping the drawing in-process
             // fixes it; the child --type= processes inherit the switches.
+            // It is pinned to DXMT to match Steam's CEF helper below, which
+            // embeds the browser the same way.
             Rule {
                 name: "rockstar-social-club-ui".into(),
                 exe: "SocialClubHelper.exe".into(),
                 company: Some("Take-Two Interactive Software".into()),
                 product: Some("Social Club UI".into()),
+                dxgi: Some(Dxgi::Dxmt),
                 arguments: vec!["--in-process-gpu".into()],
                 ..Rule::default()
             },
             // Steam's embedded browser (CEF): its GPU process cannot paint into
             // the browser's window (blank UI), so keep the GPU in-process. GPU
-            // rendering stays on and goes through Dxmt; the dxgi pin keeps
-            // it there even when a wildcard rule selects another tree.
+            // rendering stays on and goes through DXMT, pinned off the 64-bit
+            // default (D3DMetal) because the Steam client runs better on
+            // DXMT; the dxgi pin keeps it there even when a wildcard rule
+            // selects another tree.
             Rule {
                 name: "steam-web-helper".into(),
                 exe: "steamwebhelper.exe".into(),
@@ -186,6 +191,16 @@ mod tests {
         let (parsed, diagnostics) = Table::parse(&table.to_env_value());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(parsed, table);
+    }
+
+    #[test]
+    fn the_builtin_table_pins_the_cef_helpers_to_dxmt() {
+        let table = table();
+        for name in ["steam-web-helper", "rockstar-social-club-ui"] {
+            let rule = table.rules.iter().find(|r| r.name == name).unwrap();
+            assert_eq!(rule.dxgi, Some(Dxgi::Dxmt), "{name}");
+            assert_eq!(rule.arguments, vec!["--in-process-gpu".to_string()]);
+        }
     }
 
     #[test]
