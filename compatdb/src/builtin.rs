@@ -99,7 +99,10 @@ pub fn table() -> Table {
             // the sign-in page stays blank. Keeping the drawing in-process
             // fixes it; the child --type= processes inherit the switches.
             // It is pinned to DXMT to match Steam's CEF helper below, which
-            // embeds the browser the same way.
+            // embeds the browser the same way. The Metal HUD is for games and
+            // is noise on the launcher UI; it is turned off here and not on
+            // Launcher.exe because games started from the launcher would
+            // inherit the variable.
             Rule {
                 name: "rockstar-social-club-ui".into(),
                 exe: "SocialClubHelper.exe".into(),
@@ -107,6 +110,7 @@ pub fn table() -> Table {
                 product: Some("Social Club UI".into()),
                 dxgi: Some(Dxgi::Dxmt),
                 arguments: vec!["--in-process-gpu".into()],
+                env: vec![("MTL_HUD_ENABLED".into(), "0".into())],
                 ..Rule::default()
             },
             // Steam's embedded browser (CEF): its GPU process cannot paint into
@@ -114,7 +118,9 @@ pub fn table() -> Table {
             // rendering stays on and goes through DXMT, pinned off the 64-bit
             // default (D3DMetal) because the Steam client runs better on
             // DXMT; the dxgi pin keeps it there even when a wildcard rule
-            // selects another tree.
+            // selects another tree. The Metal HUD is off for the same reason
+            // as on the Social Club helper; steam.exe, which starts the games,
+            // has no rule.
             Rule {
                 name: "steam-web-helper".into(),
                 exe: "steamwebhelper.exe".into(),
@@ -122,6 +128,7 @@ pub fn table() -> Table {
                 product: Some("Steam Client WebHelper".into()),
                 dxgi: Some(Dxgi::Dxmt),
                 arguments: vec!["--in-process-gpu".into()],
+                env: vec![("MTL_HUD_ENABLED".into(), "0".into())],
                 ..Rule::default()
             },
             // GTA IV (Complete Edition). The switch overrides the game's own
@@ -201,6 +208,50 @@ mod tests {
             assert_eq!(rule.dxgi, Some(Dxgi::Dxmt), "{name}");
             assert_eq!(rule.arguments, vec!["--in-process-gpu".to_string()]);
         }
+    }
+
+    #[test]
+    fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() {
+        // Every rule that matches a launcher or a game, or every process,
+        // must leave the environment alone, or the games started from it
+        // would inherit the entries.
+        let hud_off = vec![("MTL_HUD_ENABLED".to_string(), "0".to_string())];
+        let helpers = ["steam-web-helper", "rockstar-social-club-ui"];
+        let table = table();
+        for rule in &table.rules {
+            if helpers.contains(&rule.name.as_str()) {
+                assert_eq!(rule.env, hud_off, "{}", rule.name);
+            } else {
+                assert_eq!(rule.env, [], "{}", rule.name);
+            }
+        }
+        let launcher = table
+            .rules
+            .iter()
+            .find(|r| r.name == "rockstar-launcher")
+            .unwrap();
+        assert_eq!(launcher.env, []);
+        // The resolved environment of a helper is that entry alone.
+        let steam = VersionInfo {
+            company: "Valve Corporation".into(),
+            product: "Steam Client WebHelper".into(),
+            original_filename: "steamwebhelper.exe".into(),
+        };
+        assert_eq!(table.resolve("steamwebhelper.exe", &steam).env, hud_off);
+        let social = VersionInfo {
+            company: "Take-Two Interactive Software, Inc.".into(),
+            product: "Social Club UI".into(),
+            original_filename: "SocialClubHelper.exe".into(),
+        };
+        assert_eq!(table.resolve("SocialClubHelper.exe", &social).env, hud_off);
+        let launcher_version = VersionInfo {
+            company: "Rockstar Games".into(),
+            product: "Rockstar Games Launcher".into(),
+            original_filename: "Launcher.exe".into(),
+        };
+        let resolution = table.resolve("Launcher.exe", &launcher_version);
+        assert_eq!(resolution.matched, wildcards_and("rockstar-launcher"));
+        assert_eq!(resolution.env, []);
     }
 
     #[test]

@@ -374,8 +374,10 @@ The embedded Chromium (CEF) browsers of Steam and the Rockstar Social Club get
 `--in-process-gpu`, because their GPU process cannot paint into another
 process's window under winemac. Steam's helper is pinned to `dxmt` because
 it runs better there than on the x86_64 default, and the Social Club helper
-is pinned the same way to match it. The remaining rules are for games that
-need a command-line switch to work around their own detection code.
+is pinned the same way to match it. Both helpers also turn the Metal HUD off
+through `MTL_HUD_ENABLED`, and games do not inherit it because they start
+from other processes. The remaining rules are for games that need a
+command-line switch to work around their own detection code.
 
 `no-vulkan` adds the override `vulkan-1=`, which disables the Vulkan loader.
 The bundle has no Vulkan: Wine is built `--without-vulkan` and the bundle

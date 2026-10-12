@@ -784,9 +784,11 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_rules_set_no_env() {
-        // The exported function reads WINE_COMPATDB, which a developer's shell
-        // may set; the answer is only predictable without it.
+    fn the_builtin_rules_set_no_env_for_a_game() {
+        // Only the CEF helpers get env from the built-in rules, which
+        // builtin.rs checks; a game gets none. The exported function reads
+        // WINE_COMPATDB, which a developer's shell may set; the answer is
+        // only predictable without it.
         if std::env::var_os(ENV_VAR).is_some() {
             return;
         }
