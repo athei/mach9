@@ -1,7 +1,8 @@
 //! Applying a [`Resolution`] to the current process: prepending the Direct3D
 //! trees, adding load-order overrides, setting the DPI awareness and large
-//! address awareness, and rewriting the command line and environment in both
-//! PEB copies.
+//! address awareness, rewriting the command line and environment in both PEB
+//! copies, and setting the environment entries in the process's unix
+//! environment.
 
 use std::{
     ffi::{CString, OsStr},
@@ -210,6 +211,7 @@ fn alloc_block(nt: &Ntdll, process: &Process, size: usize) -> Option<*mut core::
     }
     base
 }
+
 /// Apply the environment entries to this process's own unix environment too, so
 /// unix-side readers (winemetal, mtld3d, Metal) see them. An empty value
 /// removes the variable.
