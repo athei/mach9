@@ -186,7 +186,7 @@ mod tests {
         let gta = table.rules.iter().find(|r| r.name == "gta-iv").unwrap();
         assert!(gta.arguments[0].starts_with("-availablevidmem"));
         // The D3D9 quirks are mtld3d's, not ours.
-        assert!(gta.env.is_empty());
+        assert_eq!(gta.env, []);
 
         let (parsed, diagnostics) = Table::parse(&table.to_env_value());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -224,7 +224,7 @@ mod tests {
         let count = names.len();
         names.dedup();
         assert_eq!(names.len(), count, "duplicate rule name");
-        assert!(table.duplicate_matchers().is_empty());
+        assert_eq!(table.duplicate_matchers(), []);
     }
 
     #[test]
@@ -247,7 +247,7 @@ mod tests {
             "{HEADER}\nname=old;exe=old.exe;large_address_aware=false;x87_sidecar=false"
         ));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         let old = table.resolve("Old.exe", &VersionInfo::default());
         assert_eq!(old.large_address_aware, Some(false));
         assert_eq!(old.x87_sidecar, Some(false));
@@ -257,7 +257,7 @@ mod tests {
         assert_eq!(other.large_address_aware, Some(true));
         assert_eq!(other.x87_sidecar, Some(true));
         // The plain wildcard rules still stack without being reported.
-        assert!(table.duplicate_matchers().is_empty());
+        assert_eq!(table.duplicate_matchers(), []);
     }
 
     #[test]
@@ -267,7 +267,7 @@ mod tests {
             "{HEADER}\nname=large-address-aware;enabled=false\nname=x87-sidecar;enabled=false"
         ));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         let resolution = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(resolution.large_address_aware, None);
         assert_eq!(resolution.x87_sidecar, None);
@@ -279,7 +279,7 @@ mod tests {
         let mut table = table();
         let (over, diagnostics) = Table::parse(&format!("{HEADER}\nname=dpi-aware;enabled=false"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         let resolution = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(resolution.dpi_aware, None);
         assert_eq!(resolution.matched, wildcards_without("dpi-aware"));
@@ -294,7 +294,7 @@ mod tests {
         let (over, diagnostics) =
             Table::parse(&format!("{HEADER}\nname=global;exe=*;dpi_aware=false"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         let resolution = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(resolution.dpi_aware, Some(false));
         assert_eq!(resolution.matched, wildcards_and("global"));
@@ -306,7 +306,7 @@ mod tests {
         let (over, diagnostics) =
             Table::parse(&format!("{HEADER}\nname=old;exe=old.exe;dpi_aware=false"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         assert_eq!(
             table.resolve("Old.exe", &VersionInfo::default()).dpi_aware,
             Some(false)
@@ -330,7 +330,7 @@ mod tests {
             "{HEADER}\nname=global;exe=*;dll_overrides=mscoree=b"
         ));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         let resolution = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(
             resolution.dll_overrides,
@@ -341,14 +341,14 @@ mod tests {
             ]
         );
         assert_eq!(resolution.matched, wildcards_and("global"));
-        assert!(table.duplicate_matchers().is_empty());
+        assert_eq!(table.duplicate_matchers(), []);
     }
 
     #[test]
     fn disabling_no_mono_gecko_drops_only_its_override() {
         let mut table = table();
         let (over, _) = Table::parse(&format!("{HEADER}\nname=no-mono-gecko;enabled=false"));
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         assert_eq!(
             table
                 .resolve("game.exe", &VersionInfo::default())
@@ -367,7 +367,7 @@ mod tests {
             "{HEADER}\nname=my-game;exe=game.exe;dll_overrides=vulkan-1=n"
         ));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         let resolution = table.resolve("Game.exe", &VersionInfo::default());
         assert_eq!(
             resolution.dll_overrides,
@@ -390,7 +390,7 @@ mod tests {
     fn disabling_no_vulkan_drops_the_override() {
         let mut table = table();
         let (over, _) = Table::parse(&format!("{HEADER}\nname=no-vulkan;enabled=false"));
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         let resolution = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(resolution.matched, wildcards_without("no-vulkan"));
         // The Mono and Gecko prompts stay off.
@@ -404,7 +404,7 @@ mod tests {
     fn a_game_override_merges_into_the_builtin_it_names() {
         let mut table = table();
         let (over, _) = Table::parse(&format!("{HEADER}\nname=rockstar-launcher;dxgi=dxmt"));
-        assert!(table.overlay(over).is_empty());
+        assert_eq!(table.overlay(over), [] as [String; 0]);
         let launcher = table
             .rules
             .iter()
