@@ -37,11 +37,11 @@ OUT="$OUT_DIR/wine-deps-macos-x86_64.tar.xz"
 # x86_64-adjacent; everything else in the closure comes along automatically.
 ROOTS=(freetype gnutls sdl2-compat sdl3 bison)
 
-# Must not be newer than the MACOSX_DEPLOYMENT_TARGET build-wine.sh pins.
-# A lower floor is fine, since libraries built for an older macOS load in a
-# Wine built for a newer one. It stays at 15.0 because the published deps-*
-# release was built against it, and raising it would mean rebuilding and
-# uploading that release for no gain.
+# Must not be newer than the MACOSX_DEPLOYMENT_TARGET build-wine.sh pins, and
+# currently equals it. A lower floor would also be fine, since libraries built
+# for an older macOS load in a Wine built for a newer one. The published deps-*
+# release was built against 15.0, so changing this means rebuilding and
+# uploading that release.
 MACOS_FLOOR="${MACOS_FLOOR:-15.0}"
 
 GMP_VERSION="6.3.0"
@@ -159,14 +159,25 @@ done
 rm -rf "$GMP_CELLAR/lib" "$GMP_CELLAR/include"
 cp -R "$GMP_BUILT/lib" "$GMP_BUILT/include" "$GMP_CELLAR/"
 
+# macos_newer <a> <b>: succeed when macOS version <a> is newer than <b>.
+# Major, minor and patch are compared as numbers and a missing part counts as
+# 0. The same function as in bundle-wine.sh, whose --strict-floor check this
+# tree has to pass in CI.
+macos_newer() {
+    local a1 a2 a3 b1 b2 b3
+    IFS=. read -r a1 a2 a3 <<< "$1"
+    IFS=. read -r b1 b2 b3 <<< "$2"
+    [ $(( ${a1:-0} * 10000 + ${a2:-0} * 100 + ${a3:-0} )) -gt \
+      $(( ${b1:-0} * 10000 + ${b2:-0} * 100 + ${b3:-0} )) ]
+}
+
 # Nothing ships unless it can actually load on the floor we claim to support.
 echo "==> Verifying every Mach-O against macOS $MACOS_FLOOR..."
-FLOOR_MAJOR=${MACOS_FLOOR%%.*}
 BAD=0
 while IFS= read -r f; do
     minos=$(otool -l "$f" 2>/dev/null | awk '/LC_BUILD_VERSION/{v=1} v&&/minos/{print $2; exit}')
     [ -n "$minos" ] || continue
-    if [ "${minos%%.*}" -gt "$FLOOR_MAJOR" ]; then
+    if macos_newer "$minos" "$MACOS_FLOOR"; then
         echo "  too new: minos $minos  ${f#"$STAGE"/}"
         BAD=1
     fi

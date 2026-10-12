@@ -32,12 +32,13 @@ fi
 # cx-26.3.0-3 shipped minos 15.0 off the macos-15 runner, while a local build
 # on macOS 27 produced minos 26.0. Pin it so CI and local builds agree and the
 # floor does not move when the image is bumped. The SDK stays whatever the host
-# has; only the minimum is fixed. GPTK's D3DMetal, the default for 64-bit
-# D3D10 to D3D12, needs macOS 26.4, because it links libdxccontainer.dylib,
-# which carries minos 26.4. So the bundle targets macOS 26, and a lower floor
-# buys nothing for the default setup. compatdb has the same pin in
-# .cargo/config.toml.
-export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-26.0}"
+# has; only the minimum is fixed. The floor is macOS 15. GPTK's D3DMetal, the
+# default for 64-bit D3D10 to D3D12, needs macOS 26.4, because it links
+# libdxccontainer.dylib, which carries minos 26.4. That is handled at runtime:
+# below macOS 26.4, compatdb.so gives those processes DXMT instead. compatdb
+# has the same pin in .cargo/config.toml, and bundle-wine.sh checks every
+# Mach-O in the bundle against it.
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
 
 # Parse flags
 CLEAN=0

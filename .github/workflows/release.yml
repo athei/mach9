@@ -95,7 +95,7 @@ jobs:
           key: redist-${{ hashFiles('scripts/redist.env') }}
 
       - name: Bundle distribution
-        run: MINGW_DIR="$HOME/llvm-mingw" scripts/bundle-wine.sh --dest "$GITHUB_WORKSPACE/dist"
+        run: MINGW_DIR="$HOME/llvm-mingw" scripts/bundle-wine.sh --strict-floor --dest "$GITHUB_WORKSPACE/dist"
 
       - name: Create tarball
         run: |
