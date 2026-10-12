@@ -39,19 +39,23 @@ it does not prove that the sidecar's x87 hook took effect. A full bundle whose
 ntdll lacks the `compatdb_preinit_query` export fails the check, since it was
 built from a Wine tree without the ntdll side of the x87sidecar.
 `--runtime-only` skips the SDK files and the test binaries; that is the flavor
-that goes into an application.
+that goes into an application. The verification pass also compares the
+minimum macOS of every Mach-O in the tree with the floor it is held to and
+warns about each file that needs a newer one; `--strict-floor` turns that
+warning into an error (see [Releases](#releases)).
 
 `--compatdb-only` updates the bundle already at `<dest>/wine` instead of
 building a new one: it builds `compatdb.so`, replaces the installed copy,
-checks the new library for `/usr/local/` references and boots a prefix as a
-full bundle does. The x87sidecar check is skipped when the bundle's ntdll
-lacks the `compatdb_preinit_query` export, since an ntdll that old does not
-start the bundled sidecar on its own; otherwise it runs as in a full bundle,
-including the check that `bin/x87sidecar` is an arm64 executable. There is no
-prompt, nothing is deleted, `make install` does not run, and the Wine build
-directory is not needed, so it works on an unpacked release tarball as well.
-It keeps whatever flavor the bundle already has; `--runtime-only` is accepted
-next to it and ignored.
+checks the new library for `/usr/local/` references and its minimum macOS
+(only that library, since the rest of the tree was not built here), and boots
+a prefix as a full bundle does. The x87sidecar check is skipped when the
+bundle's ntdll lacks the `compatdb_preinit_query` export, since an ntdll that
+old does not start the bundled sidecar on its own; otherwise it runs as in a
+full bundle, including the check that `bin/x87sidecar` is an arm64
+executable. There is no prompt, nothing is deleted, `make install` does not
+run, and the Wine build directory is not needed, so it works on an unpacked
+release tarball as well. It keeps whatever flavor the bundle already has;
+`--runtime-only` is accepted next to it and ignored.
 
 The `d3d9_test.exe` binaries land in `lib/wine/tests/{i386,x86_64}-windows/`,
 outside the directories the loader searches, and are plain PEs. Wine's
@@ -161,11 +165,14 @@ while a local build on macOS 27 produced `minos 26.0`. The SDK is still
 whatever the build host has; only the minimum is fixed. Check this pin still
 holds whenever the runner image is bumped.
 
-The pin follows GPTK's D3DMetal, the default for 64-bit D3D10 to D3D12. It
-links `libdxccontainer.dylib`, which needs a newer macOS than mtld3d and DXMT
-do, so a lower floor buys nothing for the default setup. Wine picks up a
-changed pin on the next `build-wine.sh --clean`, which is how CI always
-builds.
+The pin is the floor of the whole bundle except GPTK's `D3DMetal.framework`,
+the default for 64-bit D3D10 to D3D12. D3DMetal links
+`libdxccontainer.dylib`, which needs a newer macOS than the bundle's floor
+(`GPTK_FLOOR` in [`bundle-wine.sh`](bundle-wine.sh)), and it is shipped
+unmodified, so it cannot be built for a lower floor. On an older macOS,
+compatdb.so gives the processes that would get D3DMetal DXMT instead (see
+[compatdb.so](#compatdbso)). Wine picks up a changed pin on the next
+`build-wine.sh --clean`, which is how CI always builds.
 
 The workflow does not install Homebrew. Homebrew has stopped shipping x86_64
 macOS bottles (gmp, sdl2-compat and sdl3 have none at all, the rest stop at the
@@ -189,11 +196,10 @@ script rebuilds gmp against its own `MACOS_FLOOR`, and then refuses to write
 the archive if any Mach-O in the tree is newer than that floor. If another
 formula loses its bottle, that check is what will catch it.
 
-The `MACOS_FLOOR` set in [`package-deps.sh`](package-deps.sh) can be lower
-than the deployment target in [`build-wine.sh`](build-wine.sh), and is.
-Libraries built for an older macOS load in a Wine built for a newer one, so
-the prefix only has to be no newer than Wine's floor, not equal to it. Raising
-it would mean rebuilding and uploading the `deps-*` release for no gain.
+The `MACOS_FLOOR` set in [`package-deps.sh`](package-deps.sh) must not be
+newer than the deployment target in [`build-wine.sh`](build-wine.sh). It may
+be lower, since libraries built for an older macOS load in a Wine built for a
+newer one. Changing it means rebuilding and uploading the `deps-*` release.
 
 To refresh it: `arch -x86_64 /usr/local/bin/brew upgrade` the formulae, run
 `./package-deps.sh`, attach `dist/wine-deps-macos-x86_64.tar.xz` to a new
@@ -201,6 +207,25 @@ To refresh it: `arch -x86_64 /usr/local/bin/brew upgrade` the formulae, run
 at it. The one thing the prefix does not provide is `pkg-config`, which comes
 from the runner image; the workflow fails loudly if it is missing rather than
 building a Wine with the libraries silently absent.
+
+`bundle-wine.sh` checks the minimum macOS (`minos`) of every Mach-O in the
+finished bundle against the deployment target `build-wine.sh` builds with
+(it reads the same `MACOSX_DEPLOYMENT_TARGET`, with the same default). The
+files of Apple's `lib/external/D3DMetal.framework` are held to a separate
+floor instead, `GPTK_FLOOR` in [`bundle-wine.sh`](bundle-wine.sh), which has
+to equal `GPTK_MIN` in [`compatdb/src/macos.rs`](compatdb/src/macos.rs), the
+version compatdb.so falls back to DXMT below. `libd3dshared.dylib` is not part
+of that: ntdll loads it in every process that loads a native PE module, such
+as a game's executable, so it has to meet the normal floor.
+Without `--strict-floor` each file over its floor is printed as a warning and
+the bundle step carries on; with it they are an error. A missing `otool`, or
+a run in which no file had a `minos` to read, is an error either way. Both
+release workflows pass `--strict-floor`: their libraries come from the
+`deps-*` tarball, which already meets the floor. A local build copies whatever
+Homebrew has in `/usr/local`, and a formula Homebrew compiled on that machine,
+such as gmp, carries the minimum of the macOS it was built on. A bundle built
+on a newer macOS can therefore exceed the floor; it is not distributed, so a
+warning is enough there.
 
 ## No-execute
 
@@ -254,8 +279,8 @@ D3D8 and DDraw have no alternative to wined3d and stay in the default dirs.
 
 | Family | Tree | Contents | Default |
 |--------|------|----------|---------|
-| `dxgi` | `lib/wine/dxgi/gptk/` | Apple D3DMetal: dxgi, d3d10, d3d11, d3d12, nvapi64, nvngx; plus Wine's d3d10core and d3d10_1, which return `E_FAIL` on its dxgi but keep D3D10 probes from failing to load. x86_64 only. | x86_64 |
-| `dxgi` | `lib/wine/dxgi/dxmt/` | DXMT: dxgi, d3d10core, d3d11, winemetal for both arches; plus Wine's d3d10 and d3d10_1. | i386 |
+| `dxgi` | `lib/wine/dxgi/gptk/` | Apple D3DMetal: dxgi, d3d10, d3d11, d3d12, nvapi64, nvngx; plus Wine's d3d10core and d3d10_1, which return `E_FAIL` on its dxgi but keep D3D10 probes from failing to load. x86_64 only, and only on a macOS D3DMetal loads on. | x86_64 |
+| `dxgi` | `lib/wine/dxgi/dxmt/` | DXMT: dxgi, d3d10core, d3d11, winemetal for both arches; plus Wine's d3d10 and d3d10_1. | i386; x86_64 where D3DMetal does not load |
 | `dxgi` | `lib/wine/dxgi/wined3d/` | Wine's dxgi, d3d10, d3d10core, d3d10_1, d3d11 for both arches. No d3d12, which needs Vulkan. | |
 | `d3d9` | `lib/wine/d3d9/mtld3d/` | [mtld3d](https://github.com/athei/mtld3d): d3d9 and mtld3d for both arches, one x86_64 `mtld3d.so`. | both |
 | `d3d9` | `lib/wine/d3d9/wined3d/` | Wine's d3d9 for both arches. Needs only `wined3d.dll`, which is in the default dir. | |
@@ -282,9 +307,21 @@ CrossOver's own compat database uses. The library reads the process's image
 name and version resource, resolves the rules that match, and applies them:
 
 - `dxgi` and `d3d9`: which tree to prepend. Unset means the defaults in the
-  table above. An implementation that does not exist for the process's
-  architecture (`gptk` on i386) degrades to that architecture's default with
-  a log line, so `dxgi = gptk` in a rule reads as "GPTK where it exists".
+  table above. `gptk` cannot load everywhere: Apple ships no i386 D3DMetal,
+  and the x86_64 one needs a newer macOS than the bundle's floor (`GPTK_MIN`
+  in [`compatdb/src/macos.rs`](compatdb/src/macos.rs)). Where it cannot load,
+  a process that would get it, from the x86_64 default or from a rule, gets
+  `dxmt` instead, with a log line such as
+  `dxgi = gptk not available on macOS 15.7.1 (needs macOS 26.4), using dxmt`.
+  So `dxgi = gptk` in a rule reads as "GPTK where it loads". The library
+  reads the version from `kern.osproductversion`. macOS puts a compatibility
+  value (10.16 or 16.0) there for a process that runs with
+  `SYSTEM_VERSION_COMPAT=1` or whose main binary was built against an old
+  SDK, so when `kern.system_version_compat` is nonzero, the major version is
+  10 or 16, or the value cannot be read, the Darwin release in
+  `kern.osrelease` decides instead, and the log line names it
+  (`on Darwin 25.3.0`). When neither is usable, the library assumes GPTK
+  loads.
 - `dll_overrides`: `WINEDLLOVERRIDES`-style `names=order` entries, added
   through ntdll's load-order hook.
 - `dpi_aware`: `true` makes the process DPI-aware (system-aware), `false`
@@ -331,11 +368,14 @@ The built-in rules are in
 reason it exists. Five of them, `no-vulkan`, `dpi-aware`,
 `large-address-aware`, `x87-sidecar` and `no-mono-gecko`, match every process
 (`exe` is `*`) and are described below.
-The rest are pinned by version resource. They cover launchers that need a
-real D3D10.1 device, which D3DMetal does not provide, embedded Chromium (CEF)
-browsers whose GPU process cannot paint into another process's window under
-winemac, and games that need a command-line switch to work around their own
-detection code.
+The rest are pinned by version resource. The Rockstar Games Launcher needs a
+real D3D10.1 device, which D3DMetal does not provide, so it gets `wined3d`.
+The embedded Chromium (CEF) browsers of Steam and the Rockstar Social Club get
+`--in-process-gpu`, because their GPU process cannot paint into another
+process's window under winemac. Steam's helper is pinned to `dxmt` because
+it runs better there than on the x86_64 default, and the Social Club helper
+is pinned the same way to match it. The remaining rules are for games that
+need a command-line switch to work around their own detection code.
 
 `no-vulkan` adds the override `vulkan-1=`, which disables the Vulkan loader.
 The bundle has no Vulkan: Wine is built `--without-vulkan` and the bundle
@@ -490,7 +530,8 @@ its signature. Apple's Game Porting Toolkit download needs an Apple ID
 session, so the unmodified dmg is attached to a `gptk-<version>` release on
 this repository (those tags trigger neither release workflow) and the pin
 points there; upgrading means downloading the new image by hand and creating a
-new `gptk-*` release. Apple's license (shipped as
+new `gptk-*` release, and raising D3DMetal's floor if the new image needs a
+newer macOS (see [Caveats](#caveats)). Apple's license (shipped as
 `lib/external/D3DMetal-License.rtf`) allows distributing the Redistributables
 unmodified for non-commercial purposes, which is why the files are copied byte
 for byte: no `install_name_tool`, no re-signing, and the dylib closure walk
@@ -552,12 +593,20 @@ The patched tree at athei/wine carries the glue:
   drop is a crash inside their code, not an error message. Check it on every
   GPTK, DXMT or CrossOver bump.
 - `init_non_native_support()` is gated on Sonoma or later, and D3DMetal
-  needs a newer macOS than the rest of the bundle because it links
-  `libdxccontainer.dylib`. That is what the deployment target in
-  [`build-wine.sh`](build-wine.sh) follows.
-- D3DMetal's client surface goes through `get_win_data(hwnd)`, so it is
-  same-process only. Cross-process presentation (Steam's CEF GPU process
-  drawing into the browser window) still needs `--in-process-gpu`.
+  needs a newer macOS than the deployment target in
+  [`build-wine.sh`](build-wine.sh) because it links `libdxccontainer.dylib`.
+  compatdb.so gives DXMT to the processes that would get D3DMetal on an older
+  macOS, and the bundle's minos check holds `D3DMetal.framework` to that
+  newer floor instead of the deployment target. `GPTK_FLOOR` in
+  [`bundle-wine.sh`](bundle-wine.sh) and the `GPTK_MIN` constants in
+  [`compatdb/src/macos.rs`](compatdb/src/macos.rs) have to move together
+  when a new GPTK image raises D3DMetal's minimum.
+- D3DMetal and DXMT both get the window's client view through the
+  `get_win_data(hwnd)` entry of `macdrv_functions`. winemac looks the window
+  up in a table of the windows the calling process created, so neither can
+  present into another process's window. Cross-process presentation (a CEF
+  GPU process drawing into the browser window) still needs `--in-process-gpu`,
+  which the Steam and Social Club rules add.
 - A builtin only loads if its placeholder exists in the prefix, and wineboot
   stamps placeholders for what is in `lib/wine/<arch>-windows` when the prefix
   is created. The markers in the default dirs cover every DLL the trees
