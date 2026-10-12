@@ -108,14 +108,14 @@ pub fn table() -> Table {
             },
             // Steam's embedded browser (CEF): its GPU process cannot paint into
             // the browser's window (blank UI), so keep the GPU in-process. GPU
-            // rendering stays on and goes through D3DMetal; the dxgi pin keeps
+            // rendering stays on and goes through Dxmt; the dxgi pin keeps
             // it there even when a wildcard rule selects another tree.
             Rule {
                 name: "steam-web-helper".into(),
                 exe: "steamwebhelper.exe".into(),
                 company: Some("Valve Corporation".into()),
                 product: Some("Steam Client WebHelper".into()),
-                dxgi: Some(Dxgi::Gptk),
+                dxgi: Some(Dxgi::Dxmt),
                 arguments: vec!["--in-process-gpu".into()],
                 ..Rule::default()
             },
