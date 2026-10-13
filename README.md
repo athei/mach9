@@ -29,8 +29,8 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
   unpacking with `xattr -drs com.apple.quarantine wine`.
 - The minimum macOS is `MACOSX_DEPLOYMENT_TARGET` in
   [`build-wine.sh`](build-wine.sh). D3DMetal needs a newer macOS
-  (`GPTK_FLOOR` in [`bundle-wine.sh`](bundle-wine.sh)); below it, 64-bit
-  processes get DXMT instead.
+  (`GPTK_FLOOR` in [`bundle-wine.sh`](bundle-wine.sh)); below it, processes
+  that would get D3DMetal get DXMT instead.
 
 ## Bundle layout
 
@@ -58,23 +58,27 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
 
 ### Direct3D backends
 
-| Family | APIs | Rule value | Tree | Default for |
-|--------|------|------------|------|-------------|
-| `dxgi` | D3D10, D3D10.1, D3D11, D3D12 | `gptk` (Apple D3DMetal) | `lib/wine/dxgi/gptk/` | x86_64, where D3DMetal loads |
-| `dxgi` | | `dxmt` ([DXMT](https://github.com/3Shain/dxmt)) | `lib/wine/dxgi/dxmt/` | i386; x86_64 where D3DMetal does not load |
-| `dxgi` | | `wined3d` | `lib/wine/dxgi/wined3d/` | |
-| `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | both |
-| `d3d9` | | `wined3d` | `lib/wine/d3d9/wined3d/` | |
+| Family | APIs | Rule value | Tree | Arch | Default for |
+|--------|------|------------|------|------|-------------|
+| `dxgi` | D3D10, D3D11, D3D12 | `gptk` (Apple D3DMetal) | `lib/wine/dxgi/gptk/` | x86_64 | x86_64 |
+| `dxgi` | D3D10, D3D11 | `dxmt` ([DXMT](https://github.com/3Shain/dxmt)) | `lib/wine/dxgi/dxmt/` | i386, x86_64 | i386 |
+| `dxgi` | D3D10, D3D10.1, D3D11 | `wined3d` | `lib/wine/dxgi/wined3d/` | i386, x86_64 | none |
+| `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | i386, x86_64 | i386, x86_64 |
+| `d3d9` | D3D9 | `wined3d` | `lib/wine/d3d9/wined3d/` | i386, x86_64 | none |
 
 - compatdb.so prepends one tree per family to every process's builtin search
   path, so a process sees one coherent set of modules. To pick a tree per
   game, see [recipes](docs/compatdb.md#recipes).
+- On a macOS where D3DMetal does not load, a process that would get `gptk`,
+  from the default or from a rule, gets `dxmt` instead
+  ([gptk availability](docs/compatdb.md#gptk-availability)). There, and in
+  every i386 process, D3D12 is not available.
 - D3D10 to D3D12 form one family because they all create their device
   through one `dxgi.dll` and only work with their own implementation's copy.
-- Only the `gptk` tree has D3D12, so D3D12 needs an x86_64 process on a
-  macOS where D3DMetal loads. `gptk` is x86_64 only. D3D8 and DirectDraw
-  stay on wined3d. Which modules each tree holds is in Step 4 of
-  [`bundle-wine.sh`](bundle-wine.sh).
+- The `gptk` tree carries Wine's `d3d10_1`, which fails on D3DMetal's DXGI,
+  so a D3D10.1 program needs `wined3d` (as the Rockstar launcher rule does).
+  D3D8 and DirectDraw stay on wined3d. Which modules each tree holds is in
+  Step 4 of [`bundle-wine.sh`](bundle-wine.sh).
 
 ### Defaults that differ from Wine
 
