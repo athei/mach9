@@ -146,6 +146,21 @@ pub fn table() -> Table {
                 arguments: vec!["-availablevidmem 2048.0".into()],
                 ..Rule::default()
             },
+            // NosTale rasterises its text with GDI into fixed-grid glyph
+            // atlases and fixed-size UI boxes laid out for 96 DPI. Marked
+            // DPI-aware at 192 DPI (retina), GDI hands it fonts twice as
+            // large, so wide glyphs overrun their atlas slots (clipped "m"
+            // and "w") and text overflows its boxes. Left DPI-unaware, Wine
+            // gives it 96 DPI fonts and scales its window, as Windows does at
+            // 200%. The client's version resource names only the company, so
+            // that is the whole fingerprint.
+            Rule {
+                name: "nostale".into(),
+                exe: "NostaleClientX.exe".into(),
+                company: Some("Entwell".into()),
+                dpi_aware: Some(false),
+                ..Rule::default()
+            },
         ],
     }
 }
@@ -499,6 +514,15 @@ mod tests {
             table.resolve("GTAIV.exe", &gta).matched,
             wildcards_and("gta-iv")
         );
+        // NosTale's client names its company and nothing else.
+        let nostale = VersionInfo {
+            company: "Entwell".into(),
+            ..VersionInfo::default()
+        };
+        assert_eq!(
+            table.resolve("NostaleClientX.exe", &nostale).matched,
+            wildcards_and("nostale")
+        );
         // An unrelated program of the same name gets only the `*` rules.
         let only_wildcard = wildcards();
         assert_eq!(
@@ -510,6 +534,34 @@ mod tests {
         assert_eq!(
             table.resolve("GTAIV.exe", &VersionInfo::default()).matched,
             only_wildcard
+        );
+        assert_eq!(
+            table
+                .resolve("NostaleClientX.exe", &VersionInfo::default())
+                .matched,
+            only_wildcard
+        );
+    }
+
+    #[test]
+    fn the_nostale_client_is_dpi_unaware_and_nothing_else_changes() {
+        // The fingerprinted rule beats the `dpi-aware` default for the client
+        // alone; every other setting stays the wildcards'.
+        let table = table();
+        let nostale = VersionInfo {
+            company: "Entwell".into(),
+            ..VersionInfo::default()
+        };
+        let mut expected = table.resolve("game.exe", &VersionInfo::default());
+        expected.dpi_aware = Some(false);
+        expected.matched.push("nostale".to_string());
+        assert_eq!(table.resolve("NostaleClientX.exe", &nostale), expected);
+        assert_eq!(expected.matched, wildcards_and("nostale"));
+        assert_eq!(
+            table
+                .resolve("NostaleClientX.exe", &VersionInfo::default())
+                .dpi_aware,
+            Some(true)
         );
     }
 }
