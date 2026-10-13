@@ -366,20 +366,37 @@ mod tests {
         u32::try_from(v).unwrap()
     }
 
-    /// A `VS_VERSIONINFO`-shaped blob holding the three fields.
+    /// A `VS_VERSIONINFO` node: header words, key, padding, value, padding,
+    /// children. Every value here is text or empty, so `wValueLength` counts
+    /// characters.
+    fn version_node(key: &str, value: &[u16], children: &[u16]) -> Vec<u16> {
+        let mut node = vec![0, u16::try_from(value.len()).unwrap(), 1];
+        node.extend(key.encode_utf16());
+        node.push(0);
+        node.resize(node.len().next_multiple_of(2), 0);
+        node.extend(value);
+        node.resize(node.len().next_multiple_of(2), 0);
+        node.extend(children);
+        node[0] = u16::try_from(node.len() * 2).unwrap();
+        node
+    }
+
+    /// A `VS_VERSIONINFO` blob holding the three fields in one string table.
     fn version_blob_bytes() -> Vec<u8> {
-        let mut units: Vec<u16> = Vec::new();
+        let mut strings: Vec<u16> = Vec::new();
         for (key, value) in [
             ("CompanyName", "Acme Games"),
             ("ProductName", "Rocket Sled"),
             ("OriginalFilename", "Sled.exe"),
         ] {
-            units.extend([0x40, 0x0f, 0x01]);
-            units.extend(key.encode_utf16());
-            units.extend([0, 0]);
-            units.extend(value.encode_utf16());
-            units.push(0);
+            let mut text: Vec<u16> = value.encode_utf16().collect();
+            text.push(0);
+            strings.resize(strings.len().next_multiple_of(2), 0);
+            strings.extend(version_node(key, &text, &[]));
         }
+        let table = version_node("040904b0", &[], &strings);
+        let info = version_node("StringFileInfo", &[], &table);
+        let units = version_node("VS_VERSION_INFO", &[], &info);
         units.iter().flat_map(|u| u.to_le_bytes()).collect()
     }
 

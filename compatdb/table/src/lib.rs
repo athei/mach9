@@ -38,8 +38,10 @@ pub const ENV_VAR: &str = "WINE_COMPATDB";
 pub const HEADER: &str = "v=5";
 
 /// The parts of a PE version resource the database can match on. Vendor-set at
-/// link time, so stable across install location and patches. Empty strings when
-/// the image carries no version resource.
+/// link time, so stable across install location and patches.
+///
+/// A field is an empty string when the image carries no version resource or
+/// the resource leaves that field empty.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct VersionInfo {
     pub company: String,
@@ -49,55 +51,116 @@ pub struct VersionInfo {
 
 impl VersionInfo {
     /// Extract the standard fields from a `VS_VERSIONINFO` blob (the bytes of an
-    /// `RT_VERSION` resource, as UTF-16). Each `String` rule stores a
-    /// NUL-terminated key immediately followed, after zero padding, by its
-    /// value, so the value is the next non-empty UTF-16 run after the key run.
+    /// `RT_VERSION` resource, as UTF-16 units). The blob is walked as the tree
+    /// it is: the root, its `StringFileInfo` children, their string tables and
+    /// the `String` entries in them. A field takes the value of the first entry
+    /// with its key, in table order; an entry whose value is empty, or a key no
+    /// table has, leaves the field empty, so a rule that pins it cannot match.
     #[must_use]
     pub fn from_resource(blob: &[u16]) -> Self {
         Self {
-            company: value_after(blob, "CompanyName"),
-            product: value_after(blob, "ProductName"),
-            original_filename: value_after(blob, "OriginalFilename"),
+            company: string_value(blob, "CompanyName"),
+            product: string_value(blob, "ProductName"),
+            original_filename: string_value(blob, "OriginalFilename"),
         }
     }
 }
 
-/// The value that follows a `String` rule's key.
-///
-/// In a real `VS_VERSIONINFO` each `String` rule starts with three header
-/// words (`wLength`, `wValueLength`, `wType`) immediately before the key text,
-/// so the key run decodes with a short binary prefix (e.g. `"\u{40}\u{f}\u{1}CompanyName"`).
-/// The value that follows has no such header, so it is a clean run. Match the
-/// key as a run *suffix*, then take the next run as the value.
-fn value_after(blob: &[u16], key: &str) -> String {
-    let runs = utf16_runs(blob);
-    runs.iter()
-        .position(|run| run.ends_with(key))
-        .and_then(|i| i.checked_add(1))
-        .and_then(|next| runs.get(next))
-        .cloned()
-        .unwrap_or_default()
+/// One node of a `VS_VERSIONINFO` tree. Every node, the root, the containers
+/// and the `String` entries alike, is `wLength` (bytes, children included),
+/// `wValueLength`, `wType`, a NUL-terminated UTF-16 key, padding to a 32-bit
+/// boundary, the value, padding again, and then the children.
+struct VersionNode<'a> {
+    key: &'a [u16],
+    /// From the start of the value to the end of the node.
+    value: &'a [u16],
+    /// The children, as the units that hold them.
+    children: &'a [u16],
 }
 
-/// Split a UTF-16 buffer into its NUL-separated runs, dropping empty ones and
-/// decoding each lossily.
-fn utf16_runs(blob: &[u16]) -> Vec<String> {
-    let mut runs = Vec::new();
-    let mut cur: Vec<u16> = Vec::new();
-    for &u in blob {
-        if u == 0 {
-            if !cur.is_empty() {
-                runs.push(String::from_utf16_lossy(&cur));
-                cur.clear();
-            }
+impl<'a> VersionNode<'a> {
+    /// Parse the node at the start of `units` and return it with the units
+    /// after it, where its next sibling starts. `units` has to start on a
+    /// 32-bit boundary, which every node does. A node whose length is too
+    /// short for its header or whose key is not NUL-terminated ends the walk;
+    /// one that claims more than `units` holds is cut off at the end.
+    fn parse(units: &'a [u16]) -> Option<(Self, &'a [u16])> {
+        let length = usize::from(*units.first()?).div_ceil(2);
+        let value_length = usize::from(*units.get(1)?);
+        // Any nonzero wType is text, as in Wine's VerQueryValue.
+        let text = *units.get(2)? != 0;
+        if length < 3 {
+            return None;
+        }
+        let node = units.get(..length).unwrap_or(units);
+        let key_text = node.get(3..)?;
+        let key_end = key_text.iter().position(|&u| u == 0)?;
+        let key = key_text.get(..key_end)?;
+        // The key starts 3 units in, and its NUL is one more.
+        let value_at = key_end.checked_add(4)?.checked_next_multiple_of(2)?;
+        let value = node.get(value_at..).unwrap_or_default();
+        // wValueLength counts characters for a text value and bytes for a
+        // binary one; the children start at the next 32-bit boundary after it.
+        let value_units = if text {
+            value_length
         } else {
-            cur.push(u);
-        }
+            value_length.div_ceil(2)
+        };
+        let children_at = value_at
+            .checked_add(value_units)?
+            .checked_next_multiple_of(2)?;
+        let children = node.get(children_at..).unwrap_or_default();
+        let next = length.checked_next_multiple_of(2)?;
+        let rest = units.get(next..).unwrap_or_default();
+        Some((
+            Self {
+                key,
+                value,
+                children,
+            },
+            rest,
+        ))
     }
-    if !cur.is_empty() {
-        runs.push(String::from_utf16_lossy(&cur));
+
+    /// The nodes in a run of sibling units, in order.
+    fn siblings(mut units: &'a [u16]) -> impl Iterator<Item = Self> {
+        std::iter::from_fn(move || {
+            let (node, rest) = Self::parse(units)?;
+            units = rest;
+            Some(node)
+        })
     }
-    runs
+
+    /// Whether the key is `want`, compared ASCII-case-insensitively as
+    /// `VerQueryValue` does.
+    fn key_is(&self, want: &str) -> bool {
+        self.key
+            .iter()
+            .map(|&u| to_lower_u16(u))
+            .eq(want.encode_utf16().map(to_lower_u16))
+    }
+}
+
+/// The value of the first `String` entry with this key in any string table of
+/// the blob, empty when there is none or its value is empty.
+///
+/// The value is read up to its NUL within the entry rather than by
+/// `wValueLength`, which resource compilers do not all fill in the same way.
+fn string_value(blob: &[u16], key: &str) -> String {
+    let Some((root, _)) = VersionNode::parse(blob) else {
+        return String::new();
+    };
+    if !root.key_is("VS_VERSION_INFO") {
+        return String::new();
+    }
+    VersionNode::siblings(root.children)
+        .filter(|info| info.key_is("StringFileInfo"))
+        .flat_map(|info| VersionNode::siblings(info.children))
+        .flat_map(|table| VersionNode::siblings(table.children))
+        .find(|entry| entry.key_is(key))
+        .and_then(|entry| entry.value.split(|&u| u == 0).next())
+        .map(String::from_utf16_lossy)
+        .unwrap_or_default()
 }
 
 /// Which implementation of the DXGI family a process loads.
@@ -923,7 +986,8 @@ fn env_name_matches(seg: &[u16], name: &str) -> bool {
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::panic
+    clippy::panic,
+    clippy::arithmetic_side_effects
 )]
 mod tests {
     use super::*;
@@ -1453,32 +1517,276 @@ mod tests {
         assert_eq!(r.arguments, vec!["--in-process-gpu".to_string()]);
     }
 
+    /// One `VS_VERSIONINFO` node as a resource compiler lays it out: the three
+    /// header words, the key, padding, the value, then, when there are any,
+    /// padding and the children. `text` sets `wType`, which decides whether
+    /// `wValueLength` counts characters or bytes. `wLength` leaves out the
+    /// padding after the node, as real resources do.
+    fn version_node(key: &str, value: &[u16], text: bool, children: &[u16]) -> Vec<u16> {
+        let mut node = vec![0, 0, u16::from(text)];
+        node.extend(key.encode_utf16());
+        node.push(0);
+        node.resize(node.len().next_multiple_of(2), 0);
+        node.extend(value);
+        if !children.is_empty() {
+            node.resize(node.len().next_multiple_of(2), 0);
+            node.extend(children);
+        }
+        node[0] = u16::try_from(node.len() * 2).unwrap();
+        node[1] = u16::try_from(if text { value.len() } else { value.len() * 2 }).unwrap();
+        node
+    }
+
+    /// Sibling nodes, each starting on a 32-bit boundary.
+    fn siblings(nodes: &[Vec<u16>]) -> Vec<u16> {
+        let mut out = Vec::new();
+        for node in nodes {
+            out.resize(out.len().next_multiple_of(2), 0);
+            out.extend(node);
+        }
+        out
+    }
+
+    /// A `String` entry; an empty value is the NUL alone.
+    fn string_entry(key: &str, value: &str) -> Vec<u16> {
+        let mut text: Vec<u16> = value.encode_utf16().collect();
+        text.push(0);
+        version_node(key, &text, true, &[])
+    }
+
+    /// A whole `VS_VERSIONINFO`: the root with a zeroed `VS_FIXEDFILEINFO`, a
+    /// `StringFileInfo` holding one string table per entry of `tables`, and a
+    /// `VarFileInfo` after it.
+    fn version_resource(tables: &[(&str, &[(&str, &str)])]) -> Vec<u16> {
+        let tables: Vec<Vec<u16>> = tables
+            .iter()
+            .map(|(language, entries)| {
+                let strings: Vec<Vec<u16>> = entries
+                    .iter()
+                    .map(|(key, value)| string_entry(key, value))
+                    .collect();
+                version_node(language, &[], false, &siblings(&strings))
+            })
+            .collect();
+        let string_info = version_node("StringFileInfo", &[], false, &siblings(&tables));
+        let translation = version_node("Translation", &[0x0409, 0x04b0], false, &[]);
+        let var_info = version_node("VarFileInfo", &[], false, &translation);
+        version_node(
+            "VS_VERSION_INFO",
+            &[0; 26],
+            false,
+            &siblings(&[string_info, var_info]),
+        )
+    }
+
     #[test]
     fn version_info_reads_the_standard_fields_from_a_resource() {
-        // A realistic VS_VERSIONINFO shape: each key is preceded by the three
-        // String-rule header words (wLength, wValueLength, wType), the value
-        // is a clean run.
-        let mut blob: Vec<u16> = Vec::new();
-        let key = |b: &mut Vec<u16>, s: &str| {
-            b.extend([0x40u16, 0x0f, 0x01]); // header words
-            b.extend(s.encode_utf16());
-            b.push(0);
-            b.push(0); // padding
-        };
-        let val = |b: &mut Vec<u16>, s: &str| {
-            b.extend(s.encode_utf16());
-            b.push(0);
-        };
-        key(&mut blob, "CompanyName");
-        val(&mut blob, "Rockstar Games");
-        key(&mut blob, "ProductName");
-        val(&mut blob, "Rockstar Games Launcher");
-        key(&mut blob, "OriginalFilename");
-        val(&mut blob, "Launcher.exe");
+        let blob = version_resource(&[(
+            "040904b0",
+            &[
+                ("CompanyName", "Rockstar Games"),
+                ("FileVersion", "1.0.0.1"),
+                ("OriginalFilename", "Launcher.exe"),
+                ("ProductName", "Rockstar Games Launcher"),
+            ],
+        )]);
         let vi = VersionInfo::from_resource(&blob);
         assert_eq!(vi.company, "Rockstar Games");
         assert_eq!(vi.product, "Rockstar Games Launcher");
         assert_eq!(vi.original_filename, "Launcher.exe");
+    }
+
+    #[test]
+    fn an_empty_value_followed_by_another_entry_is_empty() {
+        // The entry after the empty one must not be read as its value.
+        let blob = version_resource(&[(
+            "040904b0",
+            &[
+                ("CompanyName", ""),
+                ("FileDescription", "Game"),
+                ("OriginalFilename", ""),
+                ("ProductName", ""),
+                ("ProductVersion", "1.0.0.0"),
+            ],
+        )]);
+        assert_eq!(VersionInfo::from_resource(&blob), VersionInfo::default());
+    }
+
+    #[test]
+    fn an_empty_value_at_the_end_of_a_table_is_empty() {
+        // Nothing of the next table or of VarFileInfo leaks into it either.
+        let blob = version_resource(&[
+            (
+                "040904b0",
+                &[("CompanyName", "Acme"), ("OriginalFilename", "")],
+            ),
+            ("040704b0", &[("ProductName", "Rocket Sled")]),
+        ]);
+        let vi = VersionInfo::from_resource(&blob);
+        assert_eq!(vi.company, "Acme");
+        assert_eq!(vi.original_filename, "");
+        // A field the first table lacks comes from the next one.
+        assert_eq!(vi.product, "Rocket Sled");
+        let last = version_resource(&[("040904b0", &[("ProductName", "")])]);
+        assert_eq!(VersionInfo::from_resource(&last), VersionInfo::default());
+    }
+
+    #[test]
+    fn the_nostale_client_has_only_a_company() {
+        // The string table of NosTale's NostaleClientX.exe (block 041203B5),
+        // whose only non-empty names are the company and the versions.
+        // Reading the values as NUL-separated runs takes the next entry's
+        // header and key for the value of each empty one, so the product read
+        // as "4\u{8}\u{1}ProductVersion".
+        let blob = version_resource(&[(
+            "041203B5",
+            &[
+                ("CompanyName", "Entwell"),
+                ("FileDescription", ""),
+                ("FileVersion", "0.9.3.3259"),
+                ("InternalName", ""),
+                ("LegalCopyright", ""),
+                ("LegalTrademarks", ""),
+                ("OriginalFilename", ""),
+                ("ProductName", ""),
+                ("ProductVersion", "1.0.0.0"),
+                ("Comments", ""),
+                ("PrivateBuild", ""),
+                ("SpecialBuild", ""),
+            ],
+        )]);
+        // Two entries as the exe stores them, which pins the fixture's layout
+        // to the real one.
+        let entry = |header: [u16; 3], text: &str| {
+            let mut units = header.to_vec();
+            units.extend(text.encode_utf16());
+            units
+        };
+        assert_eq!(
+            string_entry("CompanyName", "Entwell"),
+            entry([0x30, 8, 1], "CompanyName\0\0Entwell\0")
+        );
+        assert_eq!(
+            string_entry("ProductName", ""),
+            entry([0x22, 1, 1], "ProductName\0\0\0")
+        );
+        let vi = VersionInfo::from_resource(&blob);
+        assert_eq!(
+            vi,
+            VersionInfo {
+                company: "Entwell".into(),
+                ..VersionInfo::default()
+            }
+        );
+        // A rule that pins a field the exe leaves empty does not match it.
+        let pinned = |product: Option<&str>, original_filename: Option<&str>| Rule {
+            name: "nostale".into(),
+            exe: "NostaleClientX.exe".into(),
+            company: Some("Entwell".into()),
+            product: product.map(Into::into),
+            original_filename: original_filename.map(Into::into),
+            ..Rule::default()
+        };
+        assert!(pinned(None, None).matches("NostaleClientX.exe", &vi));
+        assert!(!pinned(Some("ProductVersion"), None).matches("NostaleClientX.exe", &vi));
+        assert!(!pinned(None, Some("ProductName")).matches("NostaleClientX.exe", &vi));
+    }
+
+    #[test]
+    fn keys_match_case_insensitively_and_the_first_entry_wins() {
+        let blob = version_resource(&[
+            ("040904b0", &[("companyname", "First")]),
+            ("040704b0", &[("CompanyName", "Second")]),
+        ]);
+        assert_eq!(VersionInfo::from_resource(&blob).company, "First");
+    }
+
+    #[test]
+    fn a_malformed_resource_yields_empty_fields() {
+        let blob = version_resource(&[(
+            "040904b0",
+            &[("CompanyName", "Acme"), ("ProductName", "Rocket Sled")],
+        )]);
+        // Cut short anywhere: never a panic, and never a value that is not
+        // the field's own.
+        for len in 0..blob.len() {
+            let vi = VersionInfo::from_resource(&blob[..len]);
+            assert!("Acme".starts_with(&vi.company), "{len}: {vi:?}");
+            assert!("Rocket Sled".starts_with(&vi.product), "{len}: {vi:?}");
+        }
+        // A root that is not VS_VERSION_INFO, and a zero length.
+        let mut foreign = blob.clone();
+        foreign[3] = u16::from(b'X');
+        assert_eq!(VersionInfo::from_resource(&foreign), VersionInfo::default());
+        let mut zero = blob;
+        zero[0] = 0;
+        assert_eq!(VersionInfo::from_resource(&zero), VersionInfo::default());
+        // A bare key and value with no tree around them.
+        let mut runs: Vec<u16> = vec![0x40, 0x0f, 0x01];
+        runs.extend("CompanyName\0\0Acme\0".encode_utf16());
+        assert_eq!(VersionInfo::from_resource(&runs), VersionInfo::default());
+    }
+
+    #[test]
+    fn a_broken_entry_ends_its_table_without_taking_a_neighbours_value() {
+        let blob = version_resource(&[(
+            "040904b0",
+            &[
+                ("CompanyName", "Acme"),
+                ("FileDescription", "Game"),
+                ("ProductName", "Rocket Sled"),
+            ],
+        )]);
+        // Where the header of the entry with this key starts.
+        let entry_at = |key: &str| {
+            let key = u16s(key);
+            blob.windows(key.len()).position(|w| w == key).unwrap() - 3
+        };
+        let acme_only = VersionInfo {
+            company: "Acme".into(),
+            ..VersionInfo::default()
+        };
+        // A zero or too-small wLength in the middle of the table: the walk
+        // stops there, so the entries before it still count.
+        for length in [0, 2, 6] {
+            let mut broken = blob.clone();
+            broken[entry_at("FileDescription")] = length;
+            assert_eq!(
+                VersionInfo::from_resource(&broken),
+                acme_only,
+                "wLength {length}"
+            );
+        }
+        // An entry claiming more than its table holds is cut off at the
+        // table's end, and nothing after it is read as a sibling.
+        let mut oversized = blob.clone();
+        oversized[entry_at("CompanyName")] = 0xfffe;
+        assert_eq!(VersionInfo::from_resource(&oversized), acme_only);
+        // A value with wValueLength 0 and no NUL before the next entry ends
+        // where its entry does.
+        let mut unterminated = version_node("CompanyName", &u16s("Acme"), true, &[]);
+        unterminated[1] = 0;
+        assert_eq!(
+            unterminated.len() % 2,
+            0,
+            "no padding before the next entry"
+        );
+        let table = version_node(
+            "040904b0",
+            &[],
+            false,
+            &siblings(&[unterminated, string_entry("ProductName", "Rocket Sled")]),
+        );
+        let info = version_node("StringFileInfo", &[], false, &table);
+        let unterminated = version_node("VS_VERSION_INFO", &[0; 26], false, &info);
+        assert_eq!(
+            VersionInfo::from_resource(&unterminated),
+            VersionInfo {
+                company: "Acme".into(),
+                product: "Rocket Sled".into(),
+                ..VersionInfo::default()
+            }
+        );
     }
 
     #[test]
