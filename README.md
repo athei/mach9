@@ -376,8 +376,12 @@ process's window under winemac. Steam's helper is pinned to `dxmt` because
 it runs better there than on the x86_64 default, and the Social Club helper
 is pinned the same way to match it. Both helpers also turn the Metal HUD off
 through `MTL_HUD_ENABLED`, and games do not inherit it because they start
-from other processes. The remaining rules are for games that need a
-command-line switch to work around their own detection code.
+from other processes. `gta-iv` adds a command-line switch that works around
+the game's own video-memory detection. `nostale` makes NosTale's client
+DPI-unaware: it draws its text with GDI into glyph atlases and UI boxes sized
+for 96 DPI, so the fonts it gets at a retina DPI overrun both, while unaware it
+gets 96 DPI fonts and a scaled window, as on Windows at 200%. Its version
+resource names only the company, so the rule pins `CompanyName` alone.
 
 `no-vulkan` adds the override `vulkan-1=`, which disables the Vulkan loader.
 The bundle has no Vulkan: Wine is built `--without-vulkan` and the bundle
