@@ -944,22 +944,31 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_rules_set_no_env_for_a_game() {
-        // Only the CEF helpers get env from the built-in rules, which
-        // builtin.rs checks; a game gets none. The exported function reads
-        // WINE_COMPATDB, which a developer's shell may set; the answer is
-        // only predictable without it.
+    fn the_builtin_rules_set_only_the_wildcard_env_for_a_game() {
+        // Beyond the CEF helpers, which builtin.rs checks, a game gets env
+        // from the built-in rules only in the arm64 Wine: the FEX entry every
+        // process gets. The exported function reads WINE_COMPATDB, which a
+        // developer's shell may set; the answer is only predictable without
+        // it.
         if std::env::var_os(ENV_VAR).is_some() {
             return;
         }
+        let expected: &[u8] = match Host::current() {
+            Host::X86_64 => b"",
+            Host::Aarch64 => b"FEX_X87REDUCEDPRECISION=1\0\0",
+        };
         let path = c"/nonexistent/games/game.exe";
-        let mut buf = [0xAA_u8; 16];
+        let mut buf = [0xAA_u8; 64];
         // SAFETY: a valid NUL-terminated string and a buffer of its length.
         let ret = unsafe { compatdb_query_env(path.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
-        assert_eq!(ret, 0);
-        assert!(buf.iter().all(|&b| b == 0xAA));
+        assert_eq!(usize::try_from(ret).ok(), Some(expected.len()));
+        assert_eq!(buf.get(..expected.len()), Some(expected));
+        assert!(
+            buf.get(expected.len()..)
+                .is_some_and(|rest| rest.iter().all(|&b| b == 0xAA))
+        );
         // SAFETY: a valid NUL-terminated string and a null buffer of size 0.
         let ret = unsafe { compatdb_query_env(path.as_ptr(), std::ptr::null_mut(), 0) };
-        assert_eq!(ret, 0);
+        assert_eq!(usize::try_from(ret).ok(), Some(expected.len()));
     }
 }
