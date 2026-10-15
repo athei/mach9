@@ -444,14 +444,13 @@ impl Process {
             log::line("NtCurrentTeb returned null");
             return None;
         }
-        // SAFETY: TEB.Peb sits at TEB_PEB_OFFSET (a multiple of 8, so the
-        // slot is pointer-aligned) and holds the PEB pointer, which ntdll
-        // populated before this library was loaded.
-        #[allow(clippy::cast_ptr_alignment)]
+        // SAFETY: the TEB is page-aligned, and TEB.Peb sits at
+        // TEB_PEB_OFFSET, a whole number of pointer-sized slots in (checked
+        // in ntdll.rs), so the read is aligned. It holds the PEB pointer,
+        // which ntdll populated before this library was loaded.
         let peb = unsafe {
-            teb.cast::<u8>()
-                .add(TEB_PEB_OFFSET)
-                .cast::<*mut Peb>()
+            teb.cast::<*mut Peb>()
+                .add(TEB_PEB_OFFSET / size_of::<*mut Peb>())
                 .read()
         };
         if peb.is_null() {
@@ -533,7 +532,6 @@ unsafe fn read_environment(env: *mut u16, size_bytes: usize) -> Vec<u16> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use compatdb_table::{ANY_EXE, Rule};
 
@@ -558,20 +556,28 @@ mod tests {
         }
     }
 
-    fn x87(table: &Table, path: &str) -> Option<bool> {
-        query_x87(table, path.as_bytes()).unwrap().2
+    /// What a test returns, so a missing value fails it through `?` rather
+    /// than a panic in the test body.
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// `x87_sidecar` for `path`, or an error when the path names no file.
+    fn x87(table: &Table, path: &str) -> Result<Option<bool>, String> {
+        query_x87(table, path.as_bytes())
+            .map(|(_, _, r)| r)
+            .ok_or_else(|| format!("{path} names no file"))
     }
 
     #[test]
-    fn the_query_matches_on_the_basename_of_a_unix_or_a_dos_path() {
+    fn the_query_matches_on_the_basename_of_a_unix_or_a_dos_path() -> TestResult {
         let table = table();
-        assert_eq!(x87(&table, "/nonexistent/games/old.exe"), Some(false));
-        assert_eq!(x87(&table, "C:\\Games\\OLD.EXE"), Some(false));
-        assert_eq!(x87(&table, "old.exe"), Some(false));
-        assert_eq!(x87(&table, "/nonexistent/games/new.exe"), Some(true));
-        let (exe, version, _) = query_x87(&table, b"C:\\Games\\Old.exe").unwrap();
+        assert_eq!(x87(&table, "/nonexistent/games/old.exe")?, Some(false));
+        assert_eq!(x87(&table, "C:\\Games\\OLD.EXE")?, Some(false));
+        assert_eq!(x87(&table, "old.exe")?, Some(false));
+        assert_eq!(x87(&table, "/nonexistent/games/new.exe")?, Some(true));
+        let (exe, version, _) = query_x87(&table, b"C:\\Games\\Old.exe").ok_or("no file name")?;
         assert_eq!(exe, "Old.exe");
         assert_eq!(version, VersionInfo::default());
+        Ok(())
     }
 
     #[test]
@@ -580,7 +586,7 @@ mod tests {
         assert!(query_x87(&table, b"").is_none());
         assert!(query_x87(&table, b"/nonexistent/games/").is_none());
         assert!(query_x87(&table, b"C:\\Games\\").is_none());
-        assert_eq!(x87(&Table::default(), "/nonexistent/game.exe"), None);
+        assert_eq!(x87(&Table::default(), "/nonexistent/game.exe"), Ok(None));
         // SAFETY: a null path is part of the contract.
         assert_eq!(unsafe { compatdb_query_x87(std::ptr::null()) }, -1);
         let empty = c"";
@@ -644,14 +650,14 @@ mod tests {
     }
 
     #[test]
-    fn the_env_query_matches_on_the_basename_of_a_unix_or_a_dos_path() {
+    fn the_env_query_matches_on_the_basename_of_a_unix_or_a_dos_path() -> TestResult {
         let table = env_table();
         for path in [
             "/nonexistent/games/game.exe",
             "C:\\Games\\GAME.EXE",
             "Game.exe",
         ] {
-            let (exe, version, env) = query_env(&table, path.as_bytes()).unwrap();
+            let (exe, version, env) = query_env(&table, path.as_bytes()).ok_or(path)?;
             assert_eq!(exe.to_ascii_lowercase(), "game.exe");
             assert_eq!(version, VersionInfo::default());
             assert_eq!(
@@ -665,25 +671,24 @@ mod tests {
                 ]
             );
         }
-        let (_, _, env) = query_env(&table, b"/nonexistent/games/other.exe").unwrap();
+        let (_, _, env) = query_env(&table, b"/nonexistent/games/other.exe").ok_or("other")?;
         assert_eq!(env, [pair("A", "1")]);
+        Ok(())
     }
 
     #[test]
     fn the_env_block_keeps_order_duplicates_and_empty_values() {
         let table = env_table();
         let (ret, buf) = answer(&table, "/nonexistent/games/game.exe", 64);
-        assert_eq!(usize::try_from(ret).unwrap(), GAME_BLOCK.len());
+        assert_eq!(usize::try_from(ret).ok(), Some(GAME_BLOCK.len()));
         assert_eq!(buf.get(..GAME_BLOCK.len()), Some(GAME_BLOCK));
         assert!(
             buf.get(GAME_BLOCK.len()..)
-                .unwrap()
-                .iter()
-                .all(|&b| b == 0xAA)
+                .is_some_and(|rest| rest.iter().all(|&b| b == 0xAA))
         );
         // Exactly the needed size is enough.
         let (ret, buf) = answer(&table, "C:\\Games\\Game.exe", GAME_BLOCK.len());
-        assert_eq!(usize::try_from(ret).unwrap(), GAME_BLOCK.len());
+        assert_eq!(usize::try_from(ret).ok(), Some(GAME_BLOCK.len()));
         assert_eq!(buf, GAME_BLOCK);
         assert_eq!(encode_env(&[]), b"");
         assert_eq!(encode_env(&[pair("X", "")]), b"X=\0\0");
@@ -693,11 +698,11 @@ mod tests {
     fn a_short_buffer_gets_nothing_and_learns_the_size() {
         let table = env_table();
         let (ret, buf) = answer(&table, "game.exe", GAME_BLOCK.len() - 1);
-        assert_eq!(usize::try_from(ret).unwrap(), GAME_BLOCK.len());
+        assert_eq!(usize::try_from(ret).ok(), Some(GAME_BLOCK.len()));
         assert!(buf.iter().all(|&b| b == 0xAA));
         // SAFETY: a null buffer with size 0 is part of the contract.
         let ret = unsafe { answer_env(&table, b"game.exe", std::ptr::null_mut(), 0) };
-        assert_eq!(usize::try_from(ret).unwrap(), GAME_BLOCK.len());
+        assert_eq!(usize::try_from(ret).ok(), Some(GAME_BLOCK.len()));
     }
 
     #[test]

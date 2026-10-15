@@ -186,7 +186,6 @@ fn sysctl_int(name: &CStr) -> Option<c_int> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -344,10 +343,16 @@ mod tests {
     #[test]
     fn the_host_sysctls_read_and_parse() {
         // The tests run on macOS, so the sysctls must answer.
-        let product = sysctl_string(c"kern.osproductversion").unwrap();
-        assert!(Version::parse(&product).is_some(), "{product:?}");
-        let release = sysctl_string(c"kern.osrelease").unwrap();
-        assert!(Version::parse(&release).is_some(), "{release:?}");
+        let product = sysctl_string(c"kern.osproductversion");
+        assert!(
+            product.as_deref().and_then(Version::parse).is_some(),
+            "{product:?}"
+        );
+        let release = sysctl_string(c"kern.osrelease");
+        assert!(
+            release.as_deref().and_then(Version::parse).is_some(),
+            "{release:?}"
+        );
         assert!(sysctl_int(c"kern.system_version_compat").is_some());
         assert_ne!(host().name, "");
     }
