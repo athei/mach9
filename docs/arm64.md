@@ -228,8 +228,8 @@ Wine source, its DLLs carrying the recorded version), the llvm-mingw
 compilers the smoke test uses, and the provisioning profile (not expired,
 granting the entitlement, with an identity of its team in the keychain).
 
-After assembly, besides the self-containment, `minos`, symlink and copied-in
-file checks of the x86_64 bundle
+After assembly, besides the self-containment, `minos`, floor-newer import,
+symlink and copied-in file checks of the x86_64 bundle
 ([maintenance.md](maintenance.md#what-bundle-winesh-verifies)):
 
 - No reference to any of the profile's `LEAK_PREFIXES` survives.
@@ -241,10 +241,6 @@ file checks of the x86_64 bundle
   `xtajit64.dll` are FEX's.
 - No `bin/x87sidecar`, no x87 export in `compatdb.so` or `ntdll.so`, and
   `compatdb.so` exports `compatdb_query_env`.
-- No unix module, `bin/wine` or `bin/wineserver` imports a function of
-  `FLOOR_NEWER_FUNCS` while the floor is below its version
-  ([macOS floors](maintenance.md#macos-floors)). That catches a Wine build
-  tree configured before the override, which `minos` does not show.
 - The smoke test, with the caller's `WINE_COMPATDB` and every `WINEMSYNC*`
   and `FEX_*` variable dropped: `wine --version`; a fresh prefix boots
   (`cmd /c exit`), with `compatdb:` lines, no trace of the x87sidecar, and

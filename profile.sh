@@ -75,7 +75,10 @@ set_profile() {
             # processes DXMT instead. .cargo/config.toml carries the same
             # value for a plain cargo build of compatdb.
             MACOS_FLOOR="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
-            FLOOR_NEWER_FUNCS=""
+            # See after the profiles. The macOS 27 SDK declares pipe2 as
+            # available from macOS 27 on, above this floor. An older SDK
+            # has no pipe2, so there the override changes nothing.
+            FLOOR_NEWER_FUNCS="pipe2:27.0"
             UNIX_DIR=x86_64-unix
             PE64_DIR=x86_64-windows
             RUST_TARGET=x86_64-apple-darwin

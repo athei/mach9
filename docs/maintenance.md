@@ -64,6 +64,11 @@ A full x86_64 bundle (the arm64 one: [arm64.md](arm64.md#what-the-bundle-step-ch
   [macOS floors](#macos-floors). Without `--strict-floor` each file over its
   floor is a warning; with it, an error. A missing `otool`, or a run in
   which no file had a `minos`, is an error either way.
+- No unix module (Apple's `libd3dshared.dylib` aside), loader or
+  `wineserver` imports a function of the profile's `FLOOR_NEWER_FUNCS`
+  while the floor is below its version (see [macOS floors](#macos-floors)).
+  That catches a Wine build tree configured before the override, which
+  `minos` does not show.
 - Boots a throwaway prefix and requires compatdb.so to report the default
   trees (`dxgi = gptk`, or `dxmt` on a macOS below `GPTK_FLOOR`, and
   `d3d9 = mtld3d`).
