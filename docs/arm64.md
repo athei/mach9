@@ -103,7 +103,8 @@ to this build only.
 |----------|--------|
 | `WINEMSYNC` | Unset or a non-zero number: msync is on. Any other value (`0`, empty, not a number): off, and Wine synchronizes through wineserver requests as upstream Wine does. Only the wineserver reads it, from the environment of the process that starts it, and every process of the session follows the wineserver's choice whatever its own environment says |
 | `WINENCPU` | Limits the number of processors Wine reports to programs, for those that misbehave with many. A value of 0, one that is not a number, or one above the real count is ignored |
-| `FEX_HARDWARE_TSO` | Leave unset. `1` lets FEX switch to the hardware x86 memory ordering instead of emulating it, but FEX switches only the thread that asks, and this Wine does not switch the threads it starts, so it is not safe with this Wine |
+| `FEX_HARDWARE_TSO` | Unset or `1`: FEX runs x86 code with the hardware x86 memory ordering (TSO) instead of emulating it with ordered loads and stores. The ordering is a per-thread mode: FEX switches a thread to it whenever the thread enters x86 code and back at the syscalls and unix calls of x86 code, since native code runs slower in it. `0`: FEX emulates the ordering. Any other value logs an error and FEX emulates the ordering. FEX also emulates it, without a message, when the loader lacks the cross-architecture entitlement ([Loader app](#loader-app)) |
+| `FEX_HOSTFEATURES` | FEX's host feature overrides. x86_64 programs, which run as ARM64EC, run without AFP (the Arm floating-point behaviour FEX uses to match x86) by default, because the floating-point mode would have to change on every call between x86 code and native code, which costs more than AFP saves. `enableafp` turns it back on. i386 programs keep AFP |
 
 - msync is CrossOver's implementation of Windows synchronization objects
   for macOS, built on Mach semaphores and shared memory, which saves
@@ -188,11 +189,10 @@ Wine source commit. What goes in is the `WITH_WINE_SDK` step of
 The loader needs `com.apple.developer.cross-architecture-support`. With it,
 the kernel leaves most of the 4 GB `__PAGEZERO` as a mapping Wine can
 replace, which Wine claims as its low reserved area for the i386 code that
-runs under FEX. It also gates the hardware x86 memory ordering that
-`FEX_HARDWARE_TSO` would use, which this build leaves off
-([Runtime](#runtime)). That entitlement is honoured only through a
-provisioning profile embedded in an app bundle and a signature by a
-certificate of the profile's team.
+runs under FEX. It also gates the hardware x86 memory ordering FEX runs
+x86 code with (`FEX_HARDWARE_TSO`, [Runtime](#runtime)). That entitlement
+is honoured only through a provisioning profile embedded in an app bundle
+and a signature by a certificate of the profile's team.
 
 - The bundle step moves the loader into `lib/wine/aarch64-unix/wine.app` and
   links both entry points to it.
