@@ -200,7 +200,9 @@ file checks of the x86_64 bundle
   loads `dxgi.dll` and `d3d9.dll`. Each one's compatdb lines must name the
   trees for its arch (the x86 defaults, or `wined3d` for the native one), and
   the x86 programs must load both DLLs; the native one cannot (see
-  [Limitations](#limitations)). Every run has a time limit.
+  [Limitations](#limitations)). Then the x86_64 and i686 programs load every
+  module of each Direct3D tree in turn, as for the x86_64 bundle. Every run
+  has a time limit.
 
 ## Limitations
 
@@ -208,13 +210,15 @@ file checks of the x86_64 bundle
   modules of the Direct3D trees; the loader fails with error 193
   (`ERROR_BAD_EXE_FORMAT`). The prefix's placeholder for each of those names
   comes from the fake-module marker in `aarch64-windows`, and the
-  placeholder's machine decides which module Wine looks for. Those markers
-  are x64 ones, because x64 games are what the bundle is for and an x64
-  process needs them: with ARM64 markers built from the `wined3d` trees, the
-  native program loads Wine's ARM64X modules and the x64 program fails with
-  the same error instead. compatdb.so still gives a native ARM64 program the
-  `wined3d` trees ([arm64 Wine](compatdb.md#arm64-wine)), the only ones with
-  ARM64 code, so the choice is right once a placeholder lets it through.
+  placeholder's machine decides which module Wine looks for. Every 64-bit
+  marker is an x64 one, even where the module behind it is one of Wine's
+  ARM64X modules (`d3d10.dll` and `d3d10_1.dll` in every tree), because x64
+  games are what the bundle is for and an x64 process needs them: with an
+  ARM64 marker the native program loads Wine's ARM64X module and the x64
+  program fails with the same error instead. compatdb.so still gives a
+  native ARM64 program the `wined3d` trees
+  ([arm64 Wine](compatdb.md#arm64-wine)), the only ones with ARM64 code, so
+  the choice is right once a placeholder lets it through.
 
 ## Pinned inputs
 

@@ -1,8 +1,10 @@
-/* The console program bundle-wine.sh --arm64 builds for each PE architecture
- * and runs under the bundled wine. It prints a marker naming the
- * architecture it was compiled for, then tries dxgi.dll and d3d9.dll, which
- * come from the Direct3D trees compatdb.so picks for the process, and says
- * whether both loaded. */
+/* The console program bundle-wine.sh builds for each PE architecture it
+ * tests and runs under the bundled wine. It prints a marker naming the
+ * architecture it was compiled for, then loads each DLL named on its command
+ * line (dxgi.dll and d3d9.dll without arguments), which come from the
+ * Direct3D trees compatdb.so picks for the process. It prints one line
+ * listing them all when every one loaded, else one line per DLL that did
+ * not. */
 
 #include <stdio.h>
 #include <windows.h>
@@ -17,18 +19,33 @@
 #error "unknown architecture"
 #endif
 
-int main(void)
+int main(int argc, char **argv)
 {
-    HMODULE dxgi, d3d9;
+    static char *defaults[] = { "dxgi.dll", "d3d9.dll" };
+    char **names = argv + 1;
+    int count = argc - 1, failed = 0, i;
 
+    if (!count)
+    {
+        names = defaults;
+        count = 2;
+    }
     printf("wine-build smoke test: hello from %s\n", ARCH);
     fflush(stdout);
-    dxgi = LoadLibraryA("dxgi.dll");
-    d3d9 = LoadLibraryA("d3d9.dll");
-    if (dxgi && d3d9)
-        printf("wine-build smoke test: %s loads dxgi.dll and d3d9.dll\n", ARCH);
-    else
-        printf("wine-build smoke test: %s cannot load dxgi.dll (%p) or d3d9.dll (%p), error %lu\n",
-               ARCH, (void *)dxgi, (void *)d3d9, GetLastError());
+    for (i = 0; i < count; i++)
+    {
+        if (!LoadLibraryA(names[i]))
+        {
+            printf("wine-build smoke test: %s cannot load %s, error %lu\n", ARCH, names[i],
+                   GetLastError());
+            failed = 1;
+        }
+    }
+    if (!failed)
+    {
+        printf("wine-build smoke test: %s loads", ARCH);
+        for (i = 0; i < count; i++) printf(" %s", names[i]);
+        printf("\n");
+    }
     return 0;
 }
