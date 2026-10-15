@@ -961,8 +961,8 @@ check_dxmt_build() {
 # The arm64 loader needs com.apple.developer.cross-architecture-support,
 # with which the kernel leaves most of the 4 GB __PAGEZERO replaceable, so
 # Wine can claim the low address space its i386 code needs (the same
-# entitlement gates the hardware x86 memory ordering FEX_HARDWARE_TSO would
-# use, which this build leaves off). That entitlement is restricted: it is
+# entitlement gates the hardware x86 memory ordering FEX runs x86 code with,
+# see FEX_HARDWARE_TSO in docs/arm64.md). That entitlement is restricted: it is
 # only honoured with a provisioning profile that grants it, embedded in an
 # app bundle, and a signature by a certificate of the same team. So the
 # loader moves into lib/wine/<unix>/wine.app and everything that
