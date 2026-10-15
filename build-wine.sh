@@ -2,13 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
-
-# ARM64X link libraries for linking ARM64X PE builtins, built and staged but
-# never installed or run.
-ARM64X_BUILD_DIR="${ARM64X_BUILD_DIR:-$ROOT/build-arm64x}"
-ARM64X_LIB_DIR="${ARM64X_LIB_DIR:-$ROOT/dist/wine-arm64x}"
 
 usage() {
     echo "Usage: $0 [--clean] [--arm64]"
@@ -42,10 +36,14 @@ if [ ! -x "$MINGW_DIR/bin/x86_64-w64-mingw32-clang" ]; then
 fi
 export PATH="$PATH:$MINGW_DIR/bin"
 
-if [ ! -x "$MINGW_DIR/bin/arm64ec-w64-mingw32-clang" ]; then
-    echo "Error: llvm-mingw at $MINGW_DIR has no arm64ec toolchain"
-    exit 1
-fi
+case ",$WINE_ARCHS," in
+    *,arm64ec,*)
+        if [ ! -x "$MINGW_DIR/bin/arm64ec-w64-mingw32-clang" ]; then
+            echo "Error: llvm-mingw at $MINGW_DIR has no arm64ec toolchain"
+            exit 1
+        fi
+        ;;
+esac
 
 # The floor is pinned in profile.sh, which exports it as
 # MACOSX_DEPLOYMENT_TARGET for everything built below. The SDK stays whatever
@@ -56,9 +54,8 @@ check_deps_formulae
 # Clean if requested
 if [ "$CLEAN" -eq 1 ]; then
     echo "==> Cleaning build directory..."
-    remove_tree "$BUILD_DIR"
 fi
-mkdir -p "$BUILD_DIR"
+claim_tree "$BUILD_DIR" wine "$CLEAN"
 
 # Every optional dependency is switched off unless it is switched back on
 # here, so a package missing from the dependency prefix fails configure
@@ -226,45 +223,11 @@ echo "==> Build complete."
 file "$BUILD_DIR/loader/wine"
 "$BUILD_DIR/loader/wine" --version 2>/dev/null || true
 
-# ── Link-library trees and the Wine SDK ──────────────────────────────────
+# ── The Wine SDK ─────────────────────────────────────────────────────────
 # PE code built outside Wine (DXMT, mtld3d) links against Wine's
 # libwinecrt0.a, for the unix_lib.o its unix calls go through, and imports
 # from libntdll.a (DXMT also from libdbghelp.a), each for the architecture of
-# that code. A link-library tree is a second configure of the Wine source for
-# just the PE architectures a build lacks, of which only those archives are
-# built: no unix dependency is wanted, so every package is switched off.
-# Configure still probes the host side, but runs natively: the tree is arm64
-# in host and target.
-LINK_LIB_WITHOUT=(
-    --without-alsa --without-capi --without-coreaudio --without-cups
-    --without-dbus --without-ffmpeg --without-fontconfig --without-freetype
-    --without-gettext --without-gnutls --without-gphoto --without-gssapi
-    --without-gstreamer --without-hwloc --without-inotify --without-krb5
-    --without-netapi --without-opencl --without-oss --without-pcap
-    --without-pcsclite --without-pulse --without-sane --without-sdl
-    --without-udev --without-usb --without-v4l2
-    --without-vulkan --without-wayland --without-x
-)
-
-# link_lib_tree <dir> <archs> <configure-arg>...: configure <dir> as a
-# link-library tree for the PE architectures <archs>, once (again after
-# --clean). The arguments add the options only this Wine source has and the
-# toolchain.
-link_lib_tree() {
-    local dir="$1" archs="$2"
-    shift 2
-    if [ "$CLEAN" -eq 1 ]; then
-        remove_tree "$dir"
-    fi
-    mkdir -p "$dir"
-    if [ ! -f "$dir/Makefile" ]; then
-        echo "==> Configuring the link library tree $dir ($archs)..."
-        (cd "$dir" && "$WINE_SRC/configure" --enable-archs="$archs" --with-mingw \
-            "${LINK_LIB_WITHOUT[@]}" "$@")
-    else
-        echo "==> Skipping configure of $dir (already configured, use --clean to reconfigure)"
-    fi
-}
+# that code.
 
 # link_libs <pe-dir>: print the paths, relative to a build tree, of the three
 # archives for <pe-dir>. Upstream Wine builds winecrt0 under libs/, the
@@ -278,9 +241,9 @@ link_libs() {
 }
 
 # check_arm64x_archive <libwinecrt0.a>: exit unless the archive carries both
-# halves an ARM64X link takes from it. A missing EC half means the ARM64X
-# pairing did not happen and the archive holds ARM64 code only; a missing
-# ARM64 half means the archive is not the paired one at all.
+# halves an ARM64X link takes from it. A missing EC half means arm64ec was not
+# paired with aarch64 and the archive holds ARM64 code only; a missing ARM64
+# half means the archive is not the paired one at all.
 check_arm64x_archive() {
     local members member
     members="$("$MINGW_DIR/bin/llvm-ar" t "$1")"
@@ -291,25 +254,45 @@ check_arm64x_archive() {
 }
 
 # The Wine SDK of the arm64 build: one directory, in the layout of an
-# installed Wine, that DXMT's PE build (-Dwine_install_path) and mtld3d
-# (WINE_SDK, and WINE_SDK_ARM64X for its ARM64X build) read. bin/winebuild
-# and the aarch64-windows and i386-windows archives come from the arm64 build
-# itself: its aarch64-windows archives are ARM64X, since arm64ec is paired
-# with aarch64 there, which is why the arm64 profile needs no ARM64X side
-# tree. The x86_64-windows archives are the one thing that build cannot make
-# (ARM64EC is not x64, and an x64 object does not link against it), so a
-# link-library tree configured for x86_64 alone, reusing the build's tools,
-# makes them. WINE_COMMIT names the source commit, which build-dxmt.sh and
-# bundle-wine.sh compare.
+# installed Wine, that DXMT's PE build reads (-Dwine_install_path). The
+# bundle carries the same files, which is where mtld3d's builds read them.
+# bin/winebuild and the aarch64-windows and i386-windows archives come from
+# the arm64 build itself: its aarch64-windows archives are ARM64X, since
+# arm64ec is paired with aarch64 there (makedep's native_archs and
+# hybrid_archs), so one set under aarch64-windows carries both halves. The
+# x86_64-windows archives are the one thing that build cannot make (ARM64EC
+# is not x64, and an x64 object does not link against it). A second configure
+# of the Wine source for x86_64 alone, reusing the build's tools, makes them:
+# only those archives are built, and no unix dependency is wanted, so every
+# package is switched off. Configure still probes the host side, but runs
+# natively, arm64 in host and target. WINE_COMMIT names the source commit,
+# which build-dxmt.sh and bundle-wine.sh compare.
+X86LIBS_WITHOUT=(
+    --without-alsa --without-capi --without-coreaudio --without-cups
+    --without-dbus --without-ffmpeg --without-fontconfig --without-freetype
+    --without-gettext --without-gnutls --without-gphoto --without-gssapi
+    --without-gstreamer --without-hwloc --without-inotify --without-krb5
+    --without-netapi --without-opencl --without-oss --without-pcap
+    --without-pcsclite --without-pulse --without-sane --without-sdl
+    --without-udev --without-usb --without-v4l2
+    --without-vulkan --without-wayland --without-x
+)
 if [ "$WITH_WINE_SDK" -eq 1 ]; then
-    link_lib_tree "$X86LIBS_BUILD_DIR" x86_64 "${CONFIGURE_FEATURES_EXTRA[@]}" \
-        --host="$HOST_TRIPLE" --with-wine-tools="$BUILD_DIR" \
-        CC="clang -arch arm64" --disable-tests BISON="$DEPS_PREFIX/opt/bison/bin/bison"
+    claim_tree "$X86LIBS_BUILD_DIR" x86libs "$CLEAN"
+    if [ ! -f "$X86LIBS_BUILD_DIR/Makefile" ]; then
+        echo "==> Configuring the x86_64 link library tree $X86LIBS_BUILD_DIR..."
+        (cd "$X86LIBS_BUILD_DIR" && "$WINE_SRC/configure" --enable-archs=x86_64 \
+            --with-mingw "${X86LIBS_WITHOUT[@]}" "${CONFIGURE_FEATURES_EXTRA[@]}" \
+            --host="$HOST_TRIPLE" --with-wine-tools="$BUILD_DIR" \
+            CC="clang -arch arm64" --disable-tests BISON="$DEPS_PREFIX/opt/bison/bin/bison")
+    else
+        echo "==> Skipping configure of $X86LIBS_BUILD_DIR (already configured, use --clean to reconfigure)"
+    fi
     # shellcheck disable=SC2046 # one word per target
     make -C "$X86LIBS_BUILD_DIR" -j"$(sysctl -n hw.ncpu)" $(link_libs x86_64-windows)
 
     echo "==> Staging the Wine SDK into $WINE_SDK_DIR..."
-    remove_tree "$WINE_SDK_DIR"
+    claim_tree "$WINE_SDK_DIR" sdk 1
     mkdir -p "$WINE_SDK_DIR/bin"
     cp "$BUILD_DIR/tools/winebuild/winebuild" "$WINE_SDK_DIR/bin/"
     for pe in "$PE64_DIR" i386-windows x86_64-windows; do
@@ -340,37 +323,4 @@ if [ "$WITH_FEX" -eq 1 ]; then
 fi
 if [ "$WITH_DXMT_BUILD" -eq 1 ]; then
     "$SCRIPT_DIR/build-dxmt.sh" "${SUB_FLAGS[@]}"
-fi
-
-# The ARM64X link libraries for the x86_64 profile, whose Wine has no arm64
-# PE side: a link-library tree for arm64ec,aarch64. The output is two link
-# archives, not a Wine: nothing here is runnable and none of it is
-# installed. An ARM64X PE builtin needs a `libwinecrt0.a` to take its
-# `unix_lib.o` from and a `libntdll.a` to import from, each with an ARM64 and
-# an ARM64EC member, and that is all this produces. The Wine that eventually
-# loads such a builtin is CrossOver's, not this one, and it ships no link
-# archives of its own.
-#
-# arm64ec is paired with aarch64 so makedep sets up ARM64X (`native_archs` /
-# `hybrid_archs`): the pair emits ONE set of libraries under `aarch64-windows`
-# carrying both arches' objects, which is also where the loader looks, since
-# `get_pe_dir` knows no arm64ec directory and redirects a hybrid module
-# requested as AMD64 to the ARM64 one. arm64ec alone would build a standalone
-# `arm64ec-windows` tree that no loader ever searches.
-if [ "$WITH_ARM64X" -eq 1 ]; then
-    echo "==> Building the ARM64X link libraries..."
-    link_lib_tree "$ARM64X_BUILD_DIR" arm64ec,aarch64 --without-unwind --host=aarch64-apple-darwin
-    make -C "$ARM64X_BUILD_DIR" -j"$(sysctl -n hw.ncpu)" \
-        dlls/winecrt0/aarch64-windows/libwinecrt0.a \
-        dlls/ntdll/aarch64-windows/libntdll.a
-
-    # Staged in the layout of an installed Wine, so a consumer can point its
-    # WINE_SDK at this directory and find the libraries where it expects them.
-    echo "==> Staging the ARM64X link libraries into $ARM64X_LIB_DIR ..."
-    mkdir -p "$ARM64X_LIB_DIR/lib/wine/aarch64-windows"
-    cp "$ARM64X_BUILD_DIR/dlls/winecrt0/aarch64-windows/libwinecrt0.a" \
-       "$ARM64X_BUILD_DIR/dlls/ntdll/aarch64-windows/libntdll.a" \
-       "$ARM64X_LIB_DIR/lib/wine/aarch64-windows/"
-    check_arm64x_archive "$ARM64X_LIB_DIR/lib/wine/aarch64-windows/libwinecrt0.a"
-    echo "==> ARM64X link libraries staged."
 fi

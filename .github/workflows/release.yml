@@ -33,7 +33,7 @@ jobs:
         with:
           repository: athei/wine
           ref: ${{ steps.ref.outputs.ref }}
-          path: src
+          path: src/intel
           fetch-depth: 1
 
       - name: Ensure Rosetta 2
@@ -94,12 +94,15 @@ jobs:
           path: cache
           key: redist-${{ hashFiles('scripts/redist.env') }}
 
+      # The scripts take the workspace (the parent of scripts/) as the root of
+      # their layout: src/intel/ and cache/ above, the build under
+      # build/intel/ and the bundle in dist/intel/wine.
       - name: Bundle distribution
-        run: MINGW_DIR="$HOME/llvm-mingw" scripts/bundle-wine.sh --strict-floor --dest "$GITHUB_WORKSPACE/dist"
+        run: MINGW_DIR="$HOME/llvm-mingw" scripts/bundle-wine.sh --strict-floor
 
       - name: Create tarball
         run: |
-          XZ_OPT="-T0" gtar -C dist -cJf "wine-${GITHUB_REF_NAME}-macos-x86_64.tar.xz" wine
+          XZ_OPT="-T0" gtar -C dist/intel -cJf "wine-${GITHUB_REF_NAME}-macos-x86_64.tar.xz" wine
 
       - name: Create draft release
         env:

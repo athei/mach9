@@ -14,10 +14,9 @@ set -e
 #
 # Nothing is installed here: bundle-wine.sh --arm64 installs from these trees.
 #
-# --clean wipes the three trees first.
+# --clean wipes FEX_BUILD_DIR first.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
 CLEAN=0
@@ -85,8 +84,8 @@ echo "    at $(git -C "$FEX_SRC" rev-parse HEAD)"
 
 if [ "$CLEAN" -eq 1 ]; then
     echo "==> Cleaning $FEX_BUILD_DIR..."
-    remove_tree "$FEX_BUILD_DIR/wow64" "$FEX_BUILD_DIR/arm64ec" "$FEX_BUILD_DIR/unixlib"
 fi
+claim_tree "$FEX_BUILD_DIR" fex "$CLEAN"
 # Stale until the build below finishes.
 rm -f "$FEX_BUILD_DIR/COMMIT"
 

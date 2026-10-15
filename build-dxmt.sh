@@ -46,10 +46,7 @@ set -e
 # which takes long to build and does not depend on anything here).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
-DXMT_BUILD_DIR="${DXMT_BUILD_DIR:-$ROOT/build-dxmt}"
-DXMT_LLVM="${DXMT_LLVM:-$DXMT_BUILD_DIR/llvm15}"
 
 CLEAN=0
 while [ $# -gt 0 ]; do
@@ -60,7 +57,8 @@ while [ $# -gt 0 ]; do
 done
 
 # DXMT is only built for the arm64 profile, which names the Wine build tree
-# and SDK to link against, DXMT_DIST and the floor.
+# and SDK to link against, DXMT_BUILD_DIR, DXMT_LLVM, DXMT_DIST and the
+# floor.
 # shellcheck source=profile.sh
 . "$SCRIPT_DIR/profile.sh"
 set_profile arm64
@@ -132,12 +130,18 @@ for triple in x86_64-w64-mingw32 i686-w64-mingw32 arm64ec-w64-mingw32; do
     done
 done
 
+# The checkouts and meson trees this script deletes and recreates are fixed
+# paths in DXMT_BUILD_DIR. DXMT_LLVM and DXMT_DIST are inside it unless
+# overridden, so they are claimed on their own, and so is DXMT_LLVM.part
+# below.
+claim_tree "$DXMT_BUILD_DIR" dxmt
+claim_tree "$DXMT_LLVM" dxmt-llvm
 if [ "$CLEAN" -eq 1 ]; then
     echo "==> Cleaning the DXMT trees..."
     remove_tree "$DXMT_SRC" "$DXMT_BUILD_DIR/win64" "$DXMT_BUILD_DIR/win32" \
-                "$DXMT_BUILD_DIR/unix" "$DXMT_DIST"
+                "$DXMT_BUILD_DIR/unix"
 fi
-mkdir -p "$DXMT_BUILD_DIR"
+claim_tree "$DXMT_DIST" dxmt-dist "$CLEAN"
 
 # pinned_clone <url> <tag> <commit> <dir>: make <dir> a shallow clone of
 # <tag> with its submodules, and exit unless the tag is at <commit>. An
@@ -171,14 +175,8 @@ pinned_clone() {
 # and the other options are Hadron's, which builds LLVM 15 with the same
 # SDK; zstd is off so the result needs nothing from Homebrew. DXMT_LLVM/COMMIT
 # records the commit they were built from; libraries from another one (a
-# bumped pin) are rebuilt. A DXMT_LLVM without that file was not made here
-# and is never deleted.
+# bumped pin), or none, are rebuilt.
 if [ "$(cat "$DXMT_LLVM/COMMIT" 2>/dev/null)" != "$LLVM15_GIT_COMMIT" ]; then
-    if [ -e "$DXMT_LLVM" ] && [ ! -f "$DXMT_LLVM/COMMIT" ]; then
-        echo "Error: $DXMT_LLVM exists but was not built by this script (no COMMIT);"
-        echo "remove it or point DXMT_LLVM elsewhere"
-        exit 1
-    fi
     echo "==> Building LLVM 15 static libraries into $DXMT_LLVM..."
     remove_tree "$DXMT_LLVM" "$DXMT_BUILD_DIR/llvm-build"
     pinned_clone "$LLVM15_GIT_URL" "$LLVM15_GIT_TAG" "$LLVM15_GIT_COMMIT" "$DXMT_BUILD_DIR/llvm-project"
@@ -201,7 +199,7 @@ if [ "$(cat "$DXMT_LLVM/COMMIT" 2>/dev/null)" != "$LLVM15_GIT_COMMIT" ]; then
     cmake --build "$DXMT_BUILD_DIR/llvm-build"
     # Installed next to DXMT_LLVM and renamed into place, so an interrupted
     # install never leaves a DXMT_LLVM behind.
-    remove_tree "$DXMT_LLVM.part"
+    claim_tree "$DXMT_LLVM.part" dxmt-llvm 1
     cmake --install "$DXMT_BUILD_DIR/llvm-build" --prefix "$DXMT_LLVM.part" >/dev/null
     echo "$LLVM15_GIT_COMMIT" > "$DXMT_LLVM.part/COMMIT"
     mv "$DXMT_LLVM.part" "$DXMT_LLVM"
@@ -268,7 +266,7 @@ ninja -C "$DXMT_BUILD_DIR/unix" src/winemetal/unix/winemetal.so
 
 # ── Stage ───────────────────────────────────────────────────────────────
 echo "==> Staging DXMT into $DXMT_DIST..."
-remove_tree "$DXMT_DIST"
+claim_tree "$DXMT_DIST" dxmt-dist 1
 mkdir -p "$DXMT_DIST/x86_64-windows" "$DXMT_DIST/i386-windows" "$DXMT_DIST/$UNIX_DIR"
 for dll in $PE_DLLS; do
     case $dll in

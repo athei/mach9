@@ -106,10 +106,9 @@ the patched ntdll.
 - x86_64 Homebrew in `/usr/local/` (not the ARM one in `/opt/homebrew/`)
   with the formulae in `ROOTS` in [`package-deps.sh`](package-deps.sh), and
   a `pkg-config`.
-- [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) at `MINGW_DIR`,
-  including its arm64ec toolchain. The scripts append its `bin/` to `PATH`;
-  never prepend it, since its unprefixed `clang` breaks configure's host
-  compiler detection.
+- [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) at `MINGW_DIR`. The
+  scripts append its `bin/` to `PATH`; never prepend it, since its
+  unprefixed `clang` breaks configure's host compiler detection.
 - Rust with the `x86_64-apple-darwin` target, for `compatdb.so`.
 
 The arm64 build needs a different set: see
@@ -118,8 +117,8 @@ The arm64 build needs a different set: see
 ### Commands
 
 ```bash
-./build-wine.sh                       # configure and compile
-./bundle-wine.sh --dest /path/to/out  # assemble /path/to/out/wine
+./build-wine.sh    # configure and compile
+./bundle-wine.sh   # assemble the bundle (see Layout)
 ```
 
 | Script | Flag | Effect |
@@ -127,14 +126,38 @@ The arm64 build needs a different set: see
 | `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile |
 | `build-wine.sh` | `--clean` | Wipes the build directories first; the only way to pick up changed configure flags or deployment target |
 | `build-wine.sh`, `bundle-wine.sh` | `--arm64` | The native arm64 profile instead of the x86_64 one; see [docs/arm64.md](docs/arm64.md) |
-| `bundle-wine.sh` | `--dest <dir>` | Required. Writes `<dir>/wine`, asking before it deletes an existing one |
+| `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the profile's bundle in the [layout](#layout). Either way it asks before it deletes an existing one |
 | `bundle-wine.sh` | `--runtime-only` | No development files and no test binaries; the flavor to put into an application |
-| `bundle-wine.sh` | `--compatdb-only` | Rebuilds `compatdb.so` into the existing `<dir>/wine` only; no prompt, no `make install`, no Wine build needed, works on an unpacked release tarball; `--runtime-only` is ignored |
+| `bundle-wine.sh` | `--compatdb-only` | Rebuilds `compatdb.so` into the existing bundle only (the profile's, or `<dir>/wine` with `--dest`); no prompt, no `make install`, no Wine build needed, works on an unpacked release tarball; `--runtime-only` is ignored |
 | `bundle-wine.sh` | `--strict-floor` | A Mach-O that needs a newer macOS than its floor is an error instead of a warning |
 
 `usage()` and the argument parsing in [`bundle-wine.sh`](bundle-wine.sh) are
 authoritative. What the bundle step checks is in
 [docs/maintenance.md](docs/maintenance.md#what-bundle-winesh-verifies).
+
+### Layout
+
+Everything lives beside this repository, in the directory that holds it
+(the root; `WINE_BUILD_ROOT` names another, for a checkout kept elsewhere):
+
+| Path | What it is |
+|------|------------|
+| `scripts/` | This repository |
+| `src/<profile>/` | The profile's Wine source: `src/intel` is the checkout of athei/wine, `src/arm64` a linked worktree of it |
+| `src-fex/` | The FEX checkout |
+| `cache/` | Downloaded redistributables |
+| `build/<profile>/` | Every intermediate of a profile: the Wine build and, for arm64, the SDK and its link-library tree, FEX and DXMT |
+| `dist/<profile>/wine` | The profile's bundle |
+
+`<profile>` is `intel` or `arm64`. The name of each tree is set in
+[`profile.sh`](profile.sh), with the variable that overrides it. The
+scripts mark each build tree they make with a `.wine-build-tree` file and
+refuse to fill or delete a directory that is not empty and has no such
+marker, so an override cannot point them at something else
+(`claim_tree` in [`profile.sh`](profile.sh)). The exception is an unmarked
+tree from before markers existed, which is adopted when its parent is
+`build/<profile>/` or another tree of the same profile and it is not a git
+checkout.
 
 ### Paths
 
@@ -142,15 +165,13 @@ authoritative. What the bundle step checks is in
 |----------|------------|---------|
 | `WINE_SRC` | athei/wine checkout | build |
 | `BUILD_DIR` | Wine build tree; with `--compatdb-only` only cargo's target directory, `$BUILD_DIR/compatdb` | build, bundle |
-| `ARM64X_BUILD_DIR` | Build tree of the ARM64X link libraries | build |
-| `ARM64X_LIB_DIR` | Where the ARM64X link libraries are staged | build |
 | `MINGW_DIR` | llvm-mingw | build, bundle |
 | `CACHE_DIR` | Downloaded redistributables | bundle |
 
 These are the x86_64 build's; the arm64 build has its own names, listed in
-[docs/arm64.md](docs/arm64.md#paths). The defaults of `WINE_SRC` and
-`BUILD_DIR` are set in [`profile.sh`](profile.sh), the others at the top of
-[`build-wine.sh`](build-wine.sh) and [`bundle-wine.sh`](bundle-wine.sh).
+[docs/arm64.md](docs/arm64.md#paths). `MINGW_DIR` and `CACHE_DIR` are set at
+the top of [`build-wine.sh`](build-wine.sh) and
+[`bundle-wine.sh`](bundle-wine.sh), the others in [`profile.sh`](profile.sh).
 
 ### Configure policy
 

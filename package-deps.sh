@@ -16,7 +16,7 @@ set -e
 # them from source on a current macOS would raise that floor instead. Upload
 # the result with:
 #
-#   gh release create deps-<date> --title ... dist/wine-deps-macos-x86_64.tar.xz
+#   gh release create deps-<date> --title ... dist/intel/wine-deps-macos-x86_64.tar.xz
 #
 # then point DEPS_URL and DEPS_SHA256 in .github/workflows/release.yml at it.
 #
@@ -27,10 +27,17 @@ set -e
 # below against MACOS_FLOOR, and every Mach-O in the staged tree is checked
 # against that floor before the archive is written.
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# profile.sh sets ROOT, the directory that holds this repository, and
+# provides macos_newer, the comparison bundle-wine.sh's --strict-floor check
+# uses, which this tree has to pass in CI. No profile is selected: the floor
+# and prefix below are this script's own. The archive is an input of the
+# x86_64 build, so it goes beside that profile's bundle.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=profile.sh
+. "$SCRIPT_DIR/profile.sh"
 PREFIX="${PREFIX:-/usr/local}"
 BREW="${BREW:-$PREFIX/bin/brew}"
-OUT_DIR="${OUT_DIR:-$ROOT/dist}"
+OUT_DIR="${OUT_DIR:-$ROOT/dist/intel}"
 OUT="$OUT_DIR/wine-deps-macos-x86_64.tar.xz"
 
 # The libraries Wine links against plus the one build tool that has to be
@@ -158,18 +165,6 @@ for dylib in "$GMP_BUILT"/lib/*.dylib; do
 done
 rm -rf "$GMP_CELLAR/lib" "$GMP_CELLAR/include"
 cp -R "$GMP_BUILT/lib" "$GMP_BUILT/include" "$GMP_CELLAR/"
-
-# macos_newer <a> <b>: succeed when macOS version <a> is newer than <b>.
-# Major, minor and patch are compared as numbers and a missing part counts as
-# 0. The same function as in bundle-wine.sh, whose --strict-floor check this
-# tree has to pass in CI.
-macos_newer() {
-    local a1 a2 a3 b1 b2 b3
-    IFS=. read -r a1 a2 a3 <<< "$1"
-    IFS=. read -r b1 b2 b3 <<< "$2"
-    [ $(( ${a1:-0} * 10000 + ${a2:-0} * 100 + ${a3:-0} )) -gt \
-      $(( ${b1:-0} * 10000 + ${b2:-0} * 100 + ${b3:-0} )) ]
-}
 
 # Nothing ships unless it can actually load on the floor we claim to support.
 echo "==> Verifying every Mach-O against macOS $MACOS_FLOOR..."
