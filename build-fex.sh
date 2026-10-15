@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-# Builds FEX, the x86 emulator of the arm64 Wine, from athei/FEX at the ref in
+# Builds FEX, the x86 emulator of the arm64 Wine, from athei/FEX (upstream FEX
+# with our commits on top; FEX_REPO names another repository) at the ref in
 # fex-src.ref (a branch, tag or commit). Called by build-wine.sh --arm64;
 # running it alone rebuilds FEX only. Three CMake trees under FEX_BUILD_DIR,
 # following Hadron's recipe:

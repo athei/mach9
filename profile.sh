@@ -75,6 +75,7 @@ set_profile() {
             # processes DXMT instead. .cargo/config.toml carries the same
             # value for a plain cargo build of compatdb.
             MACOS_FLOOR="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
+            FLOOR_NEWER_FUNCS=""
             UNIX_DIR=x86_64-unix
             PE64_DIR=x86_64-windows
             RUST_TARGET=x86_64-apple-darwin
@@ -142,6 +143,9 @@ set_profile() {
                 fi
                 MACOS_FLOOR="$MACOSX_DEPLOYMENT_TARGET"
             fi
+            # See after the profiles. The macOS 27 SDK declares pipe2 as
+            # available from macOS 27 on, above this floor.
+            FLOOR_NEWER_FUNCS="pipe2:27.0"
             UNIX_DIR=aarch64-unix
             # An x64 process runs as ARM64EC, and Wine looks up its builtins
             # in aarch64-windows only, so the x86_64 PE modules of DXMT and
@@ -182,6 +186,21 @@ set_profile() {
             exit 1
             ;;
     esac
+    # FLOOR_NEWER_FUNCS: functions Wine's configure checks for that the
+    # macOS SDK declares, but that macOS only has from a release above the
+    # floor, as <function>:<macOS version>. configure finds them in the SDK,
+    # Wine calls them without an availability check, and so the linker
+    # weak-imports them and on an older macOS the call jumps to address 0
+    # (pipe2 is what ntdll's server_pipe() calls first in every process).
+    # While the floor is below a function's version, configure is told the
+    # function is missing, and Wine uses the older calls it has for that
+    # case.
+    local func
+    for func in $FLOOR_NEWER_FUNCS; do
+        if macos_newer "${func#*:}" "$MACOS_FLOOR"; then
+            CONFIGURE_TOOLCHAIN+=("ac_cv_func_${func%%:*}=no")
+        fi
+    done
     # Where `make install` puts the tree under DESTDIR. Wine's default
     # --prefix, which configure is never given; the bundle step moves this
     # directory to <dest>/wine.

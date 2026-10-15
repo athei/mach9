@@ -1,17 +1,26 @@
 # Native arm64 build
 
 `--arm64` builds and bundles a native arm64 Wine that runs x86 programs
-through [FEX](https://github.com/athei/FEX) instead of Rosetta. It is local
-only: no workflow builds it, and the bundle is signed for the machine's own
-developer team.
+through [FEX](https://github.com/FEX-Emu/FEX) instead of Rosetta. It is
+local only: no workflow builds it, and the bundle is signed for the
+machine's own developer team.
 
 Every difference from the x86_64 build is a value or a flag of the `arm64`
 profile in [`profile.sh`](../profile.sh); the scripts test the flags. In
 short:
 
-- The Wine source is the arm64 worktree of the Wine checkout, configured
-  natively against the arm64 Homebrew with the same allowlist as the x86_64
-  build, plus the options only that tree has (`CONFIGURE_FEATURES_EXTRA`).
+- The Wine source is upstream Wine with our own series on top, the branch
+  [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched) of
+  athei/wine, checked out in the arm64 worktree of the Wine checkout. Some
+  of its commits come from Hadron, and it carries CrossOver's msync (see
+  [Runtime](#runtime)). It is configured natively against the arm64
+  Homebrew with the same allowlist as the x86_64 build, plus the options
+  only that tree has (`CONFIGURE_FEATURES_EXTRA`) and the configure results
+  the floor overrides (`FLOOR_NEWER_FUNCS`,
+  [macOS floors](maintenance.md#macos-floors)).
+- FEX is upstream FEX with our own commits on top, from
+  [athei/FEX](https://github.com/athei/FEX) at the ref
+  [`fex-src.ref`](../fex-src.ref) names.
 - FEX replaces Rosetta, so there is no x87sidecar and compatdb.so has no x87
   query. Instead, compatdb's built-in `fex-x87-reduced-precision` rule asks
   FEX for faster x87 emulation
@@ -84,6 +93,42 @@ uses. The arm64 overrides have their own names, so a `WINE_SRC` or
 | `lib/wine/dxgi/<impl>/aarch64-windows/`, `lib/wine/d3d9/<impl>/aarch64-windows/` | The 64-bit modules of each tree. DXMT's and mtld3d's are x86_64 PE: an x64 process runs as ARM64EC, and Wine looks up its builtins in `aarch64-windows` |
 | `lib/wine/x86_64-windows/` | Full bundle only: the SDK's x86_64 link libraries and nothing else, so the bundle carries the same link libraries as the SDK. Nothing reads the directory at run time |
 
+## Runtime
+
+Besides the variables of the x86_64 bundle
+([environment variables](../README.md#environment-variables)), these apply
+to this build only.
+
+| Variable | Effect |
+|----------|--------|
+| `WINEMSYNC` | Unset or a non-zero number: msync is on. Any other value (`0`, empty, not a number): off, and Wine synchronizes through wineserver requests as upstream Wine does. Only the wineserver reads it, from the environment of the process that starts it, and every process of the session follows the wineserver's choice whatever its own environment says |
+| `WINENCPU` | Limits the number of processors Wine reports to programs, for those that misbehave with many. A value of 0, one that is not a number, or one above the real count is ignored |
+| `FEX_HARDWARE_TSO` | Leave unset. `1` lets FEX switch to the hardware x86 memory ordering instead of emulating it, but FEX switches only the thread that asks, and this Wine does not switch the threads it starts, so it is not safe with this Wine |
+
+- msync is CrossOver's implementation of Windows synchronization objects
+  for macOS, built on Mach semaphores and shared memory, which saves
+  wineserver round trips.
+- `WINEMSYNC=0` has to be in the environment of whatever starts the
+  wineserver session, normally the launcher's first Wine process, and
+  takes effect only for a new session. A per-game compatdb `env` rule
+  cannot turn msync off reliably: it reaches the game's process, which
+  only starts the wineserver when no session is running yet.
+- While msync is on, the wineserver prints `msync: up and running.` on its
+  standard error when it starts and registers a launchd service named
+  `wine-<dev>-<inode>-msync` while it runs; for a wineserver started from
+  the GUI login session, `launchctl print gui/<uid>` lists it. With msync
+  off neither appears.
+- If the wineserver cannot register that service, it prints an
+  `msync: error:` line saying msync is off for this wineserver and runs the
+  session without msync. `msync: up and running.` then does not appear.
+  The messages are in
+  [`server/msync.c`](https://github.com/athei/wine/blob/arm64-patched/server/msync.c).
+- `WINENCPU` belongs on the process that starts the session as well. Each
+  process limits the count it reports itself, but the `CentralProcessor`
+  registry keys and `NUMBER_OF_PROCESSORS` are written once per session,
+  and FEX's emulated CPUID reads those keys, so a value set later for one
+  game leaves them at the session's count.
+
 ## Wine SDK
 
 PE code built outside Wine links against Wine's `libwinecrt0.a` (for the
@@ -140,10 +185,14 @@ Wine source commit. What goes in is the `WITH_WINE_SDK` step of
 
 ## Loader app
 
-FEX needs the hardware x86 memory ordering that macOS only grants to a
-process signed with `com.apple.developer.cross-architecture-support`. That
-entitlement is honoured only through a provisioning profile embedded in an
-app bundle and a signature by a certificate of the profile's team.
+The loader needs `com.apple.developer.cross-architecture-support`. With it,
+the kernel leaves most of the 4 GB `__PAGEZERO` as a mapping Wine can
+replace, which Wine claims as its low reserved area for the i386 code that
+runs under FEX. It also gates the hardware x86 memory ordering that
+`FEX_HARDWARE_TSO` would use, which this build leaves off
+([Runtime](#runtime)). That entitlement is honoured only through a
+provisioning profile embedded in an app bundle and a signature by a
+certificate of the profile's team.
 
 - The bundle step moves the loader into `lib/wine/aarch64-unix/wine.app` and
   links both entry points to it.
@@ -192,10 +241,17 @@ file checks of the x86_64 bundle
   `xtajit64.dll` are FEX's.
 - No `bin/x87sidecar`, no x87 export in `compatdb.so` or `ntdll.so`, and
   `compatdb.so` exports `compatdb_query_env`.
-- The smoke test, with the caller's `WINE_COMPATDB` and `FEX_*` variables
-  dropped: `wine --version`; a fresh prefix boots (`cmd /c exit`), with
-  `compatdb:` lines and no trace of the x87sidecar; the i386 `cmd.exe` runs;
-  and [`smoke/hello.c`](../smoke/hello.c), compiled for each architecture in
+- No unix module, `bin/wine` or `bin/wineserver` imports a function of
+  `FLOOR_NEWER_FUNCS` while the floor is below its version
+  ([macOS floors](maintenance.md#macos-floors)). That catches a Wine build
+  tree configured before the override, which `minos` does not show.
+- The smoke test, with the caller's `WINE_COMPATDB` and every `WINEMSYNC*`
+  and `FEX_*` variable dropped: `wine --version`; a fresh prefix boots
+  (`cmd /c exit`), with `compatdb:` lines, no trace of the x87sidecar, and
+  the wineserver's `msync: up and running.` line and no `msync: error:`
+  line (with `--compatdb-only`, a wineserver without msync skips that
+  check); the i386 `cmd.exe` runs; and
+  [`smoke/hello.c`](../smoke/hello.c), compiled for each architecture in
   the profile's `SMOKE_PE_ARCHS`, prints its marker and reports whether it
   loads `dxgi.dll` and `d3d9.dll`. Each one's compatdb lines must name the
   trees for its arch (the x86 defaults, or `wined3d` for the native one), and
@@ -228,5 +284,5 @@ file checks of the x86_64 bundle
 | mtld3d | The same release tarball as the x86_64 build, [`redist.env`](../redist.env) |
 | DXMT | [`redist.env`](../redist.env), by commit |
 | LLVM for DXMT's `winemetal.so` | [`redist.env`](../redist.env), tag and commit; `build-dxmt.sh` fails when the tag is not at the commit |
-| Wine | The arm64 worktree's checkout. The SDK and DXMT record the commit they were built against (with `-dirty` when tracked files differ, which counts all uncommitted states as one), and the bundle step refuses either when it is not the current one |
+| Wine | Whatever the arm64 worktree has checked out, normally [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched); nothing pins a commit. The SDK and DXMT record the commit they were built against (with `-dirty` when tracked files differ, which counts all uncommitted states as one), and the bundle step refuses either when it is not the current one |
 | Provisioning profile | [`signing/loader.provisionprofile`](../signing/loader.provisionprofile); replace the file when it expires or the App ID changes |

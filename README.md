@@ -11,8 +11,8 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
   logging.
 - [docs/maintenance.md](docs/maintenance.md): internals, floors, pins, the
   Wine-side contract, upgrade checklist.
-- [docs/arm64.md](docs/arm64.md): the native arm64 build with FEX, local
-  only.
+- [docs/arm64.md](docs/arm64.md): the native arm64 build, from upstream
+  Wine with our own series and FEX, local only.
 
 ## Getting a build
 
@@ -89,8 +89,8 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
 ### Defaults that differ from Wine
 
 Each row decided by a rule is a built-in compatdb rule that matches every
-process and can be changed per game or globally. No-execute is decided by
-the patched ntdll.
+process and can be changed per game or globally. No-execute and
+synchronization are decided by the patched Wine.
 
 | Behavior | Default in this bundle | Decided by |
 |----------|------------------------|------------|
@@ -98,6 +98,7 @@ the patched ntdll.
 | Address space | Every 32-bit process gets 4 GB, even without the large-address-aware flag | Rule `large-address-aware` ([recipes](docs/compatdb.md#recipes)) |
 | x87sidecar | Every i386 process under Rosetta starts under it | Rule `x87-sidecar` ([recipes](docs/compatdb.md#recipes)) |
 | x87 precision under FEX ([arm64 build](docs/arm64.md) only) | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([arm64 Wine](docs/compatdb.md#arm64-wine), [recipes](docs/compatdb.md#recipes)) |
+| Synchronization ([arm64 build](docs/arm64.md) only) | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | wineserver; `WINEMSYNC=0` where the session starts turns it off ([arm64 runtime](docs/arm64.md#runtime)) |
 | Vulkan loader | Disabled (`vulkan-1=`); the bundle ships no Vulkan | Rule `no-vulkan` ([recipes](docs/compatdb.md#recipes)) |
 | Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | Rule `no-mono-gecko` ([recipes](docs/compatdb.md#recipes)) |
 | No-execute | Follows the main executable's `NX_COMPAT` flag alone, as Windows does ([#3](https://github.com/athei/wine-build/issues/3)). Permanently on under Rosetta: a program that tries to turn it off gets `STATUS_ACCESS_DENIED` | ntdll, `WINE_DISABLE_NX_COMPAT` ([Wine-side contract](docs/maintenance.md#wine-side-contract)) |

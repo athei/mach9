@@ -107,6 +107,17 @@ With `--compatdb-only`:
   the floor would follow the runner image. Check that it still holds when the
   runner image changes.
 - Only the minimum is fixed; the SDK is whatever the build host has.
+- An SDK newer than the floor can declare functions Wine's configure checks
+  for that macOS only has above the floor. configure finds them, Wine calls
+  them without an availability check, and the linker weak-imports them, so
+  on an older macOS the call jumps to address 0. `minos` does not show
+  this, but the compiler warns `'<function>' is only available on macOS
+  <version> or newer`. A profile lists such functions in
+  `FLOOR_NEWER_FUNCS` in [`profile.sh`](../profile.sh), and configure is
+  told each is missing while the floor is below its version; a change
+  takes effect on the next `build-wine.sh --clean`, and until then the
+  bundle step fails on a module that still imports one. After a new SDK,
+  search a clean build's log for that warning.
 - Wine picks up a changed pin on the next `build-wine.sh --clean`, which is
   how CI always builds.
 - A `MACOSX_DEPLOYMENT_TARGET` in the environment overrides `MACOS_FLOOR`

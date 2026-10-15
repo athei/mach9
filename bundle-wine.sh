@@ -399,6 +399,84 @@ check_minos() {
     echo "  load on older systems (--strict-floor makes this an error)"
 }
 
+# check_floor_newer_imports: exit if a unix module, the loader or wineserver
+# imports a function of FLOOR_NEWER_FUNCS (profile.sh) while the floor is
+# below that function's version. profile.sh keeps such functions from
+# configure, but a build tree configured before that, or one whose configure
+# ran without the override, still calls them, weak-imported, and minos does
+# not show it. The unix modules of the default dir (DXMT's winemetal.so
+# among them, which the dxmt tree links to) and of the d3d9 trees are checked,
+# but not those of the gptk tree: they are links to Apple's
+# libd3dshared.dylib, which ships as it is. A path that resolves to a file
+# already checked (the loader's symlinks) is skipped. A module that checks
+# availability before it calls the function would be flagged as well,
+# although it is safe; none in the bundle does that today.
+check_floor_newer_imports() {
+    local func name f real rel syms seen checked=0 bad=0 files=()
+    if ! command -v nm >/dev/null; then
+        echo "Error: nm not found (it comes with the Xcode command line tools)"
+        exit 1
+    fi
+    files=("$WINE_DIR/bin/wine" "$WINE_DIR/bin/wineserver" "$unixdir/wine"
+           "$unixdir"/*.so
+           "$WINE_DIR"/lib/wine/d3d9/*/"$UNIX_DIR"/*.so)
+    for func in $FLOOR_NEWER_FUNCS; do
+        macos_newer "${func#*:}" "$MACOS_FLOOR" || continue
+        checked=$((checked + 1))
+        name=${func%%:*}
+        seen=$'\n'
+        for f in "${files[@]}"; do
+            [ -e "$f" ] || continue
+            real=$(perl -MCwd=abs_path -e 'print abs_path(shift)' "$f")
+            case "$seen" in *$'\n'"$real"$'\n'*) continue ;; esac
+            seen+="$real"$'\n'
+            rel=${f#"$WINE_DIR"/}
+            syms=$(nm -u "$f" 2>"$TMP_DIR/nm.err") || {
+                echo "Error: nm cannot read $rel:"
+                cat "$TMP_DIR/nm.err"
+                exit 1
+            }
+            if grep -qx "_$name" <<< "$syms"; then
+                echo "  ERROR: $rel imports $name, a function newer than the floor"
+                echo "    (macOS has it from ${func#*:} on, the floor is $MACOS_FLOOR)."
+                echo "    $(floor_import_hint "$rel")"
+                bad=1
+            fi
+        done
+    done
+    if [ "$checked" -eq 0 ]; then
+        echo "  No function of FLOOR_NEWER_FUNCS is newer than the floor $MACOS_FLOOR; nothing to check."
+        return 0
+    fi
+    if [ "$bad" -ne 0 ]; then
+        echo "Error: the modules above import functions newer than the floor"
+        exit 1
+    fi
+    echo "  No module imports a function of FLOOR_NEWER_FUNCS newer than the floor."
+}
+
+# floor_import_hint <rel>: what to do about the module <rel> (a path in the
+# bundle) importing a function newer than the floor, by where it comes from.
+floor_import_hint() {
+    case "$1" in
+        lib/wine/d3d9/*)
+            echo "It comes from the mtld3d release pinned in redist.env, which needs the fix." ;;
+        */compatdb.so)
+            echo "It is compatdb.so, which this script builds from compatdb/; fix the crate." ;;
+        */winemetal.so)
+            if [ "$WITH_DXMT_BUILD" -eq 1 ]; then
+                echo "It is DXMT's, built by build-dxmt.sh; fix DXMT or how it is built."
+            else
+                echo "It is DXMT's, from the release pinned in redist.env, which needs the fix."
+            fi ;;
+        */libwow64fex.so|*/libarm64ecfex.so)
+            echo "It is FEX's, built by build-fex.sh; fix FEX or how it is built." ;;
+        *)
+            echo "It comes from the Wine build, which configure set up without the"
+            echo "    FLOOR_NEWER_FUNCS overrides: run build-wine.sh with --clean." ;;
+    esac
+}
+
 # check_query_export: fail unless the installed compatdb.so exports
 # compatdb_query_env and, with the x87sidecar, compatdb_query_x87. ntdll
 # reads a missing compatdb_query_x87 as no opinion, which means attaching the
@@ -597,12 +675,13 @@ smoke_test() {
 # smoke_test_arm64: run the bundled arm64 wine through the signed loader and
 # check that native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
-# hang rather than an error. The caller's WINE_COMPATDB and FEX_* variables
-# are dropped so that the built-in rules and FEX's defaults decide.
+# hang rather than an error. The caller's WINE_COMPATDB and every WINEMSYNC*
+# and FEX_* variable are dropped so that the built-in rules and the defaults
+# of Wine and FEX decide.
 smoke_test_arm64() {
     local version log arch cc exe marker markers sidecar var
     local wine_env=(env -u WINE_COMPATDB)
-    for var in $(compgen -e | grep '^FEX_'); do
+    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_)'); do
         wine_env+=(-u "$var")
     done
     wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all)
@@ -639,6 +718,27 @@ smoke_test_arm64() {
         exit 1
     fi
     echo "  Nothing involves the x87sidecar."
+    # msync is on by default, and the caller's WINEMSYNC* variables are
+    # dropped above. The wineserver the boot started writes "msync: up and
+    # running." to stderr, whatever WINEDEBUG says, only once its launchd
+    # service is registered and msync is on; when registration fails it
+    # prints an "msync: error:" line and runs without msync. Its other
+    # "msync: error:" lines are failures too, while the "msync: error
+    # setting ..." lines (no colon) only report a thread scheduling policy
+    # it could not set and are not. A bundle whose wineserver has no msync
+    # at all can only be one from before it, which --compatdb-only may meet
+    # and skips; a full bundle without it was built from a Wine source that
+    # lacks it, which is an error.
+    if [ "$COMPATDB_ONLY" -eq 1 ] && ! grep -qaF "msync: up and running." "$WINE_DIR/bin/wineserver"; then
+        echo "  Skipping the msync check: this wineserver predates msync."
+    elif ! grep -qF "msync: up and running." "$log" || grep -q "^msync: error:" "$log"; then
+        echo "Error: the wineserver of the prefix boot did not start msync:"
+        grep "msync" "$log" || echo "  (no msync lines at all)"
+        smoke_stop
+        exit 1
+    else
+        echo "  The wineserver runs msync."
+    fi
 
     time_mark "smoke: i386 cmd.exe under FEX"
     echo "  Starting the i386 cmd.exe under FEX..."
@@ -858,12 +958,14 @@ check_dxmt_build() {
 }
 
 # ── Loader app ──────────────────────────────────────────────────────────
-# The arm64 loader runs x86 code through FEX, which needs the hardware x86
-# memory ordering macOS only grants to a process signed with
-# com.apple.developer.cross-architecture-support. That entitlement is
-# restricted: it is only honoured with a provisioning profile that grants it,
-# embedded in an app bundle, and a signature by a certificate of the same
-# team. So the loader moves into lib/wine/<unix>/wine.app and everything that
+# The arm64 loader needs com.apple.developer.cross-architecture-support,
+# with which the kernel leaves most of the 4 GB __PAGEZERO replaceable, so
+# Wine can claim the low address space its i386 code needs (the same
+# entitlement gates the hardware x86 memory ordering FEX_HARDWARE_TSO would
+# use, which this build leaves off). That entitlement is restricted: it is
+# only honoured with a provisioning profile that grants it, embedded in an
+# app bundle, and a signature by a certificate of the same team. So the
+# loader moves into lib/wine/<unix>/wine.app and everything that
 # starts a Wine process reaches it through a symlink. Everything about the
 # signature comes from the profile in LOADER_PROFILE: the entitlements, the
 # bundle identifier and the team whose certificate signs.
@@ -2136,6 +2238,9 @@ fi
 time_mark "Step 5: minos"
 echo "  Checking every Mach-O against macOS $MACOS_FLOOR..."
 check_minos "$WINE_DIR"
+if [ -n "$FLOOR_NEWER_FUNCS" ]; then
+    check_floor_newer_imports
+fi
 # smoke_test checks that bin/x87sidecar is an arm64 executable before it
 # starts the i386 process, for this mode and --compatdb-only alike.
 
