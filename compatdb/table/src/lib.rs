@@ -982,15 +982,12 @@ fn env_name_matches(seg: &[u16], name: &str) -> bool {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
 mod tests {
     use super::*;
+
+    /// What a test returns, so a missing value fails it through `?` rather
+    /// than a panic in the test body.
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     fn u16s(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()
@@ -1120,7 +1117,7 @@ mod tests {
             Table::parse(&format!("{HEADER}\nname=rockstar-launcher;dxgi=dxmt"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(over.rules.len(), 1);
-        assert!(over.rules.first().map(|r| r.exe.is_empty()).unwrap());
+        assert_eq!(over.rules.first().map(|r| r.exe.as_str()), Some(""));
     }
 
     #[test]
@@ -1282,12 +1279,12 @@ mod tests {
             Table::parse(&format!("{HEADER}\nname=defaults;dll_overrides=a="));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(base.overlay(over), [] as [String; 0]);
-        assert_eq!(base.rules.first().unwrap().dpi_aware, Some(true));
+        assert_eq!(base.rules.first().map(|r| r.dpi_aware), Some(Some(true)));
         // One that sets it replaces it.
         let (over, diagnostics) = Table::parse(&format!("{HEADER}\nname=defaults;dpi_aware=false"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(base.overlay(over), [] as [String; 0]);
-        assert_eq!(base.rules.first().unwrap().dpi_aware, Some(false));
+        assert_eq!(base.rules.first().map(|r| r.dpi_aware), Some(Some(false)));
         assert_eq!(
             base.resolve("x.exe", &VersionInfo::default()).dpi_aware,
             Some(false)
@@ -1345,7 +1342,10 @@ mod tests {
                 assert_eq!(table.rules.len(), 1, "{key}={bad:?}");
                 assert_eq!(table.rules.first().map(|r| r.name.as_str()), Some("ok"));
                 assert_eq!(diagnostics.len(), 1, "{key}={bad:?}");
-                assert!(diagnostics[0].contains(key), "{diagnostics:?}");
+                assert!(
+                    diagnostics.first().is_some_and(|d| d.contains(key)),
+                    "{diagnostics:?}"
+                );
             }
         }
     }
@@ -1420,7 +1420,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_by_name_replaces_large_address_aware_and_x87_sidecar_only_when_set() {
+    fn overlay_by_name_replaces_large_address_aware_and_x87_sidecar_only_when_set() -> TestResult {
         let mut base = Table {
             rules: vec![Rule {
                 name: "defaults".into(),
@@ -1434,16 +1434,17 @@ mod tests {
             Table::parse(&format!("{HEADER}\nname=defaults;dll_overrides=a="));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(base.overlay(over), [] as [String; 0]);
-        let rule = base.rules.first().unwrap();
+        let rule = base.rules.first().ok_or("no rule")?;
         assert_eq!(rule.large_address_aware, Some(true));
         assert_eq!(rule.x87_sidecar, Some(true));
         let (over, diagnostics) =
             Table::parse(&format!("{HEADER}\nname=defaults;x87_sidecar=false"));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(base.overlay(over), [] as [String; 0]);
-        let rule = base.rules.first().unwrap();
+        let rule = base.rules.first().ok_or("no rule")?;
         assert_eq!(rule.large_address_aware, Some(true));
         assert_eq!(rule.x87_sidecar, Some(false));
+        Ok(())
     }
 
     #[test]
@@ -1532,8 +1533,19 @@ mod tests {
             node.resize(node.len().next_multiple_of(2), 0);
             node.extend(children);
         }
-        node[0] = u16::try_from(node.len() * 2).unwrap();
-        node[1] = u16::try_from(if text { value.len() } else { value.len() * 2 }).unwrap();
+        // The fixtures stay far below 64 KB. Were one to grow past it, the
+        // saturated length would make the tests that parse it fail.
+        let byte_len = |units: usize| u16::try_from(units.saturating_mul(2)).unwrap_or(u16::MAX);
+        let length = byte_len(node.len());
+        let value_length = if text {
+            u16::try_from(value.len()).unwrap_or(u16::MAX)
+        } else {
+            byte_len(value.len())
+        };
+        if let [w_length, w_value_length, ..] = node.as_mut_slice() {
+            *w_length = length;
+            *w_value_length = value_length;
+        }
         node
     }
 
@@ -1702,7 +1714,7 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_resource_yields_empty_fields() {
+    fn a_malformed_resource_yields_empty_fields() -> TestResult {
         let blob = version_resource(&[(
             "040904b0",
             &[("CompanyName", "Acme"), ("ProductName", "Rocket Sled")],
@@ -1710,25 +1722,36 @@ mod tests {
         // Cut short anywhere: never a panic, and never a value that is not
         // the field's own.
         for len in 0..blob.len() {
-            let vi = VersionInfo::from_resource(&blob[..len]);
+            let vi = VersionInfo::from_resource(blob.get(..len).ok_or("cut")?);
             assert!("Acme".starts_with(&vi.company), "{len}: {vi:?}");
             assert!("Rocket Sled".starts_with(&vi.product), "{len}: {vi:?}");
         }
         // A root that is not VS_VERSION_INFO, and a zero length.
         let mut foreign = blob.clone();
-        foreign[3] = u16::from(b'X');
+        *foreign.get_mut(3).ok_or("no key")? = u16::from(b'X');
         assert_eq!(VersionInfo::from_resource(&foreign), VersionInfo::default());
         let mut zero = blob;
-        zero[0] = 0;
+        *zero.first_mut().ok_or("no wLength")? = 0;
         assert_eq!(VersionInfo::from_resource(&zero), VersionInfo::default());
         // A bare key and value with no tree around them.
         let mut runs: Vec<u16> = vec![0x40, 0x0f, 0x01];
         runs.extend("CompanyName\0\0Acme\0".encode_utf16());
         assert_eq!(VersionInfo::from_resource(&runs), VersionInfo::default());
+        Ok(())
     }
 
     #[test]
-    fn a_broken_entry_ends_its_table_without_taking_a_neighbours_value() {
+    fn a_broken_entry_ends_its_table_without_taking_a_neighbours_value() -> TestResult {
+        // The wLength of the entry with this key, three words before the key.
+        fn w_length<'a>(blob: &'a mut [u16], key: &str) -> Result<&'a mut u16, String> {
+            let units = u16s(key);
+            blob.windows(units.len())
+                .position(|w| w == units)
+                .and_then(|at| at.checked_sub(3))
+                .and_then(|at| blob.get_mut(at))
+                .ok_or_else(|| format!("no entry {key}"))
+        }
+
         let blob = version_resource(&[(
             "040904b0",
             &[
@@ -1737,11 +1760,6 @@ mod tests {
                 ("ProductName", "Rocket Sled"),
             ],
         )]);
-        // Where the header of the entry with this key starts.
-        let entry_at = |key: &str| {
-            let key = u16s(key);
-            blob.windows(key.len()).position(|w| w == key).unwrap() - 3
-        };
         let acme_only = VersionInfo {
             company: "Acme".into(),
             ..VersionInfo::default()
@@ -1750,7 +1768,7 @@ mod tests {
         // stops there, so the entries before it still count.
         for length in [0, 2, 6] {
             let mut broken = blob.clone();
-            broken[entry_at("FileDescription")] = length;
+            *w_length(&mut broken, "FileDescription")? = length;
             assert_eq!(
                 VersionInfo::from_resource(&broken),
                 acme_only,
@@ -1759,16 +1777,15 @@ mod tests {
         }
         // An entry claiming more than its table holds is cut off at the
         // table's end, and nothing after it is read as a sibling.
-        let mut oversized = blob.clone();
-        oversized[entry_at("CompanyName")] = 0xfffe;
+        let mut oversized = blob;
+        *w_length(&mut oversized, "CompanyName")? = 0xfffe;
         assert_eq!(VersionInfo::from_resource(&oversized), acme_only);
         // A value with wValueLength 0 and no NUL before the next entry ends
         // where its entry does.
         let mut unterminated = version_node("CompanyName", &u16s("Acme"), true, &[]);
-        unterminated[1] = 0;
-        assert_eq!(
-            unterminated.len() % 2,
-            0,
+        *unterminated.get_mut(1).ok_or("no wValueLength")? = 0;
+        assert!(
+            unterminated.len().is_multiple_of(2),
             "no padding before the next entry"
         );
         let table = version_node(
@@ -1787,39 +1804,43 @@ mod tests {
                 ..VersionInfo::default()
             }
         );
+        Ok(())
     }
 
     #[test]
-    fn append_cmdline_is_idempotent() {
+    fn append_cmdline_is_idempotent() -> TestResult {
         let base = u16s("cmd.exe");
         let appends = vec!["--in-process-gpu".to_string()];
-        let once = append_cmdline(&base, &appends).expect("should append");
+        let once = append_cmdline(&base, &appends).ok_or("should append")?;
         assert_eq!(String::from_utf16_lossy(&once), "cmd.exe --in-process-gpu");
         assert!(append_cmdline(&once, &appends).is_none());
+        Ok(())
     }
 
     #[test]
-    fn append_cmdline_keeps_the_existing_arguments() {
+    fn append_cmdline_keeps_the_existing_arguments() -> TestResult {
         // The launcher's `arguments` knob and any switches the parent passed
         // are in the command line already; appending must never drop them.
         let base = u16s("game.exe -console --width 1280");
-        let out = append_cmdline(&base, &["--in-process-gpu".to_string()]).expect("appended");
+        let out = append_cmdline(&base, &["--in-process-gpu".to_string()]).ok_or("appended")?;
         assert_eq!(
             String::from_utf16_lossy(&out),
             "game.exe -console --width 1280 --in-process-gpu"
         );
+        Ok(())
     }
 
     #[test]
-    fn append_cmdline_applies_each_new_text_once() {
+    fn append_cmdline_applies_each_new_text_once() -> TestResult {
         let base = u16s("app.exe --foo");
         let appends = vec!["--foo".to_string(), "--bar".to_string()];
-        let out = append_cmdline(&base, &appends).expect("should append --bar");
+        let out = append_cmdline(&base, &appends).ok_or("should append --bar")?;
         assert_eq!(String::from_utf16_lossy(&out), "app.exe --foo --bar");
+        Ok(())
     }
 
     #[test]
-    fn merge_env_replaces_appends_and_removes() {
+    fn merge_env_replaces_appends_and_removes() -> TestResult {
         let block = env_block(&["PATH=C:\\windows", "FOO=old", "=C:=C:\\cur"]);
         let out = merge_env(
             &block,
@@ -1829,12 +1850,13 @@ mod tests {
                 ("PATH".into(), String::new()), // remove
             ],
         )
-        .expect("changed");
+        .ok_or("changed")?;
         let segs = split_env(&out);
         let text: Vec<String> = segs.iter().map(|s| String::from_utf16_lossy(s)).collect();
         assert_eq!(text, vec!["foo=new", "=C:=C:\\cur", "BAR=added"]);
         // Terminated with a double NUL.
         assert_eq!(out.last(), Some(&0));
+        Ok(())
     }
 
     #[test]
@@ -1852,7 +1874,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_merges_by_name_appends_lists_and_adds_new_rules() {
+    fn overlay_merges_by_name_appends_lists_and_adds_new_rules() -> TestResult {
         let mut base = Table {
             rules: vec![Rule {
                 name: "rockstar-launcher".into(),
@@ -1884,7 +1906,7 @@ mod tests {
             .rules
             .iter()
             .find(|r| r.name == "rockstar-launcher")
-            .unwrap();
+            .ok_or("no launcher rule")?;
         assert_eq!(launcher.dxgi, Some(Dxgi::Dxmt)); // override wins
         assert_eq!(launcher.company.as_deref(), Some("Rockstar Games")); // untouched survives
         assert_eq!(launcher.exe, "Launcher.exe"); // an override needs no exe
@@ -1893,10 +1915,11 @@ mod tests {
             vec!["a=".to_string(), "b=".to_string()]
         ); // appended
         assert!(base.rules.iter().any(|r| r.exe == "New.exe")); // new rule added
+        Ok(())
     }
 
     #[test]
-    fn overlay_leaves_a_rule_with_the_same_exe_under_another_name_alone() {
+    fn overlay_leaves_a_rule_with_the_same_exe_under_another_name_alone() -> TestResult {
         // The bug named rules exist to fix: keying by executable made a new
         // rule for a common basename merge into an unrelated one and inherit
         // its fingerprint.
@@ -1918,17 +1941,21 @@ mod tests {
             }],
         });
         assert_eq!(base.rules.len(), 2);
-        let mine = base.rules.iter().find(|r| r.name == "my-launcher").unwrap();
+        let mine = base
+            .rules
+            .iter()
+            .find(|r| r.name == "my-launcher")
+            .ok_or("no my-launcher rule")?;
         assert!(mine.company.is_none(), "no fingerprint inherited");
         assert_eq!(
             base.rules
                 .iter()
                 .find(|r| r.name == "rockstar-launcher")
-                .unwrap()
-                .dxgi,
-            Some(Dxgi::Wined3d),
+                .map(|r| r.dxgi),
+            Some(Some(Dxgi::Wined3d)),
             "the pinned rule is untouched"
         );
+        Ok(())
     }
 
     #[test]
@@ -1977,7 +2004,7 @@ mod tests {
         let (parsed, diagnostics) = Table::parse(&table.to_env_value());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(parsed, table);
-        assert!(!parsed.rules.first().unwrap().enabled);
+        assert_eq!(parsed.rules.first().map(|r| r.enabled), Some(false));
     }
 
     #[test]

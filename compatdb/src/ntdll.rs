@@ -18,6 +18,7 @@ pub const MEM_COMMIT: u32 = 0x1000;
 pub const PAGE_READWRITE: u32 = 0x04;
 /// `TEB.Peb` sits here on 64-bit.
 pub const TEB_PEB_OFFSET: usize = 0x60;
+const _: () = assert!(TEB_PEB_OFFSET.is_multiple_of(size_of::<*mut Peb>()));
 /// `zero_bits` value that caps an allocation below 2 GB, so a 32-bit process
 /// can address the block through a `ULONG` pointer.
 pub const LIMIT_2G_MINUS_1: usize = 0x7fff_ffff;

@@ -166,11 +166,23 @@ pub fn table() -> Table {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use compatdb_table::{HEADER, VersionInfo};
 
     use super::*;
+
+    /// What a test returns, so a missing value fails it through `?` rather
+    /// than a panic in the test body.
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// The rule of `table` named `name`.
+    fn rule<'a>(table: &'a Table, name: &str) -> Result<&'a Rule, String> {
+        table
+            .rules
+            .iter()
+            .find(|r| r.name == name)
+            .ok_or_else(|| format!("no rule {name}"))
+    }
 
     /// The names of the rules that match every process, in table order.
     fn wildcards() -> Vec<String> {
@@ -196,37 +208,39 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_table_pins_the_launcher_and_round_trips() {
+    fn the_builtin_table_pins_the_launcher_and_round_trips() -> TestResult {
         let table = table();
-        let launcher = table
-            .rules
-            .iter()
-            .find(|r| r.name == "rockstar-launcher")
-            .unwrap();
+        let launcher = rule(&table, "rockstar-launcher")?;
         assert_eq!(launcher.dxgi, Some(Dxgi::Wined3d));
         assert_eq!(launcher.company.as_deref(), Some("Rockstar Games"));
-        let gta = table.rules.iter().find(|r| r.name == "gta-iv").unwrap();
-        assert!(gta.arguments[0].starts_with("-availablevidmem"));
+        let gta = rule(&table, "gta-iv")?;
+        assert!(
+            gta.arguments
+                .first()
+                .is_some_and(|a| a.starts_with("-availablevidmem"))
+        );
         // The D3D9 quirks are mtld3d's, not ours.
         assert_eq!(gta.env, []);
 
         let (parsed, diagnostics) = Table::parse(&table.to_env_value());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(parsed, table);
+        Ok(())
     }
 
     #[test]
-    fn the_builtin_table_pins_the_cef_helpers_to_dxmt() {
+    fn the_builtin_table_pins_the_cef_helpers_to_dxmt() -> TestResult {
         let table = table();
         for name in ["steam-web-helper", "rockstar-social-club-ui"] {
-            let rule = table.rules.iter().find(|r| r.name == name).unwrap();
-            assert_eq!(rule.dxgi, Some(Dxgi::Dxmt), "{name}");
-            assert_eq!(rule.arguments, vec!["--in-process-gpu".to_string()]);
+            let helper = rule(&table, name)?;
+            assert_eq!(helper.dxgi, Some(Dxgi::Dxmt), "{name}");
+            assert_eq!(helper.arguments, vec!["--in-process-gpu".to_string()]);
         }
+        Ok(())
     }
 
     #[test]
-    fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() {
+    fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
         // Every rule that matches a launcher or a game, or every process,
         // must leave the environment alone, or the games started from it
         // would inherit the entries.
@@ -240,12 +254,7 @@ mod tests {
                 assert_eq!(rule.env, [], "{}", rule.name);
             }
         }
-        let launcher = table
-            .rules
-            .iter()
-            .find(|r| r.name == "rockstar-launcher")
-            .unwrap();
-        assert_eq!(launcher.env, []);
+        assert_eq!(rule(&table, "rockstar-launcher")?.env, []);
         // The resolved environment of a helper is that entry alone.
         let steam = VersionInfo {
             company: "Valve Corporation".into(),
@@ -267,6 +276,7 @@ mod tests {
         let resolution = table.resolve("Launcher.exe", &launcher_version);
         assert_eq!(resolution.matched, wildcards_and("rockstar-launcher"));
         assert_eq!(resolution.env, []);
+        Ok(())
     }
 
     #[test]
@@ -467,19 +477,16 @@ mod tests {
     }
 
     #[test]
-    fn a_game_override_merges_into_the_builtin_it_names() {
+    fn a_game_override_merges_into_the_builtin_it_names() -> TestResult {
         let mut table = table();
         let (over, _) = Table::parse(&format!("{HEADER}\nname=rockstar-launcher;dxgi=dxmt"));
         assert_eq!(table.overlay(over), [] as [String; 0]);
-        let launcher = table
-            .rules
-            .iter()
-            .find(|r| r.name == "rockstar-launcher")
-            .unwrap();
+        let launcher = rule(&table, "rockstar-launcher")?;
         assert_eq!(launcher.dxgi, Some(Dxgi::Dxmt));
         // The pin survives the override.
         assert_eq!(launcher.company.as_deref(), Some("Rockstar Games"));
         assert_eq!(launcher.exe, "Launcher.exe");
+        Ok(())
     }
 
     #[test]

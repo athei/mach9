@@ -346,7 +346,6 @@ fn first_child<R: Rva + ?Sized>(img: &R, res_base: usize, dir_off: usize) -> Opt
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -354,35 +353,45 @@ mod tests {
     const SECTION_FILE_OFFSET: usize = 0x200;
     const SIZE_OF_IMAGE: usize = 0x3000;
 
-    fn put16(buf: &mut [u8], at: usize, v: u16) {
-        buf[at..at + 2].copy_from_slice(&v.to_le_bytes());
+    /// What a test or fixture builder returns, so a fixture that does not
+    /// fit fails the test through `?` rather than a panic.
+    type Fallible<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+    /// Copy `bytes` into `buf` at `at`.
+    fn put(buf: &mut [u8], at: usize, bytes: &[u8]) -> Fallible {
+        let end = at.checked_add(bytes.len()).ok_or("offset overflows")?;
+        buf.get_mut(at..end)
+            .ok_or_else(|| format!("{at:#x}..{end:#x} is outside the fixture"))?
+            .copy_from_slice(bytes);
+        Ok(())
     }
 
-    fn put32(buf: &mut [u8], at: usize, v: u32) {
-        buf[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    fn put16(buf: &mut [u8], at: usize, v: u16) -> Fallible {
+        put(buf, at, &v.to_le_bytes())
     }
 
-    fn u32_of(v: usize) -> u32 {
-        u32::try_from(v).unwrap()
+    fn put32(buf: &mut [u8], at: usize, v: usize) -> Fallible {
+        put(buf, at, &u32::try_from(v)?.to_le_bytes())
     }
 
     /// A `VS_VERSIONINFO` node: header words, key, padding, value, padding,
     /// children. Every value here is text or empty, so `wValueLength` counts
     /// characters.
-    fn version_node(key: &str, value: &[u16], children: &[u16]) -> Vec<u16> {
-        let mut node = vec![0, u16::try_from(value.len()).unwrap(), 1];
+    fn version_node(key: &str, value: &[u16], children: &[u16]) -> Fallible<Vec<u16>> {
+        let mut node = vec![0, u16::try_from(value.len())?, 1];
         node.extend(key.encode_utf16());
         node.push(0);
         node.resize(node.len().next_multiple_of(2), 0);
         node.extend(value);
         node.resize(node.len().next_multiple_of(2), 0);
         node.extend(children);
-        node[0] = u16::try_from(node.len() * 2).unwrap();
-        node
+        let length = u16::try_from(node.len() * 2)?;
+        *node.first_mut().ok_or("no wLength")? = length;
+        Ok(node)
     }
 
     /// A `VS_VERSIONINFO` blob holding the three fields in one string table.
-    fn version_blob_bytes() -> Vec<u8> {
+    fn version_blob_bytes() -> Fallible<Vec<u8>> {
         let mut strings: Vec<u16> = Vec::new();
         for (key, value) in [
             ("CompanyName", "Acme Games"),
@@ -392,19 +401,19 @@ mod tests {
             let mut text: Vec<u16> = value.encode_utf16().collect();
             text.push(0);
             strings.resize(strings.len().next_multiple_of(2), 0);
-            strings.extend(version_node(key, &text, &[]));
+            strings.extend(version_node(key, &text, &[])?);
         }
-        let table = version_node("040904b0", &[], &strings);
-        let info = version_node("StringFileInfo", &[], &table);
-        let units = version_node("VS_VERSION_INFO", &[], &info);
-        units.iter().flat_map(|u| u.to_le_bytes()).collect()
+        let table = version_node("040904b0", &[], &strings)?;
+        let info = version_node("StringFileInfo", &[], &table)?;
+        let units = version_node("VS_VERSION_INFO", &[], &info)?;
+        Ok(units.iter().flat_map(|u| u.to_le_bytes()).collect())
     }
 
     /// The `.rsrc` section's bytes, laid out for `SECTION_RVA`: a three-level
     /// directory (`RT_VERSION`, name 1, language 0x409), the data entry, and
     /// the blob.
-    fn rsrc_section() -> Vec<u8> {
-        let blob = version_blob_bytes();
+    fn rsrc_section() -> Fallible<Vec<u8>> {
+        let blob = version_blob_bytes()?;
         let mut s = vec![0; 0x60 + blob.len()];
         // Each directory: 16-byte header, then one id entry.
         for (dir, id, child) in [
@@ -412,59 +421,59 @@ mod tests {
             (0x18, 1, 0x8000_0030),
             (0x30, 0x409, 0x48),
         ] {
-            put16(&mut s, dir + 14, 1);
-            put32(&mut s, dir + 16, id);
-            put32(&mut s, dir + 20, child);
+            put16(&mut s, dir + 14, 1)?;
+            put32(&mut s, dir + 16, id)?;
+            put32(&mut s, dir + 20, child)?;
         }
-        put32(&mut s, 0x48, u32_of(SECTION_RVA + 0x60));
-        put32(&mut s, 0x4c, u32_of(blob.len()));
-        s[0x60..].copy_from_slice(&blob);
-        s
+        put32(&mut s, 0x48, SECTION_RVA + 0x60)?;
+        put32(&mut s, 0x4c, blob.len())?;
+        put(&mut s, 0x60, &blob)?;
+        Ok(s)
     }
 
     /// PE32 headers with one `.rsrc` section of `raw_size` bytes.
-    fn headers(raw_size: usize) -> Vec<u8> {
+    fn headers(raw_size: usize) -> Fallible<Vec<u8>> {
         let mut h = vec![0; SECTION_FILE_OFFSET];
-        h[0..2].copy_from_slice(b"MZ");
-        put32(&mut h, 0x3c, 0x40);
-        h[0x40..0x44].copy_from_slice(b"PE\0\0");
+        put(&mut h, 0, b"MZ")?;
+        put32(&mut h, 0x3c, 0x40)?;
+        put(&mut h, 0x40, b"PE\0\0")?;
         let coff = 0x44;
-        put16(&mut h, coff, 0x14c);
-        put16(&mut h, coff + 2, 1);
-        put16(&mut h, coff + 16, 0xe0);
+        put16(&mut h, coff, 0x14c)?;
+        put16(&mut h, coff + 2, 1)?;
+        put16(&mut h, coff + 16, 0xe0)?;
         let opt = coff + 20;
-        put16(&mut h, opt, 0x10b);
-        put32(&mut h, opt + 32, u32_of(PAGE_SIZE));
-        put32(&mut h, opt + 36, u32_of(RAW_DATA_ALIGNMENT));
-        put32(&mut h, opt + 56, u32_of(SIZE_OF_IMAGE));
-        put32(&mut h, opt + 60, u32_of(SECTION_FILE_OFFSET));
-        put32(&mut h, opt + 92, 16);
-        put32(&mut h, opt + 96 + 16, u32_of(SECTION_RVA));
-        put32(&mut h, opt + 96 + 20, u32_of(raw_size));
+        put16(&mut h, opt, 0x10b)?;
+        put32(&mut h, opt + 32, PAGE_SIZE)?;
+        put32(&mut h, opt + 36, RAW_DATA_ALIGNMENT)?;
+        put32(&mut h, opt + 56, SIZE_OF_IMAGE)?;
+        put32(&mut h, opt + 60, SECTION_FILE_OFFSET)?;
+        put32(&mut h, opt + 92, 16)?;
+        put32(&mut h, opt + 96 + 16, SECTION_RVA)?;
+        put32(&mut h, opt + 96 + 20, raw_size)?;
         let sec = opt + 0xe0;
-        h[sec..sec + 5].copy_from_slice(b".rsrc");
-        put32(&mut h, sec + 8, u32_of(raw_size));
-        put32(&mut h, sec + 12, u32_of(SECTION_RVA));
-        put32(&mut h, sec + 16, u32_of(raw_size));
-        put32(&mut h, sec + 20, u32_of(SECTION_FILE_OFFSET));
-        h
+        put(&mut h, sec, b".rsrc")?;
+        put32(&mut h, sec + 8, raw_size)?;
+        put32(&mut h, sec + 12, SECTION_RVA)?;
+        put32(&mut h, sec + 16, raw_size)?;
+        put32(&mut h, sec + 20, SECTION_FILE_OFFSET)?;
+        Ok(h)
     }
 
     /// The image as it sits on disk: headers, then the section's raw bytes.
-    fn file_layout() -> Vec<u8> {
-        let rsrc = rsrc_section();
-        let mut file = headers(rsrc.len());
+    fn file_layout() -> Fallible<Vec<u8>> {
+        let rsrc = rsrc_section()?;
+        let mut file = headers(rsrc.len())?;
         file.extend(&rsrc);
-        file
+        Ok(file)
     }
 
     /// The image as the loader maps it: the section at its RVA.
-    fn mapped_layout() -> Vec<u8> {
-        let rsrc = rsrc_section();
+    fn mapped_layout() -> Fallible<Vec<u8>> {
+        let rsrc = rsrc_section()?;
         let mut image = vec![0; SIZE_OF_IMAGE];
-        image[..SECTION_FILE_OFFSET].copy_from_slice(&headers(rsrc.len()));
-        image[SECTION_RVA..SECTION_RVA + rsrc.len()].copy_from_slice(&rsrc);
-        image
+        put(&mut image, 0, &headers(rsrc.len())?)?;
+        put(&mut image, SECTION_RVA, &rsrc)?;
+        Ok(image)
     }
 
     fn expected() -> VersionInfo {
@@ -476,71 +485,77 @@ mod tests {
     }
 
     #[test]
-    fn a_file_is_read_through_its_section_table() {
-        let file = file_layout();
-        let pe = PeFile::new(file.as_slice()).unwrap();
+    fn a_file_is_read_through_its_section_table() -> Fallible {
+        let file = file_layout()?;
+        let pe = PeFile::new(file.as_slice()).ok_or("not a PE")?;
         assert_eq!(from_image(&pe), expected());
         // Read at raw offsets, the resource RVA points past the end of the
         // file, which is why the translation is needed at all.
         assert_eq!(from_image(file.as_slice()), VersionInfo::default());
+        Ok(())
     }
 
     #[test]
-    fn the_mapped_and_the_file_readers_agree() {
-        let image = mapped_layout();
+    fn the_mapped_and_the_file_readers_agree() -> Fallible {
+        let image = mapped_layout()?;
         assert_eq!(read(image.as_ptr().cast()), expected());
         assert_eq!(from_image(image.as_slice()), expected());
+        Ok(())
     }
 
     #[test]
-    fn pointer_to_raw_data_is_rounded_down_like_the_loader_does() {
-        let mut file = file_layout();
+    fn pointer_to_raw_data_is_rounded_down_like_the_loader_does() -> Fallible {
+        let mut file = file_layout()?;
         let sec = 0x44 + 20 + 0xe0;
-        put32(&mut file, sec + 20, u32_of(SECTION_FILE_OFFSET + 0x1ff));
-        let pe = PeFile::new(file.as_slice()).unwrap();
+        put32(&mut file, sec + 20, SECTION_FILE_OFFSET + 0x1ff)?;
+        let pe = PeFile::new(file.as_slice()).ok_or("not a PE")?;
         assert_eq!(from_image(&pe), expected());
+        Ok(())
     }
 
     #[test]
-    fn a_low_alignment_file_is_read_flat() {
+    fn a_low_alignment_file_is_read_flat() -> Fallible {
         // FileAlignment == SectionAlignment below a page: the loader maps the
         // file as is, so the file looks exactly like the mapped image.
-        let mut file = mapped_layout();
+        let mut file = mapped_layout()?;
         let opt = 0x44 + 20;
-        put32(&mut file, opt + 32, 0x200);
-        put32(&mut file, opt + 36, 0x200);
+        put32(&mut file, opt + 32, 0x200)?;
+        put32(&mut file, opt + 36, 0x200)?;
         // The section table still claims the usual raw offset, which a flat
         // read must ignore.
-        let pe = PeFile::new(file.as_slice()).unwrap();
+        let pe = PeFile::new(file.as_slice()).ok_or("not a PE")?;
         assert!(pe.flat);
         assert_eq!(from_image(&pe), expected());
+        Ok(())
     }
 
     #[test]
-    fn a_hostile_section_count_is_refused() {
-        let mut file = file_layout();
-        put16(&mut file, 0x44 + 2, u16::MAX);
+    fn a_hostile_section_count_is_refused() -> Fallible {
+        let mut file = file_layout()?;
+        put16(&mut file, 0x44 + 2, u16::MAX)?;
         assert!(PeFile::new(file.as_slice()).is_none());
+        Ok(())
     }
 
     #[test]
-    fn a_read_past_the_raw_data_of_a_section_fails() {
-        let file = file_layout();
-        let pe = PeFile::new(file.as_slice()).unwrap();
-        let end = SECTION_RVA + rsrc_section().len();
+    fn a_read_past_the_raw_data_of_a_section_fails() -> Fallible {
+        let file = file_layout()?;
+        let pe = PeFile::new(file.as_slice()).ok_or("not a PE")?;
+        let end = SECTION_RVA + rsrc_section()?.len();
         let mut buf = [0; 4];
         assert!(pe.read(end - 4, &mut buf).is_some());
         assert!(pe.read(end - 3, &mut buf).is_none());
         // Between the headers and the section nothing is backed by the file.
         assert!(pe.read(SECTION_FILE_OFFSET, &mut buf).is_none());
         assert!(pe.read(SECTION_FILE_OFFSET - 4, &mut buf).is_some());
+        Ok(())
     }
 
     #[test]
-    fn a_truncated_or_foreign_file_yields_nothing() {
-        let file = file_layout();
+    fn a_truncated_or_foreign_file_yields_nothing() -> Fallible {
+        let file = file_layout()?;
         for len in [0, 0x3c, 0x60, SECTION_FILE_OFFSET, file.len() - 1] {
-            let pe = PeFile::new(&file[..len]);
+            let pe = PeFile::new(file.get(..len).ok_or("cut")?);
             assert_eq!(
                 pe.map(|pe| from_image(&pe)).unwrap_or_default(),
                 VersionInfo::default(),
@@ -548,9 +563,10 @@ mod tests {
             );
         }
         let mut not_pe = file;
-        not_pe[0x40] = b'N';
+        put(&mut not_pe, 0x40, b"N")?;
         assert!(PeFile::new(not_pe.as_slice()).is_none());
         assert_eq!(read(core::ptr::null()), VersionInfo::default());
+        Ok(())
     }
 
     #[test]
