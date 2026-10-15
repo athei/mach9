@@ -20,6 +20,7 @@ RUNTIME_ONLY=0
 COMPATDB_ONLY=0
 STRICT_FLOOR=0
 WITH_SYMBOLS=0
+ASSUME_YES=0
 ARCH_PROFILE=intel
 # Whether wine.app (arm64 profile) gets a secure timestamp, which needs
 # Apple's timestamp server. LOADER_TIMESTAMP=0 signs without one, for an
@@ -41,7 +42,7 @@ fi
 GPTK_FLOOR=26.4
 
 usage() {
-    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--compatdb-only] [--strict-floor] [--symbols] [--arm64]"
+    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--compatdb-only] [--strict-floor] [--symbols] [--yes] [--arm64]"
     exit 1
 }
 
@@ -56,7 +57,9 @@ usage() {
 # whatever Homebrew has, which on a newer macOS can carry a newer minos, and
 # is not distributed. --symbols keeps the PE files as they were before Step
 # 4e stripped them in <dir>/wine-symbols (the release workflow publishes
-# them). --arm64 bundles the native arm64 build (profile.sh).
+# them). --yes deletes an existing bundle at <dir>/wine without asking first,
+# for a run nobody watches. --arm64 bundles the native arm64 build
+# (profile.sh).
 while [ $# -gt 0 ]; do
     case "$1" in
         --dest) [ $# -ge 2 ] || usage; DIST_DIR="$2"; shift 2 ;;
@@ -64,6 +67,7 @@ while [ $# -gt 0 ]; do
         --compatdb-only) COMPATDB_ONLY=1; shift ;;
         --strict-floor) STRICT_FLOOR=1; shift ;;
         --symbols) WITH_SYMBOLS=1; shift ;;
+        --yes) ASSUME_YES=1; shift ;;
         --arm64) ARCH_PROFILE=arm64; shift ;;
         *) usage ;;
     esac
@@ -1251,11 +1255,14 @@ if [ -d "$WINE_DIR" ]; then
         exit 1
     fi
     echo "Will delete existing bundle: $WINE_DIR"
-    read -r -p "Continue? [y/N] " confirm
-    case "$confirm" in
-        [yY]) remove_tree "$WINE_DIR" ;;
-        *) echo "Aborted."; exit 1 ;;
-    esac
+    if [ "$ASSUME_YES" -eq 0 ]; then
+        read -r -p "Continue? [y/N] " confirm
+        case "$confirm" in
+            [yY]) ;;
+            *) echo "Aborted."; exit 1 ;;
+        esac
+    fi
+    remove_tree "$WINE_DIR"
 fi
 # The previous bundle's symbols go too, so a run that fails before Step 4e,
 # or one without --symbols, cannot leave them next to a bundle they do not

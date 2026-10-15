@@ -130,7 +130,8 @@ The arm64 build needs a different set: see
 | `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile |
 | `build-wine.sh` | `--clean` | Wipes the build directories first; the only way to pick up changed configure flags or deployment target |
 | `build-wine.sh`, `bundle-wine.sh` | `--arm64` | The native arm64 profile instead of the x86_64 one; see [docs/arm64.md](docs/arm64.md) |
-| `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the profile's bundle in the [layout](#layout). Either way it asks before it deletes an existing one |
+| `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the profile's bundle in the [layout](#layout). Either way it asks before it deletes an existing one, unless `--yes` |
+| `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking, for an unattended run. A directory that is not empty and has no `bin/wine` is still refused |
 | `bundle-wine.sh` | `--runtime-only` | No development files and no test binaries; the flavor to put into an application |
 | `bundle-wine.sh` | `--compatdb-only` | Rebuilds `compatdb.so` into the existing bundle only (the profile's, or `<dir>/wine` with `--dest`); no prompt, no `make install`, no Wine build needed, works on an unpacked release tarball; `--runtime-only` is ignored |
 | `bundle-wine.sh` | `--strict-floor` | A Mach-O that needs a newer macOS than its floor is an error instead of a warning |
