@@ -27,6 +27,10 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
   `compatdb-*` release as Latest, so filter by the `cx-` prefix to find the
   newest Wine build.
 - The bundle is x86_64 and needs Rosetta on Apple Silicon.
+- The PE files ship without debug info or symbol tables. A release that
+  strips them carries them as the optional asset
+  `wine-<tag>-macos-x86_64-symbols.tar.xz`: the unstripped files under the
+  same paths, for symbolizing crash reports.
 - A browser download marks the tarball as quarantined; remove it after
   unpacking with `xattr -drs com.apple.quarantine wine`.
 - The minimum macOS is `MACOS_FLOOR` of the `intel` profile in
@@ -130,6 +134,7 @@ The arm64 build needs a different set: see
 | `bundle-wine.sh` | `--runtime-only` | No development files and no test binaries; the flavor to put into an application |
 | `bundle-wine.sh` | `--compatdb-only` | Rebuilds `compatdb.so` into the existing bundle only (the profile's, or `<dir>/wine` with `--dest`); no prompt, no `make install`, no Wine build needed, works on an unpacked release tarball; `--runtime-only` is ignored |
 | `bundle-wine.sh` | `--strict-floor` | A Mach-O that needs a newer macOS than its floor is an error instead of a warning |
+| `bundle-wine.sh` | `--symbols` | Also keeps the PE files as they were before their symbols were stripped, in `wine-symbols` next to the bundle; the release workflow passes it |
 
 `usage()` and the argument parsing in [`bundle-wine.sh`](bundle-wine.sh) are
 authoritative. What the bundle step checks is in
@@ -148,6 +153,7 @@ Everything lives beside this repository, in the directory that holds it
 | `cache/` | Downloaded redistributables |
 | `build/<profile>/` | Every intermediate of a profile: the Wine build and, for arm64, the SDK and its link-library tree, FEX and DXMT |
 | `dist/<profile>/wine` | The profile's bundle |
+| `dist/<profile>/wine-symbols` | With `--symbols`, the bundle's PE files before their symbols were stripped (Step 4e of [`bundle-wine.sh`](bundle-wine.sh)); not part of the bundle |
 
 `<profile>` is `intel` or `arm64`. The name of each tree is set in
 [`profile.sh`](profile.sh), with the variable that overrides it. The

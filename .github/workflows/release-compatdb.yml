@@ -98,6 +98,21 @@ jobs:
           # the workspace as the root.
           mkdir -p dist/intel
           gtar -C dist/intel -xJf "$RUNNER_TEMP/$asset"
+          # The PE files and so their symbols are the base's: its symbols
+          # archive, when it has one, is attached again under this tag.
+          symbols="wine-${BASE}-macos-x86_64-symbols.tar.xz"
+          digest=$(gh release view "$BASE" --repo "$GITHUB_REPOSITORY" --json assets \
+            | jq -r --arg name "$symbols" '.assets[] | select(.name == $name) | .digest')
+          if [ -n "$digest" ]; then
+            case "$digest" in
+              sha256:*) ;;
+              *) echo "No sha256 digest for $symbols on $BASE (got '$digest')."; exit 1 ;;
+            esac
+            gh release download "$BASE" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$symbols" --dir "$RUNNER_TEMP"
+            echo "${digest#sha256:}  $RUNNER_TEMP/$symbols" | shasum -a 256 -c -
+            mv "$RUNNER_TEMP/$symbols" "wine-${TAG}-macos-x86_64-symbols.tar.xz"
+          fi
 
       - name: Ensure Rosetta 2
         run: |
@@ -130,10 +145,14 @@ jobs:
           if [ -n "$base_notes" ]; then
             notes=$(printf '%s\n\n%s: %s' "$notes" "$BASE" "$base_notes")
           fi
+          assets=("wine-${TAG}-macos-x86_64.tar.xz")
+          if [ -f "wine-${TAG}-macos-x86_64-symbols.tar.xz" ]; then
+            assets+=("wine-${TAG}-macos-x86_64-symbols.tar.xz")
+          fi
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --draft \
             --verify-tag \
             --title "$TAG" \
             --notes "$notes" \
-            "wine-${TAG}-macos-x86_64.tar.xz"
+            "${assets[@]}"

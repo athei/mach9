@@ -98,11 +98,16 @@ jobs:
       # their layout: src/intel/ and cache/ above, the build under
       # build/intel/ and the bundle in dist/intel/wine.
       - name: Bundle distribution
-        run: MINGW_DIR="$HOME/llvm-mingw" scripts/bundle-wine.sh --strict-floor
+        run: MINGW_DIR="$HOME/llvm-mingw" scripts/bundle-wine.sh --strict-floor --symbols
 
-      - name: Create tarball
+      # The second archive, an optional asset, holds the PE files as they were
+      # before bundle-wine.sh stripped their symbols, for symbolizing crash
+      # reports. The bundle itself carries no symbols.
+      - name: Create tarballs
         run: |
           XZ_OPT="-T0" gtar -C dist/intel -cJf "wine-${GITHUB_REF_NAME}-macos-x86_64.tar.xz" wine
+          XZ_OPT="-T0" gtar -C dist/intel --exclude=.wine-build-tree \
+            -cJf "wine-${GITHUB_REF_NAME}-macos-x86_64-symbols.tar.xz" wine-symbols
 
       - name: Create draft release
         env:
@@ -115,4 +120,5 @@ jobs:
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
             --notes "Wine distribution built from athei/wine@${{ steps.ref.outputs.ref }} with ${GITHUB_REPOSITORY}@${sha}" \
-            "wine-${GITHUB_REF_NAME}-macos-x86_64.tar.xz"
+            "wine-${GITHUB_REF_NAME}-macos-x86_64.tar.xz" \
+            "wine-${GITHUB_REF_NAME}-macos-x86_64-symbols.tar.xz"
