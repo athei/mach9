@@ -7,12 +7,13 @@
 //! Every rule that names an executable also carries a version fingerprint, so
 //! none of them can catch an unrelated program that happens to share a file
 //! name. The exceptions are `no-vulkan`, `dpi-aware`, `large-address-aware`,
-//! `x87-sidecar` and `no-mono-gecko`, which match every process on purpose:
-//! each is a default that a more specific rule can override and that can be
-//! dropped by name.
+//! `x87-sidecar`, `fex-x87-reduced-precision` and `no-mono-gecko`, which
+//! match every process on purpose: each is a default that a more specific
+//! rule can override and that can be dropped by name.
 //!
-//! The rules differ by [`Host`] only where a rule cannot apply to that Wine:
-//! the arm64 Wine has no `x87-sidecar` rule, since it runs no Rosetta.
+//! The rules differ by [`Host`] only in how x87 code is sped up: the `x86_64`
+//! Wine has the `x87-sidecar` rule for Rosetta, the arm64 one the
+//! `fex-x87-reduced-precision` rule for FEX.
 
 use compatdb_table::{ANY_EXE, Dxgi, Host, Rule, Table};
 
@@ -62,20 +63,40 @@ pub fn table_for(host: Host) -> Table {
             ..Rule::default()
         },
     ];
-    // Every i386 process under Rosetta starts with the x87sidecar attached,
-    // which runs x87 floating-point code faster than Rosetta does on its
-    // own. ntdll asks compatdb_query_x87 before it starts the process, so a
-    // rule for one game with `x87_sidecar = false` keeps the sidecar away
-    // from it. The arm64 Wine runs no Rosetta and its library has no such
-    // query, so it gets no rule.
-    if host == Host::X86_64 {
-        rules.push(Rule {
+    // How each Wine speeds up x87 floating-point code, which games built for
+    // 32-bit x86 use heavily.
+    rules.push(match host {
+        // Every i386 process under Rosetta starts with the x87sidecar
+        // attached, which runs x87 code faster than Rosetta does on its own.
+        // ntdll asks compatdb_query_x87 before it starts the process, so a
+        // rule for one game with `x87_sidecar = false` keeps the sidecar
+        // away from it.
+        Host::X86_64 => Rule {
             name: "x87-sidecar".into(),
             exe: ANY_EXE.into(),
             x87_sidecar: Some(true),
             ..Rule::default()
-        });
-    }
+        },
+        // The arm64 Wine runs x86 code under FEX, which by default emulates
+        // x87 at its full 80-bit precision, and games that use x87 run
+        // slowly that way. Its X87ReducedPrecision option computes with
+        // 64-bit precision instead, which is fast at some cost in accuracy
+        // (FEX warns of possible rendering bugs). FEX takes the option from
+        // FEX_X87REDUCEDPRECISION, parsed as an integer (so "1", not
+        // "true"), and reads it from the Windows environment block when its
+        // process init runs, after this library has written its env there.
+        //
+        // It matches every process, native ARM64 ones included. FEX is not
+        // loaded in those, so the variable does nothing there, but a child
+        // they start inherits it, and that child may be x86. A rule for one
+        // game with `env=FEX_X87REDUCEDPRECISION=` removes it again.
+        Host::Aarch64 => Rule {
+            name: "fex-x87-reduced-precision".into(),
+            exe: ANY_EXE.into(),
+            env: vec![("FEX_X87REDUCEDPRECISION".into(), "1".into())],
+            ..Rule::default()
+        },
+    });
     rules.extend([
         // Keeps Wine from prompting to install Mono and Gecko, in
         // wineboot and in any process that loads either. It is a separate
@@ -207,11 +228,34 @@ mod tests {
             "dpi-aware".to_string(),
             "large-address-aware".to_string(),
         ];
-        if host == Host::X86_64 {
-            names.push("x87-sidecar".to_string());
-        }
+        names.push(x87_rule(host).to_string());
         names.push("no-mono-gecko".to_string());
         names
+    }
+
+    /// The name of the rule that speeds up x87 code on `host`.
+    const fn x87_rule(host: Host) -> &'static str {
+        match host {
+            Host::X86_64 => "x87-sidecar",
+            Host::Aarch64 => "fex-x87-reduced-precision",
+        }
+    }
+
+    /// The env every process gets from the built-in rules on `host`. The
+    /// variable is spelled out here to guard against a typo: FEX matches the
+    /// name exactly and parses the value as an integer.
+    fn wildcard_env(host: Host) -> Vec<(String, String)> {
+        match host {
+            Host::X86_64 => vec![],
+            Host::Aarch64 => vec![("FEX_X87REDUCEDPRECISION".to_string(), "1".to_string())],
+        }
+    }
+
+    /// `wildcard_env(host)` followed by `more`.
+    fn wildcard_env_and(host: Host, more: &[(String, String)]) -> Vec<(String, String)> {
+        let mut env = wildcard_env(host);
+        env.extend_from_slice(more);
+        env
     }
 
     /// `wildcards(host)` without the rule of the given name.
@@ -256,10 +300,64 @@ mod tests {
         };
         assert!(has(Host::X86_64));
         assert!(!has(Host::Aarch64));
-        // Apart from that rule, the two tables are the same.
+        // Apart from the x87 rule, the two tables are the same.
         let mut intel = table_for(Host::X86_64);
-        intel.rules.retain(|r| r.name != "x87-sidecar");
-        assert_eq!(intel, table_for(Host::Aarch64));
+        intel.rules.retain(|r| r.name != x87_rule(Host::X86_64));
+        let mut arm = table_for(Host::Aarch64);
+        arm.rules.retain(|r| r.name != x87_rule(Host::Aarch64));
+        assert_eq!(intel, arm);
+    }
+
+    #[test]
+    fn only_the_arm64_table_asks_fex_for_reduced_x87_precision() -> TestResult {
+        let name = x87_rule(Host::Aarch64);
+        assert!(
+            !table_for(Host::X86_64)
+                .rules
+                .iter()
+                .any(|r| r.name == name || r.env.iter().any(|(n, _)| n.starts_with("FEX_")))
+        );
+        let arm = table_for(Host::Aarch64);
+        let fex = rule(&arm, name)?;
+        assert_eq!(fex.exe, ANY_EXE);
+        assert_eq!(fex.env, wildcard_env(Host::Aarch64));
+        // Every process gets it: x86_64, i386 and native ARM64 alike, since
+        // rules do not match on the arch.
+        let game = arm.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.env, wildcard_env(Host::Aarch64));
+        // Naming the rule from the x86_64 side finds nothing there.
+        let mut intel = table_for(Host::X86_64);
+        let (over, _) = Table::parse(&format!("{HEADER}\nname={name};enabled=false"));
+        assert_eq!(intel.overlay(over), [name.to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_game_rule_or_disabling_by_name_turns_reduced_x87_precision_off() -> TestResult {
+        let arm = Host::Aarch64;
+        // For one game: an empty value, which removes the variable, folds
+        // after the default.
+        let table = with_overrides(arm, "name=old;exe=old.exe;env=FEX_X87REDUCEDPRECISION=");
+        let old = table.resolve("Old.exe", &VersionInfo::default());
+        let removed = ("FEX_X87REDUCEDPRECISION".to_string(), String::new());
+        assert_eq!(old.env, wildcard_env_and(arm, &[removed]));
+        let block: Vec<u16> = "FEX_X87REDUCEDPRECISION=1\0OTHER=x\0\0"
+            .encode_utf16()
+            .collect();
+        let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
+        assert_eq!(String::from_utf16_lossy(&merged), "OTHER=x\0\0");
+        // Another process keeps it.
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.env, wildcard_env(arm));
+        // For every process: drop the rule.
+        let table = with_overrides(arm, "name=fex-x87-reduced-precision;enabled=false");
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.env, []);
+        assert_eq!(
+            game.matched,
+            wildcards_without(arm, "fex-x87-reduced-precision")
+        );
+        Ok(())
     }
 
     #[test]
@@ -322,9 +420,10 @@ mod tests {
 
     #[test]
     fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
-        // Every rule that matches a launcher or a game, or every process,
-        // must leave the environment alone, or the games started from it
-        // would inherit the entries.
+        // Every rule that matches a launcher or a game must leave the
+        // environment alone, or the games started from it would inherit the
+        // entries. The FEX rule is the one exception: it is meant for every
+        // process, so a child that inherits it gets what it would get anyway.
         let hud_off = vec![("MTL_HUD_ENABLED".to_string(), "0".to_string())];
         let helpers = ["steam-web-helper", "rockstar-social-club-ui"];
         for host in HOSTS {
@@ -332,12 +431,16 @@ mod tests {
             for rule in &table.rules {
                 if helpers.contains(&rule.name.as_str()) {
                     assert_eq!(rule.env, hud_off, "{}", rule.name);
+                } else if rule.name == x87_rule(host) {
+                    assert_eq!(rule.env, wildcard_env(host), "{}", rule.name);
                 } else {
                     assert_eq!(rule.env, [], "{}", rule.name);
                 }
             }
+            let hud_off = wildcard_env_and(host, &hud_off);
             assert_eq!(rule(&table, "rockstar-launcher")?.env, []);
-            // The resolved environment of a helper is that entry alone.
+            // The resolved environment of a helper is that entry after the
+            // wildcard one.
             let steam = VersionInfo {
                 company: "Valve Corporation".into(),
                 product: "Steam Client WebHelper".into(),
@@ -357,7 +460,7 @@ mod tests {
             };
             let resolution = table.resolve("Launcher.exe", &launcher_version);
             assert_eq!(resolution.matched, wildcards_and(host, "rockstar-launcher"));
-            assert_eq!(resolution.env, []);
+            assert_eq!(resolution.env, wildcard_env(host));
         }
         Ok(())
     }
@@ -400,6 +503,7 @@ mod tests {
             assert_eq!(resolution.dpi_aware, Some(true));
             assert_eq!(resolution.large_address_aware, Some(true));
             assert_eq!(resolution.x87_sidecar, x87_default(host), "{host:?}");
+            assert_eq!(resolution.env, wildcard_env(host), "{host:?}");
         }
     }
 

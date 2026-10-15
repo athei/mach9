@@ -143,6 +143,8 @@ executable.
 | Keep the x87sidecar away from every process | `name=no-x87;exe=*;x87_sidecar=false`, or set `ROSETTA_X87_PATH` to an empty value |
 | Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` |
 | Let one game turn no-execute off | `name=my-game;exe=Game.exe;env=WINE_DISABLE_NX_COMPAT=0` |
+| Give one game FEX's full x87 precision (arm64 Wine) | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
+| Give every process FEX's full x87 precision (arm64 Wine) | `name=fex-x87-reduced-precision;enabled=false` |
 
 - `WINEDLLOVERRIDES=vulkan-1=n` or `mscoree=b` alone does not work: ntdll
   parses that variable first, and an override compatdb adds replaces the
@@ -189,6 +191,16 @@ same rules, with these differences. They are chosen by `Host` in
   `WINE_COMPATDB` still parses, so a launcher can send the same rules to
   both Wines; `name=x87-sidecar;enabled=false` is logged as
   `override names no rule`.
+- Instead, the built-in `fex-x87-reduced-precision` rule sets an `env` entry
+  for every process that has FEX emulate x87 code with reduced precision,
+  which is much faster and slightly less accurate. FEX reads it from the
+  process's environment block when it starts, which compatdb.so has
+  already rewritten. The entry and the reasoning are in
+  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). Neither a FEX
+  config file nor the variable exported before launch overrides it: FEX's
+  environment layer outranks its config files, and the rule replaces a
+  value already in the environment. To turn it off for one game or for
+  every process, use the two FEX recipes in [recipes](#recipes).
 - `gptk` is never available, so an x86 process defaults to `dxmt`, and a
   `dxgi=gptk` rule falls back with a log line that names the arm64 Wine, not
   the macOS release.
