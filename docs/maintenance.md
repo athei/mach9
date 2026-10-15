@@ -5,32 +5,44 @@ check when something upstream changes.
 
 ## Relocation
 
-- `build-wine.sh` patches the `SONAME_LIB*` defines in `config.h` to
+- `build-wine.sh` patches the `SONAME_LIB*` defines of the libraries the
+  allowlist enables (`BUNDLED_SONAMES`) to
   `@loader_path/../../external/<lib>`, so Wine's `.so` modules in
-  `lib/wine/x86_64-unix/` find the bundled dylibs in `lib/external/` through
-  dyld alone.
+  `lib/wine/<arch>-unix/` find the bundled dylibs in `lib/external/` through
+  dyld alone. The placeholder defines configure writes for libraries it did
+  not find (`FALLBACK_SONAMES`) stay as they are, and any other `SONAME_LIB*`
+  define stops the build: it is a library the allowlist does not account
+  for.
 - `config.status` silently regenerates `config.h` after a source update, so
   the script checks the patch before every build and again after `make`,
   re-patching and rebuilding when it was lost.
 - `bundle-wine.sh` takes the direct dependencies from the patched sonames in
   `config.h` (plus `libSDL3`, which sdl2-compat loads at run time), copies
-  them and their `/usr/local` closure into `lib/external/`, rewrites their
-  install names to `@loader_path/`, and fails if any `/usr/local/`
-  reference survives.
+  them and their `DEPS_PREFIX` closure into `lib/external/`, rewrites their
+  install names to `@loader_path/`, and fails if any reference to one of the
+  profile's `LEAK_PREFIXES` survives. The arm64 profile re-signs the
+  rewritten dylibs ad hoc, since arm64 code does not load with a broken
+  signature.
 - There is no launcher binary and no `DYLD_*` variable.
 
 ## Direct3D trees
 
+- Which trees a build has is `DXGI_IMPLS` and `D3D9_IMPLS` in
+  [`profile.sh`](../profile.sh), in the order a default-dir marker prefers
+  them.
 - Each tree under `lib/wine/dxgi/` and `lib/wine/d3d9/` has
   `<arch>-windows/` and, where the implementation has a unix half,
-  `x86_64-unix/`. D3DMetal's unix modules are symlinks to
-  `lib/external/libd3dshared.dylib`; DXMT's and mtld3d's single x86_64 `.so`
+  `<arch>-unix/`. D3DMetal's unix modules are symlinks to
+  `lib/external/libd3dshared.dylib`; DXMT's and mtld3d's single `.so`
   also serves the i386 PE modules through wow64 entry points. Which modules
   go into which tree is in Step 4 of [`bundle-wine.sh`](../bundle-wine.sh).
+- Every module a family's trees supply is removed from the default
+  `<arch>-windows/` directory and replaced by a fake-module marker made from
+  the first tree that has it.
 
 ## What bundle-wine.sh verifies
 
-A full bundle:
+A full x86_64 bundle (the arm64 one: [arm64.md](arm64.md#what-the-bundle-step-checks)):
 
 - Removes inherited `com.apple.quarantine` from the tree (and nothing else),
   so macOS does not block a copied library; a failure stops the bundle step.
@@ -38,6 +50,7 @@ A full bundle:
   included, references `/usr/local/`.
 - The Direct3D files and the x87sidecar are in place, and the mtld3d tree's
   `d3d9.dll` is byte-identical to mtld3d's.
+- No symlink in the tree dangles.
 - `compatdb.so` exports `compatdb_query_env` and, in the x86_64 bundle,
   `compatdb_query_x87` (the arm64 library has no x87 query, see
   [arm64 Wine](compatdb.md#arm64-wine)).
@@ -73,12 +86,11 @@ With `--compatdb-only`:
 
 | Setting | Defined in | Applies to | Constraint |
 |---------|------------|------------|------------|
-| `MACOSX_DEPLOYMENT_TARGET` default | [`build-wine.sh`](../build-wine.sh) | Wine | Same value as the other `MACOSX_DEPLOYMENT_TARGET` rows |
-| `MACOSX_DEPLOYMENT_TARGET` default (`MACOS_FLOOR`) | [`bundle-wine.sh`](../bundle-wine.sh) | The floor every Mach-O in the bundle is checked against | Same value as the other `MACOSX_DEPLOYMENT_TARGET` rows |
-| `MACOSX_DEPLOYMENT_TARGET` | [`.cargo/config.toml`](../.cargo/config.toml) | `compatdb.so` | Same value as the other `MACOSX_DEPLOYMENT_TARGET` rows |
+| `MACOS_FLOOR` of each profile | [`profile.sh`](../profile.sh) | Exported as `MACOSX_DEPLOYMENT_TARGET` for everything the scripts build (Wine, `compatdb.so`, FEX, DXMT), and the floor every Mach-O in the bundle is checked against | The `intel` value equals the `.cargo/config.toml` row |
+| `MACOSX_DEPLOYMENT_TARGET` | [`.cargo/config.toml`](../.cargo/config.toml) | `compatdb.so` built by a plain `cargo build`; the scripts override it | Same as the `intel` `MACOS_FLOOR` |
 | `GPTK_FLOOR` | [`bundle-wine.sh`](../bundle-wine.sh) | The `minos` check of `lib/external/D3DMetal.framework`, and which `dxgi` line the smoke test expects on the build host. D3DMetal links `libdxccontainer.dylib` and ships unmodified, so it cannot be rebuilt for a lower floor | Equal to `GPTK_MIN` |
 | `GPTK_MIN`, `GPTK_MIN_TEXT`, `GPTK_MIN_DARWIN` | [`compatdb/src/macos.rs`](../compatdb/src/macos.rs) | Whether compatdb.so lets a process load D3DMetal, and the log text | Move together, with `GPTK_FLOOR` |
-| `MACOS_FLOOR` | [`package-deps.sh`](../package-deps.sh) | The `deps-*` dependency prefix | Not newer than the deployment target; changing it means a new `deps-*` release |
+| `MACOS_FLOOR` | [`package-deps.sh`](../package-deps.sh) | The `deps-*` dependency prefix | Not newer than the `intel` `MACOS_FLOOR`; changing it means a new `deps-*` release |
 
 - Without the pin, clang takes the deployment target from the build host, so
   the floor would follow the runner image. Check that it still holds when the
@@ -86,8 +98,8 @@ With `--compatdb-only`:
 - Only the minimum is fixed; the SDK is whatever the build host has.
 - Wine picks up a changed pin on the next `build-wine.sh --clean`, which is
   how CI always builds.
-- A `MACOSX_DEPLOYMENT_TARGET` in the environment overrides every
-  `MACOSX_DEPLOYMENT_TARGET` row above.
+- A `MACOSX_DEPLOYMENT_TARGET` in the environment overrides `MACOS_FLOOR`
+  and the `.cargo/config.toml` value.
 - `libd3dshared.dylib` is held to the normal floor: ntdll loads it in every
   process that loads a native PE module, such as a game's executable.
 - Both release workflows pass `--strict-floor`, since their libraries come
@@ -104,6 +116,7 @@ With `--compatdb-only`:
 | x86_64 dependency prefix | A `deps-*` release, named by `DEPS_URL` and `DEPS_SHA256` in [release.yml](../.github/workflows/release.yml) | See below |
 | Runner image, llvm-mingw | The workflows in [`.github/workflows/`](../.github/workflows) | Edit the workflow; re-check the floors |
 | Wine source | [`wine-src.ref`](../wine-src.ref) | Point it at a branch, tag or commit of athei/wine |
+| Sources the arm64 build compiles (FEX, DXMT, LLVM for DXMT) and its provisioning profile | See [arm64.md](arm64.md#pinned-inputs) | |
 
 - `bundle-wine.sh` downloads each artifact into `CACHE_DIR` and reuses the
   cached copy while its checksum matches the pin. A fresh download that does
@@ -193,9 +206,12 @@ anything below needs a `cx-*` release.
 
 ## ARM64X link libraries
 
-- `build-wine.sh` also configures a second tree in `ARM64X_BUILD_DIR` with
-  `arm64ec,aarch64`, so the archives carry both ARM64 and ARM64EC members,
-  and builds only `libwinecrt0.a` and `libntdll.a`.
+- `build-wine.sh` (x86_64 profile) also configures a link-library tree in
+  `ARM64X_BUILD_DIR` with `arm64ec,aarch64`, so the archives carry both
+  ARM64 and ARM64EC members, and builds only `libwinecrt0.a` and
+  `libntdll.a`. The arm64 profile has no such tree: its own build makes
+  these archives, and its [Wine SDK](arm64.md#wine-sdk) carries them, with
+  the x86 ones, for DXMT and mtld3d.
 - They are staged under `ARM64X_LIB_DIR/lib/wine/aarch64-windows/`, in the
   layout of an installed Wine, for linking ARM64X PE builtins that
   CrossOver's arm64 Wine loads; it ships no link archives of its own.
