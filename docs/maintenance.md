@@ -50,6 +50,11 @@ A full x86_64 bundle (the arm64 one: [arm64.md](arm64.md#what-the-bundle-step-ch
   included, references `/usr/local/`.
 - The Direct3D files and the x87sidecar are in place, and the mtld3d tree's
   `d3d9.dll` is byte-identical to mtld3d's.
+- No PE file has `.debug_*` sections or a COFF symbol table; Step 4e
+  stripped them, keeping the unstripped files in `wine-symbols` next to the
+  bundle with `--symbols`. The exception is the files from
+  the GPTK image, which Step 4e leaves alone and which must be
+  byte-identical to the image.
 - No symlink in the tree dangles.
 - `compatdb.so` exports `compatdb_query_env` and, in the x86_64 bundle,
   `compatdb_query_x87` (the arm64 library has no x87 query, see

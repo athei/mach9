@@ -14,9 +14,12 @@ MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 DIST_DIR=""
 # Set by unpack_dxmt or from DXMT_DIST; never taken from the environment.
 DXMT_SRC=""
+# The files installed from the GPTK image (Step 4); never from the environment.
+GPTK_FILES=""
 RUNTIME_ONLY=0
 COMPATDB_ONLY=0
 STRICT_FLOOR=0
+WITH_SYMBOLS=0
 ARCH_PROFILE=intel
 # Whether wine.app (arm64 profile) gets a secure timestamp, which needs
 # Apple's timestamp server. LOADER_TIMESTAMP=0 signs without one, for an
@@ -38,7 +41,7 @@ fi
 GPTK_FLOOR=26.4
 
 usage() {
-    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--compatdb-only] [--strict-floor] [--arm64]"
+    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--compatdb-only] [--strict-floor] [--symbols] [--arm64]"
     exit 1
 }
 
@@ -51,13 +54,16 @@ usage() {
 # instead of a warning. CI passes it: its libraries come from the deps
 # tarball package-deps.sh builds, which meets the floor. A local build copies
 # whatever Homebrew has, which on a newer macOS can carry a newer minos, and
-# is not distributed. --arm64 bundles the native arm64 build (profile.sh).
+# is not distributed. --symbols keeps the PE files as they were before Step
+# 4e stripped them in <dir>/wine-symbols (the release workflow publishes
+# them). --arm64 bundles the native arm64 build (profile.sh).
 while [ $# -gt 0 ]; do
     case "$1" in
         --dest) [ $# -ge 2 ] || usage; DIST_DIR="$2"; shift 2 ;;
         --runtime-only) RUNTIME_ONLY=1; shift ;;
         --compatdb-only) COMPATDB_ONLY=1; shift ;;
         --strict-floor) STRICT_FLOOR=1; shift ;;
+        --symbols) WITH_SYMBOLS=1; shift ;;
         --arm64) ARCH_PROFILE=arm64; shift ;;
         *) usage ;;
     esac
@@ -71,6 +77,9 @@ if [ -z "$DIST_DIR" ]; then
 fi
 
 WINE_DIR="$DIST_DIR/wine"
+# The PE files' symbols (Step 4e, with --symbols), next to the bundle and
+# never in it.
+SYMBOLS_DIR="$DIST_DIR/wine-symbols"
 unixdir="$WINE_DIR/lib/wine/$UNIX_DIR"
 COMPATDB_BUILD="$BUILD_DIR/compatdb/$RUST_TARGET/release/libcompatdb.dylib"
 
@@ -91,6 +100,35 @@ in_list() {
         *" $1 "*) return 0 ;;
     esac
     return 1
+}
+
+# Timing. time_mark <label> ends the interval of the previous mark and starts
+# one for <label>; print_timings lists them all, in order, at the end. Wall
+# time in milliseconds, through perl since bash 3.2 has no subsecond clock.
+TIMINGS=()
+TIMING_LABEL=""
+TIMING_START=0
+now_ms() {
+    perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'
+}
+time_mark() {
+    local now
+    now=$(now_ms)
+    if [ -n "$TIMING_LABEL" ]; then
+        TIMINGS+=("$((now - TIMING_START))|$TIMING_LABEL")
+    fi
+    TIMING_LABEL="$1"
+    TIMING_START=$now
+}
+print_timings() {
+    local entry total=0
+    time_mark ""
+    echo "==> Time per step"
+    for entry in "${TIMINGS[@]}"; do
+        printf '  %8.1fs  %s\n' "$(echo "${entry%%|*}" | awk '{print $1 / 1000}')" "${entry#*|}"
+        total=$((total + ${entry%%|*}))
+    done
+    printf '  %8.1fs  total\n' "$(echo "$total" | awk '{print $1 / 1000}')"
 }
 
 # fetch <url> <sha256> [name]: download an artifact into $CACHE_DIR, or reuse
@@ -131,6 +169,125 @@ fetch() {
     fi
     mv "$target.part" "$target"
     echo "$target"
+}
+
+# pe_scan: read NUL-separated paths on stdin and print, for each that is a PE
+# image, "<path>\t<symbol table offset>\t<symbol count>" from its COFF
+# header, sorted by path. A PE image is an MZ file whose e_lfanew points at a
+# PE signature, not only an MZ file: Wine's .fon fonts are MZ files with a
+# 16-bit NE header. One perl process reads the headers of every file, rather
+# than a few processes per file.
+pe_scan() {
+    perl -0 -ne '
+        chomp;
+        my $f = $_;
+        open(my $h, "<", $f) or next;
+        binmode $h;
+        my ($mz, $coff);
+        next unless read($h, $mz, 64) == 64 && substr($mz, 0, 2) eq "MZ";
+        seek($h, unpack("V", substr($mz, 60, 4)), 0) or next;
+        next unless read($h, $coff, 24) == 24 && substr($coff, 0, 4) eq "PE\0\0";
+        my ($ptr, $count) = unpack("VV", substr($coff, 12, 8));
+        print "$f\t$ptr\t$count\n";
+    ' | LC_ALL=C sort
+}
+
+# strip_pe <rel>...: strip each PE file <rel> (a path in the bundle) in
+# place, as Step 4e describes, keeping the unstripped copy in SYMBOLS_DIR
+# with --symbols. Runs in parallel batches under xargs, so it reports
+# instead of exiting: an error goes to $STRIP_ERRORS/<n> and leaves the file
+# as it was. Prints the path of every file it changed.
+strip_pe() {
+    local rel f out
+    for rel in "$@"; do
+        f="$WINE_DIR/$rel"
+        out="$STRIP_WORK/$(printf '%s' "$rel" | tr '/' '%')"
+        if ! "$MINGW_DIR/bin/llvm-strip" --strip-all -o "$out" "$f" 2>"$out.err" \
+            && ! drop_coff_symtab "$f" "$out"; then
+            { echo "Error: cannot strip $rel:"; cat "$out.err"; } > "$STRIP_ERRORS/${out##*/}"
+            rm -f "$out" "$out.err"
+            continue
+        fi
+        if cmp -s "$f" "$out"; then
+            rm -f "$out" "$out.err"
+            continue
+        fi
+        if head -c 128 "$f" | grep -qa "Wine builtin DLL" \
+            && ! head -c 128 "$out" | grep -qa "Wine builtin DLL"; then
+            echo "Error: stripping $rel lost its builtin marker" > "$STRIP_ERRORS/${out##*/}"
+            rm -f "$out" "$out.err"
+            continue
+        fi
+        if [ "$WITH_SYMBOLS" -eq 1 ]; then
+            if ! mkdir -p "$SYMBOLS_DIR/$(dirname "$rel")" || ! cp -p "$f" "$SYMBOLS_DIR/$rel"; then
+                echo "Error: cannot keep the unstripped $rel in $SYMBOLS_DIR" > "$STRIP_ERRORS/${out##*/}"
+                rm -f "$out" "$out.err"
+                continue
+            fi
+        fi
+        if ! cp "$out" "$f"; then
+            echo "Error: cannot replace $rel with its stripped copy" > "$STRIP_ERRORS/${out##*/}"
+            rm -f "$out" "$out.err"
+            continue
+        fi
+        rm -f "$out" "$out.err"
+        echo "$rel"
+    done
+}
+
+# pe_debug_files <file>...: print each of the PE files that has .debug_*
+# sections, and "!<file>" for one llvm-objdump cannot read. One llvm-objdump
+# reads the whole batch; only when it fails is each file read on its own, to
+# tell which one it was.
+pe_debug_files() {
+    local out f
+    if out=$("$MINGW_DIR/bin/llvm-objdump" -h "$@" 2>&1); then
+        awk '
+            /:\tfile format / { cur = $0; sub(/:\tfile format .*/, "", cur); seen = 0; next }
+            / \.debug_/ && !seen { print cur; seen = 1 }
+        ' <<< "$out"
+        return 0
+    fi
+    for f in "$@"; do
+        if out=$("$MINGW_DIR/bin/llvm-objdump" -h "$f" 2>&1); then
+            if grep -q ' \.debug_' <<< "$out"; then echo "$f"; fi
+        else
+            echo "!$f"
+        fi
+    done
+}
+
+# coff_symtab <pe-file>: print where the file's COFF symbol table starts,
+# its symbol count and where the string table after it ends, as file
+# offsets; "0 0 0" when the header points at no table.
+coff_symtab() {
+    local pe ptr count strings
+    pe=$(od -An -tu4 -j60 -N4 "$1" | tr -d ' ')
+    ptr=$(od -An -tu4 -j$((pe + 12)) -N4 "$1" | tr -d ' ')
+    count=$(od -An -tu4 -j$((pe + 16)) -N4 "$1" | tr -d ' ')
+    if [ "$ptr" -eq 0 ] && [ "$count" -eq 0 ]; then
+        echo "0 0 0"
+        return
+    fi
+    strings=$(od -An -tu4 -j$((ptr + count * 18)) -N4 "$1" | tr -d ' ')
+    echo "$ptr $count $((ptr + count * 18 + ${strings:-0}))"
+}
+
+# drop_coff_symtab <pe-file> <out>: write <pe-file> to <out> without its COFF
+# symbol table, by cutting the file where the table starts and clearing the
+# header's pointer and count. Fails unless the table and its strings end the
+# file and the file has no .debug_* sections, which would need llvm-strip.
+drop_coff_symtab() {
+    local pe ptr count end sections
+    read -r ptr count end < <(coff_symtab "$1")
+    [ "$ptr" -ne 0 ] && [ "$end" -eq "$(stat -f %z "$1")" ] || return 1
+    sections=$("$MINGW_DIR/bin/llvm-objdump" -h "$1" 2>&1) || return 1
+    if grep -q ' \.debug_' <<< "$sections"; then
+        return 1
+    fi
+    pe=$(od -An -tu4 -j60 -N4 "$1" | tr -d ' ')
+    head -c "$ptr" "$1" > "$2" || return 1
+    printf '\0\0\0\0\0\0\0\0' | dd of="$2" bs=1 seek=$((pe + 12)) conv=notrunc 2>/dev/null
 }
 
 # The helpers below exit on failure instead of returning a status. Call them
@@ -346,6 +503,7 @@ smoke_test() {
     # Booting a throwaway prefix does: the library logs one block per process,
     # and its "(from ...)" lines only appear once it found and prepended the
     # trees. The Mono and Gecko installers are kept out so nothing pops a dialog.
+    time_mark "smoke: prefix boot"
     echo "  Booting a throwaway prefix to check compatdb.so..."
     smoke_log="$TMP_DIR/smoke.log"
     WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all \
@@ -376,6 +534,7 @@ smoke_test() {
         # after two minutes. The caller's ROSETTA_X87_PATH and WINE_COMPATDB
         # are dropped so that the bundled sidecar and the built-in rules
         # decide.
+        time_mark "smoke: i386 process under the x87sidecar"
         echo "  Starting an i386 process to check the x87sidecar..."
         x87_log="$TMP_DIR/x87.log"
         local x87_status=0
@@ -451,6 +610,7 @@ smoke_test_arm64() {
 
     # wineboot creates the prefix here, so the limit is generous. The Mono
     # and Gecko installers are kept out so nothing pops a dialog.
+    time_mark "smoke: prefix boot"
     echo "  Booting a throwaway prefix..."
     log="$TMP_DIR/smoke.log"
     run_limited 600 "$log" "${wine_env[@]}" "$WINE_DIR/bin/wine" cmd /c exit
@@ -476,6 +636,7 @@ smoke_test_arm64() {
     fi
     echo "  Nothing involves the x87sidecar."
 
+    time_mark "smoke: i386 cmd.exe under FEX"
     echo "  Starting the i386 cmd.exe under FEX..."
     log="$TMP_DIR/wow64.log"
     run_limited 120 "$log" "${wine_env[@]}" "$WINE_DIR/bin/wine" 'C:\windows\syswow64\cmd.exe' /c exit
@@ -497,6 +658,7 @@ smoke_test_arm64() {
         cc="$MINGW_DIR/bin/$arch-w64-mingw32-clang"
         exe="$TMP_DIR/hello-$arch.exe"
         "$cc" -O2 -o "$exe" "$SCRIPT_DIR/smoke/hello.c"
+        time_mark "smoke: hello.exe $arch"
         echo "  Running hello.exe for $arch..."
         log="$TMP_DIR/hello-$arch.log"
         run_limited 120 "$log" "${wine_env[@]}" "$WINE_DIR/bin/wine" "$exe"
@@ -578,6 +740,7 @@ check_tree_loads() {
                 names+=("$(basename "$f")")
             done
             names+=("$other")
+            time_mark "smoke: $arch on $family/$impl"
             log="$TMP_DIR/trees-$arch-$family-$impl.log"
             run_limited 120 "$log" "$@" \
                 WINE_COMPATDB="$header"$'\n'"name=smoke;exe=$(basename "$exe");$family=$impl" \
@@ -1002,7 +1165,7 @@ if [ "$COMPATDB_ONLY" -eq 1 ]; then
     echo "==> Step 1: Build compatdb.so"
     build_compatdb
 
-    # Same reason as Step 4e of a full bundle. A freshly linked file normally
+    # Same reason as Step 4f of a full bundle. A freshly linked file normally
     # carries no quarantine, so only remove it when it is there.
     echo "==> Step 2: Remove inherited quarantine"
     if xattr -p com.apple.quarantine "$unixdir/compatdb.so" >/dev/null 2>&1; then
@@ -1039,6 +1202,7 @@ fi
 # ── Preflight ───────────────────────────────────────────────────────────
 # What a full bundle needs beyond the Wine build, checked before Step 0
 # deletes anything.
+time_mark "Preflight"
 echo "==> Preflight"
 check_sdk_floor
 check_deps_formulae
@@ -1057,10 +1221,17 @@ for arch in $SMOKE_PE_ARCHS x86_64 i686; do
         exit 1
     fi
 done
+for tool in llvm-strip llvm-objdump; do
+    if [ ! -x "$MINGW_DIR/bin/$tool" ]; then
+        echo "Error: no $tool in $MINGW_DIR/bin (Step 4e needs it)"
+        exit 1
+    fi
+done
 if [ "$WITH_LOADER_APP" -eq 1 ]; then
     loader_preflight
 fi
 
+time_mark "Step 0: Clean previous bundle"
 # ── Step 0: Clean previous bundle ──────────────────────────────────────
 # The bundle ships, so it carries no tree marker. Only a directory that looks
 # like a bundle, one with a bin/wine, is offered for deletion. make install
@@ -1086,9 +1257,19 @@ if [ -d "$WINE_DIR" ]; then
         *) echo "Aborted."; exit 1 ;;
     esac
 fi
+# The previous bundle's symbols go too, so a run that fails before Step 4e,
+# or one without --symbols, cannot leave them next to a bundle they do not
+# belong to.
+if [ "$WITH_SYMBOLS" -eq 1 ]; then
+    claim_tree "$SYMBOLS_DIR" symbols 1
+elif [ -e "$SYMBOLS_DIR" ]; then
+    claim_tree "$SYMBOLS_DIR" symbols 1
+    remove_tree "$SYMBOLS_DIR"
+fi
 mkdir -p "$DIST_DIR"
 
 # ── Step 1: Staged install ──────────────────────────────────────────────
+time_mark "Step 1: Staged install"
 # Under the same wrapper as configure, since it can rerun configure's probes.
 cd "$BUILD_DIR"
 if [ "$RUNTIME_ONLY" -eq 1 ]; then
@@ -1100,9 +1281,12 @@ else
 fi
 
 # ── Step 2: Flatten prefix ──────────────────────────────────────────────
+time_mark "Step 2: Flatten prefix"
 echo "==> Step 2: Flatten prefix"
 mv "$DIST_DIR$INSTALL_PREFIX" "$WINE_DIR"
-# Left behind is the empty parent of the prefix (/usr of /usr/local).
+# Left behind is the empty parent of the prefix (/usr of /usr/local), unless
+# a Finder window showing <dest> put a .DS_Store into it.
+rm -f "$DIST_DIR/$INSTALL_TOP/.DS_Store"
 rmdir "$DIST_DIR/$INSTALL_TOP"
 
 EXT_DIR="$WINE_DIR/lib/external"
@@ -1118,6 +1302,7 @@ EXT_DIR="$WINE_DIR/lib/external"
 # Development files only: the runtime-only bundle goes into an application, and
 # a test suite has no business there.
 if [ "$RUNTIME_ONLY" -eq 0 ] && [ "$WITH_D3D9_TESTS" -eq 1 ]; then
+    time_mark "Step 2b: d3d9 test binaries"
     echo "==> Step 2b: Bundle the d3d9 test binaries"
     for arch in i386-windows "$PE64_DIR"; do
         src="$BUILD_DIR/dlls/d3d9/tests/$arch/d3d9_test.exe"
@@ -1141,6 +1326,7 @@ fi
 # aarch64-windows, and the loader and setupapi's fake-DLL install only pick
 # .dll and .exe files that are PE images.
 if [ "$RUNTIME_ONLY" -eq 0 ] && [ "$WITH_WINE_SDK" -eq 1 ]; then
+    time_mark "Step 2c: x86_64 link libraries"
     echo "==> Step 2c: x86_64 link libraries"
     mkdir -p "$WINE_DIR/lib/wine/x86_64-windows"
     for lib in "$WINE_SDK_DIR"/lib/wine/x86_64-windows/*.a; do
@@ -1153,6 +1339,7 @@ fi
 # Wine's .so modules dlopen these via @loader_path sonames (patched by
 # build-wine.sh). Transitive deps are loaded by dyld from their @loader_path
 # install names.
+time_mark "Step 3: Bundle dynamic libraries"
 echo "==> Step 3: Bundle dynamic libraries"
 mkdir -p "$EXT_DIR"
 
@@ -1260,6 +1447,7 @@ fi
 # stays: i386's is replaced by DXMT, and on x86_64 it is Wine's, loaded only
 # by the wined3d side tree (D3DMetal's dxgi cannot back it, so the default
 # GPTK stack never reaches it).
+time_mark "Step 3b: Vulkan removal"
 echo "==> Step 3b: Remove the modules Vulkan removal orphans"
 for dead in \
     i386-windows/vulkan-1.dll \
@@ -1295,6 +1483,7 @@ done
 # touch the Apple-signed libd3dshared.dylib. Staging afterwards keeps them out
 # of reach without any exemption logic. Nothing below rewrites install names,
 # re-signs, or walks the otool closure.
+time_mark "Step 4: Direct3D backends"
 echo "==> Step 4: Direct3D backends"
 
 # Every artifact, the x87sidecar of Step 4c included, is downloaded (or taken
@@ -1349,8 +1538,7 @@ if in_list gptk "$DXGI_IMPLS"; then
     # D3DMetal, straight off the GPTK image. Apple's license allows
     # redistributing the Redistributables unmodified for non-commercial
     # purposes, so the files are copied byte for byte, signatures and all.
-    # `ditto` preserves the symlinks (each x86_64-unix/*.so points at
-    # ../../external/libd3dshared.dylib) and the framework's _CodeSignature
+    # `ditto` preserves the framework's symlinks and its _CodeSignature
     # directory; `cp -R` would not. The image carries a click-through license
     # agreement, which hdiutil prompts for on stdin and would otherwise block
     # a CI run forever. The here-string answers it and PAGER keeps the
@@ -1368,19 +1556,29 @@ if in_list gptk "$DXGI_IMPLS"; then
         echo "Error: no redist/lib directory on $(basename "$GPTK_DMG")"
         exit 1
     fi
+    # A copy as it is on the image, which Step 5 compares the installed files
+    # with.
+    ditto "$GPTK_LIB" "$TMP_DIR/gptk-image"
 
-    echo "  Installing D3DMetal (x86_64 d3d10/d3d11/d3d12/dxgi)..."
-    ditto "$GPTK_LIB/external" "$EXT_DIR"
-    ditto "$GPTK_LIB/wine/x86_64-unix" "$unixdir"
-    ditto "$GPTK_LIB/wine/x86_64-windows" "$d3d64"
-
+    # D3DMetal's PE modules, each as <name on the image>:<name in the bundle>.
+    # Each goes into the gptk tree with a unixlib symlink at the deeper path,
+    # which stands in for the image's own x86_64-unix symlink of that name.
     # nvngx is what games look for when probing DLSS; Apple ships its MetalFX
-    # implementation under a descriptive name that no game ever loads.
-    # wine.inf already registers nvapi64.dll and nvngx.dll as fake DLLs.
-    echo "    nvngx-on-metalfx -> nvngx"
-    mv -f "$d3d64/nvngx-on-metalfx.dll" "$d3d64/nvngx.dll"
-    rm -f "$unixdir/nvngx-on-metalfx.so"
-    ln -sf ../../external/libd3dshared.dylib "$unixdir/nvngx.so"
+    # implementation under a descriptive name that no game ever loads, and
+    # wine.inf already registers nvapi64.dll and nvngx.dll as fake DLLs. This
+    # one list drives the install, the record of Apple's files that Step 4e
+    # and Step 5 work from, and the check that the image holds nothing else.
+    GPTK_MODULES="dxgi:dxgi d3d10:d3d10 d3d11:d3d11 d3d12:d3d12 nvapi64:nvapi64 nvngx-on-metalfx:nvngx"
+    echo "  Installing D3DMetal..."
+    ditto "$GPTK_LIB/external" "$EXT_DIR"
+    gw="$tree/gptk/$PE64_DIR"
+    gu="$tree/gptk/$UNIX_DIR"
+    mkdir -p "$gw" "$gu"
+    for m in $GPTK_MODULES; do
+        echo "    ${m%%:*}.dll -> dxgi/gptk/$PE64_DIR/${m#*:}.dll"
+        ditto "$GPTK_LIB/wine/x86_64-windows/${m%%:*}.dll" "$gw/${m#*:}.dll"
+        ln -sf ../../../../external/libd3dshared.dylib "$gu/${m#*:}.so"
+    done
 
     GPTK_LICENSE=$(find "$GPTK_MNT" -maxdepth 2 -iname 'License.rtf' -print -quit)
     if [ -n "$GPTK_LICENSE" ]; then
@@ -1394,22 +1592,57 @@ if in_list gptk "$DXGI_IMPLS"; then
     hdiutil detach "$GPTK_MNT" -quiet
     rmdir "$GPTK_MNT" 2>/dev/null || true
 
-    # gptk tree: D3DMetal's dxgi/d3d10/d3d11/d3d12 (+ nvngx/nvapi64), moved out
-    # of the default dir, their unixlib symlinks re-pointed at the deeper path.
-    gw="$tree/gptk/$PE64_DIR"
-    gu="$tree/gptk/$UNIX_DIR"
-    mkdir -p "$gw" "$gu"
-    for dll in dxgi d3d10 d3d11 d3d12 nvngx nvapi64; do
-        mv -f "$d3d64/$dll.dll" "$gw/$dll.dll"
-        rm -f "$unixdir/$dll.so"
-        ln -sf ../../../../external/libd3dshared.dylib "$gu/$dll.so"
-    done
     # D3DMetal ships no d3d10core/d3d10_1; Wine's were reachable by GPTK
     # processes in the old default dir (they return E_FAIL on GPTK's dxgi but
     # must be present so anything probing D3D10 keeps its old behaviour rather
     # than failing to load). Pure PE, no unixlib.
     cp "$BUILD_DIR/dlls/d3d10core/$PE64_DIR/d3d10core.dll" "$gw/"
     cp "$BUILD_DIR/dlls/d3d10_1/$PE64_DIR/d3d10_1.dll"     "$gw/"
+
+    # Every regular file the bundle takes from the image, as
+    # "<path on the image>|<path in the bundle>" lines. Step 4e leaves these
+    # alone and Step 5 checks them against the image copy: they ship as
+    # Apple made them. Every entry of the image has to be accounted for: a
+    # file or symlink under external/ is installed at the same path under
+    # lib/external/, a module named in GPTK_MODULES goes into the gptk tree,
+    # and the x86_64-unix symlink of such a module is replaced by the tree's
+    # own. Anything else, or a file missing where it should be, is an error,
+    # so a change to the image or to this step cannot let an Apple file slip
+    # past Step 4e and Step 5.
+    while IFS= read -r -d '' f; do
+        src="${f#"$TMP_DIR/gptk-image/"}"
+        name="${src##*/}"
+        dst=""
+        case "$src" in
+            external/*) dst="lib/$src" ;;
+            wine/x86_64-windows/*.dll|wine/x86_64-unix/*.so)
+                for m in $GPTK_MODULES; do
+                    if [ "${m%%:*}" = "${name%.*}" ]; then
+                        dst="lib/wine/dxgi/gptk/$PE64_DIR/${m#*:}.dll"
+                    fi
+                done ;;
+        esac
+        if [ -z "$dst" ]; then
+            echo "Error: $src on the GPTK image is not installed (GPTK_MODULES does not name it)"
+            exit 1
+        fi
+        if [ -L "$f" ]; then
+            case "$src" in
+                wine/x86_64-unix/*) ;;
+                *)
+                    if [ "$(readlink "$f")" != "$(readlink "$WINE_DIR/$dst" 2>/dev/null)" ]; then
+                        echo "Error: $src on the GPTK image is not installed as the same symlink at $dst"
+                        exit 1
+                    fi ;;
+            esac
+            continue
+        fi
+        if [ ! -f "$WINE_DIR/$dst" ] || [ -L "$WINE_DIR/$dst" ]; then
+            echo "Error: $src from the GPTK image is not installed at $dst"
+            exit 1
+        fi
+        GPTK_FILES+="$src|$dst"$'\n'
+    done < <(find "$TMP_DIR/gptk-image" \( -type f -o -type l \) -print0)
 fi
 
 if in_list dxmt "$DXGI_IMPLS"; then
@@ -1514,6 +1747,7 @@ fi
 # (docs/arm64.md, Limitations). An arm64 winebuild has no default PE target,
 # hence the explicit -b; for the x86_64 profile it gives the same bytes as
 # the -m32/-m64 used before.
+time_mark "Step 4: fake-module markers"
 echo "  Stamping fake-module markers in the default dirs..."
 mark() { # <out-dir> <arch-dir> <real-dll> <name>
     local target=x86_64-windows
@@ -1546,6 +1780,7 @@ done
 # chosen per process from its built-in rules plus whatever WINE_COMPATDB
 # carries. Built here from the compatdb/ crate for this profile's Rust
 # target, the one Wine in this bundle.
+time_mark "Step 4b: Compat database"
 echo "==> Step 4b: Compat database"
 build_compatdb
 
@@ -1557,6 +1792,7 @@ build_compatdb
 # no re-signing, and the leak check in Step 5 does not look at bin/. Only for
 # a Wine under Rosetta; a native arm64 Wine runs i386 code under FEX.
 if [ "$WITH_X87SIDECAR" -eq 1 ]; then
+    time_mark "Step 4c: x87sidecar"
     echo "==> Step 4c: x87sidecar"
     mkdir -p "$TMP_DIR/x87sidecar"
     tar xJf "$X87SIDECAR_TAR" -C "$TMP_DIR/x87sidecar"
@@ -1578,6 +1814,7 @@ fi
 # others, so FEX's DLLs are installed under their own names and as those two,
 # replacing the stubs `make install` put there.
 if [ "$WITH_FEX" -eq 1 ]; then
+    time_mark "Step 4d: FEX"
     echo "==> Step 4d: FEX"
     for t in wow64 arm64ec unixlib; do
         if [ ! -f "$FEX_BUILD_DIR/$t/build.ninja" ]; then
@@ -1605,27 +1842,92 @@ if [ "$WITH_FEX" -eq 1 ]; then
     cp "$fexunix/libwow64fex.so" "$fexunix/libarm64ecfex.so" "$unixdir/"
 fi
 
-# ── Step 4e: Remove inherited quarantine ──────────────────────────────
+# ── Step 4e: Split off PE symbols ───────────────────────────────────────
+# Wine, DXMT, FEX and the d3d9 tests are built with DWARF debug info, and
+# most PE files also carry a COFF symbol table. Together they make up more
+# than half the size of the PE modules and only serve a debugger or the
+# symbolizing of a crash report, so the bundle ships none of them. Every PE
+# file under lib/wine is stripped of both here, except those from the GPTK
+# image, which may only be redistributed unmodified (Step 4) and are left
+# alone. With --symbols the unstripped copy of each stripped file goes to
+# <dest>/wine-symbols (cleared in Step 0), next to the bundle, under the same
+# relative path: an address in lib/wine/<arch>-windows/foo.dll is looked up
+# in wine-symbols/lib/wine/<arch>-windows/foo.dll. The files are stripped in
+# parallel batches (strip_pe), and errors are listed sorted by file once all
+# are done. llvm-strip keeps the DOS stub, which holds Wine's builtin
+# marker, and handles ARM64X images. It cannot read the symbol table GNU ld
+# writes for some i386 DLLs (DXMT's release); there the table and its
+# strings, which end the file, are cut off instead (drop_coff_symtab). Step 5
+# checks that no PE file kept either.
+time_mark "Step 4e: Split off PE symbols"
+echo "==> Step 4e: Split off PE symbols"
+if in_list gptk "$DXGI_IMPLS" && [ -z "$GPTK_FILES" ]; then
+    echo "Error: no record of the files from the GPTK image; nothing would keep them unmodified"
+    exit 1
+fi
+# mtld3d's d3d9.dll as installed, for Step 5's comparison with the release.
+if in_list mtld3d "$D3D9_IMPLS"; then
+    for arch in i386-windows "$PE64_DIR"; do
+        mkdir -p "$TMP_DIR/installed/$arch"
+        cp -p "$d3d9tree/mtld3d/$arch/d3d9.dll" "$TMP_DIR/installed/$arch/"
+    done
+fi
+# Every PE file but Apple's (they ship unmodified, Step 4; Step 5 checks
+# them), in parallel batches.
+STRIP_WORK="$TMP_DIR/strip"
+STRIP_ERRORS="$TMP_DIR/strip-errors"
+mkdir -p "$STRIP_WORK" "$STRIP_ERRORS"
+export WINE_DIR MINGW_DIR SYMBOLS_DIR WITH_SYMBOLS STRIP_WORK STRIP_ERRORS
+export -f strip_pe drop_coff_symtab coff_symtab
+# pipefail in a subshell, so a failing find or perl stops the step instead
+# of handing xargs an empty list.
+(
+    set -o pipefail
+    find "$WINE_DIR/lib/wine" -type f ! -name '*.a' -print0 | pe_scan | cut -f1 \
+        | while IFS= read -r f; do
+              rel="${f#"$WINE_DIR"/}"
+              case "$GPTK_FILES" in *"|$rel"$'\n'*) continue ;; esac
+              printf '%s\0' "$rel"
+          done \
+        | xargs -0 -n 32 -P "$(sysctl -n hw.ncpu)" /bin/bash -c 'strip_pe "$@"' _ > "$TMP_DIR/stripped.list"
+)
+if [ -n "$(ls "$STRIP_ERRORS")" ]; then
+    for e in $(ls "$STRIP_ERRORS" | LC_ALL=C sort); do
+        cat "$STRIP_ERRORS/$e"
+    done
+    exit 1
+fi
+split=$(wc -l < "$TMP_DIR/stripped.list" | tr -d ' ')
+if [ "$WITH_SYMBOLS" -eq 1 ]; then
+    echo "    $split PE files stripped, their symbols in $SYMBOLS_DIR"
+else
+    echo "    $split PE files stripped (--symbols keeps a copy with their symbols)"
+fi
+
+# ── Step 4f: Remove inherited quarantine ──────────────────────────────
 # Extracting and copying the checksum-verified redistributables can preserve
 # download quarantine, which blocks libraries such as winemetal.so at load time.
 # Clear only that attribute from the assembled bundle before running it. Keep
 # signatures and other metadata intact; -s acts on symlinks themselves so this
 # cannot change a target outside the bundle.
-echo "==> Step 4e: Remove inherited quarantine"
+time_mark "Step 4f: Remove inherited quarantine"
+echo "==> Step 4f: Remove inherited quarantine"
 if ! xattr -drs com.apple.quarantine "$WINE_DIR"; then
     echo "Error: failed to remove inherited quarantine from $WINE_DIR" >&2
     exit 1
 fi
 
-# ── Step 4f: Loader app ─────────────────────────────────────────────────
+# ── Step 4g: Loader app ─────────────────────────────────────────────────
 # Last of all that touches the loader, so nothing changes the signed bundle
 # after it is sealed.
 if [ "$WITH_LOADER_APP" -eq 1 ]; then
-    echo "==> Step 4f: Loader app"
+    time_mark "Step 4g: Loader app"
+    echo "==> Step 4g: Loader app"
     package_loader
 fi
 
 # ── Step 5: Verify ──────────────────────────────────────────────────────
+time_mark "Step 5: library references"
 echo "==> Step 5: Verify"
 
 echo "  wine binary: $(file -L "$WINE_DIR/bin/wine" | sed 's|.*/||')"
@@ -1650,6 +1952,7 @@ echo "  All binaries clean, no ${LEAK_PREFIXES// / or } references."
 
 # The Direct3D backends and everything else copied in rather than built,
 # which nothing the build does would have caught.
+time_mark "Step 5: copied-in components"
 WANT=("lib/wine/$UNIX_DIR/compatdb.so"
       "lib/wine/$PE64_DIR/dxgi.dll" "lib/wine/i386-windows/dxgi.dll"
       "lib/wine/$PE64_DIR/d3d9.dll" "lib/wine/i386-windows/d3d9.dll")
@@ -1709,12 +2012,13 @@ for want in "${WANT[@]}"; do
     fi
 done
 # A d3d9.dll named like mtld3d's could still be Wine's; only a byte comparison
-# proves the right copy landed in the tree.
+# proves the right copy landed in the tree. Step 4e kept a copy of it as it
+# was installed, before stripping.
 if in_list mtld3d "$D3D9_IMPLS"; then
     for arch in i386-windows "$PE64_DIR"; do
         srcarch=$arch
         [ "$arch" = i386-windows ] || srcarch=x86_64-windows
-        if ! cmp -s "$MTLD3D_SRC/$srcarch/d3d9.dll" "$d3d9tree/mtld3d/$arch/d3d9.dll"; then
+        if ! cmp -s "$MTLD3D_SRC/$srcarch/d3d9.dll" "$TMP_DIR/installed/$arch/d3d9.dll"; then
             echo "  ERROR: d3d9/mtld3d/$arch/d3d9.dll is not mtld3d's"
             MISSING=1
         fi
@@ -1736,8 +2040,73 @@ if [ $MISSING -ne 0 ]; then
 fi
 echo "  Direct3D trees (dxgi: $DXGI_IMPLS; d3d9: $D3D9_IMPLS) and the other copied-in components in place."
 
+# Step 4e stripped every PE file's symbols; none may be left, except in
+# Apple's files, which ship as they are on the image. Those are checked for
+# exactly that, by content (shasum reads the file; cmp maps it, which macOS
+# can kill for a signed Mach-O). One header scan (pe_scan) finds the PE files
+# and their COFF symbol tables, and llvm-objdump reads their section tables
+# in parallel batches (pe_debug_files).
+time_mark "Step 5: PE symbol check"
+(
+    set -o pipefail
+    find "$WINE_DIR" -type f ! -name '*.a' -print0 | pe_scan > "$TMP_DIR/pe-scan"
+)
+# A scan that came back empty, or without a module every bundle has, read
+# nothing and would pass for a clean bundle.
+if ! cut -f1 "$TMP_DIR/pe-scan" | grep -qxF "$WINE_DIR/lib/wine/$PE64_DIR/ntdll.dll"; then
+    echo "  ERROR: the PE scan found $(wc -l < "$TMP_DIR/pe-scan" | tr -d ' ') files, not lib/wine/$PE64_DIR/ntdll.dll"
+    exit 1
+fi
+: > "$TMP_DIR/pe-check"
+: > "$TMP_DIR/pe-symboled"
+while IFS=$'\t' read -r f ptr count; do
+    rel="${f#"$WINE_DIR"/}"
+    case "$GPTK_FILES" in *"|$rel"$'\n'*) continue ;; esac
+    printf '%s\0' "$f" >> "$TMP_DIR/pe-check"
+    if [ "$ptr" != 0 ] || [ "$count" != 0 ]; then
+        echo "$rel" >> "$TMP_DIR/pe-symboled"
+    fi
+done < "$TMP_DIR/pe-scan"
+export MINGW_DIR
+export -f pe_debug_files
+xargs -0 -n 64 -P "$(sysctl -n hw.ncpu)" /bin/bash -c 'pe_debug_files "$@"' _ \
+    < "$TMP_DIR/pe-check" > "$TMP_DIR/pe-debug"
+unreadable=$(grep '^!' "$TMP_DIR/pe-debug" | LC_ALL=C sort | head -1)
+if [ -n "$unreadable" ]; then
+    echo "  ERROR: llvm-objdump cannot read ${unreadable#!"$WINE_DIR"/}:"
+    "$MINGW_DIR/bin/llvm-objdump" -h "${unreadable#!}" 2>&1 || true
+    exit 1
+fi
+while IFS= read -r f; do
+    echo "${f#"$WINE_DIR"/}" >> "$TMP_DIR/pe-symboled"
+done < "$TMP_DIR/pe-debug"
+if [ -s "$TMP_DIR/pe-symboled" ]; then
+    echo "  ERROR: PE files with debug sections or a symbol table:"
+    LC_ALL=C sort -u "$TMP_DIR/pe-symboled" | sed 's/^/    /'
+    exit 1
+fi
+echo "  No PE file carries debug sections or a symbol table."
+if in_list gptk "$DXGI_IMPLS"; then
+    if [ -z "$GPTK_FILES" ]; then
+        echo "  ERROR: no record of the files from the GPTK image"
+        exit 1
+    fi
+    time_mark "Step 5: GPTK files against the image"
+    gptk_count=0
+    while IFS='|' read -r src dst; do
+        [ -n "$src" ] || continue
+        if [ "$(shasum -a 256 < "$TMP_DIR/gptk-image/$src")" != "$(shasum -a 256 < "$WINE_DIR/$dst")" ]; then
+            echo "  ERROR: $dst differs from $src on the GPTK image"
+            exit 1
+        fi
+        gptk_count=$((gptk_count + 1))
+    done <<< "$GPTK_FILES"
+    echo "  The $gptk_count files from the GPTK image are byte-identical to it."
+fi
+
 # A symlink whose target a step removed or never installed fails only at run
 # time, or, inside wine.app, as a signature that does not verify.
+time_mark "Step 5: dangling symlinks"
 DANGLING=$(find "$WINE_DIR" -type l ! -exec test -e {} \; -print)
 if [ -n "$DANGLING" ]; then
     echo "  ERROR: dangling symlinks:"
@@ -1746,6 +2115,7 @@ if [ -n "$DANGLING" ]; then
 fi
 echo "  No dangling symlinks."
 
+time_mark "Step 5: exports and loader signature"
 check_query_export
 if [ "$WITH_X87SIDECAR" -eq 0 ]; then
     check_no_x87
@@ -1756,6 +2126,7 @@ fi
 
 # After everything above is in place, so the copied-in redistributables and
 # compatdb.so are checked as well as what Wine built.
+time_mark "Step 5: minos"
 echo "  Checking every Mach-O against macOS $MACOS_FLOOR..."
 check_minos "$WINE_DIR"
 # smoke_test checks that bin/x87sidecar is an arm64 executable before it
@@ -1764,6 +2135,7 @@ check_minos "$WINE_DIR"
 "$SMOKE_TEST"
 
 echo ""
+print_timings
 echo "==> Done! Distribution is at:"
 echo "    $DIST_DIR/wine/"
 if [ "$RUNTIME_ONLY" -eq 1 ]; then
