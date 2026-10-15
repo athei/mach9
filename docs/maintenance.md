@@ -38,7 +38,9 @@ A full bundle:
   included, references `/usr/local/`.
 - The Direct3D files and the x87sidecar are in place, and the mtld3d tree's
   `d3d9.dll` is byte-identical to mtld3d's.
-- `compatdb.so` exports `compatdb_query_x87` and `compatdb_query_env`.
+- `compatdb.so` exports `compatdb_query_env` and, in the x86_64 bundle,
+  `compatdb_query_x87` (the arm64 library has no x87 query, see
+  [arm64 Wine](compatdb.md#arm64-wine)).
 - The minimum macOS (`minos`) of every executable, `.dylib` and `.so` (the
   newest slice of a universal file) is at most its floor, see
   [macOS floors](#macos-floors). Without `--strict-floor` each file over its
@@ -171,7 +173,8 @@ anything below needs a `cx-*` release.
     address limit after the library returns.
   - On an ntdll without one of them, compatdb.so logs that and skips the
     setting.
-- compatdb.so exports for ntdll: `compatdb_query_x87` and
+- compatdb.so exports for ntdll: `compatdb_query_x87` (x86_64 library
+  only, see [arm64 Wine](compatdb.md#arm64-wine)) and
   `compatdb_query_env`. ntdll calls them in the parent before it starts a
   child, and in the first process of a launch before ntdll is initialized.
   `compatdb_query_env` writes into a buffer ntdll provides, since ntdll may

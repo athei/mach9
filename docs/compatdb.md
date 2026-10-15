@@ -3,7 +3,9 @@
 - Built from the crates in [`compatdb/`](../compatdb):
   `compatdb-table` ([`compatdb/table`](../compatdb/table)) holds the pure
   rule logic, `compatdb` the cdylib around it.
-- Installed as `lib/wine/x86_64-unix/compatdb.so`. Wine's ntdll dlopens
+- Installed as `lib/wine/<host>-unix/compatdb.so`, next to ntdll's unix
+  half (`x86_64-unix`, or `aarch64-unix` in the
+  [arm64 Wine](#arm64-wine)). Wine's ntdll dlopens
   `<ntdll_dir>/compatdb.so` in every process before any PE code runs, the
   slot CrossOver's own compat database uses.
 - At load it reads the process's image name and version resource, resolves
@@ -11,6 +13,8 @@
   [`WINE_COMPATDB`](#wine_compatdb)) and applies them. ntdll also asks for
   `x87_sidecar` and `env` before it starts a process (see
   [Matching](#matching)).
+- The same source builds the library for the x86_64 Wine and for an arm64
+  one; [arm64 Wine](#arm64-wine) lists what differs.
 
 ## Settings
 
@@ -19,12 +23,12 @@ and with none, Wine does.
 
 | Key | Values | Effect | Applied |
 |-----|--------|--------|---------|
-| `dxgi` | `gptk`, `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. Unset: the [arch default](../README.md#direct3d-backends). `gptk` becomes `dxmt` where it cannot load ([gptk availability](#gptk-availability)) | At load |
-| `d3d9` | `mtld3d`, `wined3d` | The D3D9 tree to prepend. Unset: `mtld3d` | At load |
+| `dxgi` | `gptk`, `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. Unset: the arch default ([x86_64 Wine](../README.md#direct3d-backends), [arm64 Wine](#arm64-wine)). `gptk` becomes `dxmt` where it cannot load ([gptk availability](#gptk-availability)) | At load |
+| `d3d9` | `mtld3d`, `wined3d` | The D3D9 tree to prepend. Unset: `mtld3d`, except for a native ARM64 program ([arm64 Wine](#arm64-wine)) | At load |
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` only stops forcing it: the executable's flag, `WINE_LARGE_ADDRESS_AWARE` and the `AppDefaults` registry value decide. No effect on 64-bit | At load; ntdll applies it after the library returns |
-| `x87_sidecar` | `true`, `false` | `true` attaches the x87sidecar, `false` keeps it away. Only matters for an i386 process under Rosetta | Before exec, `compatdb_query_x87` |
+| `x87_sidecar` | `true`, `false` | `true` attaches the x87sidecar, `false` keeps it away. Only matters for an i386 process under Rosetta; the arm64 library accepts the key and ignores it | Before exec, `compatdb_query_x87` |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Set in the unix environment right before exec, so what runs ahead of the program sees it: its x87sidecar (the `X87_*` variables) and Rosetta. Written again into the environment block and the unix environment at load | Before exec, `compatdb_query_env`; again at load |
 
@@ -154,8 +158,11 @@ executable.
 
 ## gptk availability
 
-- Apple ships no i386 D3DMetal, and the x86_64 one needs at least `GPTK_MIN`
-  in [`compatdb/src/macos.rs`](../compatdb/src/macos.rs).
+- Apple ships no i386 D3DMetal and none for an arm64 Wine, and the x86_64
+  one needs at least `GPTK_MIN` in
+  [`compatdb/src/macos.rs`](../compatdb/src/macos.rs).
+- The arm64 library never reads the macOS version: `gptk` cannot load
+  there on any release.
 - Where `gptk` cannot load, a process that would get it, from the x86_64
   default or from a rule, gets `dxmt` instead, and the log says why. So
   `dxgi=gptk` in a rule means "D3DMetal where it loads".
@@ -170,14 +177,42 @@ executable.
   - the value cannot be read or parsed.
 - When neither is usable, the library assumes `gptk` loads.
 
+## arm64 Wine
+
+The library built for an arm64 Wine (`aarch64-apple-darwin`) applies the
+same rules, with these differences. They are chosen by `Host` in
+[`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs) and
+`table_for` in [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs).
+
+- There is no Rosetta, so no x87sidecar: the built-in `x87-sidecar` rule
+  and the `compatdb_query_x87` export are absent. `x87_sidecar` in
+  `WINE_COMPATDB` still parses, so a launcher can send the same rules to
+  both Wines; `name=x87-sidecar;enabled=false` is logged as
+  `override names no rule`.
+- `gptk` is never available, so an x86 process defaults to `dxmt`, and a
+  `dxgi=gptk` rule falls back with a log line that names the arm64 Wine, not
+  the macOS release.
+- A native ARM64 program defaults to `wined3d` in both families: the `dxmt`
+  and `mtld3d` trees of the arm64 bundle hold x86 code only, while the
+  `wined3d` trees hold Wine's own ARM64X modules. A rule asking such a
+  program for `dxmt`, `gptk` or `mtld3d` falls back to `wined3d` with a log
+  line that names the arch. `default_for` and `available_for` of `Dxgi` and
+  `D3d9` hold the table.
+- A 64-bit process loads the Direct3D trees from `aarch64-windows`, as Wine
+  on an arm64 host loads its builtins from there. An i386 process still
+  uses `i386-windows`.
+- The log labels an x86_64 program, which runs in an ARM64EC process, as
+  `x86_64 (arm64ec)` and a native ARM64 program as `aarch64`. The main
+  image's machine type tells them apart; a wow64 process is i386.
+
 ## Logging and verification
 
 The library writes to Wine's stderr; every line starts with `compatdb:`.
 
 | Line | Written by | Shows |
 |------|------------|-------|
-| A block starting `compatdb: <exe> [<arch>]` | compatdb.so, once in every process at load | Image name, arch and version fingerprint; `rules = ...` or `no rule matched`; the trees it prepended (`dxgi = <impl> (from <path>)`, `d3d9 = ...`) and any `gptk` fallback; the overrides, DPI and large address awareness it set; `x87_sidecar (rule)` for an i386 process; arguments and env. Parse diagnostics and `override names no rule` lines come just before the block |
-| `compatdb: x87 query <exe> ...` | compatdb.so, per `compatdb_query_x87` call | The executable, its fingerprint and the `x87_sidecar (rule)` answer |
+| A block starting `compatdb: <exe> [<arch>]` | compatdb.so, once in every process at load | Image name, arch and version fingerprint; `rules = ...` or `no rule matched`; the trees it prepended (`dxgi = <impl> (from <path>)`, `d3d9 = ...`) and any fallback from the implementation a rule asked for; the overrides, DPI and large address awareness it set; `x87_sidecar (rule)` for an i386 process (x86_64 only); arguments and env. Parse diagnostics and `override names no rule` lines come just before the block |
+| `compatdb: x87 query <exe> ...` | compatdb.so (x86_64 only), per `compatdb_query_x87` call | The executable, its fingerprint and the `x87_sidecar (rule)` answer |
 | `compatdb: env query <exe> ...` | compatdb.so, per `compatdb_query_env` call that returns entries | The executable, its fingerprint and the `NAME=value` entries in the order ntdll sets them; nothing when there are none |
 | `... attaching rosettax87 --cooperative ...` | ntdll, on the `err:module` channel | That the sidecar was actually started |
 

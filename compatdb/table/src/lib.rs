@@ -169,16 +169,17 @@ fn string_value(blob: &[u16], key: &str) -> String {
 /// their device through one `dxgi.dll`, and each implementation's modules only
 /// work with its own.
 ///
-/// `gptk` cannot load everywhere: there is no 32-bit `D3DMetal`, and the
-/// 64-bit one needs macOS 26.4 or later. Where it cannot load, a process that
-/// would get it, by default or by a rule, gets `dxmt` instead (see
-/// [`Dxgi::effective`]).
+/// `gptk` cannot load everywhere: there is no 32-bit `D3DMetal`, none for an
+/// arm64 Wine, and the 64-bit one needs macOS 26.4 or later. Where it cannot
+/// load, a process that would get it, by default or by a rule, gets `dxmt`
+/// instead (see [`Dxgi::effective`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dxgi {
-    /// Apple's `D3DMetal` (Game Porting Toolkit). `x86_64` only, and only on
-    /// macOS 26.4 or later: it links the `libdxccontainer.dylib` that ships
-    /// inside the bundled `D3DMetal.framework` non-weak, and that library is
-    /// built for macOS 26.4 at the earliest.
+    /// Apple's `D3DMetal` (Game Porting Toolkit). `x86_64` only, so only in
+    /// the `x86_64` Wine, and only on macOS 26.4 or later: it links the
+    /// `libdxccontainer.dylib` that ships inside the bundled
+    /// `D3DMetal.framework` non-weak, and that library is built for macOS
+    /// 26.4 at the earliest.
     Gptk,
     /// DXMT.
     Dxmt,
@@ -208,53 +209,77 @@ impl Dxgi {
         }
     }
 
-    /// What a process gets when no rule names an implementation, on a host
+    /// What a process gets when no rule names an implementation, on a macOS
     /// where that implementation can load. [`Dxgi::effective`] is what it
-    /// actually loads.
+    /// actually loads. A native ARM64 program in the arm64 Wine gets wined3d,
+    /// the one implementation that has ARM64 code there (see
+    /// [`Dxgi::available_for`]).
     #[must_use]
-    pub const fn default_for(arch: Arch) -> Self {
-        match arch {
-            Arch::X86_64 => Self::Gptk,
-            Arch::I386 => Self::Dxmt,
+    pub const fn default_for(arch: Arch, host: Host) -> Self {
+        match (host, arch) {
+            (Host::X86_64, Arch::X86_64) => Self::Gptk,
+            (Host::Aarch64, Arch::Aarch64) => Self::Wined3d,
+            (Host::X86_64, Arch::I386 | Arch::Aarch64) | (Host::Aarch64, _) => Self::Dxmt,
         }
     }
 
-    /// Whether the implementation can load for `arch`. `gptk_loads` says
-    /// whether the host's macOS can load `D3DMetal` (26.4 or later); the
-    /// caller finds that out, since this crate does no I/O. Apple ships no
-    /// 32-bit `D3DMetal`, so `gptk` never loads on i386.
+    /// Whether the implementation can load for `arch` in the Wine built for
+    /// `host`. `gptk_loads` says whether the host's macOS can load `D3DMetal`
+    /// (26.4 or later); the caller finds that out, since this crate does no
+    /// I/O. Apple ships `D3DMetal` for `x86_64` only, so `gptk` loads neither
+    /// in an i386 process nor anywhere in the arm64 Wine. The arm64 Wine's
+    /// dxmt tree holds DXMT's x86 builds, which serve x86 programs (run under
+    /// emulation) but not a native ARM64 one; its wined3d tree holds Wine's
+    /// own ARM64X modules, which serve both.
     #[must_use]
-    pub const fn available_for(self, arch: Arch, gptk_loads: bool) -> bool {
+    pub const fn available_for(self, arch: Arch, host: Host, gptk_loads: bool) -> bool {
         match self {
-            Self::Gptk => gptk_loads && matches!(arch, Arch::X86_64),
-            Self::Dxmt | Self::Wined3d => true,
+            Self::Gptk => {
+                gptk_loads && matches!(host, Host::X86_64) && matches!(arch, Arch::X86_64)
+            }
+            Self::Dxmt => !native_arm64(arch, host),
+            Self::Wined3d => true,
         }
     }
 
     /// The implementation a process actually loads: the requested one, or the
-    /// arch default when nothing was requested. When that one cannot load
-    /// (see [`Dxgi::available_for`]), the process gets `dxmt`, which loads on
-    /// both architectures and every supported macOS.
+    /// default for the arch and host when nothing was requested. When that
+    /// one cannot load (see [`Dxgi::available_for`]), the process gets
+    /// `dxmt` where that loads, and wined3d, which loads everywhere,
+    /// otherwise.
     #[must_use]
-    pub const fn effective(requested: Option<Self>, arch: Arch, gptk_loads: bool) -> Self {
+    pub const fn effective(
+        requested: Option<Self>,
+        arch: Arch,
+        host: Host,
+        gptk_loads: bool,
+    ) -> Self {
         let want = match requested {
             Some(want) => want,
-            None => Self::default_for(arch),
+            None => Self::default_for(arch, host),
         };
-        if want.available_for(arch, gptk_loads) {
+        if want.available_for(arch, host, gptk_loads) {
             want
-        } else {
+        } else if Self::Dxmt.available_for(arch, host, gptk_loads) {
             Self::Dxmt
+        } else {
+            Self::Wined3d
         }
     }
 }
 
+/// Whether `arch` is a native ARM64 program in the Wine built for `host`.
+/// Only the arm64 Wine runs one, and there the dxmt and mtld3d trees hold x86
+/// code only.
+const fn native_arm64(arch: Arch, host: Host) -> bool {
+    matches!((host, arch), (Host::Aarch64, Arch::Aarch64))
+}
+
 /// Which D3D9 implementation a process loads. Independent of [`Dxgi`]: neither
 /// implementation's `d3d9.dll` touches `dxgi.dll`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum D3d9 {
-    /// mtld3d, the default on both architectures.
-    #[default]
+    /// mtld3d, the default everywhere but for a native ARM64 program.
     Mtld3d,
     /// Wine's own wined3d.
     Wined3d,
@@ -279,25 +304,124 @@ impl D3d9 {
             Self::Wined3d => "wined3d",
         }
     }
-}
 
-/// The bitness of the process being configured.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Arch {
-    X86_64,
-    I386,
-}
-
-impl Arch {
-    /// The `<arch>-windows` builtin directory name.
+    /// What a process gets when no rule names an implementation: mtld3d,
+    /// except for a native ARM64 program in the arm64 Wine, which gets
+    /// wined3d (see [`D3d9::available_for`]).
     #[must_use]
-    pub const fn pe_dir(self) -> &'static str {
+    pub const fn default_for(arch: Arch, host: Host) -> Self {
+        if native_arm64(arch, host) {
+            Self::Wined3d
+        } else {
+            Self::Mtld3d
+        }
+    }
+
+    /// Whether the implementation can load for `arch` in the Wine built for
+    /// `host`. The arm64 Wine's mtld3d tree holds mtld3d's x86 builds, which
+    /// serve x86 programs but not a native ARM64 one; its wined3d tree holds
+    /// Wine's own ARM64X module, which serves both.
+    #[must_use]
+    pub const fn available_for(self, arch: Arch, host: Host) -> bool {
         match self {
-            Self::X86_64 => "x86_64-windows",
-            Self::I386 => "i386-windows",
+            Self::Mtld3d => !native_arm64(arch, host),
+            Self::Wined3d => true,
+        }
+    }
+
+    /// The implementation a process actually loads: the requested one, or the
+    /// default for the arch and host when nothing was requested, and wined3d
+    /// when that one cannot load.
+    #[must_use]
+    pub const fn effective(requested: Option<Self>, arch: Arch, host: Host) -> Self {
+        let want = match requested {
+            Some(want) => want,
+            None => Self::default_for(arch, host),
+        };
+        if want.available_for(arch, host) {
+            want
+        } else {
+            Self::Wined3d
         }
     }
 }
+
+/// The architecture Wine itself is built for.
+///
+/// That is the arch of the unix side: `ntdll.so` and this library. The
+/// `x86_64` Wine runs under Rosetta on Apple Silicon; the arm64 one runs
+/// natively and emulates x86 code inside the process.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Host {
+    X86_64,
+    Aarch64,
+}
+
+impl Host {
+    /// The host this code was compiled for.
+    #[must_use]
+    pub const fn current() -> Self {
+        if cfg!(target_arch = "aarch64") {
+            Self::Aarch64
+        } else {
+            Self::X86_64
+        }
+    }
+}
+
+/// The architecture of the program a process runs, which is that of its main
+/// executable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Arch {
+    /// A 64-bit x86 program. In the arm64 Wine it runs in an ARM64EC process
+    /// with its x86 code emulated.
+    X86_64,
+    /// A 32-bit x86 program, run through wow64 on either host.
+    I386,
+    /// A native ARM64 program. Only the arm64 Wine runs one.
+    Aarch64,
+}
+
+impl Arch {
+    /// The `<arch>-windows` builtin directory name in the Wine built for
+    /// `host`. The arm64 Wine loads the builtins of an `x86_64` process from
+    /// `aarch64-windows`, as upstream Wine does on an arm64 host: they are
+    /// ARM64X modules that serve the process's ARM64EC side.
+    #[must_use]
+    pub const fn pe_dir(self, host: Host) -> &'static str {
+        match (self, host) {
+            (Self::X86_64, Host::X86_64) => "x86_64-windows",
+            (Self::I386, _) => "i386-windows",
+            (Self::X86_64, Host::Aarch64) | (Self::Aarch64, _) => "aarch64-windows",
+        }
+    }
+
+    /// The arch of the current process in the Wine built for `host`. `wow64`
+    /// says whether it is a wow64 (32-bit) process; `machine` is the
+    /// `Machine` field of its main image's COFF header, when it could be
+    /// read.
+    ///
+    /// The bundle only runs x86 programs under wow64, so a wow64 process is
+    /// i386 on either host. In the `x86_64` Wine every other process is
+    /// `x86_64`, whatever `machine` says. In the arm64 Wine a 64-bit process
+    /// is always native from Wine's side (ARM64EC for an `x86_64` program),
+    /// so the main image decides: `IMAGE_FILE_MACHINE_ARM64` is a native
+    /// ARM64 program, and anything else, an unreadable header included,
+    /// counts as `x86_64`. An ARM64EC executable carries the AMD64 machine in
+    /// its header and so also counts as `x86_64`, which is what it presents
+    /// itself as.
+    #[must_use]
+    pub const fn of_process(host: Host, wow64: bool, machine: Option<u16>) -> Self {
+        match (host, wow64, machine) {
+            (_, true, _) => Self::I386,
+            (Host::Aarch64, false, Some(IMAGE_FILE_MACHINE_ARM64)) => Self::Aarch64,
+            _ => Self::X86_64,
+        }
+    }
+}
+
+/// The COFF `Machine` value of an ARM64 image.
+pub const IMAGE_FILE_MACHINE_ARM64: u16 = 0xaa64;
 
 /// The exe pattern that matches every process.
 pub const ANY_EXE: &str = "*";
@@ -335,7 +459,9 @@ pub struct Rule {
     pub large_address_aware: Option<bool>,
     /// Whether an i386 process under Rosetta runs with the x87sidecar
     /// attached. ntdll asks for this before the process starts, through
-    /// `compatdb_query_x87`, not when the library applies the rest.
+    /// `compatdb_query_x87`, not when the library applies the rest. Only the
+    /// `x86_64` library has that query; the arm64 one parses the key and
+    /// ignores it.
     pub x87_sidecar: Option<bool>,
     /// `WINEDLLOVERRIDES` elements (each a `names=order` string).
     pub dll_overrides: Vec<String>,
@@ -2212,18 +2338,22 @@ mod tests {
         );
     }
 
+    const ARCHES: [Arch; 3] = [Arch::X86_64, Arch::I386, Arch::Aarch64];
+    const HOSTS: [Host; 2] = [Host::X86_64, Host::Aarch64];
+
     #[test]
     fn dxgi_defaults_are_per_arch_and_gptk_degrades_on_i386() {
-        assert_eq!(Dxgi::default_for(Arch::X86_64), Dxgi::Gptk);
-        assert_eq!(Dxgi::default_for(Arch::I386), Dxgi::Dxmt);
-        assert_eq!(Dxgi::effective(None, Arch::X86_64, true), Dxgi::Gptk);
-        assert_eq!(Dxgi::effective(None, Arch::I386, true), Dxgi::Dxmt);
+        let intel = Host::X86_64;
+        assert_eq!(Dxgi::default_for(Arch::X86_64, intel), Dxgi::Gptk);
+        assert_eq!(Dxgi::default_for(Arch::I386, intel), Dxgi::Dxmt);
+        assert_eq!(Dxgi::effective(None, Arch::X86_64, intel, true), Dxgi::Gptk);
+        assert_eq!(Dxgi::effective(None, Arch::I386, intel, true), Dxgi::Dxmt);
         assert_eq!(
-            Dxgi::effective(Some(Dxgi::Gptk), Arch::I386, true),
+            Dxgi::effective(Some(Dxgi::Gptk), Arch::I386, intel, true),
             Dxgi::Dxmt
         );
         assert_eq!(
-            Dxgi::effective(Some(Dxgi::Wined3d), Arch::I386, true),
+            Dxgi::effective(Some(Dxgi::Wined3d), Arch::I386, intel, true),
             Dxgi::Wined3d
         );
         assert_eq!(Dxgi::Wined3d.as_str(), "wined3d");
@@ -2233,27 +2363,150 @@ mod tests {
 
     #[test]
     fn gptk_degrades_to_dxmt_where_the_host_cannot_load_it() {
+        let intel = Host::X86_64;
         // Both the 64-bit default and an explicit gptk rule.
         for requested in [None, Some(Dxgi::Gptk)] {
-            assert_eq!(Dxgi::effective(requested, Arch::X86_64, false), Dxgi::Dxmt);
-            assert_eq!(Dxgi::effective(requested, Arch::X86_64, true), Dxgi::Gptk);
-            assert_eq!(Dxgi::effective(requested, Arch::I386, false), Dxgi::Dxmt);
+            assert_eq!(
+                Dxgi::effective(requested, Arch::X86_64, intel, false),
+                Dxgi::Dxmt
+            );
+            assert_eq!(
+                Dxgi::effective(requested, Arch::X86_64, intel, true),
+                Dxgi::Gptk
+            );
+            assert_eq!(
+                Dxgi::effective(requested, Arch::I386, intel, false),
+                Dxgi::Dxmt
+            );
         }
-        // The other implementations do not depend on it.
+        // The other implementations do not depend on it, on either host
+        // (dxmt is out for a native ARM64 program for another reason, see
+        // the arm64 test below).
         for other in [Dxgi::Dxmt, Dxgi::Wined3d] {
-            for arch in [Arch::X86_64, Arch::I386] {
-                assert!(other.available_for(arch, false));
-                assert_eq!(Dxgi::effective(Some(other), arch, false), other);
+            for host in HOSTS {
+                for arch in ARCHES {
+                    if other == Dxgi::Dxmt && (host, arch) == (Host::Aarch64, Arch::Aarch64) {
+                        continue;
+                    }
+                    for gptk_loads in [true, false] {
+                        assert!(other.available_for(arch, host, gptk_loads));
+                        assert_eq!(Dxgi::effective(Some(other), arch, host, gptk_loads), other);
+                    }
+                }
             }
         }
-        assert!(Dxgi::Gptk.available_for(Arch::X86_64, true));
-        assert!(!Dxgi::Gptk.available_for(Arch::X86_64, false));
-        assert!(!Dxgi::Gptk.available_for(Arch::I386, true));
+        assert!(Dxgi::Gptk.available_for(Arch::X86_64, intel, true));
+        assert!(!Dxgi::Gptk.available_for(Arch::X86_64, intel, false));
+        assert!(!Dxgi::Gptk.available_for(Arch::I386, intel, true));
     }
 
     #[test]
-    fn d3d9_defaults_to_mtld3d_on_every_arch() {
-        assert_eq!(D3d9::default(), D3d9::Mtld3d);
+    fn the_arm64_wine_defaults_to_dxmt_and_never_loads_gptk() {
+        let arm = Host::Aarch64;
+        for arch in [Arch::X86_64, Arch::I386] {
+            assert_eq!(Dxgi::default_for(arch, arm), Dxgi::Dxmt, "{arch:?}");
+            for gptk_loads in [true, false] {
+                assert!(!Dxgi::Gptk.available_for(arch, arm, gptk_loads));
+                for requested in [None, Some(Dxgi::Gptk), Some(Dxgi::Dxmt)] {
+                    assert_eq!(
+                        Dxgi::effective(requested, arch, arm, gptk_loads),
+                        Dxgi::Dxmt
+                    );
+                }
+                assert_eq!(
+                    Dxgi::effective(Some(Dxgi::Wined3d), arch, arm, gptk_loads),
+                    Dxgi::Wined3d
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_native_arm64_program_gets_wined3d_whatever_it_asks_for() {
+        let arm = Host::Aarch64;
+        let native = Arch::Aarch64;
+        assert_eq!(Dxgi::default_for(native, arm), Dxgi::Wined3d);
+        assert_eq!(D3d9::default_for(native, arm), D3d9::Wined3d);
+        for gptk_loads in [true, false] {
+            assert!(!Dxgi::Dxmt.available_for(native, arm, gptk_loads));
+            assert!(!Dxgi::Gptk.available_for(native, arm, gptk_loads));
+            assert!(Dxgi::Wined3d.available_for(native, arm, gptk_loads));
+            for requested in [
+                None,
+                Some(Dxgi::Gptk),
+                Some(Dxgi::Dxmt),
+                Some(Dxgi::Wined3d),
+            ] {
+                assert_eq!(
+                    Dxgi::effective(requested, native, arm, gptk_loads),
+                    Dxgi::Wined3d
+                );
+            }
+        }
+        assert!(!D3d9::Mtld3d.available_for(native, arm));
+        for requested in [None, Some(D3d9::Mtld3d), Some(D3d9::Wined3d)] {
+            assert_eq!(D3d9::effective(requested, native, arm), D3d9::Wined3d);
+        }
+    }
+
+    #[test]
+    fn a_64_bit_process_loads_aarch64_builtins_in_the_arm64_wine() {
+        assert_eq!(Arch::X86_64.pe_dir(Host::X86_64), "x86_64-windows");
+        assert_eq!(Arch::X86_64.pe_dir(Host::Aarch64), "aarch64-windows");
+        assert_eq!(Arch::Aarch64.pe_dir(Host::Aarch64), "aarch64-windows");
+        for host in HOSTS {
+            assert_eq!(Arch::I386.pe_dir(host), "i386-windows");
+        }
+    }
+
+    #[test]
+    fn the_process_arch_comes_from_wow64_and_on_arm64_the_main_image() {
+        const AMD64: u16 = 0x8664;
+        for host in HOSTS {
+            for machine in [None, Some(AMD64), Some(IMAGE_FILE_MACHINE_ARM64)] {
+                assert_eq!(Arch::of_process(host, true, machine), Arch::I386);
+            }
+        }
+        // The x86_64 Wine runs no ARM64 program, so the header is not asked.
+        for machine in [None, Some(AMD64), Some(IMAGE_FILE_MACHINE_ARM64)] {
+            assert_eq!(Arch::of_process(Host::X86_64, false, machine), Arch::X86_64);
+        }
+        let arm = Host::Aarch64;
+        assert_eq!(
+            Arch::of_process(arm, false, Some(IMAGE_FILE_MACHINE_ARM64)),
+            Arch::Aarch64
+        );
+        // An x64 program under emulation, an ARM64EC one and an unreadable
+        // header all stay x86_64.
+        for machine in [None, Some(AMD64), Some(0)] {
+            assert_eq!(Arch::of_process(arm, false, machine), Arch::X86_64);
+        }
+    }
+
+    #[test]
+    fn the_host_follows_the_compile_target() {
+        let expected = match std::env::consts::ARCH {
+            "aarch64" => Some(Host::Aarch64),
+            "x86_64" => Some(Host::X86_64),
+            _ => None,
+        };
+        assert_eq!(Some(Host::current()), expected);
+    }
+
+    #[test]
+    fn d3d9_defaults_to_mtld3d_for_every_x86_program() {
+        for host in HOSTS {
+            for arch in [Arch::X86_64, Arch::I386] {
+                assert_eq!(D3d9::default_for(arch, host), D3d9::Mtld3d);
+                for requested in [None, Some(D3d9::Mtld3d)] {
+                    assert_eq!(D3d9::effective(requested, arch, host), D3d9::Mtld3d);
+                }
+                assert_eq!(
+                    D3d9::effective(Some(D3d9::Wined3d), arch, host),
+                    D3d9::Wined3d
+                );
+            }
+        }
         assert_eq!(D3d9::parse("wined3d"), Some(D3d9::Wined3d));
         assert_eq!(D3d9::parse("gptk"), None);
         assert_eq!(D3d9::Mtld3d.as_str(), "mtld3d");

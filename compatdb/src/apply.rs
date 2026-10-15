@@ -11,24 +11,26 @@ use std::{
     ptr,
 };
 
-use compatdb_table::{Arch, Resolution, append_cmdline, merge_env};
+use compatdb_table::{Resolution, append_cmdline, merge_env};
 
 use crate::{Process, log, ntdll::Ntdll};
 
 /// Prepend `lib/wine/<family>/<name>` to the builtin search path, where
-/// `family` is `dxgi` or `d3d9` and `name` the implementation's tree.
+/// `family` is `dxgi` or `d3d9` and `name` the implementation's tree. The
+/// tree counts as present when it has the process's builtin directory,
+/// `pe_dir` ([`Arch::pe_dir`](compatdb_table::Arch::pe_dir)).
 ///
 /// Every process gets one tree per family. The default dirs hold only
 /// fake-module markers for these DLLs, so this is purely additive and nothing
 /// is ever disabled. If the tree is missing the process falls back to whatever
 /// the default dir holds, which is a load failure for that API.
-pub fn tree(nt: &Ntdll, arch: Arch, family: &str, name: &str) {
+pub fn tree(nt: &Ntdll, pe_dir: &str, family: &str, name: &str) {
     let Some(lib_wine) = lib_wine_dir() else {
         log::line(&format!("  {family}: cannot locate lib/wine"));
         return;
     };
     let side = lib_wine.join(family).join(name);
-    let side_pe = side.join(arch.pe_dir());
+    let side_pe = side.join(pe_dir);
     if !side_pe.is_dir() {
         log::line(&format!(
             "  {family} = {name}: {} missing, using the default dir",
@@ -244,7 +246,7 @@ fn add_override(nt: &Ntdll, entry: &str) {
 }
 
 /// `.../lib/wine` derived from this library's own path (`dladdr`), which is
-/// `.../lib/wine/<arch>-unix/compatdb.so`.
+/// `.../lib/wine/<host>-unix/compatdb.so`.
 fn lib_wine_dir() -> Option<PathBuf> {
     // SAFETY: `info` is written by dladdr before it is read; the call takes a
     // valid code address and a valid out-pointer.
