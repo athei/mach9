@@ -20,6 +20,12 @@ pub fn read(image_base: *const c_void) -> VersionInfo {
     Mapped::new(image_base).map_or_else(VersionInfo::default, |img| from_image(&img))
 }
 
+/// The COFF `Machine` of the image mapped at `image_base`, or `None` when its
+/// headers cannot be read.
+pub fn machine(image_base: *const c_void) -> Option<u16> {
+    Mapped::new(image_base).map(|img| img.machine)
+}
+
 /// Read the version fingerprint of the PE file at `path`. A file that cannot
 /// be opened or is not a PE yields an empty [`VersionInfo`].
 pub fn read_file(path: &Path) -> VersionInfo {
@@ -95,6 +101,8 @@ impl Rva for File {
 struct Mapped {
     base: *const u8,
     size: usize,
+    /// The COFF `Machine` from the headers.
+    machine: u16,
 }
 
 impl Mapped {
@@ -106,9 +114,17 @@ impl Mapped {
         let base = image_base.cast::<u8>();
         // The headers always occupy the first page, which is enough to read
         // the real extent from.
-        let bootstrap = Self { base, size: 0x1000 };
-        let size = Headers::parse(&bootstrap)?.size_of_image;
-        Some(Self { base, size })
+        let bootstrap = Self {
+            base,
+            size: 0x1000,
+            machine: 0,
+        };
+        let headers = Headers::parse(&bootstrap)?;
+        Some(Self {
+            base,
+            size: headers.size_of_image,
+            machine: headers.machine,
+        })
     }
 }
 
@@ -215,6 +231,8 @@ impl<S: Rva> Rva for PeFile<S> {
 
 /// The header fields the reader needs, all as RVAs or sizes.
 struct Headers {
+    /// The COFF `Machine`.
+    machine: u16,
     size_of_image: usize,
     /// `SizeOfHeaders`.
     header_size: usize,
@@ -235,6 +253,7 @@ impl Headers {
             return None;
         }
         let coff = e_lfanew.checked_add(4)?;
+        let machine = img.u16(coff)?;
         let section_count = usize::from(img.u16(coff.checked_add(2)?)?);
         let optional_size = usize::from(img.u16(coff.checked_add(16)?)?);
         let opt = coff.checked_add(20)?;
@@ -253,6 +272,7 @@ impl Headers {
             0
         };
         Some(Self {
+            machine,
             size_of_image,
             header_size,
             section_alignment,
@@ -500,6 +520,22 @@ mod tests {
         let image = mapped_layout()?;
         assert_eq!(read(image.as_ptr().cast()), expected());
         assert_eq!(from_image(image.as_slice()), expected());
+        Ok(())
+    }
+
+    #[test]
+    fn the_mapped_image_reports_its_machine() -> Fallible {
+        let mut image = mapped_layout()?;
+        assert_eq!(machine(image.as_ptr().cast()), Some(0x14c));
+        put16(&mut image, 0x44, compatdb_table::IMAGE_FILE_MACHINE_ARM64)?;
+        assert_eq!(
+            machine(image.as_ptr().cast()),
+            Some(compatdb_table::IMAGE_FILE_MACHINE_ARM64)
+        );
+        assert_eq!(machine(std::ptr::null()), None);
+        // Without the PE signature there is no header to read it from.
+        put(&mut image, 0x40, b"X")?;
+        assert_eq!(machine(image.as_ptr().cast()), None);
         Ok(())
     }
 
