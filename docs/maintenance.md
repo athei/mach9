@@ -69,6 +69,12 @@ A full x86_64 bundle (the arm64 one: [arm64.md](arm64.md#what-the-bundle-step-ch
   sidecar, not that the sidecar's x87 hook took effect.
 - Fails if ntdll lacks the `compatdb_preinit_query` export: the Wine tree is
   missing the ntdll side of the x87sidecar.
+- Runs [`smoke/hello.c`](../smoke/hello.c), built for x86_64 and for i686,
+  in that prefix once per Direct3D tree that has modules for the arch, the
+  tree picked with a `WINE_COMPATDB` rule. compatdb.so must report the tree
+  and the program must load every module in it. This is what shows that the
+  prefix placeholders made from the default-dir markers let each tree in.
+  The `gptk` run is skipped below `GPTK_FLOOR`.
 
 With `--compatdb-only`:
 
