@@ -53,13 +53,22 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 mkdir -p "$BUILD_DIR"
 
-# Configure (skip if already configured unless --clean was passed)
+# Configure (skip if already configured unless --clean was passed). The
+# options cover every --with-*/--without-* package of `configure --help`,
+# each switched on or off explicitly, so the feature set does not depend on
+# what the host has installed, except: opengl, which stays at configure's
+# default (never --with-opengl: on macOS it starts an EGL probe that always
+# fails, and the Mac driver links -framework OpenGL on its own); pthread,
+# which is required; gettextpo, which is off unless asked for; and the
+# options that name a path rather than a package. The X extensions are moot
+# under --without-x and denied anyway.
 cd "$BUILD_DIR"
 if [ "$CLEAN" -eq 1 ] || [ ! -f "$BUILD_DIR/Makefile" ]; then
     echo "==> Configuring Wine..."
     arch -x86_64 "$WINE_SRC/configure" \
         --enable-archs=i386,x86_64 \
         --with-coreaudio \
+        --with-freetype \
         --with-gnutls \
         --with-mingw \
         --with-opencl \
@@ -90,6 +99,17 @@ if [ "$CLEAN" -eq 1 ] || [ ! -f "$BUILD_DIR/Makefile" ]; then
         --without-vulkan \
         --without-wayland \
         --without-x \
+        --without-xcomposite \
+        --without-xcursor \
+        --without-xfixes \
+        --without-xinerama \
+        --without-xinput \
+        --without-xinput2 \
+        --without-xrandr \
+        --without-xrender \
+        --without-xshape \
+        --without-xshm \
+        --without-xxf86vm \
         CC="clang -arch x86_64" \
         CROSSCC="clang -arch x86_64" \
         --host=x86_64-apple-darwin \
@@ -104,18 +124,61 @@ fi
 # whenever configure changes (e.g. after a source update), silently reverting
 # the patch, so check before every build, not just on --clean, and re-check
 # after make in case the build itself triggered a regeneration.
-sonames_unpatched() {
-    grep -qE '^#define SONAME_(LIBFREETYPE|LIBGNUTLS|LIBSDL2) "lib' "$BUILD_DIR/include/config.h"
+#
+# Patched are the defines of the libraries the --with-* packages above load
+# by soname, and only those, so the result does not depend on what else the
+# host has installed. configure also probes a few libraries it has no
+# --without-* for; when it does not find one it writes a placeholder define
+# (FALLBACK_SONAMES), which stays as it is. Any other define means configure
+# found a library the options above do not account for, and stops the build.
+DEPS_PREFIX=/usr/local
+BUNDLED_SONAMES="SONAME_LIBFREETYPE SONAME_LIBGNUTLS SONAME_LIBSDL2"
+FALLBACK_SONAMES="SONAME_LIBODBC=libodbc.dylib"
+CONFIG_H="$BUILD_DIR/include/config.h"
+soname_value() { # <define>: its string value in config.h, or nothing
+    sed -n "s|^#define $1 \"\\(.*\\)\"\$|\\1|p" "$CONFIG_H"
+}
+check_soname_defines() {
+    local def value
+    for def in $BUNDLED_SONAMES; do
+        if [ -z "$(soname_value "$def")" ]; then
+            echo "Error: config.h has no $def; configure did not find the library"
+            exit 1
+        fi
+    done
+    for def in $(sed -n 's|^#define \(SONAME_LIB[A-Z0-9_]*\) .*|\1|p' "$CONFIG_H"); do
+        case " $BUNDLED_SONAMES " in *" $def "*) continue ;; esac
+        value=$(soname_value "$def")
+        case " $FALLBACK_SONAMES " in *" $def=$value "*) continue ;; esac
+        echo "Error: configure found $value for $def, which the configure options do not"
+        echo "account for; uninstall it from $DEPS_PREFIX or add it to the options"
+        exit 1
+    done
+}
+unpatched_sonames() {
+    local def value
+    for def in $BUNDLED_SONAMES; do
+        value=$(soname_value "$def")
+        case "$value" in
+            lib*) echo "$value" ;;
+        esac
+    done
 }
 patch_sonames() {
+    local name
     echo "==> Patching sonames in config.h for @loader_path relocation..."
-    sed -i '' \
-        -e 's|"libfreetype\.6\.dylib"|"@loader_path/../../external/libfreetype.6.dylib"|' \
-        -e 's|"libgnutls\.30\.dylib"|"@loader_path/../../external/libgnutls.30.dylib"|' \
-        -e 's|"libSDL2-2\.0\.0\.dylib"|"@loader_path/../../external/libSDL2-2.0.0.dylib"|' \
-        "$BUILD_DIR/include/config.h"
+    for name in $(unpatched_sonames); do
+        echo "    $name"
+        sed -i '' "s|\"${name//./\\.}\"|\"@loader_path/../../external/$name\"|" "$CONFIG_H"
+    done
+    if [ -n "$(unpatched_sonames)" ]; then
+        echo "Error: config.h still names these libraries bare after patching:"
+        unpatched_sonames
+        exit 1
+    fi
 }
-if sonames_unpatched; then
+check_soname_defines
+if [ -n "$(unpatched_sonames)" ]; then
     patch_sonames
 fi
 
@@ -130,8 +193,9 @@ fi
 echo "==> Building Wine..."
 make -j$(sysctl -n hw.ncpu)
 
-if sonames_unpatched; then
+if [ -n "$(unpatched_sonames)" ]; then
     echo "==> config.h was regenerated during the build, re-patching and rebuilding..."
+    check_soname_defines
     patch_sonames
     make -j$(sysctl -n hw.ncpu)
 fi
