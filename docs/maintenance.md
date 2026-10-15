@@ -146,7 +146,7 @@ With `--compatdb-only`:
   archive if any Mach-O is newer than `MACOS_FLOOR`; that check also catches
   another formula that loses its bottle.
 - To refresh: `arch -x86_64 /usr/local/bin/brew upgrade` the formulae, run
-  `./package-deps.sh`, attach `dist/wine-deps-macos-x86_64.tar.xz` to a new
+  `./package-deps.sh`, attach the archive it writes to `dist/intel/` to a new
   `deps-<date>` release, and point `DEPS_URL` and `DEPS_SHA256` at it.
 - `pkg-config` is not in the prefix; it comes from the runner image, and the
   workflow fails if it is missing. Add `pkgconf` to `ROOTS` rather than
@@ -203,19 +203,6 @@ anything below needs a `cx-*` release.
   permanently on under Rosetta, unless `WINE_DISABLE_NX_COMPAT` says
   otherwise ([#3](https://github.com/athei/wine-build/issues/3)).
 - `wine.inf` registers the fake DLLs D3DMetal needs.
-
-## ARM64X link libraries
-
-- `build-wine.sh` (x86_64 profile) also configures a link-library tree in
-  `ARM64X_BUILD_DIR` with `arm64ec,aarch64`, so the archives carry both
-  ARM64 and ARM64EC members, and builds only `libwinecrt0.a` and
-  `libntdll.a`. The arm64 profile has no such tree: its own build makes
-  these archives, and its [Wine SDK](arm64.md#wine-sdk) carries them, with
-  the x86 ones, for DXMT and mtld3d.
-- They are staged under `ARM64X_LIB_DIR/lib/wine/aarch64-windows/`, in the
-  layout of an installed Wine, for linking ARM64X PE builtins that
-  CrossOver's arm64 Wine loads; it ships no link archives of its own.
-  Nothing in that tree is runnable.
 
 ## d3d9 conformance tests
 

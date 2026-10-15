@@ -1,21 +1,29 @@
 # shellcheck shell=bash
 # The arch profile shared by build-wine.sh and bundle-wine.sh. Source it with
-# ROOT set (the directory that holds this repository, src/ and the build
-# trees) and SCRIPT_DIR set (this repository), then call set_profile with the
-# profile name. Every difference between the two builds is a value or a flag
-# here; the steps in the scripts test the flags, never the profile name.
+# SCRIPT_DIR set (this repository), then call set_profile with the profile
+# name. Every difference between the two builds is a value or a flag here;
+# the steps in the scripts test the flags, never the profile name.
 #
 # intel  x86_64 Wine (i386 and x86_64 PE) from the CrossOver tree, run under
 #        Rosetta. What the releases ship.
 # arm64  Native arm64 Wine (aarch64, arm64ec and i386 PE) with FEX as the x86
 #        emulator, from the arm64 worktree of the Wine source. Local only.
 #
-# Environment overrides are per profile, so a value exported for one build
-# cannot redirect the other: WINE_SRC and BUILD_DIR for intel,
+# Everything lives under ROOT, the directory that holds this repository: the
+# sources (the Wine checkout of each profile under src/<profile>/, FEX in
+# src-fex/), downloads (cache/), every intermediate of a profile under
+# build/<profile>/ and its bundle under dist/<profile>/wine.
+# WINE_BUILD_ROOT overrides ROOT, for a checkout kept elsewhere (a worktree)
+# that should use the same trees.
+#
+# Environment overrides of single paths are per profile, so a value exported
+# for one build cannot redirect the other: WINE_SRC and BUILD_DIR for intel;
 # ARM64_WINE_SRC, ARM64_BUILD_DIR, ARM64_X86LIBS_BUILD_DIR and ARM64_WINE_SDK
 # for arm64 (whose FEX and DXMT paths exist only there and keep their own
-# names). MACOSX_DEPLOYMENT_TARGET overrides the intel floor, and may only
-# raise the arm64 one.
+# names).
+# MACOSX_DEPLOYMENT_TARGET overrides the intel floor, and may only raise the
+# arm64 one.
+ROOT="${WINE_BUILD_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 # set_profile <intel|arm64>: set the profile's variables, or exit on an
 # unknown name.
@@ -23,8 +31,11 @@ set_profile() {
     PROFILE="$1"
     case "$PROFILE" in
         intel)
-            WINE_SRC="${WINE_SRC:-$ROOT/src}"
-            BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
+            # The checkout that holds the Wine repository.
+            WINE_SRC="${WINE_SRC:-$ROOT/src/intel}"
+            BUILD_DIR="${BUILD_DIR:-$ROOT/build/intel/wine}"
+            # What bundle-wine.sh writes <dest>/wine into without --dest.
+            BUNDLE_DEST="$ROOT/dist/intel"
             # Wine's configure triple, and what runs configure and
             # `make install`: both probe the host, so they run translated.
             HOST_TRIPLE=x86_64-apple-darwin
@@ -73,6 +84,8 @@ set_profile() {
             D3D9_IMPLS="mtld3d wined3d"
             # All of DXMT, winemetal.so included, comes from the release
             # tarball pinned in redist.env.
+            DXMT_BUILD_DIR=""
+            DXMT_LLVM=""
             DXMT_DIST=""
             X86LIBS_BUILD_DIR=""
             WINE_SDK_DIR=""
@@ -82,17 +95,16 @@ set_profile() {
             SMOKE_PE_ARCHS=""
             WITH_X87SIDECAR=1
             WITH_D3D9_TESTS=1
-            WITH_ARM64X=1
             WITH_WINE_SDK=0
             WITH_DXMT_BUILD=0
             WITH_FEX=0
             WITH_LOADER_APP=0
             ;;
         arm64)
-            # The arm64 Wine is a worktree of the same source repository,
-            # kept inside it under the ignored .codex/ directory.
-            WINE_SRC="${ARM64_WINE_SRC:-$ROOT/src/.codex/worktrees/arm64-patched}"
-            BUILD_DIR="${ARM64_BUILD_DIR:-$ROOT/build-arm64}"
+            # The arm64 Wine is a linked worktree of the same repository.
+            WINE_SRC="${ARM64_WINE_SRC:-$ROOT/src/arm64}"
+            BUILD_DIR="${ARM64_BUILD_DIR:-$ROOT/build/arm64/wine}"
+            BUNDLE_DEST="$ROOT/dist/arm64"
             HOST_TRIPLE=aarch64-apple-darwin
             CONFIGURE_WRAPPER=()
             WINE_ARCHS=arm64ec,aarch64,i386
@@ -141,15 +153,18 @@ set_profile() {
             D3D9_IMPLS="mtld3d wined3d"
             # The link-library tree for the x86_64 PE archives and the Wine
             # SDK build-wine.sh stages from it and the main build.
-            X86LIBS_BUILD_DIR="${ARM64_X86LIBS_BUILD_DIR:-$ROOT/build-arm64-x86libs}"
-            WINE_SDK_DIR="${ARM64_WINE_SDK:-$ROOT/wine-sdk-arm64}"
-            # DXMT as build-dxmt.sh builds it against this Wine and its SDK.
-            DXMT_DIST="${DXMT_DIST:-$ROOT/build-dxmt/dist}"
+            X86LIBS_BUILD_DIR="${ARM64_X86LIBS_BUILD_DIR:-$ROOT/build/arm64/x86libs}"
+            WINE_SDK_DIR="${ARM64_WINE_SDK:-$ROOT/build/arm64/sdk}"
+            # DXMT's checkout and trees, the LLVM libraries it links, and DXMT
+            # as build-dxmt.sh stages it for the bundle.
+            DXMT_BUILD_DIR="${DXMT_BUILD_DIR:-$ROOT/build/arm64/dxmt}"
+            DXMT_LLVM="${DXMT_LLVM:-$DXMT_BUILD_DIR/llvm15}"
+            DXMT_DIST="${DXMT_DIST:-$DXMT_BUILD_DIR/dist}"
             # FEX's repository, the local clone build-fex.sh checks out
             # fex-src.ref in, and its build trees.
             FEX_REPO="${FEX_REPO:-https://github.com/athei/FEX}"
-            FEX_SRC="${FEX_SRC:-$ROOT/fex-src}"
-            FEX_BUILD_DIR="${FEX_BUILD_DIR:-$ROOT/build-fex}"
+            FEX_SRC="${FEX_SRC:-$ROOT/src-fex}"
+            FEX_BUILD_DIR="${FEX_BUILD_DIR:-$ROOT/build/arm64/fex}"
             LOADER_PROFILE="${LOADER_PROFILE:-$SCRIPT_DIR/signing/loader.provisionprofile}"
             SMOKE_TEST=smoke_test_arm64
             # The llvm-mingw targets the smoke test builds smoke/hello.c for
@@ -157,9 +172,6 @@ set_profile() {
             SMOKE_PE_ARCHS="aarch64 x86_64 i686"
             WITH_X87SIDECAR=0
             WITH_D3D9_TESTS=0
-            # Its own aarch64-windows archives are ARM64X already, so it needs
-            # no ARM64X side tree; WITH_WINE_SDK stages them.
-            WITH_ARM64X=0
             WITH_WINE_SDK=1
             WITH_DXMT_BUILD=1
             WITH_FEX=1
@@ -175,6 +187,55 @@ set_profile() {
     # directory to <dest>/wine.
     INSTALL_PREFIX=/usr/local
     export MACOSX_DEPLOYMENT_TARGET="$MACOS_FLOOR"
+}
+
+# The file that marks a directory as a tree these scripts made and may
+# delete. It holds "<profile> <name>", the tree's profile and what it is.
+TREE_MARKER=.wine-build-tree
+
+# canonical_path <dir>: <dir> with symlinks, . and .. resolved, or as given
+# when it does not exist.
+canonical_path() {
+    if [ -d "$1" ]; then
+        (cd "$1" && pwd -P)
+    else
+        echo "$1"
+    fi
+}
+
+# claim_tree <dir> <name> [<wipe>]: make <dir> the profile's tree <name>,
+# emptied first when <wipe> is 1, and mark it. Every tree a script fills or
+# deletes goes through here first, since an override can point one anywhere.
+# Exit unless <dir> is missing, empty, or marked as that same tree. A
+# directory with no marker is also taken when its parent is build/<profile>
+# or another tree of the profile: the default places of trees made before
+# there were markers. A git checkout never is.
+claim_tree() {
+    local dir="$1" mark="$PROFILE $2" found parent
+    if [ -z "$dir" ]; then
+        echo "Error: no directory for the tree '$mark'"
+        exit 1
+    elif [ -f "$dir/$TREE_MARKER" ]; then
+        found=$(cat "$dir/$TREE_MARKER")
+        if [ "$found" != "$mark" ]; then
+            echo "Error: $dir is the tree '$found', not '$mark'"
+            exit 1
+        fi
+    elif [ -e "$dir" ] && [ -n "$(ls -A "$dir")" ]; then
+        parent=$(dirname "$(canonical_path "$dir")")
+        found=$(cat "$parent/$TREE_MARKER" 2>/dev/null || true)
+        if [ -e "$dir/.git" ] || { [ "$parent" != "$(canonical_path "$ROOT/build/$PROFILE")" ] \
+            && [ "${found%% *}" != "$PROFILE" ]; }; then
+            echo "Error: $dir is not empty and has no $TREE_MARKER, so these scripts did not make it."
+            echo "Refusing to use it; remove it or point the override elsewhere."
+            exit 1
+        fi
+    fi
+    if [ "${3:-0}" -eq 1 ]; then
+        remove_tree "$dir"
+    fi
+    mkdir -p "$dir"
+    echo "$mark" > "$dir/$TREE_MARKER"
 }
 
 # macos_newer <a> <b>: succeed when macOS version <a> is newer than <b>.

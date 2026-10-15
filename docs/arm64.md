@@ -19,8 +19,8 @@ short:
   [arm64 Wine](compatdb.md#arm64-wine)).
 - No D3DMetal: Apple ships it for x86_64 only. The trees the bundle carries
   are `DXGI_IMPLS` and `D3D9_IMPLS` in the profile.
-- No d3d9 test binaries and no ARM64X side tree; the [Wine SDK](#wine-sdk)
-  carries the build's own ARM64X link libraries instead.
+- No d3d9 test binaries.
+- A [Wine SDK](#wine-sdk) is staged for the PE code built outside Wine.
 - The loader is wrapped in a signed app bundle (see [Loader app](#loader-app)).
 
 ## Requirements
@@ -30,7 +30,8 @@ short:
 - The arm64 Homebrew at the profile's `DEPS_PREFIX` with the formulae in
   `DEPS_FORMULAE`, plus `cmake`, `ninja` and `meson`.
 - Xcode's Metal toolchain (`xcrun metal`), for DXMT's shaders.
-- llvm-mingw at `MINGW_DIR`, as for the x86_64 build.
+- llvm-mingw at `MINGW_DIR`, as for the x86_64 build, including its arm64ec
+  toolchain.
 - Rust with the profile's `RUST_TARGET`.
 - In the keychain, a code signing identity of the team that
   [`signing/loader.provisionprofile`](../signing/loader.provisionprofile)
@@ -41,8 +42,8 @@ short:
 ## Commands
 
 ```bash
-./build-wine.sh --arm64                       # Wine, then FEX and DXMT
-./bundle-wine.sh --arm64 --dest /path/to/out  # assemble /path/to/out/wine
+./build-wine.sh --arm64    # Wine, the SDK, then FEX and DXMT
+./bundle-wine.sh --arm64   # assemble the bundle
 ```
 
 | Script | What it does |
@@ -54,8 +55,10 @@ short:
 
 ### Paths
 
-The arm64 overrides have their own names, so a `WINE_SRC` or `BUILD_DIR`
-exported for the x86_64 build cannot redirect this one. A
+Every tree of this profile lives under `build/arm64/` and the bundle in
+`dist/arm64/wine`, in the [layout](../README.md#layout) the x86_64 build
+uses. The arm64 overrides have their own names, so a `WINE_SRC` or
+`BUILD_DIR` exported for the x86_64 build cannot redirect this one. A
 `MACOSX_DEPLOYMENT_TARGET` may raise the arm64 floor but not lower it.
 
 | Variable | What it is | Default set in |
@@ -65,8 +68,8 @@ exported for the x86_64 build cannot redirect this one. A
 | `ARM64_WINE_SDK` | The [Wine SDK](#wine-sdk) | [`profile.sh`](../profile.sh) |
 | `FEX_REPO`, `FEX_SRC` | FEX repository and the local clone `build-fex.sh` checks out | [`profile.sh`](../profile.sh) |
 | `FEX_BUILD_DIR` | FEX's CMake trees | [`profile.sh`](../profile.sh) |
-| `DXMT_BUILD_DIR` | DXMT's checkout, its meson trees (x86_64 and i386 PE, arm64 unix) and, by default, `DXMT_LLVM` | [`build-dxmt.sh`](../build-dxmt.sh) |
-| `DXMT_LLVM` | The LLVM static libraries `winemetal.so` links | [`build-dxmt.sh`](../build-dxmt.sh) |
+| `DXMT_BUILD_DIR` | DXMT's checkout, its meson trees (x86_64 and i386 PE, arm64 unix) and, by default, `DXMT_LLVM` and `DXMT_DIST` | [`profile.sh`](../profile.sh) |
+| `DXMT_LLVM` | The LLVM static libraries `winemetal.so` links | [`profile.sh`](../profile.sh) |
 | `DXMT_DIST` | All of DXMT as the bundle installs it, with the commits it was built from | [`profile.sh`](../profile.sh) |
 | `LOADER_PROFILE` | The provisioning profile the loader is signed for | [`profile.sh`](../profile.sh) |
 
@@ -92,21 +95,21 @@ Wine source commit. What goes in is the `WITH_WINE_SDK` step of
 [`build-wine.sh`](../build-wine.sh).
 
 - `bin/winebuild` and the `aarch64-windows` and `i386-windows` archives come
-  from the arm64 build itself. Its `aarch64-windows` archives are ARM64X
-  (arm64ec is paired with aarch64 there), so the arm64 profile needs no
-  ARM64X side tree; that tree stays with the x86_64 profile, whose Wine has
-  no arm64 PE side.
+  from the arm64 build itself. Its `aarch64-windows` archives are ARM64X,
+  carrying ARM64 and ARM64EC members, since arm64ec is paired with aarch64
+  there.
 - The `x86_64-windows` archives are what the arm64 build cannot make: x64
   objects do not link against ARM64EC ones. A link-library tree, a second
   configure of the same source for x86_64 alone that reuses the build's
   tools, builds just those.
 - DXMT's PE build reads it through `-Dwine_install_path` (see
   [`build-dxmt.sh`](../build-dxmt.sh)).
-- [mtld3d](https://github.com/athei/mtld3d) reads it through `WINE_SDK` for
-  its x86 DLLs and `WINE_SDK_ARM64X` for its ARM64X build (`EC=1`); both can
-  name this one directory. Its
+- A full bundle carries the same files, so the bundle is an installed Wine
+  with its SDK. [mtld3d](https://github.com/athei/mtld3d) builds against
+  installed Wines, not the SDK directory: the x86_64 profile's
+  `dist/intel/wine` and this profile's `dist/arm64/wine`. Its
   [`docs/BUILDING.md`](https://github.com/athei/mtld3d/blob/main/docs/BUILDING.md)
-  lists what else that build needs.
+  names the variables and lists what else that build needs.
 - `build-dxmt.sh` and the bundle step refuse an SDK whose `WINE_COMMIT` is not
   the Wine source's current commit.
 

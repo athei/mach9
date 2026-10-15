@@ -2,7 +2,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# ROOT, the layout and the profiles.
+# shellcheck source=profile.sh
+. "$SCRIPT_DIR/profile.sh"
 CACHE_DIR="${CACHE_DIR:-$ROOT/cache}"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
@@ -36,10 +38,12 @@ fi
 GPTK_FLOOR=26.4
 
 usage() {
-    echo "Usage: $0 --dest <dir> [--runtime-only] [--compatdb-only] [--strict-floor] [--arm64]"
+    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--compatdb-only] [--strict-floor] [--arm64]"
     exit 1
 }
 
+# --dest names the directory the bundle goes into as <dir>/wine; without it,
+# the profile's place in the layout (BUNDLE_DEST in profile.sh).
 # --compatdb-only replaces compatdb.so in the bundle already at <dir>/wine and
 # leaves everything else alone. --runtime-only is accepted alongside it and
 # ignored, since it only affects what a full bundle installs. --strict-floor
@@ -59,16 +63,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -z "$DIST_DIR" ]; then
-    echo "Error: --dest is required"
-    usage
-fi
-
 # Paths, the floor every Mach-O is checked against (MACOS_FLOOR, the
 # deployment target build-wine.sh builds with) and the feature flags.
-# shellcheck source=profile.sh
-. "$SCRIPT_DIR/profile.sh"
 set_profile "$ARCH_PROFILE"
+if [ -z "$DIST_DIR" ]; then
+    DIST_DIR="$BUNDLE_DEST"
+fi
 
 WINE_DIR="$DIST_DIR/wine"
 unixdir="$WINE_DIR/lib/wine/$UNIX_DIR"
@@ -999,7 +999,23 @@ if [ "$WITH_LOADER_APP" -eq 1 ]; then
 fi
 
 # ── Step 0: Clean previous bundle ──────────────────────────────────────
+# The bundle ships, so it carries no tree marker. Only a directory that looks
+# like a bundle, one with a bin/wine, is offered for deletion. make install
+# writes the tree under <dest>/<INSTALL_PREFIX>, which Step 2 moves away and
+# then removes, so that directory must not be there already.
+INSTALL_TOP="${INSTALL_PREFIX#/}"
+INSTALL_TOP="${INSTALL_TOP%%/*}"
+if [ -e "$DIST_DIR/$INSTALL_TOP" ]; then
+    echo "Error: $DIST_DIR/$INSTALL_TOP exists and the staged install would go into it;"
+    echo "remove it first if an interrupted run left it"
+    exit 1
+fi
 if [ -d "$WINE_DIR" ]; then
+    if [ ! -e "$WINE_DIR/bin/wine" ] && [ ! -L "$WINE_DIR/bin/wine" ] \
+        && [ -n "$(ls -A "$WINE_DIR")" ]; then
+        echo "Error: $WINE_DIR is not empty and has no bin/wine; not deleting what is not a bundle"
+        exit 1
+    fi
     echo "Will delete existing bundle: $WINE_DIR"
     read -r -p "Continue? [y/N] " confirm
     case "$confirm" in
@@ -1022,10 +1038,9 @@ fi
 
 # ── Step 2: Flatten prefix ──────────────────────────────────────────────
 echo "==> Step 2: Flatten prefix"
-INSTALL_TOP="${INSTALL_PREFIX#/}"
-INSTALL_TOP="${INSTALL_TOP%%/*}"
 mv "$DIST_DIR$INSTALL_PREFIX" "$WINE_DIR"
-rm -rf "${DIST_DIR:?}/$INSTALL_TOP"
+# Left behind is the empty parent of the prefix (/usr of /usr/local).
+rmdir "$DIST_DIR/$INSTALL_TOP"
 
 EXT_DIR="$WINE_DIR/lib/external"
 
