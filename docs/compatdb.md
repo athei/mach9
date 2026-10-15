@@ -209,7 +209,9 @@ same rules, with these differences. They are chosen by `Host` in
   `wined3d` trees hold Wine's own ARM64X modules. A rule asking such a
   program for `dxmt`, `gptk` or `mtld3d` falls back to `wined3d` with a log
   line that names the arch. `default_for` and `available_for` of `Dxgi` and
-  `D3d9` hold the table.
+  `D3d9` hold the table. (The bundle's placeholders for these DLL names are
+  still x64 ones, which keeps a native ARM64 program from loading them at
+  all; see [arm64.md](arm64.md#limitations).)
 - A 64-bit process loads the Direct3D trees from `aarch64-windows`, as Wine
   on an arm64 host loads its builtins from there. An i386 process still
   uses `i386-windows`.

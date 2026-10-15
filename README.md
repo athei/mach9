@@ -11,6 +11,8 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
   logging.
 - [docs/maintenance.md](docs/maintenance.md): internals, floors, pins, the
   Wine-side contract, upgrade checklist.
+- [docs/arm64.md](docs/arm64.md): the native arm64 build with FEX, local
+  only.
 
 ## Getting a build
 
@@ -27,8 +29,8 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
 - The bundle is x86_64 and needs Rosetta on Apple Silicon.
 - A browser download marks the tarball as quarantined; remove it after
   unpacking with `xattr -drs com.apple.quarantine wine`.
-- The minimum macOS is `MACOSX_DEPLOYMENT_TARGET` in
-  [`build-wine.sh`](build-wine.sh). D3DMetal needs a newer macOS
+- The minimum macOS is `MACOS_FLOOR` of the `intel` profile in
+  [`profile.sh`](profile.sh). D3DMetal needs a newer macOS
   (`GPTK_FLOOR` in [`bundle-wine.sh`](bundle-wine.sh)); below it, processes
   that would get D3DMetal get DXMT instead.
 
@@ -91,7 +93,7 @@ the patched ntdll.
 | DPI awareness | Every process is system-aware | Rule `dpi-aware` ([recipes](docs/compatdb.md#recipes)) |
 | Address space | Every 32-bit process gets 4 GB, even without the large-address-aware flag | Rule `large-address-aware` ([recipes](docs/compatdb.md#recipes)) |
 | x87sidecar | Every i386 process under Rosetta starts under it | Rule `x87-sidecar` ([recipes](docs/compatdb.md#recipes)) |
-| x87 precision under FEX (arm64 Wine only) | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([arm64 Wine](docs/compatdb.md#arm64-wine), [recipes](docs/compatdb.md#recipes)) |
+| x87 precision under FEX ([arm64 build](docs/arm64.md) only) | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([arm64 Wine](docs/compatdb.md#arm64-wine), [recipes](docs/compatdb.md#recipes)) |
 | Vulkan loader | Disabled (`vulkan-1=`); the bundle ships no Vulkan | Rule `no-vulkan` ([recipes](docs/compatdb.md#recipes)) |
 | Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | Rule `no-mono-gecko` ([recipes](docs/compatdb.md#recipes)) |
 | No-execute | Follows the main executable's `NX_COMPAT` flag alone, as Windows does ([#3](https://github.com/athei/wine-build/issues/3)). Permanently on under Rosetta: a program that tries to turn it off gets `STATUS_ACCESS_DENIED` | ntdll, `WINE_DISABLE_NX_COMPAT` ([Wine-side contract](docs/maintenance.md#wine-side-contract)) |
@@ -110,6 +112,9 @@ the patched ntdll.
   compiler detection.
 - Rust with the `x86_64-apple-darwin` target, for `compatdb.so`.
 
+The arm64 build needs a different set: see
+[docs/arm64.md](docs/arm64.md#requirements).
+
 ### Commands
 
 ```bash
@@ -121,6 +126,7 @@ the patched ntdll.
 |--------|------|--------|
 | `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile |
 | `build-wine.sh` | `--clean` | Wipes the build directories first; the only way to pick up changed configure flags or deployment target |
+| `build-wine.sh`, `bundle-wine.sh` | `--arm64` | The native arm64 profile instead of the x86_64 one; see [docs/arm64.md](docs/arm64.md) |
 | `bundle-wine.sh` | `--dest <dir>` | Required. Writes `<dir>/wine`, asking before it deletes an existing one |
 | `bundle-wine.sh` | `--runtime-only` | No development files and no test binaries; the flavor to put into an application |
 | `bundle-wine.sh` | `--compatdb-only` | Rebuilds `compatdb.so` into the existing `<dir>/wine` only; no prompt, no `make install`, no Wine build needed, works on an unpacked release tarball; `--runtime-only` is ignored |
@@ -141,14 +147,17 @@ authoritative. What the bundle step checks is in
 | `MINGW_DIR` | llvm-mingw | build, bundle |
 | `CACHE_DIR` | Downloaded redistributables | bundle |
 
-The defaults are set at the top of [`build-wine.sh`](build-wine.sh) and
-[`bundle-wine.sh`](bundle-wine.sh).
+These are the x86_64 build's; the arm64 build has its own names, listed in
+[docs/arm64.md](docs/arm64.md#paths). The defaults of `WINE_SRC` and
+`BUILD_DIR` are set in [`profile.sh`](profile.sh), the others at the top of
+[`build-wine.sh`](build-wine.sh) and [`bundle-wine.sh`](bundle-wine.sh).
 
 ### Configure policy
 
 - Every optional dependency is `--without-*` unless re-enabled with
   `--with-*` in [`build-wine.sh`](build-wine.sh), so a missing package fails
-  configure instead of silently changing the feature set.
+  configure instead of silently changing the feature set. A profile adds to
+  that list through `CONFIGURE_FEATURES_EXTRA` in [`profile.sh`](profile.sh).
 - Never pass `--with-opengl` on macOS: it triggers an EGL probe that always
   fails there, and the Mac driver links `-framework OpenGL` on its own.
 - Vulkan is off (`--without-vulkan`). Nothing in the bundle needs it, and the
