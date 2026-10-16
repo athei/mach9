@@ -230,7 +230,8 @@ anything below needs a `cx-*` release.
   alone and keeps it permanently on under Rosetta, unless
   `WINE_DISABLE_NX_COMPAT` says otherwise
   ([#3](https://github.com/athei/wine-build/issues/3)). The arm64 Wine keeps
-  Wine's behavior ([arm64](arm64.md)).
+  Wine's behavior unless `WINE_DISABLE_NX_COMPAT` keeps no-execute
+  permanently on ([arm64](arm64.md)).
 - `wine.inf` registers the fake DLLs D3DMetal needs.
 
 ## d3d9 conformance tests

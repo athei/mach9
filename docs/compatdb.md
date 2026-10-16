@@ -10,9 +10,9 @@
   slot CrossOver's own compat database uses.
 - At load it reads the process's image name and version resource, resolves
   the matching rules (the built-in ones plus
-  [`WINE_COMPATDB`](#wine_compatdb)) and applies them. ntdll also asks for
-  `x87_sidecar` and `env` before it starts a process (see
-  [Matching](#matching)).
+  [`WINE_COMPATDB`](#wine_compatdb)) and applies them. The x86_64 Wine's
+  ntdll also asks for `x87_sidecar` and `env` before it starts a process
+  (see [Matching](#matching)).
 - The same source builds the library for the x86_64 Wine and for an arm64
   one; [arm64 Wine](#arm64-wine) lists what differs.
 
@@ -30,7 +30,7 @@ and with none, Wine does.
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` only stops forcing it: the executable's flag, `WINE_LARGE_ADDRESS_AWARE` and the `AppDefaults` registry value decide. No effect on 64-bit | At load; ntdll applies it after the library returns |
 | `x87_sidecar` | `true`, `false` | `true` attaches the x87sidecar, `false` keeps it away. Only matters for an i386 process under Rosetta; the arm64 library accepts the key and ignores it | Before exec, `compatdb_query_x87` |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
-| `env` | `NAME=value`, repeatable; an empty value removes the variable | Set in the unix environment right before exec, so what runs ahead of the program sees it: its x87sidecar (the `X87_*` variables) and Rosetta. Written again into the environment block and the unix environment at load | Before exec, `compatdb_query_env`; again at load |
+| `env` | `NAME=value`, repeatable; an empty value removes the variable | In the x86_64 Wine, set in the unix environment right before exec, so what runs ahead of the program sees it: its x87sidecar (the `X87_*` variables) and Rosetta. Written into the environment block and the unix environment at load, before any PE code runs, which is the only time the [arm64 Wine](#arm64-wine) sets it. Processes the program starts inherit it | Before exec, `compatdb_query_env` (x86_64 Wine); at load |
 
 The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi` and
 `d3d9` values are case-insensitive.
@@ -51,9 +51,10 @@ The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi` and
   wins. Lists (`dll_overrides`, `arguments`, `env`) accumulate in fold order.
 - So a `*` rule from `WINE_COMPATDB` beats a built-in `*` default, and a
   rule for one executable beats both. Several `*` rules are not a conflict.
-- `x87_sidecar` and `env` are also answered before exec, in the process
-  that starts the new one. Those queries match the executable's file on disk
-  (its basename and the version resource read from the file).
+- In the x86_64 Wine, `x87_sidecar` and `env` are also answered before
+  exec, in the process that starts the new one; the arm64 Wine's ntdll does
+  not ask. Those queries match the executable's file on disk (its basename
+  and the version resource read from the file).
 - For the first process of a launch, ntdll maps a DOS path such as `C:\...`
   through the prefix's `dosdevices` to a unix path. When that fails, only the
   basename is known, and only rules without a fingerprint can match.
@@ -143,6 +144,7 @@ executable.
 | Keep the x87sidecar away from every process | `name=no-x87;exe=*;x87_sidecar=false`, or set `ROSETTA_X87_PATH` to an empty value |
 | Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` |
 | Let one game turn no-execute off (x86_64 Wine) | `name=my-game;exe=Game.exe;env=WINE_DISABLE_NX_COMPAT=0` |
+| Keep no-execute on for one game (arm64 Wine) | `name=my-game;exe=Game.exe;env=WINE_DISABLE_NX_COMPAT=1` |
 | Give one game FEX's full x87 precision (arm64 Wine) | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision (arm64 Wine) | `name=fex-x87-reduced-precision;enabled=false` |
 
@@ -157,6 +159,10 @@ executable.
 - Dropping `x87-sidecar` with `enabled=false` is not enough to keep the
   sidecar away: the library then has no opinion, and ntdll attaches it
   anyway.
+- The processes a game starts inherit the variables of its `env` rule, so
+  `WINE_DISABLE_NX_COMPAT` keeps no-execute on in them too. An empty value
+  in a rule removes the variable instead of setting it empty, so in the
+  arm64 Wine `env=WINE_DISABLE_NX_COMPAT=` does not keep no-execute on.
 
 ## gptk availability
 
