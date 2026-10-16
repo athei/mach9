@@ -99,7 +99,8 @@ and synchronization (arm64 build) are decided by the patched Wine.
 | x87sidecar | Every i386 process under Rosetta starts under it | Rule `x87-sidecar` ([recipes](docs/compatdb.md#recipes)) |
 | x87 precision under FEX ([arm64 build](docs/arm64.md) only) | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([arm64 Wine](docs/compatdb.md#arm64-wine), [recipes](docs/compatdb.md#recipes)) |
 | Synchronization ([arm64 build](docs/arm64.md) only) | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | wineserver; `WINEMSYNC=0` where the session starts turns it off ([arm64 runtime](docs/arm64.md#runtime)) |
-| Vulkan loader | Disabled (`vulkan-1=`); the bundle ships no Vulkan | Rule `no-vulkan` ([recipes](docs/compatdb.md#recipes)) |
+| Vulkan loader (x86_64 build only) | Disabled (`vulkan-1=`); that bundle ships no Vulkan. The [arm64 build](docs/arm64.md#vulkan) ships Wine's Vulkan on KosmicKrisp and leaves the loader alone | Rule `no-vulkan` ([recipes](docs/compatdb.md#recipes)) |
+| KosmicKrisp's experimental features ([arm64 build](docs/arm64.md#vulkan) only) | Advertised to every process: the ones the rule names in `MESA_KK_EXPERIMENTAL` | Rule `kosmickrisp-experimental` ([arm64 Wine](docs/compatdb.md#arm64-wine), [recipes](docs/compatdb.md#recipes)) |
 | Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | Rule `no-mono-gecko` ([recipes](docs/compatdb.md#recipes)) |
 | No-execute | x86_64 build: follows the main executable's `NX_COMPAT` flag alone, as Windows does ([#3](https://github.com/athei/wine-build/issues/3)). Permanently on under Rosetta: a program that tries to turn it off gets `STATUS_ACCESS_DENIED`. The [arm64 build](docs/arm64.md) keeps Wine's behavior unless `WINE_FORCE_NX` keeps no-execute permanently on | ntdll, `WINE_FORCE_NX` ([Wine-side contract](docs/maintenance.md#wine-side-contract)) |
 
@@ -152,8 +153,9 @@ Everything lives beside this repository, in the directory that holds it
 | `scripts/` | This repository |
 | `src/<profile>/` | The profile's Wine source: `src/intel` is the checkout of athei/wine, `src/arm64` a linked worktree of it |
 | `src-fex/` | The FEX checkout |
+| `src-mesa/` | The Mesa checkout, for the arm64 build's Vulkan driver |
 | `cache/` | Downloaded redistributables |
-| `build/<profile>/` | Every intermediate of a profile: the Wine build and, for arm64, the SDK and its link-library tree, FEX and DXMT |
+| `build/<profile>/` | Every intermediate of a profile: the Wine build and, for arm64, the SDK and its link-library tree, FEX, DXMT and Mesa with the Vulkan loader |
 | `dist/<profile>/wine` | The profile's bundle |
 | `dist/<profile>/wine-symbols` | With `--symbols`, the bundle's PE files before their symbols were stripped (Step 4e of [`bundle-wine.sh`](bundle-wine.sh)); not part of the bundle |
 
@@ -189,8 +191,12 @@ the top of [`build-wine.sh`](build-wine.sh) and
   that list through `CONFIGURE_FEATURES_EXTRA` in [`profile.sh`](profile.sh).
 - Never pass `--with-opengl` on macOS: it triggers an EGL probe that always
   fails there, and the Mac driver links `-framework OpenGL` on its own.
-- Vulkan is off (`--without-vulkan`). Nothing in the bundle needs it, and the
-  bundle step deletes the Vulkan and D3D12 modules such a build cannot back.
+- Vulkan follows the profile's `WITH_VULKAN` in [`profile.sh`](profile.sh).
+  The x86_64 build is configured `--without-vulkan`, since nothing in its
+  bundle needs Vulkan, and the bundle step deletes the Vulkan modules such
+  a build cannot back. The arm64 build has Vulkan
+  ([docs/arm64.md](docs/arm64.md#vulkan)). Neither bundle ships Wine's own
+  D3D12 modules.
 
 ## Releasing
 

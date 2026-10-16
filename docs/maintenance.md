@@ -23,6 +23,13 @@ check when something upstream changes.
   profile's `LEAK_PREFIXES` survives. The arm64 profile re-signs the
   rewritten dylibs ad hoc, since arm64 code does not load with a broken
   signature.
+- In a profile with `WITH_VULKAN` (arm64), the Vulkan loader's soname is
+  one of the patched ones, but the bundle step copies the loader from
+  `MESA_DIST`, where `build-mesa.sh` staged it built for the floor, and not
+  from `DEPS_PREFIX`. KosmicKrisp goes into `lib/external/` the same way.
+  The loader finds it through the manifest in `share/vulkan/icd.d/`, whose
+  `library_path` is relative to the manifest, and ntdll points the loader
+  at that directory ([arm64.md](arm64.md#vulkan)).
 - There is no launcher binary and no `DYLD_*` variable.
 
 ## Direct3D trees
@@ -102,7 +109,7 @@ With `--compatdb-only`:
 
 | Setting | Defined in | Applies to | Constraint |
 |---------|------------|------------|------------|
-| `MACOS_FLOOR` of each profile | [`profile.sh`](../profile.sh) | Exported as `MACOSX_DEPLOYMENT_TARGET` for everything the scripts build (Wine, `compatdb.so`, FEX, DXMT), and the floor every Mach-O in the bundle is checked against | The `intel` value equals the `.cargo/config.toml` row |
+| `MACOS_FLOOR` of each profile | [`profile.sh`](../profile.sh) | Exported as `MACOSX_DEPLOYMENT_TARGET` for everything the scripts build (Wine, `compatdb.so`, FEX, DXMT, KosmicKrisp and the Vulkan loader, though not KosmicKrisp's build tools, which only run on the build host), and the floor every Mach-O in the bundle is checked against | The `intel` value equals the `.cargo/config.toml` row |
 | `MACOSX_DEPLOYMENT_TARGET` | [`.cargo/config.toml`](../.cargo/config.toml) | `compatdb.so` built by a plain `cargo build`; the scripts override it | Same as the `intel` `MACOS_FLOOR` |
 | `GPTK_FLOOR` | [`bundle-wine.sh`](../bundle-wine.sh) | The `minos` check of `lib/external/D3DMetal.framework`, and which `dxgi` line the smoke test expects on the build host. D3DMetal links `libdxccontainer.dylib` and ships unmodified, so it cannot be rebuilt for a lower floor | Equal to `GPTK_MIN` |
 | `GPTK_MIN`, `GPTK_MIN_TEXT`, `GPTK_MIN_DARWIN` | [`compatdb/src/macos.rs`](../compatdb/src/macos.rs) | Whether compatdb.so lets a process load D3DMetal, and the log text | Move together, with `GPTK_FLOOR` |
@@ -143,7 +150,7 @@ With `--compatdb-only`:
 | x86_64 dependency prefix | A `deps-*` release, named by `DEPS_URL` and `DEPS_SHA256` in [release.yml](../.github/workflows/release.yml) | See below |
 | Runner image, llvm-mingw | The workflows in [`.github/workflows/`](../.github/workflows) | Edit the workflow; re-check the floors |
 | Wine source | [`wine-src.ref`](../wine-src.ref) | Point it at a branch, tag or commit of athei/wine |
-| Sources the arm64 build compiles (FEX, DXMT, LLVM for DXMT) and its provisioning profile | See [arm64.md](arm64.md#pinned-inputs) | |
+| Sources the arm64 build compiles (FEX, DXMT, LLVM for DXMT, Mesa, the Vulkan loader and headers) and its provisioning profile | See [arm64.md](arm64.md#pinned-inputs) | |
 
 - `bundle-wine.sh` downloads each artifact into `CACHE_DIR` and reuses the
   cached copy while its checksum matches the pin. A fresh download that does
@@ -263,3 +270,52 @@ anything below needs a `cx-*` release.
     is new.
   - A bundle redeploy wipes `lib/wine`, so such additions have to be
     reinstalled after one.
+  - Modules a new bundle adds, such as `vulkan-1.dll` and `winevulkan.dll`
+    in the first arm64 bundle with Vulkan, reach an existing prefix without
+    `wineboot -u`. `make install` gives `wine.inf` a new modification time,
+    and wineboot, which the first process of every session runs, installs
+    `wine.inf` again whenever that time differs from the one in the
+    prefix's `.update-timestamp`, stamping placeholders for every builtin.
+    Only a prefix whose `.update-timestamp` says `disable` needs
+    `wineboot -u` then.
+
+### Mesa and the Vulkan loader (arm64)
+
+- Mesa is a fork: upstream Mesa plus our topic commits, originally from
+  Hadron's patches, at the ref in [`mesa-src.ref`](../mesa-src.ref)
+  ([arm64.md](arm64.md#vulkan)). To move it to a newer Mesa main:
+  - Rebase the topic series onto the new upstream main with `git rerere`
+    enabled, so a conflict resolved once is resolved again on the next
+    rebase.
+  - Drop the commits upstream has merged in the meantime, such as those of
+    an upstream merge request the series carries under its original author,
+    and resolve what their upstream form changes in the commits on top of
+    them.
+  - Check the `MESA_KK_EXPERIMENTAL` flag names in
+    `src/kosmickrisp/vulkan/kk_debug.c` of the new tree against the
+    `kosmickrisp-experimental` rule in
+    [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs) and its tests.
+    Mesa ignores a name it does not know, so a renamed flag turns its
+    feature off without a word; the bundle's Vulkan smoke test only notices
+    it for transform feedback. A feature upstream now advertises by default
+    no longer needs its flag.
+  - Check that the two-stage build still holds: the stage 1 targets and
+    options and the stage 2 options in [`build-mesa.sh`](../build-mesa.sh),
+    the disabled optional dependencies included, must still exist under
+    those names, and the driver must still pass the script's checks
+    (system libraries only, no flat-namespace imports, `minos` at the
+    floor). A new optional dependency in Mesa's stage 2 meson log gets
+    disabled there too.
+  - Keep a copy of `MESA_DIST`, rebuild with `build-mesa.sh`, and compare
+    `vulkaninfo` for the old and the new driver, each with
+    `VK_DRIVER_FILES` naming its own manifest and `MESA_KK_EXPERIMENTAL`
+    set as the `kosmickrisp-experimental` rule sets it: extensions,
+    features and limits that disappear are a regression to explain before
+    the bundle takes the new driver.
+  - Push the branch to athei/mesa before building without `MESA_REPO`
+    pointing at the local clone; the default builds what the remote has.
+- The Vulkan loader and headers are pinned together, from one Vulkan SDK
+  release, in [`redist.env`](../redist.env). Bump both tags and commits
+  together; `build-mesa.sh` refuses a tag that is not at its commit.
+- A Wine build tree configured before `WITH_VULKAN` was on has no
+  `SONAME_LIBVULKAN`; `build-wine.sh` stops and asks for `--clean`.

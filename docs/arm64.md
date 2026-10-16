@@ -39,6 +39,8 @@ short:
   [arm64 Wine](compatdb.md#arm64-wine)).
 - No D3DMetal: Apple ships it for x86_64 only. The trees the bundle carries
   are `DXGI_IMPLS` and `D3D9_IMPLS` in the profile.
+- Wine's Vulkan is on, on KosmicKrisp, Mesa's Vulkan driver on Metal, and
+  a Vulkan loader built for the floor (see [Vulkan](#vulkan)).
 - No d3d9 test binaries.
 - A [Wine SDK](#wine-sdk) is staged for the PE code built outside Wine.
 - The loader is wrapped in a signed app bundle, and Wine processes run with
@@ -49,7 +51,9 @@ short:
 - An Apple Silicon Mac and a macOS SDK at least as new as the profile's
   `MACOS_FLOOR`.
 - The arm64 Homebrew at the profile's `DEPS_PREFIX` with the formulae in
-  `DEPS_FORMULAE`, plus `cmake`, `ninja` and `meson`.
+  `DEPS_FORMULAE`, plus `cmake`, `ninja` and `meson`, and what the
+  preflight of [`build-mesa.sh`](../build-mesa.sh) checks for, among it the
+  formulae KosmicKrisp's build tools link.
 - Xcode's Metal toolchain (`xcrun metal`), for DXMT's shaders.
 - llvm-mingw at `MINGW_DIR`, as for the x86_64 build, including its arm64ec
   toolchain.
@@ -57,22 +61,28 @@ short:
 - In the keychain, a code signing identity of the team that
   [`signing/loader.provisionprofile`](../signing/loader.provisionprofile)
   belongs to, whose certificate the profile lists.
-- Network access for the bundle step, which resolves `fex-src.ref` and gets
-  the loader's secure timestamp.
+- Network access for the bundle step, which resolves `fex-src.ref` and
+  `mesa-src.ref` and gets the loader's secure timestamp. `build-fex.sh` and
+  `build-mesa.sh` fetch their ref from `FEX_REPO` and `MESA_REPO` on every
+  run, which needs the network unless the variable names a local clone.
+  `build-mesa.sh` also needs it whenever it builds the Vulkan loader or the
+  Python environment of Mesa's build scripts anew (a first run, or changed
+  pins), to clone the loader and headers and install the Python modules.
 
 ## Commands
 
 ```bash
-./build-wine.sh --arm64    # Wine, the SDK, then FEX and DXMT
+./build-wine.sh --arm64    # Mesa and the Vulkan loader, Wine, the SDK, then FEX and DXMT
 ./bundle-wine.sh --arm64   # assemble the bundle
 ```
 
 | Script | What it does |
 |--------|--------------|
-| `build-wine.sh --arm64` | Builds Wine, stages the [Wine SDK](#wine-sdk), then runs `build-fex.sh` and `build-dxmt.sh`; `--clean` is passed on to them |
+| `build-wine.sh --arm64` | Runs `build-mesa.sh`, builds Wine against the loader it staged, stages the [Wine SDK](#wine-sdk), then runs `build-fex.sh` and `build-dxmt.sh`; `--clean` is passed on to all three |
+| [`build-mesa.sh`](../build-mesa.sh) | Checks out the ref in [`mesa-src.ref`](../mesa-src.ref) in `MESA_SRC` (refusing a tree with local changes), builds the Vulkan loader from the tags pinned in [`redist.env`](../redist.env) and KosmicKrisp, and stages both with the driver's manifest and their commits in `MESA_DIST` (see [Vulkan](#vulkan)). Runs alone too |
 | [`build-fex.sh`](../build-fex.sh) | Checks out the ref in [`fex-src.ref`](../fex-src.ref) in `FEX_SRC` (refusing a tree with local changes), builds FEX's emulator DLLs and their unix halves, and records the commit. Runs alone too |
 | [`build-dxmt.sh`](../build-dxmt.sh) | Builds DXMT from the commit pinned in [`redist.env`](../redist.env) against the Wine build and SDK, and stages it with its commit and `git describe` in `DXMT_DIST`. Runs alone too, after a Wine build |
-| `bundle-wine.sh --arm64` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT and the mtld3d release, signs the loader and runs the arm64 smoke test |
+| `bundle-wine.sh --arm64` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT, the Vulkan loader and KosmicKrisp, and the mtld3d release, signs the loader and runs the arm64 smoke test |
 
 ### Paths
 
@@ -92,6 +102,9 @@ uses. The arm64 overrides have their own names, so a `WINE_SRC` or
 | `DXMT_BUILD_DIR` | DXMT's checkout, its meson trees (x86_64 and i386 PE, arm64 unix) and, by default, `DXMT_LLVM` and `DXMT_DIST` | [`profile.sh`](../profile.sh) |
 | `DXMT_LLVM` | The LLVM static libraries `winemetal.so` links | [`profile.sh`](../profile.sh) |
 | `DXMT_DIST` | All of DXMT as the bundle installs it, with the commits it was built from | [`profile.sh`](../profile.sh) |
+| `MESA_REPO`, `MESA_SRC` | Mesa repository and the local clone `build-mesa.sh` checks out | [`profile.sh`](../profile.sh) |
+| `MESA_BUILD_DIR` | The Vulkan loader's and headers' clones and trees, KosmicKrisp's two meson trees, the Python environment and, by default, `MESA_DIST` | [`profile.sh`](../profile.sh) |
+| `MESA_DIST` | The Vulkan loader, KosmicKrisp and its manifest as the bundle installs them, with the commits they were built from | [`profile.sh`](../profile.sh) |
 | `LOADER_PROFILE` | The provisioning profile the loader is signed for | [`profile.sh`](../profile.sh) |
 
 ## Layout differences
@@ -104,6 +117,8 @@ uses. The arm64 overrides have their own names, so a `WINE_SRC` or
 | `lib/wine/aarch64-windows/xtajit.dll`, `xtajit64.dll` | FEX's WoW64 and ARM64EC DLLs under the names Wine loads by default; also present under their own names |
 | `lib/wine/dxgi/<impl>/aarch64-windows/`, `lib/wine/d3d9/<impl>/aarch64-windows/` | The 64-bit modules of each tree. DXMT's and mtld3d's are x86_64 PE: an x64 process runs as ARM64EC, and Wine looks up its builtins in `aarch64-windows` |
 | `lib/wine/x86_64-windows/` | Full bundle only: the SDK's x86_64 link libraries and nothing else, so the bundle carries the same link libraries as the SDK. Nothing reads the directory at run time |
+| `lib/external/libvulkan.1.dylib`, `lib/external/libvulkan_kosmickrisp.dylib` | The Vulkan loader `win32u.so` loads, and KosmicKrisp |
+| `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
 
 ## Runtime
 
@@ -116,6 +131,8 @@ to this build only.
 | `WINEMSYNC` | Unset or a non-zero number: msync is on. Any other value (`0`, empty, not a number): off, and Wine synchronizes through wineserver requests as upstream Wine does. Only the wineserver reads it, from the environment of the process that starts it, and every process of the session follows the wineserver's choice whatever its own environment says |
 | `WINENCPU` | Limits the number of processors Wine reports to programs, for those that misbehave with many. A value of 0, one that is not a number, or one above the real count is ignored |
 | `FEX_HARDWARE_TSO` | Unset or `1`: FEX runs x86 code with the hardware x86 memory ordering (TSO) instead of emulating it with ordered loads and stores. The ordering is a per-thread mode: FEX switches a thread to it whenever the thread enters x86 code and back at the syscalls and unix calls of x86 code, since native code runs slower in it. `0`: FEX emulates the ordering. Any other value logs an error and FEX emulates the ordering |
+| `VK_DRIVER_FILES` | Unset: ntdll sets it to the bundle's `share/vulkan/icd.d`, so the Vulkan loader uses the bundled KosmicKrisp and no driver installed elsewhere on the Mac. Set: the loader uses the manifests it names instead. ntdll also leaves it unset when the caller sets `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES`; the loader then uses those, and the bundled driver is not added to them ([Vulkan](#vulkan)) |
+| `MESA_KK_EXPERIMENTAL` | Which experimental features KosmicKrisp advertises. compatdb's built-in `kosmickrisp-experimental` rule sets it in every process, replacing a value from the environment; a rule changes or removes it ([Vulkan](#vulkan)) |
 | `FEX_HOSTFEATURES` | FEX's host feature overrides. x86_64 programs, which run as ARM64EC, run without AFP (the Arm floating-point behaviour FEX uses to match x86) by default, because the floating-point mode would have to change on every call between x86 code and native code, which costs more than AFP saves. `enableafp` turns it back on. i386 programs keep AFP |
 
 - msync is CrossOver's implementation of Windows synchronization objects
@@ -196,6 +213,74 @@ Wine source commit. What goes in is the `WITH_WINE_SDK` step of
   `DXMT_LLVM`, records the commit there, and rebuilds them only when the pin
   changes; `--clean` keeps them.
 
+## Vulkan
+
+Wine's Vulkan (`vulkan-1.dll`, `winevulkan`) runs on KosmicKrisp, Mesa's
+Vulkan driver on Metal, through the Khronos Vulkan loader. Direct3D 9 to 11
+do not use it: they go to Metal through mtld3d and DXMT.
+
+- Mesa is [athei/mesa](https://github.com/athei/mesa) at the ref
+  [`mesa-src.ref`](../mesa-src.ref) names: upstream Mesa plus our topic
+  commits, originally from
+  [Hadron's Mesa patches](https://github.com/Broyojo/hadron/tree/main/patches/mesa)
+  and regrouped by topic. Commits of upstream merge requests that are not
+  merged yet are carried under their original authors and dropped once
+  upstream has them
+  ([rebasing](maintenance.md#mesa-and-the-vulkan-loader-arm64)). Like FEX,
+  the ref is fetched from `MESA_REPO`, so a commit that is only in the local
+  clone is built only with `MESA_REPO` set to that clone.
+- KosmicKrisp is built in two stages. The driver's build compiles its
+  OpenCL C kernels with tools of Mesa's own, which link LLVM and the SPIR-V
+  libraries, and Homebrew has those only for the host's macOS. The first
+  stage builds just these tools, for the host; the second builds the driver
+  for the floor with LLVM off and the tools of the first stage, so the
+  driver links system libraries only. As with Wine's configure, the second
+  stage disables every optional library the driver does not need, so what
+  else Homebrew has installed cannot change the build.
+- `build-mesa.sh --clean` builds the driver again from scratch. The loader,
+  the Python environment and the first stage's tools are kept while what
+  they were built from is unchanged, as `build-dxmt.sh` keeps its LLVM.
+- The loader is built from source, from the Vulkan-Loader and
+  Vulkan-Headers tags pinned in [`redist.env`](../redist.env), because
+  Homebrew's vulkan-loader bottle needs a newer macOS than the floor. The
+  bundle step copies it from `MESA_DIST` into `lib/external/`, which is
+  what keeps Homebrew's loader out of the bundle: `SONAME_LIBVULKAN` holds
+  only the file name, whichever loader configure linked. `MESA_DIST/lib`
+  comes first in the profile's `LDFLAGS` so that configure's `-lvulkan`
+  test succeeds against this loader, without Homebrew's installed, and
+  does not link Homebrew's where it is.
+- `win32u.so` loads the loader the first time something in the process
+  needs Vulkan. That includes the display device
+  refresh `explorer.exe` runs when a session starts: it loads the loader
+  and KosmicKrisp and takes the GPU's name, memory size and UUID for the
+  registry from them.
+- The loader finds the driver through the manifest in
+  `share/vulkan/icd.d/`, whose `library_path` is relative to the manifest
+  (`../../../lib/external/...`), so the bundle stays relocatable. ntdll sets
+  `VK_DRIVER_FILES` to that directory when the caller has set none of
+  `VK_DRIVER_FILES`, `VK_ICD_FILENAMES` and `VK_ADD_DRIVER_FILES`, so the
+  loader uses the bundled driver and no other driver installed on the Mac.
+  A caller that sets one of them chooses the drivers itself: the bundled
+  one is then not added, and has to be named there to be used
+  ([Runtime](#runtime)).
+- Our topic commits add features KosmicKrisp advertises only when
+  `MESA_KK_EXPERIMENTAL` names them. compatdb's built-in
+  `kosmickrisp-experimental` rule sets the variable in every process, with
+  the flags in [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). As
+  with every `env` rule in this Wine, compatdb.so sets it when it loads,
+  before any PE code runs, so it is there before win32u loads the Vulkan
+  loader and the driver reads it. Mesa describes the variable in
+  [`docs/drivers/kosmickrisp.rst`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/drivers/kosmickrisp.rst);
+  the flags our topic commits add are defined next to Mesa's own in the
+  driver's source. The recipes to turn them off are in
+  [compatdb.md](compatdb.md#recipes).
+- compatdb's `no-vulkan` rule, which disables `vulkan-1` in the x86_64
+  Wine, does not exist here.
+- Wine's own `d3d12.dll` and `d3d12core.dll` are left out of the bundle,
+  as in the x86_64 build.
+- Not covered yet: Direct3D 12 through vkd3d-proton, DXVK, and OpenGL
+  through Zink on KosmicKrisp. A program that wants Vulkan itself gets it.
+
 ## Loader app
 
 The loader needs `com.apple.developer.cross-architecture-support`. With it,
@@ -262,9 +347,12 @@ formulae, the Wine SDK (staged from the current Wine source), the FEX build
 (complete, and built from the commit `fex-src.ref` names now, which it asks
 `FEX_REPO` for with `git ls-remote`, so the step needs the network), the
 staged DXMT (complete, from the pinned commit, linked against the current
-Wine source, its DLLs carrying the recorded version), the llvm-mingw
-compilers the smoke test uses, and the provisioning profile (not expired,
-granting the entitlement, with an identity of its team in the keychain).
+Wine source, its DLLs carrying the recorded version), the staged Vulkan
+loader and KosmicKrisp (complete, Mesa built from the commit `mesa-src.ref`
+names now, asked of `MESA_REPO` the same way, and the loader from the
+pinned commit), the llvm-mingw compilers the smoke test uses, and the
+provisioning profile (not expired, granting the entitlement, with an
+identity of its team in the keychain).
 
 After assembly, besides the self-containment, `minos`, floor-newer import,
 symlink and copied-in file checks of the x86_64 bundle
@@ -279,9 +367,14 @@ symlink and copied-in file checks of the x86_64 bundle
   `xtajit64.dll` are FEX's.
 - No `bin/x87sidecar`, no x87 export in `compatdb.so` or `ntdll.so`, and
   `compatdb.so` exports `compatdb_query_env`.
-- The smoke test, with the caller's `WINE_COMPATDB` and every `WINEMSYNC*`
-  and `FEX_*` variable dropped: `wine --version`; a fresh prefix boots
-  (`cmd /c exit`), with `compatdb:` lines, no trace of the x87sidecar, and
+- The Vulkan loader, KosmicKrisp, its manifest and Wine's Vulkan modules
+  are in place, the manifest's `library_path` resolves from its directory,
+  the loader and the driver export their entry points, and `ntdll.so`
+  names `VK_DRIVER_FILES`.
+- The smoke test, with the caller's `WINE_COMPATDB` and every `WINEMSYNC*`,
+  `FEX_*`, `VK_*` and `MESA_*` variable dropped: `wine --version`; a fresh
+  prefix boots (`cmd /c exit`), with `compatdb:` lines, no trace of the
+  x87sidecar, and
   the wineserver's `msync: up and running.` line and no `msync: error:`
   line (with `--compatdb-only`, a wineserver without msync skips that
   check); the i386 `cmd.exe` runs; and
@@ -291,8 +384,11 @@ symlink and copied-in file checks of the x86_64 bundle
   trees for its arch (the x86 defaults, or `wined3d` for the native one), and
   the x86 programs must load both DLLs; the native one cannot (see
   [Limitations](#limitations)). Then the x86_64 and i686 programs load every
-  module of each Direct3D tree in turn, as for the x86_64 bundle. Every run
-  has a time limit.
+  module of each Direct3D tree in turn, as for the x86_64 bundle. Last,
+  [`smoke/vulkan.c`](../smoke/vulkan.c), compiled for x86_64 and i686,
+  creates a Vulkan instance without a window and must find a device; its
+  compatdb lines must carry `MESA_KK_EXPERIMENTAL`. Every run has a time
+  limit.
 
 ## Limitations
 
@@ -318,5 +414,8 @@ symlink and copied-in file checks of the x86_64 bundle
 | mtld3d | The same release tarball as the x86_64 build, [`redist.env`](../redist.env) |
 | DXMT | [`redist.env`](../redist.env), by commit |
 | LLVM for DXMT's `winemetal.so` | [`redist.env`](../redist.env), tag and commit; `build-dxmt.sh` fails when the tag is not at the commit |
+| Mesa (KosmicKrisp) | [`mesa-src.ref`](../mesa-src.ref): a branch, tag or commit of `MESA_REPO` |
+| Vulkan loader and headers | [`redist.env`](../redist.env), tag and commit of each, from one SDK release; `build-mesa.sh` fails when a tag is not at its commit |
+| Python modules of Mesa's build scripts | [`redist.env`](../redist.env), as pip requirements with exact versions |
 | Wine | Whatever the arm64 worktree has checked out, normally [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched); nothing pins a commit. The SDK and DXMT record the commit they were built against (with `-dirty` when tracked files differ, which counts all uncommitted states as one), and the bundle step refuses either when it is not the current one |
 | Provisioning profile | [`signing/loader.provisionprofile`](../signing/loader.provisionprofile); replace the file when it expires or the App ID changes |

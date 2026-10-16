@@ -130,8 +130,8 @@ executable.
 
 | Goal | Rule |
 |------|------|
-| Let one game load its own Vulkan loader | `name=my-game;exe=Game.exe;dll_overrides=vulkan-1=n` |
-| Stop disabling Vulkan for every process | `name=no-vulkan;enabled=false` |
+| Let one game load its own Vulkan loader (x86_64 Wine) | `name=my-game;exe=Game.exe;dll_overrides=vulkan-1=n` |
+| Stop disabling Vulkan for every process (x86_64 Wine) | `name=no-vulkan;enabled=false` |
 | Re-enable Wine's Mono for every process | `name=mono;exe=*;dll_overrides=mscoree=b` |
 | Prefer a native .NET | `name=mono;exe=*;dll_overrides=mscoree=n,b` |
 | Hand Mono and Gecko back to the registry `DllOverrides` | `name=no-mono-gecko;enabled=false` |
@@ -147,7 +147,18 @@ executable.
 | Keep no-execute on for one game (arm64 Wine) | `name=my-game;exe=Game.exe;env=WINE_FORCE_NX=1` |
 | Give one game FEX's full x87 precision (arm64 Wine) | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision (arm64 Wine) | `name=fex-x87-reduced-precision;enabled=false` |
+| Turn KosmicKrisp's experimental features off for one game (arm64 Wine) | `name=my-game;exe=Game.exe;env=MESA_KK_EXPERIMENTAL=` |
+| Advertise only some of them to one game (arm64 Wine) | `name=my-game;exe=Game.exe;env=MESA_KK_EXPERIMENTAL=<flags>`, with the flags comma-separated |
+| Turn KosmicKrisp's experimental features off for every process (arm64 Wine) | `name=kosmickrisp-experimental;enabled=false` |
 
+- The Vulkan recipes are for the x86_64 Wine, whose bundle ships no Vulkan.
+  The arm64 Wine has no `no-vulkan` rule ([arm64 Wine](#arm64-wine)).
+- The KosmicKrisp flags are described in Mesa's
+  [`docs/drivers/kosmickrisp.rst`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/drivers/kosmickrisp.rst),
+  except those our Mesa topic commits add; the ones the built-in rule sets
+  are in [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). A game
+  rule's `MESA_KK_EXPERIMENTAL` folds after the built-in one and replaces it
+  for that game.
 - `WINEDLLOVERRIDES=vulkan-1=n` or `mscoree=b` alone does not work: ntdll
   parses that variable first, and an override compatdb adds replaces the
   entry for the same module. ntdll also consults compatdb's overrides before
@@ -207,6 +218,17 @@ same rules, with these differences. They are chosen by `Host` in
   environment layer outranks its config files, and the rule replaces a
   value already in the environment. To turn it off for one game or for
   every process, use the two FEX recipes in [recipes](#recipes).
+- The arm64 bundle ships Wine's Vulkan on KosmicKrisp
+  ([arm64.md](arm64.md#vulkan)), so there is no `no-vulkan` rule, and
+  `name=no-vulkan;enabled=false` is logged as `override names no rule`.
+  Instead, the built-in `kosmickrisp-experimental` rule sets
+  `MESA_KK_EXPERIMENTAL` for every process, so that KosmicKrisp advertises
+  the experimental features our Mesa topic commits add. compatdb.so sets it
+  when it loads, before any PE code runs and so before win32u loads the
+  Vulkan loader, where the driver reads it. Like the FEX entry, it replaces
+  a value already in the environment. The entry and the reasoning are in
+  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs); the KosmicKrisp
+  recipes in [recipes](#recipes) turn it off or change it.
 - `gptk` is never available, so an x86 process defaults to `dxmt`, and a
   `dxgi=gptk` rule falls back with a log line that names the arm64 Wine, not
   the macOS release.
