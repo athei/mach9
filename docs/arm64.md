@@ -21,8 +21,8 @@ short:
 - No-execute follows upstream Wine by default. The series does not carry
   the x86_64 build's no-execute change, which avoids a stall in Rosetta's
   fault handling; with no-execute off, FEX showed no such stall. Instead,
-  `WINE_DISABLE_NX_COMPAT` set to anything but `0` keeps no-execute
-  permanently on, so the process cannot turn it off
+  `WINE_FORCE_NX` set to anything but `0` keeps no-execute permanently on,
+  so the process cannot turn it off
   ([environment variables](../README.md#environment-variables)). With
   no-execute off, every readable page is executable, so FEX has to treat
   all writable memory as possible code and translates it again whenever it

@@ -58,7 +58,7 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
 |----------|--------|
 | `WINE_COMPATDB` | Extra or changed compatdb rules for the whole process tree. Format: [docs/compatdb.md](docs/compatdb.md#wine_compatdb) |
 | `ROSETTA_X87_PATH` | Unset: i386 processes use the bundled `bin/x87sidecar`. A path: that binary instead. Empty: no process gets a sidecar, whatever the rules say |
-| `WINE_DISABLE_NX_COMPAT` | x86_64 build: unset, no-execute is permanently on under Rosetta; `0`, a process may turn it off, as on Windows, on any host; any other value, permanently on, on every host. [arm64 build](docs/arm64.md): unset or `0`, Wine's behavior; any other value, permanently on |
+| `WINE_FORCE_NX` | x86_64 build: unset, no-execute is permanently on under Rosetta; `0`, a process may turn it off, as on Windows, on any host; any other value, permanently on, on every host. [arm64 build](docs/arm64.md): unset or `0`, Wine's behavior; any other value, permanently on |
 | `CX_APPLEGPTK_LIBD3DSHARED_PATH` | Overrides the `libd3dshared.dylib` ntdll loads (default: the one in `lib/external/`) |
 | `WINEDLLOVERRIDES` | Works as in Wine, but cannot undo an override compatdb adds; use a rule ([recipes](docs/compatdb.md#recipes)) |
 
@@ -101,7 +101,7 @@ and synchronization (arm64 build) are decided by the patched Wine.
 | Synchronization ([arm64 build](docs/arm64.md) only) | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | wineserver; `WINEMSYNC=0` where the session starts turns it off ([arm64 runtime](docs/arm64.md#runtime)) |
 | Vulkan loader | Disabled (`vulkan-1=`); the bundle ships no Vulkan | Rule `no-vulkan` ([recipes](docs/compatdb.md#recipes)) |
 | Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | Rule `no-mono-gecko` ([recipes](docs/compatdb.md#recipes)) |
-| No-execute | x86_64 build: follows the main executable's `NX_COMPAT` flag alone, as Windows does ([#3](https://github.com/athei/wine-build/issues/3)). Permanently on under Rosetta: a program that tries to turn it off gets `STATUS_ACCESS_DENIED`. The [arm64 build](docs/arm64.md) keeps Wine's behavior unless `WINE_DISABLE_NX_COMPAT` keeps no-execute permanently on | ntdll, `WINE_DISABLE_NX_COMPAT` ([Wine-side contract](docs/maintenance.md#wine-side-contract)) |
+| No-execute | x86_64 build: follows the main executable's `NX_COMPAT` flag alone, as Windows does ([#3](https://github.com/athei/wine-build/issues/3)). Permanently on under Rosetta: a program that tries to turn it off gets `STATUS_ACCESS_DENIED`. The [arm64 build](docs/arm64.md) keeps Wine's behavior unless `WINE_FORCE_NX` keeps no-execute permanently on | ntdll, `WINE_FORCE_NX` ([Wine-side contract](docs/maintenance.md#wine-side-contract)) |
 
 ## Building
 
