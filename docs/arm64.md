@@ -195,23 +195,33 @@ Wine source commit. What goes in is the `WITH_WINE_SDK` step of
 The loader needs `com.apple.developer.cross-architecture-support`. With it,
 the kernel leaves most of the 4 GB `__PAGEZERO` as a mapping Wine can
 replace, which Wine claims as its low reserved area for the i386 code that
-runs under FEX. It also lets a process run with 4K pages instead of the
-host's 16K pages, and gates the hardware x86 memory ordering FEX runs x86
-code with (`FEX_HARDWARE_TSO`, [Runtime](#runtime)). That entitlement is
-honoured only through a provisioning profile embedded in an app bundle and
-a signature by a certificate of the profile's team. Wine does not run
-without it.
+runs under FEX. The kernel places the loader a random distance above 4 GB
+and covers the space between 4 GB and the loader the same way, and the
+loader reserves that area for Wine too, so that an x64 executable built for
+0x100000000 without relocations can load there. The entitlement also lets a
+process run with 4K pages instead of the host's 16K pages, and gates the
+hardware x86 memory ordering FEX runs x86 code with (`FEX_HARDWARE_TSO`,
+[Runtime](#runtime)). That entitlement is honoured only through a
+provisioning profile embedded in an app bundle and a signature by a
+certificate of the profile's team. Wine does not run without it.
 
-- Before Wine sets up its address space, the loader execs itself once with
-  4K pages (`exec_with_4k_pages` in
+- Before Wine sets up its address space, the loader execs itself with 4K
+  pages (`exec_with_4k_pages` in
   [`loader/main.c`](https://github.com/athei/wine/blob/arm64-patched/loader/main.c)).
   ntdll starts new Wine processes with 4K pages directly (`preloader_exec` in
   [`dlls/ntdll/unix/loader.c`](https://github.com/athei/wine/blob/arm64-patched/dlls/ntdll/unix/loader.c)),
-  so they need no second exec. Everything inside a Wine process, FEX
-  included, then runs on 4K pages. Wine does not merge 4K Windows pages into
-  16K host pages, so page protections, guard pages, decommit and FEX's
+  so they need no exec for the page size. Everything inside a Wine process,
+  FEX included, then runs on 4K pages. Wine does not merge 4K Windows pages
+  into 16K host pages, so page protections, guard pages, decommit and FEX's
   tracking of self-modifying code work on 4K pages, as on Windows. The
   wineserver and other plain Unix programs keep the default page size.
+- When the kernel placed the loader too close to 4 GB to leave room for such
+  an executable, the loader execs itself again for a new placement, keeping
+  its 4K pages, a bounded number of times. This applies to every loader,
+  whether ntdll or something else started it. If such an exec fails, the
+  loader prints a warning and keeps its placement. The threshold and the
+  limit are in
+  [`loader/main.c`](https://github.com/athei/wine/blob/arm64-patched/loader/main.c).
 - A loader without the entitlement would be killed in that exec without a
   message, so the loader checks for the entitlement first. Without it, the
   loader exits with an error saying it must run from the signed `wine.app`.
