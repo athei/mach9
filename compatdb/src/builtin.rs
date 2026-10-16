@@ -7,13 +7,16 @@
 //! Every rule that names an executable also carries a version fingerprint, so
 //! none of them can catch an unrelated program that happens to share a file
 //! name. The exceptions are `no-vulkan`, `dpi-aware`, `large-address-aware`,
-//! `x87-sidecar`, `fex-x87-reduced-precision` and `no-mono-gecko`, which
-//! match every process on purpose: each is a default that a more specific
-//! rule can override and that can be dropped by name.
+//! `x87-sidecar`, `fex-x87-reduced-precision`, `kosmickrisp-experimental`
+//! and `no-mono-gecko`, which match every process on purpose: each is a
+//! default that a more specific rule can override and that can be dropped by
+//! name.
 //!
-//! The rules differ by [`Host`] only in how x87 code is sped up: the `x86_64`
-//! Wine has the `x87-sidecar` rule for Rosetta, the arm64 one the
-//! `fex-x87-reduced-precision` rule for FEX.
+//! The rules differ by [`Host`] in how x87 code is sped up and in Vulkan: the
+//! `x86_64` Wine has the `x87-sidecar` rule for Rosetta and the `no-vulkan`
+//! rule, since its bundle ships no Vulkan; the arm64 one has the
+//! `fex-x87-reduced-precision` rule for FEX and the
+//! `kosmickrisp-experimental` rule for the Vulkan driver its bundle ships.
 
 use compatdb_table::{ANY_EXE, Dxgi, Host, Rule, Table};
 
@@ -24,20 +27,23 @@ pub fn table() -> Table {
 
 /// The rules the bundle for `host` ships with.
 pub fn table_for(host: Host) -> Table {
-    let mut rules = vec![
-        // The bundle ships no Vulkan: Wine is built --without-vulkan and
-        // bundle-wine.sh deletes vulkan-1.dll and winevulkan. A Vulkan
-        // loader a game ships next to its exe can therefore only fail, so
-        // disable vulkan-1 in every process: the loader then fails to
-        // load, and a game that has another renderer uses it. A rule for
-        // one game's exe that adds `vulkan-1=n` is folded after this one
-        // and wins.
-        Rule {
+    let mut rules = Vec::new();
+    // The x86_64 bundle ships no Vulkan: Wine is built --without-vulkan
+    // there and bundle-wine.sh deletes vulkan-1.dll and winevulkan. A Vulkan
+    // loader a game ships next to its exe can therefore only fail, so
+    // disable vulkan-1 in every process: the loader then fails to load, and
+    // a game that has another renderer uses it. A rule for one game's exe
+    // that adds `vulkan-1=n` is folded after this one and wins. The arm64
+    // bundle ships Wine's Vulkan, so it has no such rule.
+    if host == Host::X86_64 {
+        rules.push(Rule {
             name: "no-vulkan".into(),
             exe: ANY_EXE.into(),
             dll_overrides: vec!["vulkan-1=".into()],
             ..Rule::default()
-        },
+        });
+    }
+    rules.extend([
         // Programs under this Wine are treated as DPI-aware unless a rule
         // says otherwise. An unaware program on a scaled desktop gets its
         // window and mouse coordinates scaled while display modes are
@@ -62,7 +68,7 @@ pub fn table_for(host: Host) -> Table {
             large_address_aware: Some(true),
             ..Rule::default()
         },
-    ];
+    ]);
     // How each Wine speeds up x87 floating-point code, which games built for
     // 32-bit x86 use heavily.
     rules.push(match host {
@@ -97,10 +103,33 @@ pub fn table_for(host: Host) -> Table {
             ..Rule::default()
         },
     });
+    // The arm64 bundle's Vulkan driver is KosmicKrisp, Mesa's Vulkan driver
+    // on Metal, with our topic commits, originally from Hadron's patches, on
+    // top of upstream Mesa. Three features those commits add are advertised
+    // only when MESA_KK_EXPERIMENTAL names them, because Mesa counts them as
+    // experimental (possibly incomplete, possibly slower):
+    // device-generated commands (dgc), transform feedback (xfb) and sparse
+    // resources (sparse). Direct3D 12 on Vulkan needs all three, for
+    // ExecuteIndirect, stream output and tiled resources. The driver reads
+    // the variable from the unix environment when it creates an instance,
+    // and compatdb has set it there by then.
+    //
+    // It matches every process, as the FEX rule does, since a child
+    // inherits it. A rule for one game with `env=MESA_KK_EXPERIMENTAL=`
+    // removes it, and one with other flags replaces the list for that game.
+    if host == Host::Aarch64 {
+        rules.push(Rule {
+            name: "kosmickrisp-experimental".into(),
+            exe: ANY_EXE.into(),
+            env: vec![("MESA_KK_EXPERIMENTAL".into(), "dgc,xfb,sparse".into())],
+            ..Rule::default()
+        });
+    }
     rules.extend([
         // Keeps Wine from prompting to install Mono and Gecko, in
         // wineboot and in any process that loads either. It is a separate
-        // rule so disabling `no-vulkan` does not bring the prompts back.
+        // rule so disabling `no-vulkan` in the x86_64 Wine does not bring
+        // the prompts back.
         //
         // The override disables both modules, not only the prompts. ntdll
         // consults the overrides compatdb adds before the registry
@@ -220,15 +249,23 @@ mod tests {
             .ok_or_else(|| format!("no rule {name}"))
     }
 
+    /// The name of the arm64 rule that enables the experimental features of
+    /// the Vulkan driver.
+    const KK_RULE: &str = "kosmickrisp-experimental";
+
     /// The names of the rules that match every process on `host`, in table
     /// order.
     fn wildcards(host: Host) -> Vec<String> {
-        let mut names = vec![
-            "no-vulkan".to_string(),
-            "dpi-aware".to_string(),
-            "large-address-aware".to_string(),
-        ];
+        let mut names = Vec::new();
+        if host == Host::X86_64 {
+            names.push("no-vulkan".to_string());
+        }
+        names.push("dpi-aware".to_string());
+        names.push("large-address-aware".to_string());
         names.push(x87_rule(host).to_string());
+        if host == Host::Aarch64 {
+            names.push(KK_RULE.to_string());
+        }
         names.push("no-mono-gecko".to_string());
         names
     }
@@ -241,14 +278,57 @@ mod tests {
         }
     }
 
-    /// The env every process gets from the built-in rules on `host`. The
-    /// variable is spelled out here to guard against a typo: FEX matches the
-    /// name exactly and parses the value as an integer.
-    fn wildcard_env(host: Host) -> Vec<(String, String)> {
+    /// The env of the arm64 FEX rule. The variable is spelled out here to
+    /// guard against a typo: FEX matches the name exactly and parses the
+    /// value as an integer.
+    fn fex_env() -> Vec<(String, String)> {
+        vec![("FEX_X87REDUCEDPRECISION".to_string(), "1".to_string())]
+    }
+
+    /// The env of the arm64 rule for the Vulkan driver, spelled out for the
+    /// same reason: Mesa matches the name exactly, and the flag names are
+    /// those of `src/kosmickrisp/vulkan/kk_debug.c` in Mesa.
+    fn kk_env() -> Vec<(String, String)> {
+        vec![(
+            "MESA_KK_EXPERIMENTAL".to_string(),
+            "dgc,xfb,sparse".to_string(),
+        )]
+    }
+
+    /// The wildcard rules on `host` that set env, each with its entries, in
+    /// table order.
+    fn wildcard_env_rules(host: Host) -> Vec<(&'static str, Vec<(String, String)>)> {
         match host {
             Host::X86_64 => vec![],
-            Host::Aarch64 => vec![("FEX_X87REDUCEDPRECISION".to_string(), "1".to_string())],
+            Host::Aarch64 => vec![(x87_rule(host), fex_env()), (KK_RULE, kk_env())],
         }
+    }
+
+    /// The env every process gets from the built-in rules on `host`.
+    fn wildcard_env(host: Host) -> Vec<(String, String)> {
+        wildcard_env_rules(host)
+            .into_iter()
+            .flat_map(|(_, env)| env)
+            .collect()
+    }
+
+    /// The DLL overrides every process gets from the built-in rules on
+    /// `host`: Vulkan is disabled where the bundle ships none, and Mono and
+    /// Gecko everywhere.
+    fn wildcard_overrides(host: Host) -> Vec<String> {
+        let mut overrides = Vec::new();
+        if host == Host::X86_64 {
+            overrides.push("vulkan-1=".to_string());
+        }
+        overrides.push("mscoree,mshtml=".to_string());
+        overrides
+    }
+
+    /// `wildcard_overrides(host)` followed by `more`.
+    fn wildcard_overrides_and(host: Host, more: &[&str]) -> Vec<String> {
+        let mut overrides = wildcard_overrides(host);
+        overrides.extend(more.iter().map(ToString::to_string));
+        overrides
     }
 
     /// `wildcard_env(host)` followed by `more`.
@@ -300,11 +380,14 @@ mod tests {
         };
         assert!(has(Host::X86_64));
         assert!(!has(Host::Aarch64));
-        // Apart from the x87 rule, the two tables are the same.
+        // Apart from the rules of one host, the two tables are the same.
         let mut intel = table_for(Host::X86_64);
-        intel.rules.retain(|r| r.name != x87_rule(Host::X86_64));
+        intel
+            .rules
+            .retain(|r| r.name != x87_rule(Host::X86_64) && r.name != "no-vulkan");
         let mut arm = table_for(Host::Aarch64);
-        arm.rules.retain(|r| r.name != x87_rule(Host::Aarch64));
+        arm.rules
+            .retain(|r| r.name != x87_rule(Host::Aarch64) && r.name != KK_RULE);
         assert_eq!(intel, arm);
     }
 
@@ -320,7 +403,7 @@ mod tests {
         let arm = table_for(Host::Aarch64);
         let fex = rule(&arm, name)?;
         assert_eq!(fex.exe, ANY_EXE);
-        assert_eq!(fex.env, wildcard_env(Host::Aarch64));
+        assert_eq!(fex.env, fex_env());
         // Every process gets it: x86_64, i386 and native ARM64 alike, since
         // rules do not match on the arch.
         let game = arm.resolve("game.exe", &VersionInfo::default());
@@ -345,19 +428,95 @@ mod tests {
             .encode_utf16()
             .collect();
         let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
-        assert_eq!(String::from_utf16_lossy(&merged), "OTHER=x\0\0");
+        assert_eq!(
+            String::from_utf16_lossy(&merged),
+            "OTHER=x\0MESA_KK_EXPERIMENTAL=dgc,xfb,sparse\0\0"
+        );
         // Another process keeps it.
         let other = table.resolve("other.exe", &VersionInfo::default());
         assert_eq!(other.env, wildcard_env(arm));
-        // For every process: drop the rule.
+        // For every process: drop the rule. The KosmicKrisp entry stays.
         let table = with_overrides(arm, "name=fex-x87-reduced-precision;enabled=false");
         let game = table.resolve("game.exe", &VersionInfo::default());
-        assert_eq!(game.env, []);
+        assert_eq!(game.env, kk_env());
         assert_eq!(
             game.matched,
             wildcards_without(arm, "fex-x87-reduced-precision")
         );
         Ok(())
+    }
+
+    #[test]
+    fn only_the_arm64_table_enables_the_kosmickrisp_features() -> TestResult {
+        assert!(
+            !table_for(Host::X86_64)
+                .rules
+                .iter()
+                .any(|r| r.name == KK_RULE || r.env.iter().any(|(n, _)| n.starts_with("MESA_")))
+        );
+        let arm = table_for(Host::Aarch64);
+        let kk = rule(&arm, KK_RULE)?;
+        assert_eq!(kk.exe, ANY_EXE);
+        assert_eq!(kk.env, kk_env());
+        // Every process gets it, after the FEX entry.
+        let game = arm.resolve("game.exe", &VersionInfo::default());
+        let mut env = fex_env();
+        env.extend(kk_env());
+        assert_eq!(game.env, env);
+        // Naming the rule from the x86_64 side finds nothing there.
+        let mut intel = table_for(Host::X86_64);
+        let (over, _) = Table::parse(&format!("{HEADER}\nname={KK_RULE};enabled=false"));
+        assert_eq!(intel.overlay(over), [KK_RULE.to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_game_rule_or_disabling_by_name_turns_the_kosmickrisp_features_off() -> TestResult {
+        let arm = Host::Aarch64;
+        // For one game: an empty value, which removes the variable, folds
+        // after the default.
+        let table = with_overrides(arm, "name=old;exe=old.exe;env=MESA_KK_EXPERIMENTAL=");
+        let old = table.resolve("Old.exe", &VersionInfo::default());
+        let removed = ("MESA_KK_EXPERIMENTAL".to_string(), String::new());
+        assert_eq!(old.env, wildcard_env_and(arm, &[removed]));
+        let block: Vec<u16> = "MESA_KK_EXPERIMENTAL=dgc,xfb,sparse\0OTHER=x\0\0"
+            .encode_utf16()
+            .collect();
+        let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
+        assert_eq!(
+            String::from_utf16_lossy(&merged),
+            "OTHER=x\0FEX_X87REDUCEDPRECISION=1\0\0"
+        );
+        // Another process keeps it.
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.env, wildcard_env(arm));
+        // For every process: drop the rule. The FEX entry stays.
+        let table = with_overrides(arm, &format!("name={KK_RULE};enabled=false"));
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.env, fex_env());
+        assert_eq!(game.matched, wildcards_without(arm, KK_RULE));
+        Ok(())
+    }
+
+    #[test]
+    fn the_arm64_table_leaves_vulkan_1_alone() {
+        // The arm64 bundle ships Wine's Vulkan, so no built-in rule there
+        // disables the loader, and naming the x86_64 rule finds nothing.
+        let arm = Host::Aarch64;
+        let table = table_for(arm);
+        assert!(
+            !table
+                .rules
+                .iter()
+                .any(|r| r.name == "no-vulkan"
+                    || r.dll_overrides.iter().any(|o| o.contains("vulkan")))
+        );
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.dll_overrides, vec!["mscoree,mshtml=".to_string()]);
+        let mut table = table_for(arm);
+        let (over, _) = Table::parse(&format!("{HEADER}\nname=no-vulkan;enabled=false"));
+        assert_eq!(table.overlay(over), ["no-vulkan".to_string()]);
+        assert_eq!(table, table_for(arm));
     }
 
     #[test]
@@ -422,17 +581,19 @@ mod tests {
     fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
         // Every rule that matches a launcher or a game must leave the
         // environment alone, or the games started from it would inherit the
-        // entries. The FEX rule is the one exception: it is meant for every
-        // process, so a child that inherits it gets what it would get anyway.
+        // entries. The arm64 rules for FEX and KosmicKrisp are the
+        // exceptions: they are meant for every process, so a child that
+        // inherits them gets what it would get anyway.
         let hud_off = vec![("MTL_HUD_ENABLED".to_string(), "0".to_string())];
         let helpers = ["steam-web-helper", "rockstar-social-club-ui"];
         for host in HOSTS {
             let table = table_for(host);
+            let env_rules = wildcard_env_rules(host);
             for rule in &table.rules {
                 if helpers.contains(&rule.name.as_str()) {
                     assert_eq!(rule.env, hud_off, "{}", rule.name);
-                } else if rule.name == x87_rule(host) {
-                    assert_eq!(rule.env, wildcard_env(host), "{}", rule.name);
+                } else if let Some((_, env)) = env_rules.iter().find(|(n, _)| *n == rule.name) {
+                    assert_eq!(rule.env, *env, "{}", rule.name);
                 } else {
                     assert_eq!(rule.env, [], "{}", rule.name);
                 }
@@ -440,7 +601,7 @@ mod tests {
             let hud_off = wildcard_env_and(host, &hud_off);
             assert_eq!(rule(&table, "rockstar-launcher")?.env, []);
             // The resolved environment of a helper is that entry after the
-            // wildcard one.
+            // wildcard ones.
             let steam = VersionInfo {
                 company: "Valve Corporation".into(),
                 product: "Steam Client WebHelper".into(),
@@ -496,10 +657,7 @@ mod tests {
         for host in HOSTS {
             let resolution = table_for(host).resolve("game.exe", &VersionInfo::default());
             assert_eq!(resolution.matched, wildcards(host));
-            assert_eq!(
-                resolution.dll_overrides,
-                vec!["vulkan-1=".to_string(), "mscoree,mshtml=".to_string()]
-            );
+            assert_eq!(resolution.dll_overrides, wildcard_overrides(host));
             assert_eq!(resolution.dpi_aware, Some(true));
             assert_eq!(resolution.large_address_aware, Some(true));
             assert_eq!(resolution.x87_sidecar, x87_default(host), "{host:?}");
@@ -596,11 +754,7 @@ mod tests {
             let resolution = table.resolve("game.exe", &VersionInfo::default());
             assert_eq!(
                 resolution.dll_overrides,
-                vec![
-                    "vulkan-1=".to_string(),
-                    "mscoree,mshtml=".to_string(),
-                    "mscoree=b".to_string()
-                ]
+                wildcard_overrides_and(host, &["mscoree=b"])
             );
             assert_eq!(resolution.matched, wildcards_and(host, "global"));
             assert_eq!(table.duplicate_matchers(), []);
@@ -611,11 +765,16 @@ mod tests {
     fn disabling_no_mono_gecko_drops_only_its_override() {
         for host in HOSTS {
             let table = with_overrides(host, "name=no-mono-gecko;enabled=false");
+            let expected: Vec<String> = wildcard_overrides(host)
+                .into_iter()
+                .filter(|o| o != "mscoree,mshtml=")
+                .collect();
             assert_eq!(
                 table
                     .resolve("game.exe", &VersionInfo::default())
                     .dll_overrides,
-                vec!["vulkan-1=".to_string()]
+                expected,
+                "{host:?}"
             );
         }
     }
@@ -624,40 +783,39 @@ mod tests {
     fn a_game_rule_re_enables_vulkan_after_the_builtin_disables_it() {
         // ntdll lets the last override for a module win, so the game's entry
         // has to come after the built-in one. That holds wherever the game's
-        // rule is declared, because the `*` rules are folded first.
-        for host in HOSTS {
-            let table = with_overrides(host, "name=my-game;exe=game.exe;dll_overrides=vulkan-1=n");
-            let resolution = table.resolve("Game.exe", &VersionInfo::default());
-            assert_eq!(
-                resolution.dll_overrides,
-                vec![
-                    "vulkan-1=".to_string(),
-                    "mscoree,mshtml=".to_string(),
-                    "vulkan-1=n".to_string()
-                ]
-            );
-            // Another process still has it disabled.
-            assert_eq!(
-                table
-                    .resolve("other.exe", &VersionInfo::default())
-                    .dll_overrides,
-                vec!["vulkan-1=".to_string(), "mscoree,mshtml=".to_string()]
-            );
-        }
+        // rule is declared, because the `*` rules are folded first. Only the
+        // x86_64 table disables Vulkan.
+        let intel = Host::X86_64;
+        let table = with_overrides(intel, "name=my-game;exe=game.exe;dll_overrides=vulkan-1=n");
+        let resolution = table.resolve("Game.exe", &VersionInfo::default());
+        assert_eq!(
+            resolution.dll_overrides,
+            vec![
+                "vulkan-1=".to_string(),
+                "mscoree,mshtml=".to_string(),
+                "vulkan-1=n".to_string()
+            ]
+        );
+        // Another process still has it disabled.
+        assert_eq!(
+            table
+                .resolve("other.exe", &VersionInfo::default())
+                .dll_overrides,
+            vec!["vulkan-1=".to_string(), "mscoree,mshtml=".to_string()]
+        );
     }
 
     #[test]
     fn disabling_no_vulkan_drops_the_override() {
-        for host in HOSTS {
-            let table = with_overrides(host, "name=no-vulkan;enabled=false");
-            let resolution = table.resolve("game.exe", &VersionInfo::default());
-            assert_eq!(resolution.matched, wildcards_without(host, "no-vulkan"));
-            // The Mono and Gecko prompts stay off.
-            assert_eq!(
-                resolution.dll_overrides,
-                vec!["mscoree,mshtml=".to_string()]
-            );
-        }
+        let intel = Host::X86_64;
+        let table = with_overrides(intel, "name=no-vulkan;enabled=false");
+        let resolution = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(resolution.matched, wildcards_without(intel, "no-vulkan"));
+        // The Mono and Gecko prompts stay off.
+        assert_eq!(
+            resolution.dll_overrides,
+            vec!["mscoree,mshtml=".to_string()]
+        );
     }
 
     #[test]

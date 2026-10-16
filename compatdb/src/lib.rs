@@ -946,19 +946,19 @@ mod tests {
     #[test]
     fn the_builtin_rules_set_only_the_wildcard_env_for_a_game() {
         // Beyond the CEF helpers, which builtin.rs checks, a game gets env
-        // from the built-in rules only in the arm64 Wine: the FEX entry every
-        // process gets. The exported function reads WINE_COMPATDB, which a
-        // developer's shell may set; the answer is only predictable without
-        // it.
+        // from the built-in rules only in the arm64 Wine: the FEX and
+        // KosmicKrisp entries every process gets. The exported function reads
+        // WINE_COMPATDB, which a developer's shell may set; the answer is only
+        // predictable without it.
         if std::env::var_os(ENV_VAR).is_some() {
             return;
         }
         let expected: &[u8] = match Host::current() {
             Host::X86_64 => b"",
-            Host::Aarch64 => b"FEX_X87REDUCEDPRECISION=1\0\0",
+            Host::Aarch64 => b"FEX_X87REDUCEDPRECISION=1\0MESA_KK_EXPERIMENTAL=dgc,xfb,sparse\0\0",
         };
         let path = c"/nonexistent/games/game.exe";
-        let mut buf = [0xAA_u8; 64];
+        let mut buf = [0xAA_u8; 128];
         // SAFETY: a valid NUL-terminated string and a buffer of its length.
         let ret = unsafe { compatdb_query_env(path.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
         assert_eq!(usize::try_from(ret).ok(), Some(expected.len()));
