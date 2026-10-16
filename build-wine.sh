@@ -57,11 +57,26 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 claim_tree "$BUILD_DIR" wine "$CLEAN"
 
+# build-fex.sh, build-mesa.sh and build-dxmt.sh read the same profile and
+# take --clean the same way.
+SUB_FLAGS=()
+if [ "$CLEAN" -eq 1 ]; then
+    SUB_FLAGS=(--clean)
+fi
+
+# The Vulkan loader and driver, built first: configure links against the
+# loader build-mesa.sh stages (the profile's LDFLAGS name its directory
+# first), and records its soname.
+if [ "$WITH_VULKAN" -eq 1 ]; then
+    "$SCRIPT_DIR/build-mesa.sh" "${SUB_FLAGS[@]}"
+fi
+
 # Every optional dependency is switched off unless it is switched back on
 # here, so a package missing from the dependency prefix fails configure
 # instead of silently changing the feature set. A profile adds the options
 # only its Wine tree knows through CONFIGURE_FEATURES_EXTRA; together they
 # cover every --with-*/--without-* package of `configure --help`, except:
+# vulkan, which follows the profile's WITH_VULKAN (VULKAN_OPTION below);
 # opengl, which stays at configure's default (never --with-opengl: on macOS
 # it starts an EGL probe that always fails, and the Mac driver links
 # -framework OpenGL on its own); pthread, which is required; gettextpo,
@@ -98,7 +113,6 @@ CONFIGURE_ALLOWLIST=(
     --without-udev
     --without-usb
     --without-v4l2
-    --without-vulkan
     --without-wayland
     --without-x
     --without-xcomposite
@@ -113,6 +127,13 @@ CONFIGURE_ALLOWLIST=(
     --without-xshm
     --without-xxf86vm
 )
+# Only for this configure: the x86_64 link-library tree below shares
+# CONFIGURE_FEATURES_EXTRA and keeps Vulkan off.
+if [ "$WITH_VULKAN" -eq 1 ]; then
+    VULKAN_OPTION=--with-vulkan
+else
+    VULKAN_OPTION=--without-vulkan
+fi
 
 # Configure (skip if already configured unless --clean was passed)
 cd "$BUILD_DIR"
@@ -121,6 +142,7 @@ if [ "$CLEAN" -eq 1 ] || [ ! -f "$BUILD_DIR/Makefile" ]; then
     "${CONFIGURE_WRAPPER[@]}" "$WINE_SRC/configure" \
         --enable-archs="$WINE_ARCHS" \
         "${CONFIGURE_ALLOWLIST[@]}" \
+        "$VULKAN_OPTION" \
         "${CONFIGURE_FEATURES_EXTRA[@]}" \
         "${CONFIGURE_TOOLCHAIN[@]}"
 else
@@ -138,7 +160,12 @@ fi
 # --without-* for; when it does not find one it writes a placeholder define
 # (FALLBACK_SONAMES), which stays as it is. Any other define means configure
 # found a library the allowlist does not account for, and stops the build.
+# The Vulkan loader is one of them where the profile has Vulkan; the bundle
+# step takes it from MESA_DIST.
 BUNDLED_SONAMES="SONAME_LIBFREETYPE SONAME_LIBGNUTLS SONAME_LIBSDL2"
+if [ "$WITH_VULKAN" -eq 1 ]; then
+    BUNDLED_SONAMES="$BUNDLED_SONAMES SONAME_LIBVULKAN"
+fi
 FALLBACK_SONAMES="SONAME_LIBODBC=libodbc.dylib"
 CONFIG_H="$BUILD_DIR/include/config.h"
 soname_value() { # <define>: its string value in config.h, or nothing
@@ -148,7 +175,8 @@ check_soname_defines() {
     local def value
     for def in $BUNDLED_SONAMES; do
         if [ -z "$(soname_value "$def")" ]; then
-            echo "Error: config.h has no $def; configure did not find the library"
+            echo "Error: config.h has no $def; configure did not find the library, or the"
+            echo "build tree was configured before it was enabled (run with --clean)"
             exit 1
         fi
     done
@@ -312,12 +340,7 @@ fi
 
 # FEX, the x86 emulator of the arm64 Wine, and DXMT, whose unix half links
 # against this Wine's winemac.so and ntdll.so and whose PE half links against
-# the SDK, so both are built after them. Both scripts read the same profile
-# and take --clean the same way.
-SUB_FLAGS=()
-if [ "$CLEAN" -eq 1 ]; then
-    SUB_FLAGS=(--clean)
-fi
+# the SDK, so both are built after them.
 if [ "$WITH_FEX" -eq 1 ]; then
     "$SCRIPT_DIR/build-fex.sh" "${SUB_FLAGS[@]}"
 fi
