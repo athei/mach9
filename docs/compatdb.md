@@ -142,7 +142,7 @@ executable.
 | Keep the x87sidecar away from one game | `name=my-game;exe=Game.exe;x87_sidecar=false` |
 | Keep the x87sidecar away from every process | `name=no-x87;exe=*;x87_sidecar=false`, or set `ROSETTA_X87_PATH` to an empty value |
 | Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` |
-| Let one game turn no-execute off | `name=my-game;exe=Game.exe;env=WINE_DISABLE_NX_COMPAT=0` |
+| Let one game turn no-execute off (x86_64 Wine) | `name=my-game;exe=Game.exe;env=WINE_DISABLE_NX_COMPAT=0` |
 | Give one game FEX's full x87 precision (arm64 Wine) | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision (arm64 Wine) | `name=fex-x87-reduced-precision;enabled=false` |
 

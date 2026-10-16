@@ -18,6 +18,11 @@ short:
   only that tree has (`CONFIGURE_FEATURES_EXTRA`) and the configure results
   the floor overrides (`FLOOR_NEWER_FUNCS`,
   [macOS floors](maintenance.md#macos-floors)).
+- No-execute follows upstream Wine: the series does not carry the x86_64
+  build's no-execute change, and `WINE_DISABLE_NX_COMPAT` has no effect
+  ([defaults](../README.md#defaults-that-differ-from-wine)). That change
+  avoids a stall in Rosetta's fault handling; with no-execute off, FEX
+  showed no such stall.
 - FEX is upstream FEX with our own commits on top, from
   [athei/FEX](https://github.com/athei/FEX) at the ref
   [`fex-src.ref`](../fex-src.ref) names.
