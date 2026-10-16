@@ -85,6 +85,10 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
   so a D3D10.1 program needs `wined3d` (as the Rockstar launcher rule does).
   D3D8 and DirectDraw stay on wined3d. Which modules each tree holds is in
   Step 4 of [`bundle-wine.sh`](bundle-wine.sh).
+- wined3d draws through OpenGL. In the [arm64 build](docs/arm64.md#vulkan)
+  the compatdb setting `wined3d` can put it on Vulkan for one game; it
+  applies to every wined3d user in the process
+  ([wined3d on Vulkan](docs/compatdb.md#wined3d-on-vulkan)).
 
 ### Defaults that differ from Wine
 
@@ -135,7 +139,7 @@ The arm64 build needs a different set: see
 | `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the profile's bundle in the [layout](#layout). Either way it asks before it deletes an existing one, unless `--yes` |
 | `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking, for an unattended run. A directory that is not empty and has no `bin/wine` is still refused |
 | `bundle-wine.sh` | `--runtime-only` | No development files and no test binaries; the flavor to put into an application |
-| `bundle-wine.sh` | `--compatdb-only` | Rebuilds `compatdb.so` into the existing bundle only (the profile's, or `<dir>/wine` with `--dest`); no prompt, no `make install`, no Wine build needed, works on an unpacked release tarball; `--runtime-only` is ignored |
+| `bundle-wine.sh` | `--compatdb-only` | Rebuilds `compatdb.so` into the existing bundle only (the profile's, or `<dir>/wine` with `--dest`); no prompt, no `make install`, no Wine build needed, works on an unpacked release tarball; `--runtime-only` is ignored. With `--arm64` it refuses a bundle without Vulkan ([docs/arm64.md](docs/arm64.md#what-the-bundle-step-checks)) |
 | `bundle-wine.sh` | `--strict-floor` | A Mach-O that needs a newer macOS than its floor is an error instead of a warning |
 | `bundle-wine.sh` | `--symbols` | Also keeps the PE files as they were before their symbols were stripped, in `wine-symbols` next to the bundle; the release workflow passes it |
 

@@ -675,13 +675,14 @@ smoke_test() {
 # smoke_test_arm64: run the bundled arm64 wine through the signed loader and
 # check that native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
-# hang rather than an error. The caller's WINE_COMPATDB and every WINEMSYNC*,
-# FEX_*, VK_* and MESA_* variable are dropped so that the built-in rules and
-# the defaults of Wine, FEX, the Vulkan loader and KosmicKrisp decide.
+# hang rather than an error. The caller's WINE_COMPATDB and WINE_D3D_CONFIG
+# and every WINEMSYNC*, FEX_*, VK_*, MESA_*, MTL_* and METAL_* variable are
+# dropped so that the built-in rules and the defaults of Wine, FEX, the
+# Vulkan loader, KosmicKrisp and Metal decide.
 smoke_test_arm64() {
     local version log arch cc exe marker markers sidecar var
-    local wine_env=(env -u WINE_COMPATDB)
-    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|MESA_)'); do
+    local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG)
+    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|MESA_|MTL_|METAL_)'); do
         wine_env+=(-u "$var")
     done
     wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all)
@@ -740,6 +741,14 @@ smoke_test_arm64() {
         echo "  The wineserver runs msync."
     fi
 
+    # A program that crashes would otherwise wait in winedbg's crash dialog
+    # until the time limit, and look like a hang. Without the dialog winedbg
+    # writes the backtrace to the log and the program exits at once.
+    log="$TMP_DIR/crash-dialog.log"
+    run_limited 120 "$log" "${wine_env[@]}" "$WINE_DIR/bin/wine" reg add \
+        'HKCU\Software\Wine\WineDbg' /v ShowCrashDialog /t REG_DWORD /d 0 /f
+    smoke_check "turning winedbg's crash dialog off (reg add)" 120 "$log"
+
     time_mark "smoke: i386 cmd.exe under FEX"
     echo "  Starting the i386 cmd.exe under FEX..."
     log="$TMP_DIR/wow64.log"
@@ -789,18 +798,119 @@ smoke_test_arm64() {
     echo "  Loading each Direct3D tree's modules..."
     check_tree_loads x86_64 "${wine_env[@]}"
     check_tree_loads i686 "${wine_env[@]}"
+    # --compatdb-only has already refused a bundle without Vulkan
+    # (check_vulkan_present), so every bundle that gets here has it.
     if [ "$WITH_VULKAN" -eq 1 ]; then
-        # A bundle from before Vulkan, which --compatdb-only may meet, has
-        # no driver to find.
-        if [ "$COMPATDB_ONLY" -eq 1 ] \
-            && [ ! -e "$WINE_DIR/share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json" ]; then
-            echo "  Skipping the Vulkan check: this bundle has no Vulkan driver."
-        else
-            check_vulkan_runs "${wine_env[@]}"
-        fi
+        check_vulkan_runs "${wine_env[@]}"
+        check_wined3d_device "${wine_env[@]}"
     fi
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run; the x86 ones load their Direct3D trees."
+}
+
+# check_vulkan_present: for a profile with Vulkan, exit unless the bundle
+# has the Vulkan loader, KosmicKrisp and its manifest, naming each one that
+# is missing. Such a profile's compatdb.so has no no-vulkan rule, so in a
+# bundle without Vulkan a game's own vulkan-1.dll would load and find no
+# driver, and the smoke test's Vulkan checks need it anyway. --compatdb-only
+# runs it before it builds anything, since it may meet a bundle from before
+# Vulkan; a full bundle checks the same files in Step 5.
+check_vulkan_present() {
+    local f missing=0
+    for f in share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json \
+             lib/external/libvulkan.1.dylib lib/external/libvulkan_kosmickrisp.dylib; do
+        if [ ! -e "$WINE_DIR/$f" ]; then
+            echo "Error: $WINE_DIR/$f is missing"
+            missing=1
+        fi
+    done
+    if [ "$missing" -ne 0 ]; then
+        echo "This bundle has no Vulkan. This profile's compatdb.so does not disable a"
+        echo "game's own vulkan-1.dll, which would find no driver, and the smoke test"
+        echo "needs Vulkan. Bundle the whole build instead of using --compatdb-only."
+        exit 1
+    fi
+}
+
+# check_wined3d_device <env-command>...: build smoke/wined3d.c for x86_64 and
+# i686 and run it twice in the booted throwaway prefix, with the winediag
+# channel on, on which wined3d reports a renderer it was told to use. The
+# i686 program creates a Direct3D 8 device, which always goes through
+# wined3d. Wine builds no 64-bit d3d8.dll ("configure: Disable d3d8.dll on
+# 64-bit targets."), so the x86_64 program is built with SMOKE_D3D9 and
+# creates a Direct3D 9 device instead, with a WINE_COMPATDB rule giving it
+# the wined3d d3d9 tree in both runs, which compatdb.so must report in each,
+# or the run would not go through wined3d. In the first run, where only that
+# rule is added to the built-in ones, each program must create a device and
+# wined3d must not report the Vulkan renderer: wined3d on Vulkan is opt-in,
+# and <env-command> drops the caller's WINE_D3D_CONFIG. In the second the
+# program's rule also sets wined3d=vulkan, as a rule for a game does, and
+# wined3d must report the Vulkan renderer and the program create its device
+# on it. wined3d does not fall back to OpenGL when its Vulkan adapter fails,
+# so the second run is what shows the opt-in works.
+check_wined3d_device() {
+    local arch exe log want header api flags rule tree
+    header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$SCRIPT_DIR/compatdb/table/src/lib.rs")
+    if [ -z "$header" ]; then
+        echo "Error: no HEADER found in $SCRIPT_DIR/compatdb/table/src/lib.rs; the"
+        echo "WINE_COMPATDB rules of the wined3d runs need it"
+        smoke_stop
+        exit 1
+    fi
+    for arch in x86_64 i686; do
+        exe="$TMP_DIR/wined3d-$arch.exe"
+        rule="name=smoke;exe=$(basename "$exe")"
+        # The compatdb line each run must show for the tree the program's
+        # rule asks for; none for d3d8, which no tree decides.
+        if [ "$arch" = x86_64 ]; then
+            api=d3d9
+            flags=(-DSMOKE_D3D9)
+            rule+=";d3d9=wined3d"
+            tree="compatdb: .*d3d9 = wined3d (from"
+        else
+            api=d3d8
+            flags=()
+            tree=""
+        fi
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 "${flags[@]}" -o "$exe" "$SCRIPT_DIR/smoke/wined3d.c"
+        time_mark "smoke: wined3d.exe $arch ($api)"
+        echo "  Running wined3d.exe for $arch ($api) with the default renderer..."
+        log="$TMP_DIR/wined3d-$arch.log"
+        run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag \
+            WINE_COMPATDB="$header"$'\n'"$rule" "$WINE_DIR/bin/wine" "$exe"
+        smoke_check "wined3d.exe for $arch ($api)" 120 "$log"
+        if ! grep -q "wine-build smoke test: $arch $api device on " "$log" \
+            || grep -q "err:winediag:.*Using the Vulkan renderer\." "$log"; then
+            echo "Error: wined3d.exe for $arch did not create a $api device on wined3d's default renderer"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
+        if [ -n "$tree" ] && ! grep -q "$tree" "$log"; then
+            echo "Error: compatdb.so did not give wined3d.exe for $arch the wined3d d3d9 tree"
+            echo "its rule asks for (no '$tree' line), so the run proves nothing about wined3d"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
+        grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+        time_mark "smoke: wined3d.exe $arch ($api) on Vulkan"
+        echo "  Running wined3d.exe for $arch ($api) with wined3d on Vulkan..."
+        log="$TMP_DIR/wined3d-vulkan-$arch.log"
+        run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag \
+            WINE_COMPATDB="$header"$'\n'"$rule;wined3d=vulkan" "$WINE_DIR/bin/wine" "$exe"
+        smoke_check "wined3d.exe for $arch ($api) with wined3d on Vulkan" 120 "$log"
+        for want in "wine-build smoke test: $arch $api device on " \
+                    "err:winediag:.*Using the Vulkan renderer\." ${tree:+"$tree"}; do
+            if ! grep -q "$want" "$log"; then
+                echo "Error: wined3d.exe for $arch ($api) with wined3d on Vulkan did not print '$want'"
+                cat "$log"
+                smoke_stop
+                exit 1
+            fi
+        done
+        grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+    done
 }
 
 # check_vulkan_runs <env-command>...: build smoke/vulkan.c for x86_64 and
@@ -1376,6 +1486,9 @@ if [ "$COMPATDB_ONLY" -eq 1 ]; then
         echo "Error: no bundle at $WINE_DIR (--compatdb-only updates an existing"
         echo "bundle; build one without it first, or unpack a release tarball there)"
         exit 1
+    fi
+    if [ "$WITH_VULKAN" -eq 1 ]; then
+        check_vulkan_present
     fi
 
     echo "==> Step 1: Build compatdb.so"

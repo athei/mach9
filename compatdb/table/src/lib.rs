@@ -2,8 +2,9 @@
 //!
 //! A [`Rule`] says which processes it matches and which settings it applies to
 //! them: the Direct3D implementations to load (one for D3D9, one for the DXGI
-//! family), DLL load-order overrides, the DPI awareness, large address
-//! awareness, the x87sidecar, command-line switches and environment entries.
+//! family) and the renderer of wined3d, DLL load-order overrides, the DPI
+//! awareness, large address awareness, the x87sidecar, command-line switches
+//! and environment entries.
 //!
 //! Shared by `compatdb.so`, the unix library wine's ntdll loads into every
 //! process (it holds the built-in rules, parses [`ENV_VAR`], overlays the
@@ -30,12 +31,20 @@ use std::fmt::Write as _;
 /// tree to the library.
 pub const ENV_VAR: &str = "WINE_COMPATDB";
 
-/// Serialized-table header.
+/// Serialized-table header, the one [`Table::to_env_value`] writes.
 ///
-/// A table carrying a different version is ignored wholesale, which is what
-/// makes a format change safe: a long-lived process started before the change
-/// still holds the old value and simply drops it.
-pub const HEADER: &str = "v=5";
+/// A table carrying a version the parser does not know is ignored wholesale,
+/// which is what makes a format change safe: a library older than the change
+/// drops a table written with the new header rather than half understanding
+/// it.
+pub const HEADER: &str = "v=6";
+
+/// The header before [`HEADER`], which [`Table::parse`] still accepts.
+///
+/// The format only gained a key since (`wined3d`), so a table with this
+/// header means the same in the current format, and a launcher that still
+/// writes it keeps working with this library.
+pub const PREVIOUS_HEADER: &str = "v=5";
 
 /// The parts of a PE version resource the database can match on. Vendor-set at
 /// link time, so stable across install location and patches.
@@ -346,6 +355,97 @@ impl D3d9 {
     }
 }
 
+/// Which renderer wined3d, Wine's own Direct3D, draws with in a process.
+///
+/// One `wined3d.dll` serves every wined3d user in a process (the wined3d trees
+/// of [`Dxgi`] and [`D3d9`], D3D8 and `DirectDraw`), and it reads its settings
+/// once, so this is a setting of the process, not of a family. It chooses no
+/// tree: [`Dxgi`] and [`D3d9`] still decide whether wined3d is used at all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Wined3d {
+    /// OpenGL, wined3d's own default.
+    Gl,
+    /// Vulkan. Only the arm64 Wine has Vulkan; the `x86_64` one is built
+    /// without it (see [`Wined3d::effective`]).
+    Vulkan,
+}
+
+impl Wined3d {
+    /// The environment variable wined3d reads its settings from, a list of
+    /// `name=value` options.
+    pub const CONFIG_VAR: &'static str = "WINE_D3D_CONFIG";
+
+    /// Parse a wire/TOML value, case-insensitively.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "gl" => Some(Self::Gl),
+            "vulkan" => Some(Self::Vulkan),
+            _ => None,
+        }
+    }
+
+    /// The wire/TOML spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Gl => "gl",
+            Self::Vulkan => "vulkan",
+        }
+    }
+
+    /// Whether the renderer exists in the Wine built for `host`: OpenGL
+    /// everywhere, Vulkan only in the arm64 Wine.
+    #[must_use]
+    pub const fn available_for(self, host: Host) -> bool {
+        match self {
+            Self::Gl => true,
+            Self::Vulkan => matches!(host, Host::Aarch64),
+        }
+    }
+
+    /// The renderer a process actually gets: the requested one, or OpenGL
+    /// when nothing was requested or the requested one does not exist for
+    /// `host`.
+    #[must_use]
+    pub const fn effective(requested: Option<Self>, host: Host) -> Self {
+        match requested {
+            Some(want) if want.available_for(host) => want,
+            _ => Self::Gl,
+        }
+    }
+
+    /// The `WINE_D3D_CONFIG` value for this renderer on top of `config`, the
+    /// value the rules' own `env` entries leave the variable at (`None` when
+    /// they do not set it, or remove it). The renderer comes first and the
+    /// other options of `config` are kept, while a `renderer` option there is
+    /// dropped: this setting decides the renderer. OpenGL is set as
+    /// explicitly as Vulkan, so a process that asks for it does not inherit
+    /// Vulkan from the process that started it.
+    #[must_use]
+    pub fn config(self, config: Option<&str>) -> String {
+        let mut options = vec![format!("renderer={}", self.as_str())];
+        options.extend(
+            config
+                .unwrap_or("")
+                .split([',', ';'])
+                .filter(|o| !o.is_empty())
+                .filter(|o| o.split('=').next() != Some("renderer"))
+                .map(String::from),
+        );
+        options.join(",")
+    }
+
+    /// The `renderer` option of a `WINE_D3D_CONFIG` value, the first one as
+    /// wined3d reads it, or `None` when the value has none.
+    #[must_use]
+    pub fn renderer_in(config: &str) -> Option<&str> {
+        config
+            .split([',', ';'])
+            .find_map(|o| o.strip_prefix("renderer="))
+    }
+}
+
 /// The architecture Wine itself is built for.
 ///
 /// That is the arch of the unix side: `ntdll.so` and this library. The
@@ -448,6 +548,8 @@ pub struct Rule {
     pub dxgi: Option<Dxgi>,
     /// The D3D9 implementation to load.
     pub d3d9: Option<D3d9>,
+    /// The renderer of wined3d, for every wined3d user in the process.
+    pub wined3d: Option<Wined3d>,
     /// Whether the process is DPI-aware (system-aware) or unaware. Unset
     /// leaves the decision to a less specific rule, and with none to wine
     /// (the registry and the manifest).
@@ -494,6 +596,7 @@ impl Default for Rule {
             original_filename: None,
             dxgi: None,
             d3d9: None,
+            wined3d: None,
             dpi_aware: None,
             large_address_aware: None,
             x87_sidecar: None,
@@ -577,6 +680,9 @@ impl Rule {
         if over.d3d9.is_some() {
             self.d3d9 = over.d3d9;
         }
+        if over.wined3d.is_some() {
+            self.wined3d = over.wined3d;
+        }
         if over.dpi_aware.is_some() {
             self.dpi_aware = over.dpi_aware;
         }
@@ -612,6 +718,7 @@ pub struct Table {
 pub struct Resolution {
     pub dxgi: Option<Dxgi>,
     pub d3d9: Option<D3d9>,
+    pub wined3d: Option<Wined3d>,
     pub dpi_aware: Option<bool>,
     pub large_address_aware: Option<bool>,
     pub x87_sidecar: Option<bool>,
@@ -628,12 +735,42 @@ impl Resolution {
     pub const fn is_empty(&self) -> bool {
         self.dxgi.is_none()
             && self.d3d9.is_none()
+            && self.wined3d.is_none()
             && self.dpi_aware.is_none()
             && self.large_address_aware.is_none()
             && self.x87_sidecar.is_none()
             && self.dll_overrides.is_empty()
             && self.arguments.is_empty()
             && self.env.is_empty()
+    }
+
+    /// The value the rules' own `env` entries leave `WINE_D3D_CONFIG` at:
+    /// the last entry for it, `Some("")` when that one removes it, and `None`
+    /// when no rule sets it.
+    #[must_use]
+    pub fn d3d_config(&self) -> Option<&str> {
+        self.env
+            .iter()
+            .rev()
+            .find(|(name, _)| name.eq_ignore_ascii_case(Wined3d::CONFIG_VAR))
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// When a rule sets [`Resolution::wined3d`], the renderer the process
+    /// gets in the Wine built for `host` (see [`Wined3d::effective`]: Vulkan
+    /// becomes OpenGL where there is none), with the `WINE_D3D_CONFIG` that
+    /// names it folded into [`Resolution::env`]. That entry goes after the
+    /// rules' own entries, so it is the value the variable ends up with when
+    /// the env is applied, and it keeps the other options a rule's
+    /// `WINE_D3D_CONFIG` set (see [`Wined3d::config`]). `None`, with nothing
+    /// changed, when no rule sets it: then the process keeps whatever
+    /// `WINE_D3D_CONFIG` it has, from a rule's `env` or inherited. Call it
+    /// once, after [`Table::resolve`].
+    pub fn apply_wined3d(&mut self, host: Host) -> Option<Wined3d> {
+        let wined3d = Wined3d::effective(Some(self.wined3d?), host);
+        let value = wined3d.config(self.d3d_config().filter(|value| !value.is_empty()));
+        self.env.push((Wined3d::CONFIG_VAR.to_string(), value));
+        Some(wined3d)
     }
 }
 
@@ -671,6 +808,9 @@ impl Table {
             }
             if let Some(d3d9) = rule.d3d9 {
                 r.d3d9 = Some(d3d9);
+            }
+            if let Some(wined3d) = rule.wined3d {
+                r.wined3d = Some(wined3d);
             }
             if let Some(aware) = rule.dpi_aware {
                 r.dpi_aware = Some(aware);
@@ -762,15 +902,15 @@ impl Table {
 
     /// Parse the value of [`ENV_VAR`]. Lenient: a malformed record is skipped
     /// with a diagnostic rather than failing the whole table, since the `.so`
-    /// must never abort a process. A header line other than [`HEADER`] yields
-    /// an empty table and a single diagnostic. Returns the table and the
-    /// diagnostics (empty when clean).
+    /// must never abort a process. A header line other than [`HEADER`] or
+    /// [`PREVIOUS_HEADER`] yields an empty table and a single diagnostic.
+    /// Returns the table and the diagnostics (empty when clean).
     #[must_use]
     pub fn parse(text: &str) -> (Self, Vec<String>) {
         let mut lines = text.lines();
         let mut diagnostics = Vec::new();
         match lines.next() {
-            Some(HEADER) => {}
+            Some(HEADER | PREVIOUS_HEADER) => {}
             other => {
                 diagnostics.push(format!(
                     "unrecognized header {:?}, ignoring the whole table",
@@ -822,6 +962,22 @@ pub fn append_cmdline(cmdline: &[u16], appends: &[String]) -> Option<Vec<u16>> {
         changed = true;
     }
     changed.then_some(cur)
+}
+
+/// The value of the variable `name` in a `NAME=value\0...\0\0` block, the
+/// first entry for it, matched case-insensitively and decoded lossily; `None`
+/// when the block has none.
+#[must_use]
+pub fn env_value(block: &[u16], name: &str) -> Option<String> {
+    let seg = split_env(block)
+        .into_iter()
+        .find(|seg| env_name_matches(seg, name))?;
+    let value = seg
+        .iter()
+        .position(|&u| u == u16::from(b'='))
+        .and_then(|i| seg.get(i.saturating_add(1)..))
+        .unwrap_or(&[]);
+    Some(String::from_utf16_lossy(value))
 }
 
 /// Merge environment entries into a `NAME=value\0...\0\0` block.
@@ -900,6 +1056,9 @@ fn rule_to_record(rule: &Rule) -> String {
     if let Some(d3d9) = rule.d3d9 {
         fields.push(field("d3d9", d3d9.as_str()));
     }
+    if let Some(wined3d) = rule.wined3d {
+        fields.push(field("wined3d", wined3d.as_str()));
+    }
     for (key, value) in [
         ("dpi_aware", rule.dpi_aware),
         ("large_address_aware", rule.large_address_aware),
@@ -953,6 +1112,13 @@ fn record_to_rule(record: &str) -> Result<Rule, String> {
                 match D3d9::parse(&decoded) {
                     Some(d3d9) => rule.d3d9 = Some(d3d9),
                     None => return Err(format!("unknown d3d9 value {decoded:?}")),
+                }
+            }
+            "wined3d" => {
+                let decoded = decode(value);
+                match Wined3d::parse(&decoded) {
+                    Some(wined3d) => rule.wined3d = Some(wined3d),
+                    None => return Err(format!("unknown wined3d value {decoded:?}")),
                 }
             }
             "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
@@ -1215,15 +1381,33 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_the_previous_header() {
-        // A process started before the format change still holds a `v=4`
-        // value; it must be dropped whole rather than half understood.
+    fn parse_rejects_an_older_header_than_the_previous_one() {
+        // A table older than the previous format must be dropped whole
+        // rather than half understood.
         let (table, diagnostics) = Table::parse("v=4\nname=x;exe=x.exe");
         assert_eq!(table.rules, []);
         assert_eq!(diagnostics.len(), 1);
-        let (table, diagnostics) = Table::parse("v=5\nname=x;exe=x.exe");
+        let (table, diagnostics) = Table::parse(&format!("{HEADER}\nname=x;exe=x.exe"));
         assert_eq!(table.rules.len(), 1);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn a_table_with_the_previous_header_parses_as_with_the_current_one() {
+        // What a launcher that still writes the previous header sends: the
+        // same records mean the same under either header.
+        let records = "name=rockstar-launcher;dxgi=dxmt\n\
+                       name=wow;exe=WoW.exe;company=Blizzard;d3d9=wined3d;env=A=1\n\
+                       name=dpi-aware;enabled=false";
+        let (previous, d1) = Table::parse(&format!("{PREVIOUS_HEADER}\n{records}"));
+        let (current, d2) = Table::parse(&format!("{HEADER}\n{records}"));
+        assert!(d1.is_empty(), "{d1:?}");
+        assert!(d2.is_empty(), "{d2:?}");
+        assert_eq!(previous.rules.len(), 3);
+        assert_eq!(previous, current);
+        assert_ne!(PREVIOUS_HEADER, HEADER);
+        // The library writes the current header only.
+        assert!(current.to_env_value().starts_with(&format!("{HEADER}\n")));
     }
 
     #[test]
@@ -2536,5 +2720,222 @@ mod tests {
         let other = table.resolve("other.exe", &VersionInfo::default());
         assert_eq!(other.dxgi, Some(Dxgi::Wined3d));
         assert_eq!(other.d3d9, None);
+    }
+
+    fn pair(name: &str, value: &str) -> (String, String) {
+        (name.into(), value.into())
+    }
+
+    #[test]
+    fn wined3d_parses_round_trips_and_rejects_other_values() {
+        assert_eq!(Wined3d::parse("GL"), Some(Wined3d::Gl));
+        assert_eq!(Wined3d::parse("Vulkan"), Some(Wined3d::Vulkan));
+        assert_eq!(Wined3d::parse("opengl"), None);
+        assert_eq!(Wined3d::parse("dxmt"), None);
+        assert_eq!(Wined3d::Vulkan.as_str(), "vulkan");
+        let table = Table {
+            rules: vec![
+                Rule {
+                    name: "vk".into(),
+                    exe: "vk.exe".into(),
+                    wined3d: Some(Wined3d::Vulkan),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "gl".into(),
+                    exe: "gl.exe".into(),
+                    wined3d: Some(Wined3d::Gl),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "unset".into(),
+                    exe: "unset.exe".into(),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let value = table.to_env_value();
+        assert!(
+            value.contains("name=vk;exe=vk.exe;wined3d=vulkan"),
+            "{value}"
+        );
+        assert!(value.contains("name=gl;exe=gl.exe;wined3d=gl"), "{value}");
+        assert!(
+            !value.contains("name=unset;exe=unset.exe;wined3d"),
+            "{value}"
+        );
+        let (parsed, diagnostics) = Table::parse(&value);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(parsed, table);
+        let (bad, diagnostics) = Table::parse(&format!(
+            "{HEADER}\nname=x;exe=x.exe;wined3d=opengl\nname=ok;exe=ok.exe"
+        ));
+        assert_eq!(bad.rules.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn wined3d_resolves_to_the_most_specific_rule_and_overlays_by_name() {
+        let mut table = Table {
+            rules: vec![
+                Rule {
+                    name: "game".into(),
+                    exe: "game.exe".into(),
+                    wined3d: Some(Wined3d::Gl),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "global".into(),
+                    exe: ANY_EXE.into(),
+                    wined3d: Some(Wined3d::Vulkan),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let none = VersionInfo::default();
+        assert_eq!(table.resolve("game.exe", &none).wined3d, Some(Wined3d::Gl));
+        assert_eq!(
+            table.resolve("other.exe", &none).wined3d,
+            Some(Wined3d::Vulkan)
+        );
+        // An override by name changes the setting and keeps the rest.
+        let (over, diagnostics) = Table::parse(&format!("{HEADER}\nname=game;wined3d=vulkan"));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(table.overlay(over), [] as [String; 0]);
+        assert_eq!(
+            table.resolve("game.exe", &none).wined3d,
+            Some(Wined3d::Vulkan)
+        );
+        // Dropping the wildcard leaves other processes with no opinion.
+        let (over, _) = Table::parse(&format!("{HEADER}\nname=global;enabled=false"));
+        assert_eq!(table.overlay(over), [] as [String; 0]);
+        assert_eq!(table.resolve("other.exe", &none).wined3d, None);
+        assert_eq!(
+            table.resolve("game.exe", &none).wined3d,
+            Some(Wined3d::Vulkan)
+        );
+    }
+
+    #[test]
+    fn vulkan_exists_only_in_the_arm64_wine_and_gl_is_the_default() {
+        assert_eq!(Wined3d::effective(None, Host::Aarch64), Wined3d::Gl);
+        assert_eq!(Wined3d::effective(None, Host::X86_64), Wined3d::Gl);
+        assert_eq!(
+            Wined3d::effective(Some(Wined3d::Vulkan), Host::Aarch64),
+            Wined3d::Vulkan
+        );
+        assert_eq!(
+            Wined3d::effective(Some(Wined3d::Vulkan), Host::X86_64),
+            Wined3d::Gl
+        );
+        assert!(!Wined3d::Vulkan.available_for(Host::X86_64));
+        assert!(Wined3d::Gl.available_for(Host::X86_64));
+    }
+
+    #[test]
+    fn a_set_renderer_is_always_named_and_unset_sets_nothing() {
+        let resolved = |wined3d| Resolution {
+            wined3d,
+            env: vec![pair("A", "1")],
+            ..Resolution::default()
+        };
+        // Each renderer a rule sets goes after the rules' env, OpenGL as
+        // explicitly as Vulkan, so a child never keeps its parent's Vulkan.
+        for (wined3d, value) in [
+            (Wined3d::Vulkan, "renderer=vulkan"),
+            (Wined3d::Gl, "renderer=gl"),
+        ] {
+            let mut r = resolved(Some(wined3d));
+            assert_eq!(r.apply_wined3d(Host::Aarch64), Some(wined3d));
+            assert_eq!(r.env, [pair("A", "1"), pair("WINE_D3D_CONFIG", value)]);
+        }
+        // The x86_64 Wine has no Vulkan: OpenGL, set as such.
+        let mut r = resolved(Some(Wined3d::Vulkan));
+        assert_eq!(r.apply_wined3d(Host::X86_64), Some(Wined3d::Gl));
+        assert_eq!(
+            r.env,
+            [pair("A", "1"), pair("WINE_D3D_CONFIG", "renderer=gl")]
+        );
+        // No rule sets it: nothing changes, on either host.
+        for host in [Host::Aarch64, Host::X86_64] {
+            let mut r = resolved(None);
+            assert_eq!(r.apply_wined3d(host), None);
+            assert_eq!(r.env, [pair("A", "1")]);
+        }
+    }
+
+    #[test]
+    fn the_setting_decides_the_renderer_and_keeps_the_other_options_of_an_env_rule() -> TestResult {
+        // A rule's own WINE_D3D_CONFIG keeps its other options, loses its
+        // renderer, and the setting's entry is the value the block ends with.
+        for (wined3d, renderer) in [(Wined3d::Vulkan, "vulkan"), (Wined3d::Gl, "gl")] {
+            let mut r = Resolution {
+                wined3d: Some(wined3d),
+                env: vec![
+                    pair("wine_d3d_config", "csmt=0"),
+                    pair(
+                        "WINE_D3D_CONFIG",
+                        "renderer=no3d,csmt=0x1;MaxVersionGL=0x40001",
+                    ),
+                ],
+                ..Resolution::default()
+            };
+            assert_eq!(r.apply_wined3d(Host::Aarch64), Some(wined3d));
+            let want = format!("renderer={renderer},csmt=0x1,MaxVersionGL=0x40001");
+            assert_eq!(r.env.last(), Some(&pair("WINE_D3D_CONFIG", &want)));
+            let block: Vec<u16> = "WINE_D3D_CONFIG=shader_backend=glsl\0OTHER=x\0\0"
+                .encode_utf16()
+                .collect();
+            let merged = merge_env(&block, &r.env).ok_or("unchanged")?;
+            assert_eq!(
+                String::from_utf16_lossy(&merged),
+                format!("WINE_D3D_CONFIG={want}\0OTHER=x\0\0")
+            );
+        }
+        // A rule that removes the variable leaves just the renderer.
+        let mut r = Resolution {
+            wined3d: Some(Wined3d::Vulkan),
+            env: vec![pair("WINE_D3D_CONFIG", "")],
+            ..Resolution::default()
+        };
+        r.apply_wined3d(Host::Aarch64);
+        assert_eq!(
+            r.env.last(),
+            Some(&pair("WINE_D3D_CONFIG", "renderer=vulkan"))
+        );
+        // Without the setting a rule's WINE_D3D_CONFIG applies as it is,
+        // renderer and all.
+        let mut r = Resolution {
+            env: vec![pair("WINE_D3D_CONFIG", "renderer=vulkan,csmt=0")],
+            ..Resolution::default()
+        };
+        assert_eq!(r.apply_wined3d(Host::Aarch64), None);
+        assert_eq!(r.env, [pair("WINE_D3D_CONFIG", "renderer=vulkan,csmt=0")]);
+        assert_eq!(r.d3d_config(), Some("renderer=vulkan,csmt=0"));
+        Ok(())
+    }
+
+    #[test]
+    fn the_renderer_of_a_config_and_a_variable_of_a_block_read_as_wined3d_reads_them() {
+        assert_eq!(
+            Wined3d::renderer_in("csmt=0,renderer=vulkan"),
+            Some("vulkan")
+        );
+        assert_eq!(
+            Wined3d::renderer_in("renderer=gl;renderer=vulkan"),
+            Some("gl")
+        );
+        assert_eq!(Wined3d::renderer_in("csmt=0,max_renderer=x"), None);
+        assert_eq!(Wined3d::renderer_in(""), None);
+        let block: Vec<u16> = "=C:=C:\\\0wine_d3d_config=renderer=vulkan\0WINE_D3D_CONFIG=x\0\0"
+            .encode_utf16()
+            .collect();
+        assert_eq!(
+            env_value(&block, "WINE_D3D_CONFIG").as_deref(),
+            Some("renderer=vulkan")
+        );
+        assert_eq!(env_value(&block, "OTHER"), None);
+        let empty: Vec<u16> = "A=\0\0".encode_utf16().collect();
+        assert_eq!(env_value(&empty, "a").as_deref(), Some(""));
     }
 }
