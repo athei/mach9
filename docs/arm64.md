@@ -133,6 +133,7 @@ to this build only.
 | `FEX_HARDWARE_TSO` | Unset or `1`: FEX runs x86 code with the hardware x86 memory ordering (TSO) instead of emulating it with ordered loads and stores. The ordering is a per-thread mode: FEX switches a thread to it whenever the thread enters x86 code and back at the syscalls and unix calls of x86 code, since native code runs slower in it. `0`: FEX emulates the ordering. Any other value logs an error and FEX emulates the ordering |
 | `VK_DRIVER_FILES` | Unset: ntdll sets it to the bundle's `share/vulkan/icd.d`, so the Vulkan loader uses the bundled KosmicKrisp and no driver installed elsewhere on the Mac. Set: the loader uses the manifests it names instead. ntdll also leaves it unset when the caller sets `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES`; the loader then uses those, and the bundled driver is not added to them ([Vulkan](#vulkan)) |
 | `MESA_KK_EXPERIMENTAL` | Which experimental features KosmicKrisp advertises. compatdb's built-in `kosmickrisp-experimental` rule sets it in every process, replacing a value from the environment; a rule changes or removes it ([Vulkan](#vulkan)) |
+| `WINE_D3D_CONFIG` | wined3d's settings, as in Wine. `renderer=vulkan` puts wined3d on KosmicKrisp. compatdb's `wined3d=vulkan` sets it for one game, keeping the variable's other options; the programs that game starts inherit it unless a rule for them sets `wined3d` ([wined3d on Vulkan](compatdb.md#wined3d-on-vulkan)) |
 | `FEX_HOSTFEATURES` | FEX's host feature overrides. x86_64 programs, which run as ARM64EC, run without AFP (the Arm floating-point behaviour FEX uses to match x86) by default, because the floating-point mode would have to change on every call between x86 code and native code, which costs more than AFP saves. `enableafp` turns it back on. i386 programs keep AFP |
 
 - msync is CrossOver's implementation of Windows synchronization objects
@@ -216,8 +217,9 @@ Wine source commit. What goes in is the `WITH_WINE_SDK` step of
 ## Vulkan
 
 Wine's Vulkan (`vulkan-1.dll`, `winevulkan`) runs on KosmicKrisp, Mesa's
-Vulkan driver on Metal, through the Khronos Vulkan loader. Direct3D 9 to 11
-do not use it: they go to Metal through mtld3d and DXMT.
+Vulkan driver on Metal, through the Khronos Vulkan loader. The default
+Direct3D implementations, mtld3d and DXMT, go to Metal directly and do not
+use it; wined3d can, per game (see below).
 
 - Mesa is [athei/mesa](https://github.com/athei/mesa) at the ref
   [`mesa-src.ref`](../mesa-src.ref) names: upstream Mesa plus our topic
@@ -274,6 +276,16 @@ do not use it: they go to Metal through mtld3d and DXMT.
   the flags our topic commits add are defined next to Mesa's own in the
   driver's source. The recipes to turn them off are in
   [compatdb.md](compatdb.md#recipes).
+- wined3d, Wine's own Direct3D, which serves the `wined3d` trees of both
+  families and D3D8 and DirectDraw, keeps Wine's default OpenGL renderer.
+  Apple's OpenGL is old enough to hold that renderer to a low Direct3D
+  feature level, and wined3d's Vulkan renderer reaches a higher one on
+  KosmicKrisp. It is not the default because wined3d on KosmicKrisp still
+  crashes in many of Wine's conformance tests, and wined3d does not fall
+  back to OpenGL when Vulkan fails. A compatdb rule with `wined3d=vulkan`
+  turns it on for one game, for every wined3d user in that process,
+  D3D8 and DirectDraw included
+  ([wined3d on Vulkan](compatdb.md#wined3d-on-vulkan)).
 - compatdb's `no-vulkan` rule, which disables `vulkan-1` in the x86_64
   Wine, does not exist here.
 - Wine's own `d3d12.dll` and `d3d12core.dll` are left out of the bundle,
@@ -371,13 +383,16 @@ symlink and copied-in file checks of the x86_64 bundle
   are in place, the manifest's `library_path` resolves from its directory,
   the loader and the driver export their entry points, and `ntdll.so`
   names `VK_DRIVER_FILES`.
-- The smoke test, with the caller's `WINE_COMPATDB` and every `WINEMSYNC*`,
-  `FEX_*`, `VK_*` and `MESA_*` variable dropped: `wine --version`; a fresh
-  prefix boots (`cmd /c exit`), with `compatdb:` lines, no trace of the
-  x87sidecar, and
+- The smoke test, with the caller's `WINE_COMPATDB` and `WINE_D3D_CONFIG`
+  and every `WINEMSYNC*`, `FEX_*`, `VK_*`, `MESA_*`, `MTL_*` and `METAL_*`
+  variable dropped: `wine --version`; a fresh prefix boots
+  (`cmd /c exit`), with `compatdb:` lines, no trace of the x87sidecar, and
   the wineserver's `msync: up and running.` line and no `msync: error:`
   line (with `--compatdb-only`, a wineserver without msync skips that
-  check); the i386 `cmd.exe` runs; and
+  check); winedbg's crash dialog is turned off in the prefix
+  (`ShowCrashDialog`), so a program that crashes exits with a backtrace in
+  the log instead of waiting for the time limit; the i386 `cmd.exe` runs;
+  and
   [`smoke/hello.c`](../smoke/hello.c), compiled for each architecture in
   the profile's `SMOKE_PE_ARCHS`, prints its marker and reports whether it
   loads `dxgi.dll` and `d3d9.dll`. Each one's compatdb lines must name the
@@ -387,8 +402,21 @@ symlink and copied-in file checks of the x86_64 bundle
   module of each Direct3D tree in turn, as for the x86_64 bundle. Last,
   [`smoke/vulkan.c`](../smoke/vulkan.c), compiled for x86_64 and i686,
   creates a Vulkan instance without a window and must find a device; its
-  compatdb lines must carry `MESA_KK_EXPERIMENTAL`. Every run has a time
-  limit.
+  compatdb lines must carry `MESA_KK_EXPERIMENTAL`. Then
+  [`smoke/wined3d.c`](../smoke/wined3d.c), compiled for x86_64 and i686,
+  must create a device for a hidden window through wined3d twice, with the
+  `winediag` channel on: with the default renderer, where wined3d must not
+  report the Vulkan renderer, and with a `wined3d=vulkan` rule for the
+  program, where it must. The i686 program uses Direct3D 8. Wine builds no
+  64-bit `d3d8.dll`, so the x86_64 one uses Direct3D 9, with a rule giving
+  it the `wined3d` d3d9 tree in both runs. Every run has a time limit.
+
+`--compatdb-only` refuses a bundle that lacks the Vulkan loader,
+KosmicKrisp or its manifest, such as one from before this build had
+Vulkan, and names what is missing. The arm64 library has no `no-vulkan`
+rule, so in such a bundle a game's own `vulkan-1.dll` would load and find
+no driver, and the smoke test's Vulkan checks need Vulkan anyway. Such a
+bundle needs a full bundle step.
 
 ## Limitations
 

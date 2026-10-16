@@ -229,7 +229,7 @@ pub fn table_for(host: Host) -> Table {
 
 #[cfg(test)]
 mod tests {
-    use compatdb_table::{HEADER, VersionInfo};
+    use compatdb_table::{HEADER, VersionInfo, Wined3d};
 
     use super::*;
 
@@ -496,6 +496,45 @@ mod tests {
         assert_eq!(game.env, fex_env());
         assert_eq!(game.matched, wildcards_without(arm, KK_RULE));
         Ok(())
+    }
+
+    #[test]
+    fn wined3d_on_vulkan_is_a_setting_for_one_game_and_never_a_default() {
+        // wined3d on KosmicKrisp still crashes in too many places to be every
+        // process's renderer, so no built-in rule sets the wined3d setting or
+        // WINE_D3D_CONFIG on either host. A game rule opts in, and only that
+        // game gets it, in the arm64 Wine only.
+        for host in HOSTS {
+            assert!(
+                !table_for(host)
+                    .rules
+                    .iter()
+                    .any(|r| r.wined3d.is_some()
+                        || r.env.iter().any(|(n, _)| n == "WINE_D3D_CONFIG")),
+                "{host:?}"
+            );
+            let mut game = table_for(host).resolve("game.exe", &VersionInfo::default());
+            assert_eq!(game.apply_wined3d(host), None, "{host:?}");
+            assert_eq!(game.env, wildcard_env(host), "{host:?}");
+        }
+        let arm = Host::Aarch64;
+        let table = with_overrides(arm, "name=my-game;exe=game.exe;wined3d=vulkan");
+        let mut game = table.resolve("Game.exe", &VersionInfo::default());
+        assert_eq!(game.matched, wildcards_and(arm, "my-game"));
+        assert_eq!(game.apply_wined3d(arm), Some(Wined3d::Vulkan));
+        let vulkan = ("WINE_D3D_CONFIG".to_string(), "renderer=vulkan".to_string());
+        assert_eq!(game.env, wildcard_env_and(arm, &[vulkan]));
+        let mut other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.apply_wined3d(arm), None);
+        assert_eq!(other.env, wildcard_env(arm));
+        // The same rule in the x86_64 Wine, which has no Vulkan, gets OpenGL,
+        // named as such.
+        let intel = Host::X86_64;
+        let table = with_overrides(intel, "name=my-game;exe=game.exe;wined3d=vulkan");
+        let mut game = table.resolve("Game.exe", &VersionInfo::default());
+        assert_eq!(game.apply_wined3d(intel), Some(Wined3d::Gl));
+        let gl = ("WINE_D3D_CONFIG".to_string(), "renderer=gl".to_string());
+        assert_eq!(game.env, wildcard_env_and(intel, &[gl]));
     }
 
     #[test]

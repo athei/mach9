@@ -25,6 +25,7 @@ and with none, Wine does.
 |-----|--------|--------|---------|
 | `dxgi` | `gptk`, `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. Unset: the arch default ([x86_64 Wine](../README.md#direct3d-backends), [arm64 Wine](#arm64-wine)). `gptk` becomes `dxmt` where it cannot load ([gptk availability](#gptk-availability)) | At load |
 | `d3d9` | `mtld3d`, `wined3d` | The D3D9 tree to prepend. Unset: `mtld3d`, except for a native ARM64 program ([arm64 Wine](#arm64-wine)) | At load |
+| `wined3d` | `gl`, `vulkan` | The renderer of wined3d, for the whole process: every wined3d user in it, the `wined3d` trees of both families and D3D8 and DirectDraw, shares one wined3d. Set, it names the renderer in `WINE_D3D_CONFIG` through the `env` path; unset, it sets nothing, so a `WINE_D3D_CONFIG` from elsewhere, or wined3d's default, OpenGL, applies ([wined3d on Vulkan](#wined3d-on-vulkan)). `vulkan` becomes `gl` in the x86_64 Wine, which has no Vulkan | At load, as `env` |
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` only stops forcing it: the executable's flag, `WINE_LARGE_ADDRESS_AWARE` and the `AppDefaults` registry value decide. No effect on 64-bit | At load; ntdll applies it after the library returns |
@@ -32,8 +33,8 @@ and with none, Wine does.
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | In the x86_64 Wine, set in the unix environment right before exec, so what runs ahead of the program sees it: its x87sidecar (the `X87_*` variables) and Rosetta. Written into the environment block and the unix environment at load, before any PE code runs, which is the only time the [arm64 Wine](#arm64-wine) sets it. Processes the program starts inherit it | Before exec, `compatdb_query_env` (x86_64 Wine); at load |
 
-The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi` and
-`d3d9` values are case-insensitive.
+The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
+`d3d9` and `wined3d` values are case-insensitive.
 
 ## Matching
 
@@ -89,8 +90,9 @@ name=dpi-aware;enabled=false
 ### Format
 
 - The first line is the format header: the value of `HEADER` in
-  [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs). `v=<N>` above
-  is a placeholder for it.
+  [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs), or of
+  `PREVIOUS_HEADER` there, which the library still accepts. `v=<N>` above is
+  a placeholder for it.
 - Then one rule per line, as `key=value` fields joined by `;`. Blank lines
   are ignored.
 - Keys: `name` (required), the matching keys (`exe`, `company`, `product`,
@@ -115,13 +117,16 @@ name=dpi-aware;enabled=false
 
 Errors never abort a process.
 
-- An unknown key, an unknown `dxgi` or `d3d9` value, a boolean other than
-  `true` or `false` (so `TRUE` or `1` too), a missing `name` or a field
-  without `=` drops that line with a diagnostic. The other lines still apply.
-- A header other than `HEADER` makes the library ignore the whole value with
-  one diagnostic. That keeps a format change safe for long-lived processes,
-  and it means a launcher and `compatdb.so` must be updated together when
-  `HEADER` changes.
+- An unknown key, an unknown `dxgi`, `d3d9` or `wined3d` value, a boolean
+  other than `true` or `false` (so `TRUE` or `1` too), a missing `name` or a
+  field without `=` drops that line with a diagnostic. The other lines still
+  apply.
+- A header other than `HEADER` or `PREVIOUS_HEADER` makes the library
+  ignore the whole value with one diagnostic. A library older than a format
+  change therefore drops a table written with the new header rather than
+  half understand it, so a launcher that writes a new `HEADER` needs a
+  `compatdb.so` that knows it. The library reads the previous format too,
+  so a launcher can move to a new `HEADER` after the library does.
 
 ## Recipes
 
@@ -150,9 +155,10 @@ executable.
 | Turn KosmicKrisp's experimental features off for one game (arm64 Wine) | `name=my-game;exe=Game.exe;env=MESA_KK_EXPERIMENTAL=` |
 | Advertise only some of them to one game (arm64 Wine) | `name=my-game;exe=Game.exe;env=MESA_KK_EXPERIMENTAL=<flags>`, with the flags comma-separated |
 | Turn KosmicKrisp's experimental features off for every process (arm64 Wine) | `name=kosmickrisp-experimental;enabled=false` |
+| Put wined3d on Vulkan for one game (arm64 Wine) | `name=my-game;exe=Game.exe;wined3d=vulkan` |
 
-- The Vulkan recipes are for the x86_64 Wine, whose bundle ships no Vulkan.
-  The arm64 Wine has no `no-vulkan` rule ([arm64 Wine](#arm64-wine)).
+- The Vulkan loader recipes are for the x86_64 Wine, whose bundle ships no
+  Vulkan. The arm64 Wine has no `no-vulkan` rule ([arm64 Wine](#arm64-wine)).
 - The KosmicKrisp flags are described in Mesa's
   [`docs/drivers/kosmickrisp.rst`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/drivers/kosmickrisp.rst),
   except those our Mesa topic commits add; the ones the built-in rule sets
@@ -174,6 +180,34 @@ executable.
   `WINE_FORCE_NX` keeps no-execute on in them too. An empty value in a rule
   removes the variable instead of setting it empty, so in the arm64 Wine
   `env=WINE_FORCE_NX=` does not keep no-execute on.
+
+## wined3d on Vulkan
+
+- `wined3d` chooses the renderer of wined3d, Wine's own Direct3D, for the
+  whole process. A process has one wined3d, which reads its settings once,
+  and it serves every wined3d user there: the `wined3d` trees that `dxgi`
+  and `d3d9` choose, and D3D8 and DirectDraw, which always use wined3d.
+  `dxgi` and `d3d9` still decide whether a family uses wined3d at all.
+- Only the arm64 Wine has Vulkan, on KosmicKrisp
+  ([arm64.md](arm64.md#vulkan)). In the x86_64 Wine `vulkan` becomes `gl`,
+  set as such, and the log says so.
+- No built-in rule sets it, so wined3d stays on its default OpenGL unless a
+  rule asks for Vulkan. On KosmicKrisp it still crashes in many of Wine's
+  conformance tests, and wined3d does not fall back to OpenGL when Vulkan
+  fails.
+- Set to either value, it names the renderer in `WINE_D3D_CONFIG`, the list
+  of wined3d's `Direct3D` registry settings as comma-separated `name=value`
+  options, through the same path as an `env` entry, after the rules' own
+  entries. When a rule's `env` also sets `WINE_D3D_CONFIG`, its options are
+  kept and its `renderer`, if any, is replaced: `wined3d` decides the
+  renderer, `env` the other options. A `WINE_D3D_CONFIG` the process was
+  started with is replaced, as by any `env` entry.
+- Unset, it sets nothing, so a `WINE_D3D_CONFIG` from a rule's `env` or
+  from the process's environment applies as it is. That includes the one a
+  process inherits from the process that started it: a program started by a
+  process with `wined3d=vulkan` runs wined3d on Vulkan too, unless a rule
+  for it sets `wined3d` itself. The log line names the renderer such an
+  inherited value asks for.
 
 ## gptk availability
 
@@ -229,6 +263,12 @@ same rules, with these differences. They are chosen by `Host` in
   a value already in the environment. The entry and the reasoning are in
   [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs); the KosmicKrisp
   recipes in [recipes](#recipes) turn it off or change it.
+- `wined3d=vulkan` is available here, and only here: a rule with it puts
+  wined3d on KosmicKrisp for its process
+  ([wined3d on Vulkan](#wined3d-on-vulkan)). wined3d reads the
+  `WINE_D3D_CONFIG` it sets from the environment block, which compatdb.so
+  has already rewritten, and the variable takes precedence over wined3d's
+  registry settings.
 - `gptk` is never available, so an x86 process defaults to `dxmt`, and a
   `dxgi=gptk` rule falls back with a log line that names the arm64 Wine, not
   the macOS release.
@@ -253,7 +293,7 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
 
 | Line | Written by | Shows |
 |------|------------|-------|
-| A block starting `compatdb: <exe> [<arch>]` | compatdb.so, once in every process at load | Image name, arch and version fingerprint; `rules = ...` or `no rule matched`; the trees it prepended (`dxgi = <impl> (from <path>)`, `d3d9 = ...`) and any fallback from the implementation a rule asked for; the overrides, DPI and large address awareness it set; `x87_sidecar (rule)` for an i386 process (x86_64 only); arguments and env. Parse diagnostics and `override names no rule` lines come just before the block |
+| A block starting `compatdb: <exe> [<arch>]` | compatdb.so, once in every process at load | Image name, arch and version fingerprint; `rules = ...` or `no rule matched`; the trees it prepended (`dxgi = <impl> (from <path>)`, `d3d9 = ...`) and any fallback from the implementation a rule asked for; the wined3d renderer (`wined3d = <renderer> (...)`: set by a rule, asked for by a `WINE_D3D_CONFIG` the process has, or `default (not set)`, where wined3d's registry settings or its default decide) and any fallback from the one a rule asked for; the overrides, DPI and large address awareness it set; `x87_sidecar (rule)` for an i386 process (x86_64 only); arguments and env. Parse diagnostics and `override names no rule` lines come just before the block |
 | `compatdb: x87 query <exe> ...` | compatdb.so (x86_64 only), per `compatdb_query_x87` call | The executable, its fingerprint and the `x87_sidecar (rule)` answer |
 | `compatdb: env query <exe> ...` | compatdb.so, per `compatdb_query_env` call that returns entries | The executable, its fingerprint and the `NAME=value` entries in the order ntdll sets them; nothing when there are none |
 | `... attaching rosettax87 --cooperative ...` | ntdll, on the `err:module` channel | That the sidecar was actually started |

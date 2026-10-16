@@ -13,8 +13,8 @@
 //!
 //! It holds the built-in rules, overlays the ones passed in
 //! [`ENV_VAR`](compatdb_table::ENV_VAR), resolves the rules that match this
-//! process and applies them: the D3D9 and DXGI trees, DLL load-order
-//! overrides, the DPI awareness, large address awareness, and
+//! process and applies them: the D3D9 and DXGI trees, the wined3d renderer,
+//! DLL load-order overrides, the DPI awareness, large address awareness, and
 //! command-line/environment rewrites. All the decision logic lives in
 //! [`compatdb_table`]; this crate only moves bytes in and out of the running
 //! process, so its `unsafe` is confined to a thin ntdll shell.
@@ -41,7 +41,7 @@ use std::{
 };
 
 use compatdb_table::{
-    Arch, D3d9, Dxgi, ENV_VAR, Host, Resolution, Table, VersionInfo, basename_of,
+    Arch, D3d9, Dxgi, ENV_VAR, Host, Resolution, Table, VersionInfo, Wined3d, basename_of,
 };
 
 use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TEB_PEB_OFFSET};
@@ -254,7 +254,9 @@ fn query(table: &Table, path: &[u8]) -> Option<(String, VersionInfo, Resolution)
     } else {
         VersionInfo::default()
     };
-    let resolution = table.resolve(&exe, &version);
+    let mut resolution = table.resolve(&exe, &version);
+    // The env the process gets includes what its wined3d renderer needs.
+    resolution.apply_wined3d(Host::current());
     Some((exe, version, resolution))
 }
 
@@ -294,7 +296,7 @@ fn run() {
     let Some(process) = Process::current(&nt, host) else {
         return;
     };
-    let resolution = table.resolve(&process.exe, &process.version);
+    let mut resolution = table.resolve(&process.exe, &process.version);
     let arch = arch_name(process.arch, host);
     log::line(&format!(
         "{} [{arch}]{}",
@@ -331,6 +333,23 @@ fn run() {
         log::line(&note);
     }
     apply::tree(&nt, process.arch.pe_dir(host), "d3d9", d3d9.as_str());
+    // One renderer for every wined3d user in the process, whichever tree or
+    // API brought wined3d in. A renderer a rule sets travels as an env
+    // entry, applied with the rest below. Without one, the log names the
+    // renderer the WINE_D3D_CONFIG the process ends up with asks for: a
+    // rule's env, or else the one it inherited.
+    let requested = resolution.wined3d;
+    let wined3d = resolution.apply_wined3d(host);
+    if let (Some(want), Some(got)) = (requested, wined3d)
+        && let Some(note) = wined3d_fallback(want, host, got)
+    {
+        log::line(&note);
+    }
+    let config = match resolution.d3d_config() {
+        Some(value) => Some(value.to_owned()),
+        None => compatdb_table::env_value(&process.env, Wined3d::CONFIG_VAR),
+    };
+    log::line(&wined3d_line(wined3d, config.as_deref()));
 
     // The remaining knobs apply only when a rule matched this process.
     if !resolution.dll_overrides.is_empty() {
@@ -445,6 +464,42 @@ fn d3d9_fallback(requested: Option<D3d9>, arch: Arch, host: Host, d3d9: D3d9) ->
             d3d9.as_str()
         )
     })
+}
+
+/// The log line for a process whose rule asks for a wined3d renderer the Wine
+/// built for `host` does not have (Vulkan in the `x86_64` Wine). `wined3d` is
+/// what [`Wined3d::effective`] chose. `None` when the process gets what it
+/// asked for: OpenGL is always there.
+fn wined3d_fallback(requested: Wined3d, host: Host, wined3d: Wined3d) -> Option<String> {
+    (requested != wined3d).then(|| {
+        format!(
+            "  wined3d = {} not available on {}, using {}",
+            requested.as_str(),
+            host_name(host),
+            wined3d.as_str()
+        )
+    })
+}
+
+/// The log line naming the wined3d renderer of a process and where it comes
+/// from, in the style of the tree lines. `set` is the renderer a rule set
+/// (after any fallback), `config` the `WINE_D3D_CONFIG` the process has
+/// otherwise: from a rule's `env`, or inherited. Without either, the line says
+/// `default`: wined3d may still take a renderer from its registry settings,
+/// and uses OpenGL without one.
+fn wined3d_line(set: Option<Wined3d>, config: Option<&str>) -> String {
+    match (set, config.and_then(Wined3d::renderer_in)) {
+        (Some(wined3d), _) => format!(
+            "  wined3d = {} (through {})",
+            wined3d.as_str(),
+            Wined3d::CONFIG_VAR
+        ),
+        (None, Some(renderer)) => format!(
+            "  wined3d = {renderer} (not set; {} asks for it)",
+            Wined3d::CONFIG_VAR
+        ),
+        (None, None) => String::from("  wined3d = default (not set)"),
+    }
 }
 
 /// A compact `company="..." product="..." original_filename="..."` suffix,
@@ -932,6 +987,67 @@ mod tests {
             assert_eq!(d3d9, D3d9::Mtld3d);
             assert_eq!(d3d9_fallback(Some(D3d9::Mtld3d), arch, host, d3d9), None);
         }
+    }
+
+    #[test]
+    fn the_wined3d_lines_name_the_renderer_and_the_wine_without_vulkan() {
+        assert_eq!(
+            wined3d_fallback(Wined3d::Vulkan, INTEL, Wined3d::Gl).as_deref(),
+            Some("  wined3d = vulkan not available on x86_64, using gl")
+        );
+        assert_eq!(
+            wined3d_fallback(Wined3d::Vulkan, ARM, Wined3d::Vulkan),
+            None
+        );
+        for host in [INTEL, ARM] {
+            assert_eq!(wined3d_fallback(Wined3d::Gl, host, Wined3d::Gl), None);
+        }
+        // A renderer a rule set wins the line over any config.
+        for config in [None, Some("renderer=vulkan")] {
+            assert_eq!(
+                wined3d_line(Some(Wined3d::Gl), config),
+                "  wined3d = gl (through WINE_D3D_CONFIG)"
+            );
+        }
+        assert_eq!(
+            wined3d_line(Some(Wined3d::Vulkan), None),
+            "  wined3d = vulkan (through WINE_D3D_CONFIG)"
+        );
+        // Not set: what an inherited or env-rule config asks for, else
+        // wined3d's default, which may still come from the registry.
+        assert_eq!(
+            wined3d_line(None, Some("csmt=0,renderer=vulkan")),
+            "  wined3d = vulkan (not set; WINE_D3D_CONFIG asks for it)"
+        );
+        for config in [None, Some(""), Some("csmt=0")] {
+            assert_eq!(wined3d_line(None, config), "  wined3d = default (not set)");
+        }
+    }
+
+    #[test]
+    fn the_env_query_carries_the_wined3d_renderer_a_rule_sets() -> TestResult {
+        let table = Table {
+            rules: vec![Rule {
+                name: "game".into(),
+                exe: "Game.exe".into(),
+                wined3d: Some(Wined3d::Vulkan),
+                env: vec![pair("WINE_D3D_CONFIG", "csmt=0")],
+                ..Rule::default()
+            }],
+        };
+        let (_, _, env) = query_env(&table, b"/nonexistent/games/game.exe").ok_or("game")?;
+        let expected = match Host::current() {
+            Host::Aarch64 => vec![
+                pair("WINE_D3D_CONFIG", "csmt=0"),
+                pair("WINE_D3D_CONFIG", "renderer=vulkan,csmt=0"),
+            ],
+            Host::X86_64 => vec![
+                pair("WINE_D3D_CONFIG", "csmt=0"),
+                pair("WINE_D3D_CONFIG", "renderer=gl,csmt=0"),
+            ],
+        };
+        assert_eq!(env, expected);
+        Ok(())
     }
 
     #[test]
