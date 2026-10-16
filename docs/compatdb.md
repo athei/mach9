@@ -143,8 +143,8 @@ executable.
 | Keep the x87sidecar away from one game | `name=my-game;exe=Game.exe;x87_sidecar=false` |
 | Keep the x87sidecar away from every process | `name=no-x87;exe=*;x87_sidecar=false`, or set `ROSETTA_X87_PATH` to an empty value |
 | Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` |
-| Let one game turn no-execute off (x86_64 Wine) | `name=my-game;exe=Game.exe;env=WINE_DISABLE_NX_COMPAT=0` |
-| Keep no-execute on for one game (arm64 Wine) | `name=my-game;exe=Game.exe;env=WINE_DISABLE_NX_COMPAT=1` |
+| Let one game turn no-execute off (x86_64 Wine) | `name=my-game;exe=Game.exe;env=WINE_FORCE_NX=0` |
+| Keep no-execute on for one game (arm64 Wine) | `name=my-game;exe=Game.exe;env=WINE_FORCE_NX=1` |
 | Give one game FEX's full x87 precision (arm64 Wine) | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision (arm64 Wine) | `name=fex-x87-reduced-precision;enabled=false` |
 
@@ -160,9 +160,9 @@ executable.
   sidecar away: the library then has no opinion, and ntdll attaches it
   anyway.
 - The processes a game starts inherit the variables of its `env` rule, so
-  `WINE_DISABLE_NX_COMPAT` keeps no-execute on in them too. An empty value
-  in a rule removes the variable instead of setting it empty, so in the
-  arm64 Wine `env=WINE_DISABLE_NX_COMPAT=` does not keep no-execute on.
+  `WINE_FORCE_NX` keeps no-execute on in them too. An empty value in a rule
+  removes the variable instead of setting it empty, so in the arm64 Wine
+  `env=WINE_FORCE_NX=` does not keep no-execute on.
 
 ## gptk availability
 

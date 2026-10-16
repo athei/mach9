@@ -227,10 +227,9 @@ anything below needs a `cx-*` release.
   when the library loads into the process, but too late for the x87sidecar
   and Rosetta.
 - The x86_64 build's ntdll decides no-execute from the main executable
-  alone and keeps it permanently on under Rosetta, unless
-  `WINE_DISABLE_NX_COMPAT` says otherwise
-  ([#3](https://github.com/athei/wine-build/issues/3)). The arm64 Wine keeps
-  Wine's behavior unless `WINE_DISABLE_NX_COMPAT` keeps no-execute
+  alone and keeps it permanently on under Rosetta, unless `WINE_FORCE_NX`
+  says otherwise ([#3](https://github.com/athei/wine-build/issues/3)). The
+  arm64 Wine keeps Wine's behavior unless `WINE_FORCE_NX` keeps no-execute
   permanently on ([arm64](arm64.md)).
 - `wine.inf` registers the fake DLLs D3DMetal needs.
 
