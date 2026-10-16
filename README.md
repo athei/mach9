@@ -58,7 +58,7 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
 |----------|--------|
 | `WINE_COMPATDB` | Extra or changed compatdb rules for the whole process tree. Format: [docs/compatdb.md](docs/compatdb.md#wine_compatdb) |
 | `ROSETTA_X87_PATH` | Unset: i386 processes use the bundled `bin/x87sidecar`. A path: that binary instead. Empty: no process gets a sidecar, whatever the rules say |
-| `WINE_DISABLE_NX_COMPAT` | Unset: no-execute is permanently on under Rosetta. `0`: a process may turn it off, as on Windows, on any host. Any other value: permanently on, on every host |
+| `WINE_DISABLE_NX_COMPAT` | x86_64 build only; the [arm64 build](docs/arm64.md) ignores it. Unset: no-execute is permanently on under Rosetta. `0`: a process may turn it off, as on Windows, on any host. Any other value: permanently on, on every host |
 | `CX_APPLEGPTK_LIBD3DSHARED_PATH` | Overrides the `libd3dshared.dylib` ntdll loads (default: the one in `lib/external/`) |
 | `WINEDLLOVERRIDES` | Works as in Wine, but cannot undo an override compatdb adds; use a rule ([recipes](docs/compatdb.md#recipes)) |
 
@@ -89,8 +89,8 @@ mtld3d, wined3d), chosen by `compatdb.so`, a library built from
 ### Defaults that differ from Wine
 
 Each row decided by a rule is a built-in compatdb rule that matches every
-process and can be changed per game or globally. No-execute and
-synchronization are decided by the patched Wine.
+process and can be changed per game or globally. No-execute (x86_64 build)
+and synchronization (arm64 build) are decided by the patched Wine.
 
 | Behavior | Default in this bundle | Decided by |
 |----------|------------------------|------------|
@@ -101,7 +101,7 @@ synchronization are decided by the patched Wine.
 | Synchronization ([arm64 build](docs/arm64.md) only) | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | wineserver; `WINEMSYNC=0` where the session starts turns it off ([arm64 runtime](docs/arm64.md#runtime)) |
 | Vulkan loader | Disabled (`vulkan-1=`); the bundle ships no Vulkan | Rule `no-vulkan` ([recipes](docs/compatdb.md#recipes)) |
 | Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | Rule `no-mono-gecko` ([recipes](docs/compatdb.md#recipes)) |
-| No-execute | Follows the main executable's `NX_COMPAT` flag alone, as Windows does ([#3](https://github.com/athei/wine-build/issues/3)). Permanently on under Rosetta: a program that tries to turn it off gets `STATUS_ACCESS_DENIED` | ntdll, `WINE_DISABLE_NX_COMPAT` ([Wine-side contract](docs/maintenance.md#wine-side-contract)) |
+| No-execute (x86_64 build only) | Follows the main executable's `NX_COMPAT` flag alone, as Windows does ([#3](https://github.com/athei/wine-build/issues/3)). Permanently on under Rosetta: a program that tries to turn it off gets `STATUS_ACCESS_DENIED`. The [arm64 build](docs/arm64.md) keeps Wine's behavior | ntdll, `WINE_DISABLE_NX_COMPAT` ([Wine-side contract](docs/maintenance.md#wine-side-contract)) |
 
 ## Building
 
