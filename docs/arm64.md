@@ -18,11 +18,17 @@ short:
   only that tree has (`CONFIGURE_FEATURES_EXTRA`) and the configure results
   the floor overrides (`FLOOR_NEWER_FUNCS`,
   [macOS floors](maintenance.md#macos-floors)).
-- No-execute follows upstream Wine: the series does not carry the x86_64
-  build's no-execute change, and `WINE_DISABLE_NX_COMPAT` has no effect
-  ([defaults](../README.md#defaults-that-differ-from-wine)). That change
-  avoids a stall in Rosetta's fault handling; with no-execute off, FEX
-  showed no such stall.
+- No-execute follows upstream Wine by default. The series does not carry
+  the x86_64 build's no-execute change, which avoids a stall in Rosetta's
+  fault handling; with no-execute off, FEX showed no such stall. Instead,
+  `WINE_DISABLE_NX_COMPAT` set to anything but `0` keeps no-execute
+  permanently on, so the process cannot turn it off
+  ([environment variables](../README.md#environment-variables)). With
+  no-execute off, every readable page is executable, so FEX has to treat
+  all writable memory as possible code and translates it again whenever it
+  changes. For a program whose executable lacks the `NX_COMPAT` flag and
+  that runs slowly for that reason, a compatdb rule sets the variable
+  ([recipes](compatdb.md#recipes)).
 - FEX is upstream FEX with our own commits on top, from
   [athei/FEX](https://github.com/athei/FEX) at the ref
   [`fex-src.ref`](../fex-src.ref) names.
