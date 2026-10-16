@@ -61,17 +61,19 @@ export PATH="$PATH:$MINGW_DIR/bin"
 # the local clone calls its remotes. A tree with local changes is refused
 # rather than reset: those changes are somebody's work, and building from
 # them would not be building the ref. Submodules are left out of that check
-# because the update below moves them to the commits the ref records.
+# because the update below moves them to the commits the ref records. git
+# is kept from asking for credentials, so an unattended run fails instead of
+# waiting.
 echo "==> FEX source: $FEX_REPO $FEX_REF"
 if [ ! -e "$FEX_SRC/.git" ]; then
-    git clone "$FEX_REPO" "$FEX_SRC"
+    GIT_TERMINAL_PROMPT=0 git clone "$FEX_REPO" "$FEX_SRC"
 fi
 if [ -n "$(git -C "$FEX_SRC" status --porcelain --untracked-files=no --ignore-submodules=all)" ]; then
     echo "Error: $FEX_SRC has local changes; commit or stash them first"
     git -C "$FEX_SRC" status --short --untracked-files=no --ignore-submodules=all
     exit 1
 fi
-git -C "$FEX_SRC" fetch --quiet "$FEX_REPO" "$FEX_REF"
+GIT_TERMINAL_PROMPT=0 git -C "$FEX_SRC" fetch --quiet "$FEX_REPO" "$FEX_REF"
 git -C "$FEX_SRC" checkout --quiet --detach FETCH_HEAD
 git -C "$FEX_SRC" submodule update --init --recursive
 # A leading '+', '-' or 'U' marks a submodule that is not at the recorded
