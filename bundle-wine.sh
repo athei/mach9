@@ -675,13 +675,13 @@ smoke_test() {
 # smoke_test_arm64: run the bundled arm64 wine through the signed loader and
 # check that native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
-# hang rather than an error. The caller's WINE_COMPATDB and every WINEMSYNC*
-# and FEX_* variable are dropped so that the built-in rules and the defaults
-# of Wine and FEX decide.
+# hang rather than an error. The caller's WINE_COMPATDB and every WINEMSYNC*,
+# FEX_*, VK_* and MESA_* variable are dropped so that the built-in rules and
+# the defaults of Wine, FEX, the Vulkan loader and KosmicKrisp decide.
 smoke_test_arm64() {
     local version log arch cc exe marker markers sidecar var
     local wine_env=(env -u WINE_COMPATDB)
-    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_)'); do
+    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|MESA_)'); do
         wine_env+=(-u "$var")
     done
     wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all)
@@ -789,8 +789,51 @@ smoke_test_arm64() {
     echo "  Loading each Direct3D tree's modules..."
     check_tree_loads x86_64 "${wine_env[@]}"
     check_tree_loads i686 "${wine_env[@]}"
+    if [ "$WITH_VULKAN" -eq 1 ]; then
+        # A bundle from before Vulkan, which --compatdb-only may meet, has
+        # no driver to find.
+        if [ "$COMPATDB_ONLY" -eq 1 ] \
+            && [ ! -e "$WINE_DIR/share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json" ]; then
+            echo "  Skipping the Vulkan check: this bundle has no Vulkan driver."
+        else
+            check_vulkan_runs "${wine_env[@]}"
+        fi
+    fi
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run; the x86 ones load their Direct3D trees."
+}
+
+# check_vulkan_runs <env-command>...: build smoke/vulkan.c for x86_64 and
+# i686 and run it in the booted throwaway prefix, and exit unless each finds
+# a Vulkan device that offers VK_EXT_transform_feedback and compatdb.so gave
+# the process the KosmicKrisp variable of its built-in rule. The extension
+# is one KosmicKrisp only advertises when that variable names it, so a flag
+# renamed in Mesa fails here. Headless: the program creates no surface. The
+# device is found through vulkan-1.dll, winevulkan, the loader win32u.so
+# loads from lib/external and the manifest in share/vulkan/icd.d, which
+# ntdll names in VK_DRIVER_FILES since <env-command> drops the caller's VK_*
+# variables.
+check_vulkan_runs() {
+    local arch exe log want
+    for arch in x86_64 i686; do
+        exe="$TMP_DIR/vulkan-$arch.exe"
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$SCRIPT_DIR/smoke/vulkan.c"
+        time_mark "smoke: vulkan.exe $arch"
+        echo "  Running vulkan.exe for $arch..."
+        log="$TMP_DIR/vulkan-$arch.log"
+        run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
+        smoke_check "vulkan.exe for $arch" 120 "$log"
+        for want in "wine-build smoke test: $arch vulkan device " \
+                    "compatdb: .*env = .*MESA_KK_EXPERIMENTAL="; do
+            if ! grep -q "$want" "$log"; then
+                echo "Error: vulkan.exe for $arch did not print '$want'"
+                cat "$log"
+                smoke_stop
+                exit 1
+            fi
+        done
+        grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+    done
 }
 
 # smoke_check <what> <seconds> <log>: after run_limited, exit with the log
@@ -909,6 +952,73 @@ check_fex_build() {
         exit 1
     fi
     echo "  FEX: $built"
+}
+
+# check_mesa_build: exit unless build-mesa.sh staged the Vulkan loader and
+# KosmicKrisp completely, Mesa from the commit mesa-src.ref names now and the
+# loader from the pinned one. Needs the network, to resolve a branch or tag.
+check_mesa_build() {
+    local f built want
+    built=$(cat "$MESA_DIST/COMMIT" 2>/dev/null) || {
+        echo "Error: $MESA_DIST has no COMMIT; build-mesa.sh has not staged it (run build-wine.sh --arm64)"
+        exit 1
+    }
+    want=$(src_ref_commit mesa-src.ref "$MESA_REPO")
+    if [ -z "$want" ]; then
+        echo "Error: cannot resolve mesa-src.ref ($(tr -d '[:space:]' < "$SCRIPT_DIR/mesa-src.ref")) in $MESA_REPO"
+        exit 1
+    fi
+    if [ "$built" != "$want" ]; then
+        echo "Error: Mesa was built from $built, but mesa-src.ref now names $want"
+        echo "(run build-mesa.sh)"
+        exit 1
+    fi
+    if [ "$(cat "$MESA_DIST/LOADER_COMMIT" 2>/dev/null)" != "$VULKAN_LOADER_GIT_COMMIT" ]; then
+        echo "Error: the Vulkan loader in $MESA_DIST was not built from $VULKAN_LOADER_GIT_COMMIT (run build-mesa.sh)"
+        exit 1
+    fi
+    for f in lib/libvulkan.1.dylib lib/libvulkan_kosmickrisp.dylib \
+             share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json; do
+        if [ ! -f "$MESA_DIST/$f" ]; then
+            echo "Error: no $f in $MESA_DIST (run build-mesa.sh)"
+            exit 1
+        fi
+    done
+    echo "  Mesa: $built, Vulkan loader $VULKAN_LOADER_GIT_TAG"
+}
+
+# check_vulkan: exit unless the bundle's Vulkan hangs together: the driver
+# manifest names the bundled KosmicKrisp by a path that resolves from its
+# directory, the loader and the driver export their entry points, and ntdll
+# points the loader at the manifest's directory (it names VK_DRIVER_FILES).
+check_vulkan() {
+    local icd lib f sym
+    icd="$WINE_DIR/share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json"
+    lib=$(plutil -extract ICD.library_path raw -o - "$icd" 2>/dev/null) || {
+        echo "Error: share/vulkan/icd.d/$(basename "$icd") is missing or has no ICD.library_path"
+        exit 1
+    }
+    case "$lib" in
+        /*) echo "Error: $(basename "$icd") names the driver by the absolute path $lib"; exit 1 ;;
+    esac
+    if [ ! -f "$(dirname "$icd")/$lib" ]; then
+        echo "Error: $(basename "$icd") names $lib, which does not resolve from share/vulkan/icd.d"
+        exit 1
+    fi
+    for f in libvulkan.1.dylib:_vkGetInstanceProcAddr libvulkan.1.dylib:_vkCreateMetalSurfaceEXT \
+             libvulkan_kosmickrisp.dylib:_vk_icdGetInstanceProcAddr; do
+        sym=${f#*:}
+        if ! nm -gU "$EXT_DIR/${f%%:*}" 2>/dev/null | awk '{print $NF}' | grep -qxF "$sym"; then
+            echo "Error: lib/external/${f%%:*} does not export $sym"
+            exit 1
+        fi
+    done
+    if ! grep -qaF VK_DRIVER_FILES "$unixdir/ntdll.so"; then
+        echo "Error: $UNIX_DIR/ntdll.so does not name VK_DRIVER_FILES; the Wine tree is missing"
+        echo "the ntdll change that points the Vulkan loader at share/vulkan/icd.d"
+        exit 1
+    fi
+    echo "  The Vulkan manifest names lib/external/$(basename "$lib"), and ntdll sets VK_DRIVER_FILES."
 }
 
 # check_wine_sdk: exit unless the Wine SDK build-wine.sh staged is for the
@@ -1321,6 +1431,9 @@ fi
 if [ "$WITH_DXMT_BUILD" -eq 1 ]; then
     check_dxmt_build
 fi
+if [ "$WITH_VULKAN" -eq 1 ]; then
+    check_mesa_build
+fi
 for arch in $SMOKE_PE_ARCHS x86_64 i686; do
     if [ ! -x "$MINGW_DIR/bin/$arch-w64-mingw32-clang" ]; then
         echo "Error: no $arch-w64-mingw32-clang in $MINGW_DIR/bin (the smoke test needs it)"
@@ -1455,7 +1568,9 @@ mkdir -p "$EXT_DIR"
 # Direct deps: Wine dlopen's these by soname. build-wine.sh patches their
 # sonames in config.h to @loader_path/../../external/<name>, so config.h is
 # the authoritative (version-correct) list; resolve each against
-# $DEPS_PREFIX/lib. Deduplicated, since one library can back several defines.
+# $DEPS_PREFIX/lib, except the Vulkan loader, which build-mesa.sh built for
+# the floor into MESA_DIST. Deduplicated, since one library can back several
+# defines.
 CONFIG_H="$BUILD_DIR/include/config.h"
 if [ ! -f "$CONFIG_H" ]; then
     echo "Error: $CONFIG_H not found (run build-wine.sh first)"
@@ -1463,7 +1578,10 @@ if [ ! -f "$CONFIG_H" ]; then
 fi
 LIBS=()
 for name in $(sed -n 's|.*"@loader_path/\.\./\.\./external/\([^"]*\)".*|\1|p' "$CONFIG_H" | sort -u); do
-    LIBS+=("$DEPS_PREFIX/lib/$name")
+    case "$WITH_VULKAN:$name" in
+        1:libvulkan.*) LIBS+=("$MESA_DIST/lib/$name") ;;
+        *) LIBS+=("$DEPS_PREFIX/lib/$name") ;;
+    esac
 done
 if [ ${#LIBS[@]} -eq 0 ]; then
     echo "Error: no @loader_path sonames in $CONFIG_H: the build is not"
@@ -1473,6 +1591,13 @@ fi
 # Homebrew's "libSDL2" is sdl2-compat, a shim that loads real SDL3 at runtime
 # via @loader_path/libSDL3.dylib, so SDL3 must sit beside it in the bundle.
 LIBS+=("$DEPS_PREFIX/lib/libSDL3.dylib")
+# The Vulkan driver, which the loader opens by the path in its manifest
+# (Step 3c). It loads system libraries only, so the walk below adds nothing
+# for it or the loader, and the install name and signature steps treat both
+# like the rest.
+if [ "$WITH_VULKAN" -eq 1 ]; then
+    LIBS+=("$MESA_DIST/lib/libvulkan_kosmickrisp.dylib")
+fi
 
 echo "  Copying direct deps..."
 MISSED=0
@@ -1548,32 +1673,55 @@ if [ "$SIGN_RELINKED" -eq 1 ]; then
     done
 fi
 
-# ── Step 3b: Remove the modules Vulkan removal orphans ──────────────────
-# Wine's own D3D12 (vkd3d) and Vulkan modules cannot work in a build
-# configured --without-vulkan. Drop them rather than ship modules that
-# advertise an API they cannot serve. An x86_64 d3d12.dll that a Direct3D
-# tree supplies (D3DMetal's) is installed after this, in Step 4. d3d10core
+# ── Step 3b: Remove Wine's D3D12, and its Vulkan where it has none ──────
+# Wine's own D3D12 (d3d12.dll and d3d12core.dll, on vkd3d) is never shipped.
+# In a build configured --without-vulkan it cannot work. Where Vulkan is on,
+# D3D12 is meant to run on vkd3d-proton, which the bundle does not carry yet
+# (docs/arm64.md), so Wine's is left out rather than shipped untried. An
+# x86_64 d3d12.dll that a Direct3D tree supplies (D3DMetal's) is installed
+# after this, in Step 4. Without Vulkan, Wine's Vulkan modules go too, rather
+# than ship modules that advertise an API they cannot serve. d3d10core
 # stays: i386's is replaced by DXMT, and on x86_64 it is Wine's, loaded only
 # by the wined3d side tree (D3DMetal's dxgi cannot back it, so the default
 # GPTK stack never reaches it).
-time_mark "Step 3b: Vulkan removal"
-echo "==> Step 3b: Remove the modules Vulkan removal orphans"
-for dead in \
-    i386-windows/vulkan-1.dll \
-    i386-windows/winevulkan.dll \
-    i386-windows/d3d12.dll \
-    i386-windows/d3d12core.dll \
-    "$PE64_DIR/vulkan-1.dll" \
-    "$PE64_DIR/winevulkan.dll" \
-    "$PE64_DIR/d3d12.dll" \
-    "$PE64_DIR/d3d12core.dll" \
-    "$UNIX_DIR/winevulkan.so"
-do
+time_mark "Step 3b: D3D12 and Vulkan removal"
+echo "==> Step 3b: Remove Wine's D3D12, and its Vulkan where it has none"
+DEAD=(i386-windows/d3d12.dll i386-windows/d3d12core.dll
+      "$PE64_DIR/d3d12.dll" "$PE64_DIR/d3d12core.dll")
+if [ "$WITH_VULKAN" -eq 0 ]; then
+    DEAD+=(i386-windows/vulkan-1.dll i386-windows/winevulkan.dll
+           "$PE64_DIR/vulkan-1.dll" "$PE64_DIR/winevulkan.dll"
+           "$UNIX_DIR/winevulkan.so")
+fi
+for dead in "${DEAD[@]}"; do
     if [ -e "$WINE_DIR/lib/wine/$dead" ]; then
         echo "    $dead"
         rm -f "$WINE_DIR/lib/wine/$dead"
     fi
 done
+
+# ── Step 3c: Vulkan driver manifest ─────────────────────────────────────
+# The loader finds KosmicKrisp through its manifest in share/vulkan/icd.d,
+# the directory ntdll names in VK_DRIVER_FILES unless the caller set that
+# variable. The manifest build-mesa.sh staged names the driver relative to
+# MESA_DIST's layout; here it is pointed at lib/external, again relative to
+# the manifest, which is how the loader reads a relative library_path, so the
+# bundle stays relocatable.
+if [ "$WITH_VULKAN" -eq 1 ]; then
+    time_mark "Step 3c: Vulkan driver manifest"
+    echo "==> Step 3c: Vulkan driver manifest"
+    ICD_DIR="$WINE_DIR/share/vulkan/icd.d"
+    ICD="$ICD_DIR/kosmickrisp_mesa_icd.aarch64.json"
+    ICD_LIBRARY=../../../lib/external/libvulkan_kosmickrisp.dylib
+    mkdir -p "$ICD_DIR"
+    cp "$MESA_DIST/share/vulkan/icd.d/$(basename "$ICD")" "$ICD"
+    plutil -replace ICD.library_path -string "$ICD_LIBRARY" "$ICD"
+    if [ "$(plutil -extract ICD.library_path raw -o - "$ICD")" != "$ICD_LIBRARY" ]; then
+        echo "Error: $(basename "$ICD") does not name $ICD_LIBRARY after rewriting it"
+        exit 1
+    fi
+    echo "    share/vulkan/icd.d/$(basename "$ICD") -> $ICD_LIBRARY"
+fi
 
 # ── Step 4: Direct3D backends ───────────────────────────────────────────
 # Direct3D comes from third-party implementations that talk to Metal
@@ -2107,6 +2255,13 @@ if [ "$WITH_FEX" -eq 1 ]; then
            "lib/wine/$PE64_DIR/libwow64fex.dll" "lib/wine/$PE64_DIR/libarm64ecfex.dll"
            "lib/wine/$UNIX_DIR/libwow64fex.so" "lib/wine/$UNIX_DIR/libarm64ecfex.so")
 fi
+if [ "$WITH_VULKAN" -eq 1 ]; then
+    WANT+=("lib/external/libvulkan.1.dylib" "lib/external/libvulkan_kosmickrisp.dylib"
+           "share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json"
+           "lib/wine/$UNIX_DIR/winevulkan.so"
+           "lib/wine/$PE64_DIR/vulkan-1.dll" "lib/wine/$PE64_DIR/winevulkan.dll"
+           "lib/wine/i386-windows/vulkan-1.dll" "lib/wine/i386-windows/winevulkan.dll")
+fi
 if [ "$WITH_LOADER_APP" -eq 1 ]; then
     WANT+=("lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine"
            "lib/wine/$UNIX_DIR/wine.app/Contents/Info.plist"
@@ -2228,6 +2383,9 @@ time_mark "Step 5: exports and loader signature"
 check_query_export
 if [ "$WITH_X87SIDECAR" -eq 0 ]; then
     check_no_x87
+fi
+if [ "$WITH_VULKAN" -eq 1 ]; then
+    check_vulkan
 fi
 if [ "$WITH_LOADER_APP" -eq 1 ]; then
     check_loader_app
