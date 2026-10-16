@@ -35,7 +35,8 @@ short:
   are `DXGI_IMPLS` and `D3D9_IMPLS` in the profile.
 - No d3d9 test binaries.
 - A [Wine SDK](#wine-sdk) is staged for the PE code built outside Wine.
-- The loader is wrapped in a signed app bundle (see [Loader app](#loader-app)).
+- The loader is wrapped in a signed app bundle, and Wine processes run with
+  4K pages (see [Loader app](#loader-app)).
 
 ## Requirements
 
@@ -108,7 +109,7 @@ to this build only.
 |----------|--------|
 | `WINEMSYNC` | Unset or a non-zero number: msync is on. Any other value (`0`, empty, not a number): off, and Wine synchronizes through wineserver requests as upstream Wine does. Only the wineserver reads it, from the environment of the process that starts it, and every process of the session follows the wineserver's choice whatever its own environment says |
 | `WINENCPU` | Limits the number of processors Wine reports to programs, for those that misbehave with many. A value of 0, one that is not a number, or one above the real count is ignored |
-| `FEX_HARDWARE_TSO` | Unset or `1`: FEX runs x86 code with the hardware x86 memory ordering (TSO) instead of emulating it with ordered loads and stores. The ordering is a per-thread mode: FEX switches a thread to it whenever the thread enters x86 code and back at the syscalls and unix calls of x86 code, since native code runs slower in it. `0`: FEX emulates the ordering. Any other value logs an error and FEX emulates the ordering. FEX also emulates it, without a message, when the loader lacks the cross-architecture entitlement ([Loader app](#loader-app)) |
+| `FEX_HARDWARE_TSO` | Unset or `1`: FEX runs x86 code with the hardware x86 memory ordering (TSO) instead of emulating it with ordered loads and stores. The ordering is a per-thread mode: FEX switches a thread to it whenever the thread enters x86 code and back at the syscalls and unix calls of x86 code, since native code runs slower in it. `0`: FEX emulates the ordering. Any other value logs an error and FEX emulates the ordering |
 | `FEX_HOSTFEATURES` | FEX's host feature overrides. x86_64 programs, which run as ARM64EC, run without AFP (the Arm floating-point behaviour FEX uses to match x86) by default, because the floating-point mode would have to change on every call between x86 code and native code, which costs more than AFP saves. `enableafp` turns it back on. i386 programs keep AFP |
 
 - msync is CrossOver's implementation of Windows synchronization objects
@@ -194,11 +195,27 @@ Wine source commit. What goes in is the `WITH_WINE_SDK` step of
 The loader needs `com.apple.developer.cross-architecture-support`. With it,
 the kernel leaves most of the 4 GB `__PAGEZERO` as a mapping Wine can
 replace, which Wine claims as its low reserved area for the i386 code that
-runs under FEX. It also gates the hardware x86 memory ordering FEX runs
-x86 code with (`FEX_HARDWARE_TSO`, [Runtime](#runtime)). That entitlement
-is honoured only through a provisioning profile embedded in an app bundle
-and a signature by a certificate of the profile's team.
+runs under FEX. It also lets a process run with 4K pages instead of the
+host's 16K pages, and gates the hardware x86 memory ordering FEX runs x86
+code with (`FEX_HARDWARE_TSO`, [Runtime](#runtime)). That entitlement is
+honoured only through a provisioning profile embedded in an app bundle and
+a signature by a certificate of the profile's team. Wine does not run
+without it.
 
+- Before Wine sets up its address space, the loader execs itself once with
+  4K pages (`exec_with_4k_pages` in
+  [`loader/main.c`](https://github.com/athei/wine/blob/arm64-patched/loader/main.c)).
+  ntdll starts new Wine processes with 4K pages directly (`preloader_exec` in
+  [`dlls/ntdll/unix/loader.c`](https://github.com/athei/wine/blob/arm64-patched/dlls/ntdll/unix/loader.c)),
+  so they need no second exec. Everything inside a Wine process, FEX
+  included, then runs on 4K pages. Wine does not merge 4K Windows pages into
+  16K host pages, so page protections, guard pages, decommit and FEX's
+  tracking of self-modifying code work on 4K pages, as on Windows. The
+  wineserver and other plain Unix programs keep the default page size.
+- A loader without the entitlement would be killed in that exec without a
+  message, so the loader checks for the entitlement first. Without it, the
+  loader exits with an error saying it must run from the signed `wine.app`.
+  There is no fallback to 16K pages.
 - The bundle step moves the loader into `lib/wine/aarch64-unix/wine.app` and
   links both entry points to it.
 - The app is named Mach9, the launcher this Wine runs under, and carries the
