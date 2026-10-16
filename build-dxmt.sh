@@ -143,33 +143,6 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 claim_tree "$DXMT_DIST" dxmt-dist "$CLEAN"
 
-# pinned_clone <url> <tag> <commit> <dir>: make <dir> a shallow clone of
-# <tag> with its submodules, and exit unless the tag is at <commit>. An
-# existing clone at another commit (a bumped pin) is replaced; it is this
-# script's own scratch copy, never somebody's work tree. The submodules are
-# brought to the recorded commits every time, so an interrupted earlier run
-# cannot leave them missing.
-pinned_clone() {
-    local url="$1" tag="$2" commit="$3" dir="$4" head
-    if [ -e "$dir/.git" ]; then
-        head=$(git -C "$dir" rev-parse HEAD)
-        if [ "$head" != "$commit" ]; then
-            echo "    $dir is at $head, not $commit; cloning again"
-            remove_tree "$dir"
-        fi
-    fi
-    if [ ! -e "$dir/.git" ]; then
-        echo "    cloning $url $tag"
-        git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$tag" "$url" "$dir"
-        head=$(git -C "$dir" rev-parse HEAD)
-        if [ "$head" != "$commit" ]; then
-            echo "Error: $url $tag is at $head, redist.env pins $commit"
-            exit 1
-        fi
-    fi
-    git -C "$dir" submodule update --quiet --init --recursive --depth 1
-}
-
 # ── LLVM 15 ─────────────────────────────────────────────────────────────
 # Only the libraries airconv links: no targets, no tools. The libc++ define
 # and the other options are Hadron's, which builds LLVM 15 with the same

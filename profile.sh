@@ -11,16 +11,16 @@
 #
 # Everything lives under ROOT, the directory that holds this repository: the
 # sources (the Wine checkout of each profile under src/<profile>/, FEX in
-# src-fex/), downloads (cache/), every intermediate of a profile under
-# build/<profile>/ and its bundle under dist/<profile>/wine.
+# src-fex/, Mesa in src-mesa/), downloads (cache/), every intermediate of a
+# profile under build/<profile>/ and its bundle under dist/<profile>/wine.
 # WINE_BUILD_ROOT overrides ROOT, for a checkout kept elsewhere (a worktree)
 # that should use the same trees.
 #
 # Environment overrides of single paths are per profile, so a value exported
 # for one build cannot redirect the other: WINE_SRC and BUILD_DIR for intel;
 # ARM64_WINE_SRC, ARM64_BUILD_DIR, ARM64_X86LIBS_BUILD_DIR and ARM64_WINE_SDK
-# for arm64 (whose FEX and DXMT paths exist only there and keep their own
-# names).
+# for arm64 (whose FEX, DXMT and Mesa paths exist only there and keep their
+# own names).
 # MACOSX_DEPLOYMENT_TARGET overrides the intel floor, and may only raise the
 # arm64 one.
 ROOT="${WINE_BUILD_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -94,6 +94,10 @@ set_profile() {
             X86LIBS_BUILD_DIR=""
             WINE_SDK_DIR=""
             FEX_BUILD_DIR=""
+            # No Vulkan: Wine is configured --without-vulkan, and compatdb's
+            # no-vulkan rule disables a loader a game brings.
+            MESA_BUILD_DIR=""
+            MESA_DIST=""
             LOADER_PROFILE=""
             SMOKE_TEST=smoke_test
             SMOKE_PE_ARCHS=""
@@ -102,6 +106,7 @@ set_profile() {
             WITH_WINE_SDK=0
             WITH_DXMT_BUILD=0
             WITH_FEX=0
+            WITH_VULKAN=0
             WITH_LOADER_APP=0
             ;;
         arm64)
@@ -114,6 +119,15 @@ set_profile() {
             WINE_ARCHS=arm64ec,aarch64,i386
             DEPS_PREFIX=/opt/homebrew
             DEPS_FORMULAE="freetype gnutls sdl2-compat sdl3 bison pkgconf"
+            # Mesa's repository (upstream Mesa plus our topic commits, for
+            # its Vulkan driver KosmicKrisp), the local clone build-mesa.sh
+            # checks out mesa-src.ref in, its trees, and the Vulkan loader
+            # and driver as build-mesa.sh stages them for the bundle. Set
+            # ahead of the configure flags, which name MESA_DIST.
+            MESA_REPO="${MESA_REPO:-https://github.com/athei/mesa}"
+            MESA_SRC="${MESA_SRC:-$ROOT/src-mesa}"
+            MESA_BUILD_DIR="${MESA_BUILD_DIR:-$ROOT/build/arm64/mesa}"
+            MESA_DIST="${MESA_DIST:-$MESA_BUILD_DIR/dist}"
             # Upstream Wine has VA-API and no libunwind option.
             CONFIGURE_FEATURES_EXTRA=(--without-va)
             # Tests are left out: nothing runs them on this build. macOS
@@ -121,14 +135,19 @@ set_profile() {
             # CPPFLAGS so configure keeps its default -g -O2 CFLAGS. Putting
             # $DEPS_PREFIX first in both search paths keeps clang and ld from
             # taking an x86_64 header or library from /usr/local, which they
-            # search by default.
+            # search by default. Ahead of it, $MESA_DIST/lib holds the Vulkan
+            # loader build-mesa.sh built, so configure's -lvulkan test links
+            # that one: it succeeds without Homebrew's vulkan-loader and does
+            # not link Homebrew's libvulkan.dylib where it is installed. The
+            # soname define is the bare file name either way; that the
+            # bundle carries this loader is the bundle step's doing.
             CONFIGURE_TOOLCHAIN=(CC="clang -arch arm64"
                                  --host="$HOST_TRIPLE"
                                  --disable-tests
                                  BISON="$DEPS_PREFIX/opt/bison/bin/bison"
                                  PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig"
                                  CPPFLAGS="-I$DEPS_PREFIX/include"
-                                 LDFLAGS="-L$DEPS_PREFIX/lib")
+                                 LDFLAGS="-L$MESA_DIST/lib -L$DEPS_PREFIX/lib")
             # An x86_64 library from /usr/local cannot load into an arm64
             # process, so a reference to it is as much a leak as one to the
             # arm64 Homebrew.
@@ -182,6 +201,9 @@ set_profile() {
             WITH_WINE_SDK=1
             WITH_DXMT_BUILD=1
             WITH_FEX=1
+            # Wine's Vulkan, on the loader and KosmicKrisp build-mesa.sh
+            # builds.
+            WITH_VULKAN=1
             WITH_LOADER_APP=1
             ;;
         *)
@@ -323,22 +345,51 @@ wine_src_commit() {
     echo "$commit"
 }
 
-# fex_ref_commit: print the commit fex-src.ref names in FEX_REPO: the ref
+# src_ref_commit <ref-file> <repo>: print the commit the ref in <ref-file>
+# (a file of this repository, such as fex-src.ref) names in <repo>: the ref
 # itself when it is a full commit hash, else the tag (peeled, for an
 # annotated one) or branch of that name, preferring a tag as git does.
-# Prints nothing when the ref cannot be resolved.
-fex_ref_commit() {
+# Prints nothing when the ref cannot be resolved, also when <repo> wants
+# credentials: git is not allowed to ask for them.
+src_ref_commit() {
     local ref
-    ref=$(tr -d '[:space:]' < "$SCRIPT_DIR/fex-src.ref")
+    ref=$(tr -d '[:space:]' < "$SCRIPT_DIR/$1")
     if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
         echo "$ref"
         return 0
     fi
-    git ls-remote "$FEX_REPO" "$ref" 2>/dev/null | awk -v ref="$ref" '
+    GIT_TERMINAL_PROMPT=0 git ls-remote "$2" "$ref" 2>/dev/null | awk -v ref="$ref" '
         $2 == "refs/tags/" ref "^{}" { peeled = $1 }
         $2 == "refs/tags/" ref { tag = $1 }
         $2 == "refs/heads/" ref { head = $1 }
         END { if (peeled != "") print peeled; else if (tag != "") print tag; else if (head != "") print head }'
+}
+
+# pinned_clone <url> <tag> <commit> <dir>: make <dir> a shallow clone of
+# <tag> with its submodules, and exit unless the tag is at <commit>. An
+# existing clone at another commit (a bumped pin) is replaced; it is the
+# calling script's own scratch copy, never somebody's work tree. The
+# submodules are brought to the recorded commits every time, so an
+# interrupted earlier run cannot leave them missing.
+pinned_clone() {
+    local url="$1" tag="$2" commit="$3" dir="$4" head
+    if [ -e "$dir/.git" ]; then
+        head=$(git -C "$dir" rev-parse HEAD)
+        if [ "$head" != "$commit" ]; then
+            echo "    $dir is at $head, not $commit; cloning again"
+            remove_tree "$dir"
+        fi
+    fi
+    if [ ! -e "$dir/.git" ]; then
+        echo "    cloning $url $tag"
+        git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$tag" "$url" "$dir"
+        head=$(git -C "$dir" rev-parse HEAD)
+        if [ "$head" != "$commit" ]; then
+            echo "Error: $url $tag is at $head, redist.env pins $commit"
+            exit 1
+        fi
+    fi
+    git -C "$dir" submodule update --quiet --init --recursive --depth 1
 }
 
 # check_deps_formulae: exit unless every formula in DEPS_FORMULAE is

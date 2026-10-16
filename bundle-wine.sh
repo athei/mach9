@@ -898,7 +898,7 @@ check_fex_build() {
         echo "Error: $FEX_BUILD_DIR has no COMMIT; the last build-fex.sh run did not finish"
         exit 1
     }
-    want=$(fex_ref_commit)
+    want=$(src_ref_commit fex-src.ref "$FEX_REPO")
     if [ -z "$want" ]; then
         echo "Error: cannot resolve fex-src.ref ($(tr -d '[:space:]' < "$SCRIPT_DIR/fex-src.ref")) in $FEX_REPO"
         exit 1
