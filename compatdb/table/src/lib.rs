@@ -31,7 +31,9 @@ use std::fmt::Write as _;
 /// tree to the library.
 pub const ENV_VAR: &str = "WINE_COMPATDB";
 
-/// Serialized-table header, the one [`Table::to_env_value`] writes.
+/// The current serialized-table header. [`Table::to_env_value`] writes it
+/// for a table that needs it, one with a rule that sets `wined3d`, and
+/// [`PREVIOUS_HEADER`] otherwise.
 ///
 /// A table carrying a version the parser does not know is ignored wholesale,
 /// which is what makes a format change safe: a library older than the change
@@ -43,7 +45,10 @@ pub const HEADER: &str = "v=6";
 ///
 /// The format only gained a key since (`wined3d`), so a table with this
 /// header means the same in the current format, and a launcher that still
-/// writes it keeps working with this library.
+/// writes it keeps working with this library. It is also what
+/// [`Table::to_env_value`] writes when no rule sets `wined3d`, so a library
+/// that knows only this header, such as the `compatdb.so` of an older
+/// bundle, still reads such a table.
 pub const PREVIOUS_HEADER: &str = "v=5";
 
 /// The parts of a PE version resource the database can match on. Vendor-set at
@@ -790,11 +795,27 @@ impl Table {
         pairs
     }
 
-    /// Serialize the table into the value of [`ENV_VAR`]: the [`HEADER`] line
+    /// Serialize the table into the value of [`ENV_VAR`]: a header line
     /// followed by one record per rule.
+    ///
+    /// The header is the oldest one that can carry the table: [`HEADER`]
+    /// when a rule sets `wined3d`, the only key added since, and
+    /// [`PREVIOUS_HEADER`] otherwise. A library that knows only the previous
+    /// format then reads every table it can understand, and still drops one
+    /// it cannot. A disabled rule travels as its name alone, so its
+    /// `wined3d` does not count.
     #[must_use]
     pub fn to_env_value(&self) -> String {
-        let mut out = String::from(HEADER);
+        let header = if self
+            .rules
+            .iter()
+            .any(|rule| rule.enabled && rule.wined3d.is_some())
+        {
+            HEADER
+        } else {
+            PREVIOUS_HEADER
+        };
+        let mut out = String::from(header);
         for rule in &self.rules {
             out.push('\n');
             out.push_str(&rule_to_record(rule));
@@ -934,6 +955,11 @@ pub fn merge_env(block: &[u16], entries: &[(String, String)]) -> Option<Vec<u16>
 /// Serialize one rule. `debug_channels` is deliberately left out: whoever
 /// starts wine applies those through `WINEDEBUG`, and the library would see
 /// them too late.
+///
+/// Every key here except `wined3d` is in the [`PREVIOUS_HEADER`] format. A
+/// key added after it must also make [`Table::to_env_value`] write
+/// [`HEADER`] when a rule uses it, or a library that knows only the
+/// previous format would drop that record instead of the whole table.
 fn rule_to_record(rule: &Rule) -> String {
     let mut fields: Vec<String> = vec![field("name", &rule.name)];
     if !rule.enabled {
@@ -1324,8 +1350,57 @@ mod tests {
         assert_eq!(previous.rules.len(), 3);
         assert_eq!(previous, current);
         assert_ne!(PREVIOUS_HEADER, HEADER);
-        // The library writes the current header only.
-        assert!(current.to_env_value().starts_with(&format!("{HEADER}\n")));
+    }
+
+    #[test]
+    fn the_previous_header_is_written_unless_a_rule_sets_wined3d() {
+        // Without wined3d the table means the same in the previous format,
+        // so a library that knows only that one reads it.
+        let mut table = Table {
+            rules: vec![
+                Rule {
+                    name: "game".into(),
+                    exe: "game.exe".into(),
+                    dxgi: Some(Dxgi::Wined3d),
+                    env: vec![("A".into(), "1".into())],
+                    ..Rule::default()
+                },
+                // A disabled rule carries nothing but its name.
+                Rule {
+                    name: "dropped".into(),
+                    wined3d: Some(Wined3d::Vulkan),
+                    enabled: false,
+                    ..Rule::default()
+                },
+            ],
+        };
+        let value = table.to_env_value();
+        assert_eq!(
+            value,
+            format!(
+                "{PREVIOUS_HEADER}\n\
+                 name=game;exe=game.exe;dxgi=wined3d;env=A=1\n\
+                 name=dropped;enabled=false"
+            )
+        );
+        let (parsed, diagnostics) = Table::parse(&value);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(parsed.rules.first(), table.rules.first());
+        assert_eq!(parsed.to_env_value(), value);
+        assert_eq!(Table::default().to_env_value(), PREVIOUS_HEADER);
+        // A rule that sets it, to either renderer, needs the current header,
+        // which a library that knows only the previous one refuses as a
+        // whole rather than half understand.
+        for wined3d in [Wined3d::Gl, Wined3d::Vulkan] {
+            if let Some(game) = table.rules.first_mut() {
+                game.wined3d = Some(wined3d);
+            }
+            let value = table.to_env_value();
+            assert!(value.starts_with(&format!("{HEADER}\n")), "{value}");
+            let (parsed, diagnostics) = Table::parse(&value);
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert_eq!(parsed.rules.first(), table.rules.first());
+        }
     }
 
     #[test]
@@ -1403,7 +1478,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                "{HEADER}\n\
+                "{PREVIOUS_HEADER}\n\
                  name=aware;exe=*;dpi_aware=true\n\
                  name=unaware;exe=old.exe;d3d9=wined3d;dpi_aware=false;dll_overrides=a=\n\
                  name=unset;exe=other.exe"
@@ -1547,7 +1622,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                "{HEADER}\n\
+                "{PREVIOUS_HEADER}\n\
                  name=defaults;exe=*;large_address_aware=true\n\
                  name=old;exe=old.exe;dpi_aware=false;large_address_aware=false\n\
                  name=unset;exe=other.exe"

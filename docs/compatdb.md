@@ -100,6 +100,10 @@ name=dpi-aware;enabled=false
   [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs), or of
   `PREVIOUS_HEADER` there, which the library still accepts. `v=<N>` above is
   a placeholder for it.
+- `Table::to_env_value` there, which a launcher can use to write the value,
+  writes `PREVIOUS_HEADER` unless a rule sets `wined3d`, the only key added
+  since. So the `compatdb.so` of an older bundle, which knows only the
+  previous format, still reads every table it can understand.
 - Then one rule per line, as `key=value` fields joined by `;`. Blank lines
   are ignored.
 - Keys: `name` (required), the matching keys (`exe`, `company`, `product`,
