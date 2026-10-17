@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn the_table_accepts_an_x87_sidecar_override() {
         // A launcher written for the x86_64 Wine may still send it. The key
-        // parses, so the record is kept; the library never asks for it.
+        // is accepted and ignored, so the rest of the record still applies.
         let table = with_overrides("name=old;exe=old.exe;dpi_aware=false;x87_sidecar=false");
         let old = table.resolve("Old.exe", &VersionInfo::default());
         assert_eq!(old.dpi_aware, Some(false));
@@ -537,7 +537,6 @@ mod tests {
         assert_eq!(resolution.dll_overrides, wildcard_overrides());
         assert_eq!(resolution.dpi_aware, Some(true));
         assert_eq!(resolution.large_address_aware, Some(true));
-        assert_eq!(resolution.x87_sidecar, None);
         assert_eq!(resolution.env, wildcard_env());
     }
 

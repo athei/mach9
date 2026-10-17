@@ -540,13 +540,13 @@ mod tests {
                 Rule {
                     name: "defaults".into(),
                     exe: ANY_EXE.into(),
-                    x87_sidecar: Some(true),
+                    dpi_aware: Some(true),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "no-x87".into(),
+                    name: "unaware".into(),
                     exe: "Old.exe".into(),
-                    x87_sidecar: Some(false),
+                    dpi_aware: Some(false),
                     ..Rule::default()
                 },
             ],
@@ -557,20 +557,20 @@ mod tests {
     /// than a panic in the test body.
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    /// `x87_sidecar` for `path`, or an error when the path names no file.
-    fn x87(table: &Table, path: &str) -> Result<Option<bool>, String> {
+    /// `dpi_aware` for `path`, or an error when the path names no file.
+    fn dpi(table: &Table, path: &str) -> Result<Option<bool>, String> {
         query(table, path.as_bytes())
-            .map(|(_, _, r)| r.x87_sidecar)
+            .map(|(_, _, r)| r.dpi_aware)
             .ok_or_else(|| format!("{path} names no file"))
     }
 
     #[test]
     fn the_query_matches_on_the_basename_of_a_unix_or_a_dos_path() -> TestResult {
         let table = table();
-        assert_eq!(x87(&table, "/nonexistent/games/old.exe")?, Some(false));
-        assert_eq!(x87(&table, "C:\\Games\\OLD.EXE")?, Some(false));
-        assert_eq!(x87(&table, "old.exe")?, Some(false));
-        assert_eq!(x87(&table, "/nonexistent/games/new.exe")?, Some(true));
+        assert_eq!(dpi(&table, "/nonexistent/games/old.exe")?, Some(false));
+        assert_eq!(dpi(&table, "C:\\Games\\OLD.EXE")?, Some(false));
+        assert_eq!(dpi(&table, "old.exe")?, Some(false));
+        assert_eq!(dpi(&table, "/nonexistent/games/new.exe")?, Some(true));
         let (exe, version, _) = query(&table, b"C:\\Games\\Old.exe").ok_or("no file name")?;
         assert_eq!(exe, "Old.exe");
         assert_eq!(version, VersionInfo::default());
@@ -583,7 +583,7 @@ mod tests {
         assert!(query(&table, b"").is_none());
         assert!(query(&table, b"/nonexistent/games/").is_none());
         assert!(query(&table, b"C:\\Games\\").is_none());
-        assert_eq!(x87(&Table::default(), "/nonexistent/game.exe"), Ok(None));
+        assert_eq!(dpi(&Table::default(), "/nonexistent/game.exe"), Ok(None));
     }
 
     fn pair(name: &str, value: &str) -> (String, String) {
