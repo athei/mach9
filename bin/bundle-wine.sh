@@ -4,14 +4,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # ROOT, the layout, the paths and the floor (MACOS_FLOOR, the deployment
 # target build-wine.sh builds with, which every Mach-O is checked against).
-# shellcheck source=profile.sh
-. "$SCRIPT_DIR/profile.sh"
+# shellcheck source=lib/profile.sh
+. "$SCRIPT_DIR/lib/profile.sh"
 CACHE_DIR="${CACHE_DIR:-$ROOT/cache}"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
 # The pins of every third-party input (MTLD3D_URL/MTLD3D_SHA256 etc.).
-# shellcheck source=redist.env
-. "$SCRIPT_DIR/redist.env"
+# shellcheck source=../pins/redist.env
+. "$PINS_DIR/redist.env"
 DIST_DIR=""
 RUNTIME_ONLY=0
 COMPATDB_ONLY=0
@@ -284,11 +284,11 @@ drop_coff_symtab() {
 # build_compatdb: build the compatdb/ crate and install it as
 # $unixdir/compatdb.so. profile.sh exports MACOSX_DEPLOYMENT_TARGET, which
 # cargo hands to rustc and which takes precedence over the same pin in
-# .cargo/config.toml; cargo only reads that file relative to the working
-# directory, hence the subshell in $SCRIPT_DIR all the same. The new file is
-# copied next to the old one and renamed over it, so a Wine process that has
-# the old library mapped keeps a valid mapping instead of a file that changes
-# underneath it.
+# compatdb/.cargo/config.toml; cargo only reads that file from the working
+# directory upward, hence the subshell in the workspace all the same. The
+# new file is copied next to the old one and renamed over it, so a Wine
+# process that has the old library mapped keeps a valid mapping instead of a
+# file that changes underneath it.
 build_compatdb() {
     if ! command -v cargo >/dev/null; then
         echo "Error: cargo not found (compatdb.so needs a Rust toolchain with the"
@@ -301,8 +301,8 @@ build_compatdb() {
         echo "(rustup target add $RUST_TARGET)"
         exit 1
     fi
-    (cd "$SCRIPT_DIR" && CARGO_TARGET_DIR="$BUILD_DIR/compatdb" \
-        cargo build --quiet --release --manifest-path "$SCRIPT_DIR/Cargo.toml" \
+    (cd "$REPO_DIR/compatdb" && CARGO_TARGET_DIR="$BUILD_DIR/compatdb" \
+        cargo build --quiet --release --manifest-path "$REPO_DIR/compatdb/Cargo.toml" \
             -p compatdb --target "$RUST_TARGET")
     echo "    $UNIX_DIR/compatdb.so"
     cp "$COMPATDB_BUILD" "$unixdir/compatdb.so.new"
@@ -563,7 +563,7 @@ smoke_test() {
     for arch in $SMOKE_PE_ARCHS; do
         cc="$MINGW_DIR/bin/$arch-w64-mingw32-clang"
         exe="$TMP_DIR/hello-$arch.exe"
-        "$cc" -O2 -o "$exe" "$SCRIPT_DIR/smoke/hello.c"
+        "$cc" -O2 -o "$exe" "$REPO_DIR/smoke/hello.c"
         time_mark "smoke: hello.exe $arch"
         echo "  Running hello.exe for $arch..."
         log="$TMP_DIR/hello-$arch.log"
@@ -641,9 +641,9 @@ check_vulkan_present() {
 # so the second run is what shows the opt-in works.
 check_wined3d_device() {
     local arch exe log want header api flags rule tree
-    header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$SCRIPT_DIR/compatdb/table/src/lib.rs")
+    header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$REPO_DIR/compatdb/table/src/lib.rs")
     if [ -z "$header" ]; then
-        echo "Error: no HEADER found in $SCRIPT_DIR/compatdb/table/src/lib.rs; the"
+        echo "Error: no HEADER found in $REPO_DIR/compatdb/table/src/lib.rs; the"
         echo "WINE_COMPATDB rules of the wined3d runs need it"
         smoke_stop
         exit 1
@@ -663,7 +663,7 @@ check_wined3d_device() {
             flags=()
             tree=""
         fi
-        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 "${flags[@]}" -o "$exe" "$SCRIPT_DIR/smoke/wined3d.c"
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 "${flags[@]}" -o "$exe" "$REPO_DIR/smoke/wined3d.c"
         time_mark "smoke: wined3d.exe $arch ($api)"
         echo "  Running wined3d.exe for $arch ($api) with the default renderer..."
         log="$TMP_DIR/wined3d-$arch.log"
@@ -718,7 +718,7 @@ check_vulkan_runs() {
     local arch exe log want
     for arch in x86_64 i686; do
         exe="$TMP_DIR/vulkan-$arch.exe"
-        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$SCRIPT_DIR/smoke/vulkan.c"
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/vulkan.c"
         time_mark "smoke: vulkan.exe $arch"
         echo "  Running vulkan.exe for $arch..."
         log="$TMP_DIR/vulkan-$arch.log"
@@ -771,9 +771,9 @@ check_tree_loads() {
     shift
     [ "$arch" = i686 ] || dir="$PE64_DIR"
     # The table format header WINE_COMPATDB starts with, from its source.
-    header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$SCRIPT_DIR/compatdb/table/src/lib.rs")
+    header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$REPO_DIR/compatdb/table/src/lib.rs")
     exe="$TMP_DIR/trees-$arch.exe"
-    "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$SCRIPT_DIR/smoke/hello.c"
+    "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/hello.c"
     for family in dxgi d3d9; do
         if [ "$family" = dxgi ]; then other=d3d9.dll; else other=dxgi.dll; fi
         for impl in $(if [ "$family" = dxgi ]; then echo "$DXGI_IMPLS"; else echo "$D3D9_IMPLS"; fi); do
@@ -825,7 +825,7 @@ check_fex_build() {
     }
     want=$(src_ref_commit fex-src.ref "$FEX_REPO")
     if [ -z "$want" ]; then
-        echo "Error: cannot resolve fex-src.ref ($(tr -d '[:space:]' < "$SCRIPT_DIR/fex-src.ref")) in $FEX_REPO"
+        echo "Error: cannot resolve fex-src.ref ($(tr -d '[:space:]' < "$PINS_DIR/fex-src.ref")) in $FEX_REPO"
         exit 1
     fi
     if [ "$built" != "$want" ]; then
@@ -847,7 +847,7 @@ check_mesa_build() {
     }
     want=$(src_ref_commit mesa-src.ref "$MESA_REPO")
     if [ -z "$want" ]; then
-        echo "Error: cannot resolve mesa-src.ref ($(tr -d '[:space:]' < "$SCRIPT_DIR/mesa-src.ref")) in $MESA_REPO"
+        echo "Error: cannot resolve mesa-src.ref ($(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref")) in $MESA_REPO"
         exit 1
     fi
     if [ "$built" != "$want" ]; then

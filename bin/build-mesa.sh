@@ -50,14 +50,14 @@ done
 
 # profile.sh names Mesa's repository and clone, says where the trees go and
 # pins the floor.
-# shellcheck source=profile.sh
-. "$SCRIPT_DIR/profile.sh"
-# shellcheck source=redist.env
-. "$SCRIPT_DIR/redist.env"
+# shellcheck source=lib/profile.sh
+. "$SCRIPT_DIR/lib/profile.sh"
+# shellcheck source=../pins/redist.env
+. "$PINS_DIR/redist.env"
 
-MESA_REF="$(tr -d '[:space:]' < "$SCRIPT_DIR/mesa-src.ref")"
+MESA_REF="$(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref")"
 if [ -z "$MESA_REF" ]; then
-    echo "Error: $SCRIPT_DIR/mesa-src.ref is empty"
+    echo "Error: $PINS_DIR/mesa-src.ref is empty"
     exit 1
 fi
 

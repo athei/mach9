@@ -17,8 +17,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# shellcheck source=profile.sh
-. "$SCRIPT_DIR/profile.sh"
+# shellcheck source=lib/profile.sh
+. "$SCRIPT_DIR/lib/profile.sh"
 
 if [ ! -f "$WINE_SRC/configure" ]; then
     echo "Error: Wine source not found at $WINE_SRC"

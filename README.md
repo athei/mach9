@@ -27,7 +27,7 @@ The `cx-*` and `compatdb-*`
 Wine this repository built before, run under Rosetta. They are frozen and
 kept for comparison.
 
-The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](profile.sh).
+The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](bin/lib/profile.sh).
 
 ## Bundle layout
 
@@ -83,7 +83,7 @@ for DXMT and mtld3d, live under `<impl>/aarch64-windows/`.
   ([limitations](docs/arm64.md#limitations)).
 - D3D12 is not available: the bundle leaves out Wine's own D3D12. D3D8 and
   DirectDraw stay on wined3d. Which modules each tree holds is in Step 4 of
-  [`bundle-wine.sh`](bundle-wine.sh).
+  [`bundle-wine.sh`](bin/bundle-wine.sh).
 - wined3d draws through OpenGL. The compatdb setting `wined3d` can put it
   on Vulkan for one game; it applies to every wined3d user in the process
   ([wined3d on Vulkan](docs/compatdb.md#wined3d-on-vulkan)).
@@ -116,8 +116,8 @@ provisioning profile.
 ### Commands
 
 ```bash
-./build-wine.sh    # Mesa and the Vulkan loader, Wine, the SDK, then FEX and DXMT
-./bundle-wine.sh   # assemble the bundle (see Layout)
+bin/build-wine.sh    # Mesa and the Vulkan loader, Wine, the SDK, then FEX and DXMT
+bin/bundle-wine.sh   # assemble the bundle (see Layout)
 ```
 
 | Script | Flag | Effect |
@@ -131,10 +131,22 @@ provisioning profile.
 | `bundle-wine.sh` | `--strict-floor` | A Mach-O that needs a newer macOS than the floor is an error instead of a warning ([Homebrew libraries and the floor](docs/arm64.md#homebrew-libraries-and-the-floor)) |
 | `bundle-wine.sh` | `--symbols` | Also keeps the PE files as they were before their symbols were stripped, in `wine-symbols` next to the bundle |
 
-`usage()` and the argument parsing in [`build-wine.sh`](build-wine.sh) and
-[`bundle-wine.sh`](bundle-wine.sh) are authoritative. `build-mesa.sh`,
-`build-fex.sh` and `build-dxmt.sh` also run alone
+`usage()` and the argument parsing in
+[`build-wine.sh`](bin/build-wine.sh) and
+[`bundle-wine.sh`](bin/bundle-wine.sh) are authoritative.
+`build-mesa.sh`, `build-fex.sh` and `build-dxmt.sh` also run alone
 ([commands](docs/arm64.md#commands)).
+
+### Repository
+
+| Path | What it holds |
+|------|---------------|
+| [`bin/`](bin) | The build and bundle scripts; [`bin/lib/profile.sh`](bin/lib/profile.sh) holds the settings and helpers they share |
+| [`pins/`](pins) | The pinned inputs: [`redist.env`](pins/redist.env) and the refs of the sources the build checks out |
+| [`compatdb/`](compatdb) | The Cargo workspace of `compatdb.so` and the `compatdb-table` crate ([docs/compatdb.md](docs/compatdb.md)); run cargo there |
+| [`smoke/`](smoke) | The programs the bundle step's smoke test builds and runs |
+| [`signing/`](signing) | The loader's provisioning profile |
+| [`docs/`](docs) | The documentation this README links to |
 
 ### Layout
 
@@ -143,29 +155,29 @@ Everything lives beside this repository, in the directory that holds it
 
 | Path | What it is |
 |------|------------|
-| `scripts/` | This repository |
+| `scripts/` | The checkout of this repository, [wine-build](https://github.com/athei/wine-build), named `scripts` locally |
 | `src/` | The Wine source, a checkout of athei/wine |
 | `src-fex/` | The FEX checkout |
 | `src-mesa/` | The Mesa checkout, for the Vulkan driver |
 | `cache/` | Downloaded redistributables |
 | `build/<component>/` | One tree per intermediate: the Wine build, its SDK and link-library tree, FEX, DXMT and Mesa with the Vulkan loader |
 | `dist/wine` | The bundle |
-| `dist/wine-symbols` | With `--symbols`, the bundle's PE files before their symbols were stripped (Step 4e of [`bundle-wine.sh`](bundle-wine.sh)); not part of the bundle |
+| `dist/wine-symbols` | With `--symbols`, the bundle's PE files before their symbols were stripped (Step 4e of [`bundle-wine.sh`](bin/bundle-wine.sh)); not part of the bundle |
 
-The name of each tree is set in [`profile.sh`](profile.sh), with the
-variable that overrides it ([paths](docs/arm64.md#paths)). The scripts mark
-each build tree they make with a `.wine-build-tree` file and refuse to fill
-or delete a directory that is not empty and has no such marker, so an
-override cannot point them at something else (`claim_tree` in
-[`profile.sh`](profile.sh)). The exception is an unmarked tree from before
-markers existed, which is adopted when its parent is `build/` or another
-tree and it is not a git checkout.
+The name of each tree is set in [`profile.sh`](bin/lib/profile.sh),
+with the variable that overrides it ([paths](docs/arm64.md#paths)). The
+scripts mark each build tree they make with a `.wine-build-tree` file and
+refuse to fill or delete a directory that is not empty and has no such
+marker, so an override cannot point them at something else (`claim_tree`
+in [`profile.sh`](bin/lib/profile.sh)). The exception is an unmarked
+tree from before markers existed, which is adopted when its parent is
+`build/` or another tree and it is not a git checkout.
 
 ### Configure policy
 
 - Every optional dependency is `--without-*` unless re-enabled with
-  `--with-*` in [`build-wine.sh`](build-wine.sh), so a missing package fails
-  configure instead of silently changing the feature set.
+  `--with-*` in [`build-wine.sh`](bin/build-wine.sh), so a missing
+  package fails configure instead of silently changing the feature set.
 - Never pass `--with-opengl` on macOS: it triggers an EGL probe that always
   fails there, and the Mac driver links `-framework OpenGL` on its own.
 - Wine's Vulkan is on, on the loader and KosmicKrisp `build-mesa.sh` builds

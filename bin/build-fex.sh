@@ -30,12 +30,12 @@ done
 
 # profile.sh names FEX's repository and clone, says where the trees go and
 # pins the floor of the unix half.
-# shellcheck source=profile.sh
-. "$SCRIPT_DIR/profile.sh"
+# shellcheck source=lib/profile.sh
+. "$SCRIPT_DIR/lib/profile.sh"
 
-FEX_REF="$(tr -d '[:space:]' < "$SCRIPT_DIR/fex-src.ref")"
+FEX_REF="$(tr -d '[:space:]' < "$PINS_DIR/fex-src.ref")"
 if [ -z "$FEX_REF" ]; then
-    echo "Error: $SCRIPT_DIR/fex-src.ref is empty"
+    echo "Error: $PINS_DIR/fex-src.ref is empty"
     exit 1
 fi
 
