@@ -23,7 +23,6 @@ and with none, Wine does.
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` only stops forcing it: the executable's flag, `WINE_LARGE_ADDRESS_AWARE` and the `AppDefaults` registry value decide. No effect on 64-bit | At load; ntdll applies it after the library returns |
-| `x87_sidecar` | `true`, `false` | No effect: there is no x87sidecar, since FEX emulates x87 code ([FEX and KosmicKrisp](#fex-and-kosmickrisp)). The key still parses, so a table written for the x86_64 Wine keeps its records | Never |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it. An ntdll that asks also gets the entries before it execs the program, through `compatdb_query_env`; the arm64 Wine's ntdll does not ask | At load |
 
@@ -133,7 +132,9 @@ Wine understood. The library keeps such a record instead of dropping it:
 
 - `dxgi=gptk` reads as `dxmt`, which is what this Wine always loaded in its
   place; a native ARM64 program still gets `wined3d`.
-- `x87_sidecar` is a [setting](#settings) without effect.
+- `x87_sidecar` is accepted, with any value, and ignored. There is no
+  x87sidecar; FEX emulates x87 code
+  ([FEX and KosmicKrisp](#fex-and-kosmickrisp)).
 - A rule that names a built-in rule only that Wine had, such as
   `name=no-vulkan;enabled=false` or `name=x87-sidecar;enabled=false`, names
   no rule here and is logged as `override names no rule`.

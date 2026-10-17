@@ -3,8 +3,8 @@
 //! A [`Rule`] says which processes it matches and which settings it applies to
 //! them: the Direct3D implementations to load (one for D3D9, one for the DXGI
 //! family) and the renderer of wined3d, DLL load-order overrides, the DPI
-//! awareness, large address awareness, the x87sidecar, command-line switches
-//! and environment entries.
+//! awareness, large address awareness, command-line switches and environment
+//! entries.
 //!
 //! Shared by `compatdb.so`, the unix library wine's ntdll loads into every
 //! process (it holds the built-in rules, parses [`ENV_VAR`], overlays the
@@ -481,10 +481,6 @@ pub struct Rule {
     /// not take the space away from an executable that has the flag; it only
     /// stops forcing it. Has no effect on a 64-bit process.
     pub large_address_aware: Option<bool>,
-    /// Whether an i386 process under Rosetta ran with the x87sidecar
-    /// attached, in the `x86_64` Wine. The library parses the key and
-    /// ignores it.
-    pub x87_sidecar: Option<bool>,
     /// `WINEDLLOVERRIDES` elements (each a `names=order` string).
     pub dll_overrides: Vec<String>,
     /// Text appended to the command line, unless already present.
@@ -518,7 +514,6 @@ impl Default for Rule {
             wined3d: None,
             dpi_aware: None,
             large_address_aware: None,
-            x87_sidecar: None,
             dll_overrides: Vec::new(),
             arguments: Vec::new(),
             env: Vec::new(),
@@ -608,9 +603,6 @@ impl Rule {
         if over.large_address_aware.is_some() {
             self.large_address_aware = over.large_address_aware;
         }
-        if over.x87_sidecar.is_some() {
-            self.x87_sidecar = over.x87_sidecar;
-        }
         if !over.exe.is_empty() {
             self.exe = over.exe;
         }
@@ -640,7 +632,6 @@ pub struct Resolution {
     pub wined3d: Option<Wined3d>,
     pub dpi_aware: Option<bool>,
     pub large_address_aware: Option<bool>,
-    pub x87_sidecar: Option<bool>,
     pub dll_overrides: Vec<String>,
     pub arguments: Vec<String>,
     pub env: Vec<(String, String)>,
@@ -657,7 +648,6 @@ impl Resolution {
             && self.wined3d.is_none()
             && self.dpi_aware.is_none()
             && self.large_address_aware.is_none()
-            && self.x87_sidecar.is_none()
             && self.dll_overrides.is_empty()
             && self.arguments.is_empty()
             && self.env.is_empty()
@@ -735,9 +725,6 @@ impl Table {
             }
             if let Some(laa) = rule.large_address_aware {
                 r.large_address_aware = Some(laa);
-            }
-            if let Some(x87) = rule.x87_sidecar {
-                r.x87_sidecar = Some(x87);
             }
             r.dll_overrides.extend(rule.dll_overrides.iter().cloned());
             r.arguments.extend(rule.arguments.iter().cloned());
@@ -980,7 +967,6 @@ fn rule_to_record(rule: &Rule) -> String {
     for (key, value) in [
         ("dpi_aware", rule.dpi_aware),
         ("large_address_aware", rule.large_address_aware),
-        ("x87_sidecar", rule.x87_sidecar),
     ] {
         if let Some(value) = value {
             fields.push(field(key, if value { "true" } else { "false" }));
@@ -1041,7 +1027,11 @@ fn record_to_rule(record: &str) -> Result<Rule, String> {
             }
             "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
             "large_address_aware" => rule.large_address_aware = Some(parse_bool(key, value)?),
-            "x87_sidecar" => rule.x87_sidecar = Some(parse_bool(key, value)?),
+            // The x86_64 Wine's switch for the x87sidecar, which ran under
+            // Rosetta. A launcher written for that Wine may still send it, so
+            // the key is accepted, whatever its value, and ignored rather
+            // than dropping the record it is in.
+            "x87_sidecar" => {}
             "dll_overrides" => rule.dll_overrides.push(decode(value)),
             "arguments" => rule.arguments.push(decode(value)),
             "env" => {
@@ -1533,14 +1523,13 @@ mod tests {
     }
 
     #[test]
-    fn large_address_aware_and_x87_sidecar_round_trip_and_are_absent_when_unset() {
+    fn large_address_aware_round_trips_and_is_absent_when_unset() {
         let table = Table {
             rules: vec![
                 Rule {
                     name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     large_address_aware: Some(true),
-                    x87_sidecar: Some(true),
                     ..Rule::default()
                 },
                 Rule {
@@ -1548,7 +1537,6 @@ mod tests {
                     exe: "old.exe".into(),
                     dpi_aware: Some(false),
                     large_address_aware: Some(false),
-                    x87_sidecar: Some(false),
                     ..Rule::default()
                 },
                 Rule {
@@ -1563,8 +1551,8 @@ mod tests {
             text,
             format!(
                 "{HEADER}\n\
-                 name=defaults;exe=*;large_address_aware=true;x87_sidecar=true\n\
-                 name=old;exe=old.exe;dpi_aware=false;large_address_aware=false;x87_sidecar=false\n\
+                 name=defaults;exe=*;large_address_aware=true\n\
+                 name=old;exe=old.exe;dpi_aware=false;large_address_aware=false\n\
                  name=unset;exe=other.exe"
             )
         );
@@ -1574,46 +1562,43 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_large_address_aware_or_x87_sidecar_value_drops_the_record() {
-        for key in ["large_address_aware", "x87_sidecar"] {
-            for bad in ["yes", "1", "False", ""] {
-                let (table, diagnostics) = Table::parse(&format!(
-                    "{HEADER}\nname=x;exe=x.exe;{key}={bad}\nname=ok;exe=ok.exe"
-                ));
-                assert_eq!(table.rules.len(), 1, "{key}={bad:?}");
-                assert_eq!(table.rules.first().map(|r| r.name.as_str()), Some("ok"));
-                assert_eq!(diagnostics.len(), 1, "{key}={bad:?}");
-                assert!(
-                    diagnostics.first().is_some_and(|d| d.contains(key)),
-                    "{diagnostics:?}"
-                );
-            }
+    fn a_bad_large_address_aware_value_drops_the_record() {
+        let key = "large_address_aware";
+        for bad in ["yes", "1", "False", ""] {
+            let (table, diagnostics) = Table::parse(&format!(
+                "{HEADER}\nname=x;exe=x.exe;{key}={bad}\nname=ok;exe=ok.exe"
+            ));
+            assert_eq!(table.rules.len(), 1, "{key}={bad:?}");
+            assert_eq!(table.rules.first().map(|r| r.name.as_str()), Some("ok"));
+            assert_eq!(diagnostics.len(), 1, "{key}={bad:?}");
+            assert!(
+                diagnostics.first().is_some_and(|d| d.contains(key)),
+                "{diagnostics:?}"
+            );
         }
     }
 
     #[test]
-    fn large_address_aware_and_x87_sidecar_resolve_to_the_most_specific_rule() {
+    fn large_address_aware_resolves_to_the_most_specific_rule() {
         let table = Table {
             rules: vec![
                 Rule {
                     name: "pinned".into(),
                     exe: "game.exe".into(),
                     company: Some("Acme".into()),
-                    x87_sidecar: Some(true),
+                    dpi_aware: Some(false),
                     ..Rule::default()
                 },
                 Rule {
                     name: "named".into(),
                     exe: "game.exe".into(),
                     large_address_aware: Some(false),
-                    x87_sidecar: Some(false),
                     ..Rule::default()
                 },
                 Rule {
                     name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     large_address_aware: Some(true),
-                    x87_sidecar: Some(true),
                     ..Rule::default()
                 },
             ],
@@ -1625,49 +1610,37 @@ mod tests {
         // Only the wildcard matches.
         let other = table.resolve("other.exe", &VersionInfo::default());
         assert_eq!(other.large_address_aware, Some(true));
-        assert_eq!(other.x87_sidecar, Some(true));
         // The basename rule beats the wildcard.
         let named = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(named.large_address_aware, Some(false));
-        assert_eq!(named.x87_sidecar, Some(false));
-        // The fingerprinted rule beats both for the field it sets and inherits
-        // the other from the next most specific rule.
+        // A fingerprinted rule that leaves it unset inherits it from the next
+        // most specific rule.
         let pinned = table.resolve("game.exe", &acme);
-        assert_eq!(pinned.x87_sidecar, Some(true));
+        assert_eq!(pinned.dpi_aware, Some(false));
         assert_eq!(pinned.large_address_aware, Some(false));
-        // With no rule setting them, there is no opinion.
+        // With no rule setting it, there is no opinion.
         let none = Table::default().resolve("x.exe", &acme);
         assert_eq!(none.large_address_aware, None);
-        assert_eq!(none.x87_sidecar, None);
         assert!(none.is_empty());
-        // Either one alone makes a resolution non-empty.
-        for rule in [
-            Rule {
+        // It alone makes a resolution non-empty.
+        let table = Table {
+            rules: vec![Rule {
                 name: "laa".into(),
                 exe: ANY_EXE.into(),
                 large_address_aware: Some(false),
                 ..Rule::default()
-            },
-            Rule {
-                name: "x87".into(),
-                exe: ANY_EXE.into(),
-                x87_sidecar: Some(false),
-                ..Rule::default()
-            },
-        ] {
-            let table = Table { rules: vec![rule] };
-            assert!(!table.resolve("x.exe", &acme).is_empty());
-        }
+            }],
+        };
+        assert!(!table.resolve("x.exe", &acme).is_empty());
     }
 
     #[test]
-    fn overlay_by_name_replaces_large_address_aware_and_x87_sidecar_only_when_set() -> TestResult {
+    fn overlay_by_name_replaces_large_address_aware_only_when_set() -> TestResult {
         let mut base = Table {
             rules: vec![Rule {
                 name: "defaults".into(),
                 exe: ANY_EXE.into(),
                 large_address_aware: Some(true),
-                x87_sidecar: Some(true),
                 ..Rule::default()
             }],
         };
@@ -1677,15 +1650,39 @@ mod tests {
         assert_eq!(base.overlay(over), [] as [String; 0]);
         let rule = base.rules.first().ok_or("no rule")?;
         assert_eq!(rule.large_address_aware, Some(true));
-        assert_eq!(rule.x87_sidecar, Some(true));
-        let (over, diagnostics) =
-            Table::parse(&format!("{HEADER}\nname=defaults;x87_sidecar=false"));
+        let (over, diagnostics) = Table::parse(&format!(
+            "{HEADER}\nname=defaults;large_address_aware=false"
+        ));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(base.overlay(over), [] as [String; 0]);
         let rule = base.rules.first().ok_or("no rule")?;
-        assert_eq!(rule.large_address_aware, Some(true));
-        assert_eq!(rule.x87_sidecar, Some(false));
+        assert_eq!(rule.large_address_aware, Some(false));
         Ok(())
+    }
+
+    #[test]
+    fn a_legacy_x87_sidecar_field_is_accepted_and_ignored() {
+        // What a launcher written for the x86_64 Wine still sends. The record
+        // is kept with everything else it says, whatever the value, and
+        // nothing of it is written back.
+        let bare = Table::parse(&format!(
+            "{HEADER}\nname=old;exe=old.exe;large_address_aware=false\nname=x87-sidecar;enabled=false"
+        ));
+        for value in ["true", "false", "TRUE", "1", ""] {
+            let with = Table::parse(&format!(
+                "{HEADER}\nname=old;exe=old.exe;x87_sidecar={value};large_address_aware=false\n\
+                 name=x87-sidecar;enabled=false;x87_sidecar={value}"
+            ));
+            assert_eq!(with, bare, "x87_sidecar={value:?}");
+        }
+        let (table, diagnostics) = bare;
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(!table.to_env_value().contains("x87_sidecar"));
+        // The key still needs its '=' like any other field.
+        let (table, diagnostics) =
+            Table::parse(&format!("{HEADER}\nname=old;exe=old.exe;x87_sidecar"));
+        assert_eq!(table.rules, []);
+        assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
