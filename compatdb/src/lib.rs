@@ -1,15 +1,11 @@
 //! `compatdb.so`: the per-process settings library wine's ntdll dlopens from
 //! `<ntdll_dir>/compatdb.so` in every process (the slot `CrossOver` hack 24067
 //! provides), before any PE code runs. Its main entry point is a Mach-O
-//! initializer; ntdll also calls `compatdb_query_x87` to decide whether a
-//! process starts under the x87sidecar (only in the `x86_64` library, since
-//! the sidecar is for Rosetta), and [`compatdb_query_env`] for the rule
-//! environment to set before it execs a process.
+//! initializer; an ntdll that asks can also call [`compatdb_query_env`] for
+//! the rule environment to set before it execs a process.
 //!
-//! The same source builds the library for the `x86_64` Wine and the arm64
-//! one. What differs between them is data chosen by [`Host`]: the built-in
-//! rules, the Direct3D defaults and the builtin directory of a 64-bit
-//! process.
+//! It is built for the arm64 Wine, which runs x86 programs under emulation
+//! and native ARM64 ones.
 //!
 //! It holds the built-in rules, overlays the ones passed in
 //! [`ENV_VAR`](compatdb_table::ENV_VAR), resolves the rules that match this
@@ -29,7 +25,6 @@
 mod apply;
 mod builtin;
 mod log;
-mod macos;
 mod ntdll;
 mod version;
 
@@ -41,7 +36,7 @@ use std::{
 };
 
 use compatdb_table::{
-    Arch, D3d9, Dxgi, ENV_VAR, Host, Resolution, Table, VersionInfo, Wined3d, basename_of,
+    Arch, D3d9, Dxgi, ENV_VAR, Resolution, Table, VersionInfo, Wined3d, basename_of,
 };
 
 use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TEB_PEB_OFFSET};
@@ -53,8 +48,7 @@ static INIT: extern "C" fn() = init;
 
 extern "C" fn init() {
     // ntdll can load the library before it is initialized itself, only to
-    // call compatdb_query_x87 and compatdb_query_env, and says so through
-    // compatdb_preinit_query.
+    // call compatdb_query_env, and says so through compatdb_preinit_query.
     // Nothing here would work then, so do nothing. dyld does not unload this
     // library on dlclose, and a later dlopen of it does not run INIT again,
     // so skipping here would also skip the real run in this process. That is
@@ -67,57 +61,11 @@ extern "C" fn init() {
     run();
 }
 
-/// Whether the executable at `unix_path` should start under the x87sidecar:
-/// 1 to attach it, 0 not to, -1 for no opinion (a null or empty path, or no
-/// rule that sets `x87_sidecar`).
-///
-/// ntdll calls this before it starts an i386 process, and possibly before
-/// ntdll itself is initialized, so it reads only the rule table and the file:
-/// no PEB, no TEB and no ntdll symbol. It keeps no state between calls. The
-/// path is a unix path when ntdll could resolve one; otherwise it may be a DOS
-/// path, in which case only the basename is known and the version fingerprint
-/// is empty.
-///
-/// Only the `x86_64` library exports it: the sidecar exists for Rosetta,
-/// which the arm64 Wine does not run under.
-///
-/// # Safety
-/// `unix_path` must be null or point at a NUL-terminated string that stays
-/// valid for the duration of the call.
-#[cfg(target_arch = "x86_64")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn compatdb_query_x87(unix_path: *const c_char) -> c_int {
-    if unix_path.is_null() {
-        log::line("x87 query without a path, no opinion");
-        return -1;
-    }
-    // SAFETY: the caller passes a NUL-terminated string that stays valid for
-    // the call; it is copied out before anything else happens.
-    let path = unsafe { CStr::from_ptr(unix_path) }.to_bytes().to_vec();
-    let (table, _) = load_table();
-    let Some((exe, version, resolution)) = query(&table, &path) else {
-        log::line("x87 query without a file name, no opinion");
-        return -1;
-    };
-    let (answer, ret) = match resolution.x87_sidecar {
-        Some(true) => ("x87_sidecar (rule) = true", 1),
-        Some(false) => ("x87_sidecar (rule) = false", 0),
-        None => ("x87_sidecar (rule) unset, no opinion", -1),
-    };
-    log::line(&format!(
-        "x87 query {exe}{}: {answer}",
-        fingerprint(&version)
-    ));
-    ret
-}
-
 /// The rule environment of the executable at `path`, for ntdll to set in the
 /// unix environment right before it execs the process.
 ///
 /// The process gets its environment block and unix environment from compatdb
-/// only once it runs, which is too late for what starts ahead of it: the
-/// x87sidecar reads its `X87_*` variables before it execs Wine, and Rosetta
-/// reads its own at exec.
+/// only once it runs, which is too late for whatever starts ahead of it.
 ///
 /// Writes the entries into `buf` as `NAME=value\0` strings in resolution
 /// order, so a later entry for the same name wins, followed by one more `\0`.
@@ -130,9 +78,11 @@ pub unsafe extern "C" fn compatdb_query_x87(unix_path: *const c_char) -> c_int {
 /// (no rule sets one, or the path names no file) and -1 for a null path or
 /// entries too large for an `int`.
 ///
-/// The path is a unix path or a DOS one, as for `compatdb_query_x87`, under
-/// the same constraints: this can run before ntdll is initialized and keeps
-/// no state.
+/// ntdll may call this before it is initialized itself, so it reads only the
+/// rule table and the file: no PEB, no TEB and no ntdll symbol. It keeps no
+/// state between calls. The path is a unix path when ntdll could resolve one;
+/// otherwise it may be a DOS path, in which case only the basename is known
+/// and the version fingerprint is empty.
 /// ntdll may `dlclose` the library right after a pre-init query, which is why
 /// the answer goes into the caller's buffer and nothing points into this
 /// library.
@@ -256,7 +206,7 @@ fn query(table: &Table, path: &[u8]) -> Option<(String, VersionInfo, Resolution)
     };
     let mut resolution = table.resolve(&exe, &version);
     // The env the process gets includes what its wined3d renderer needs.
-    resolution.apply_wined3d(Host::current());
+    resolution.apply_wined3d();
     Some((exe, version, resolution))
 }
 
@@ -292,12 +242,11 @@ fn run() {
     for m in &messages {
         log::line(m);
     }
-    let host = Host::current();
-    let Some(process) = Process::current(&nt, host) else {
+    let Some(process) = Process::current(&nt) else {
         return;
     };
     let mut resolution = table.resolve(&process.exe, &process.version);
-    let arch = arch_name(process.arch, host);
+    let arch = arch_name(process.arch);
     log::line(&format!(
         "{} [{arch}]{}",
         process.exe,
@@ -312,39 +261,37 @@ fn run() {
     }
 
     // Every process gets one tree of each family prepended: a rule's choice,
-    // or the arch default, with dxmt in place of gptk where gptk cannot load,
-    // and wined3d where neither dxmt nor mtld3d can (a native ARM64 program
-    // in the arm64 Wine). Purely additive: the default dirs hold nothing that
-    // could conflict, so nothing is ever disabled.
-    // The macOS release matters only where some process could load gptk, so
-    // a Wine without it neither reads nor logs it.
-    let mac = Dxgi::Gptk
-        .available_for(Arch::X86_64, host, true)
-        .then(macos::host);
-    let gptk_loads = mac.is_some_and(|m| m.gptk_loads);
-    let release = mac.map_or("", |m| m.name.as_str());
-    let dxgi = Dxgi::effective(resolution.dxgi, process.arch, host, gptk_loads);
-    if let Some(note) = dxgi_fallback(resolution.dxgi, process.arch, host, release, dxgi) {
+    // or the arch default, and wined3d where the one asked for cannot load
+    // (dxmt or mtld3d for a native ARM64 program). Purely additive: the
+    // default dirs hold nothing that could conflict, so nothing is ever
+    // disabled.
+    let pe_dir = process.arch.pe_dir();
+    let dxgi = Dxgi::effective(resolution.dxgi, process.arch);
+    if let Some(note) = fallback(
+        "dxgi",
+        resolution.dxgi.map(Dxgi::as_str),
+        dxgi.as_str(),
+        process.arch,
+    ) {
         log::line(&note);
     }
-    apply::tree(&nt, process.arch.pe_dir(host), "dxgi", dxgi.as_str());
-    let d3d9 = D3d9::effective(resolution.d3d9, process.arch, host);
-    if let Some(note) = d3d9_fallback(resolution.d3d9, process.arch, host, d3d9) {
+    apply::tree(&nt, pe_dir, "dxgi", dxgi.as_str());
+    let d3d9 = D3d9::effective(resolution.d3d9, process.arch);
+    if let Some(note) = fallback(
+        "d3d9",
+        resolution.d3d9.map(D3d9::as_str),
+        d3d9.as_str(),
+        process.arch,
+    ) {
         log::line(&note);
     }
-    apply::tree(&nt, process.arch.pe_dir(host), "d3d9", d3d9.as_str());
+    apply::tree(&nt, pe_dir, "d3d9", d3d9.as_str());
     // One renderer for every wined3d user in the process, whichever tree or
     // API brought wined3d in. A renderer a rule sets travels as an env
     // entry, applied with the rest below. Without one, the log names the
     // renderer the WINE_D3D_CONFIG the process ends up with asks for: a
     // rule's env, or else the one it inherited.
-    let requested = resolution.wined3d;
-    let wined3d = resolution.apply_wined3d(host);
-    if let (Some(want), Some(got)) = (requested, wined3d)
-        && let Some(note) = wined3d_fallback(want, host, got)
-    {
-        log::line(&note);
-    }
+    let wined3d = resolution.apply_wined3d();
     let config = match resolution.d3d_config() {
         Some(value) => Some(value.to_owned()),
         None => compatdb_table::env_value(&process.env, Wined3d::CONFIG_VAR),
@@ -365,18 +312,6 @@ fn run() {
     if let Some(laa) = resolution.large_address_aware {
         apply::large_address_aware(&nt, laa);
     }
-    // Only for the log, and only the rule's value: ntdll asked
-    // compatdb_query_x87 before it started the process and decided then, and
-    // it may have skipped the sidecar regardless (an empty ROSETTA_X87_PATH,
-    // no sidecar installed, an ntdll without the query). For a first launch
-    // by DOS path, ntdll resolves the path through the prefix's dosdevices;
-    // when that fails the query saw only the basename. It means
-    // nothing to a 64-bit process, so only an i386 one shows it, and nothing
-    // in the arm64 Wine, which has no such query.
-    #[cfg(target_arch = "x86_64")]
-    if let (Some(x87), Arch::I386) = (resolution.x87_sidecar, process.arch) {
-        log::line(&format!("  x87_sidecar (rule) = {x87}"));
-    }
     if !resolution.arguments.is_empty() {
         log::line(&format!("  arguments = {}", resolution.arguments.join(" ")));
     }
@@ -396,94 +331,34 @@ fn run() {
     apply::unix_env(&resolution.env);
 }
 
-/// The arch of a process as the log prints it in the Wine built for `host`.
-/// In the arm64 Wine an `x86_64` program runs in an ARM64EC process, which the
-/// label says.
-const fn arch_name(arch: Arch, host: Host) -> &'static str {
-    match (arch, host) {
-        (Arch::X86_64, Host::X86_64) => "x86_64",
-        (Arch::X86_64, Host::Aarch64) => "x86_64 (arm64ec)",
-        (Arch::I386, _) => "i386",
-        (Arch::Aarch64, _) => "aarch64",
+/// The arch of a process as the log prints it. An `x86_64` program runs in an
+/// ARM64EC process, which the label says.
+const fn arch_name(arch: Arch) -> &'static str {
+    match arch {
+        Arch::X86_64 => "x86_64 (arm64ec)",
+        Arch::I386 => "i386",
+        Arch::Aarch64 => "aarch64",
     }
 }
 
-/// The host as the log names it.
-const fn host_name(host: Host) -> &'static str {
-    match host {
-        Host::X86_64 => "x86_64",
-        Host::Aarch64 => "arm64",
-    }
-}
-
-/// The log line for a process that gets another DXGI implementation than the
-/// one it asked for (`requested`) or, without a rule, than the default for
-/// its arch and host. `dxgi` is what [`Dxgi::effective`] chose and `release`
-/// the macOS release it was decided on ([`macos::Host::name`]). `None` when
-/// the process gets what it asked for.
-fn dxgi_fallback(
-    requested: Option<Dxgi>,
-    arch: Arch,
-    host: Host,
-    release: &str,
-    dxgi: Dxgi,
-) -> Option<String> {
-    let want = requested.unwrap_or_else(|| Dxgi::default_for(arch, host));
-    if want == dxgi {
-        return None;
-    }
-    // When the implementation exists for the arch (only gptk), the macOS
-    // release is what keeps it from loading. When it exists for no arch of
-    // this Wine (gptk in the arm64 one), the Wine is. Otherwise the arch is
-    // (gptk for i386, dxmt for a native ARM64 program).
-    let place = if want.available_for(arch, host, true) {
-        format!("{release} (needs macOS {})", macos::GPTK_MIN_TEXT)
-    } else if !want.available_for(Arch::X86_64, host, true) {
-        host_name(host).to_owned()
-    } else {
-        arch_name(arch, host).to_owned()
-    };
-    Some(format!(
-        "  dxgi = {} not available on {place}, using {}",
-        want.as_str(),
-        dxgi.as_str()
-    ))
-}
-
-/// The log line for a process whose rule asks for a D3D9 implementation it
-/// cannot load (mtld3d for a native ARM64 program in the arm64 Wine). `d3d9`
-/// is what [`D3d9::effective`] chose. `None` when the process gets what it
-/// asked for, or asked for nothing: the default always loads.
-fn d3d9_fallback(requested: Option<D3d9>, arch: Arch, host: Host, d3d9: D3d9) -> Option<String> {
+/// The log line for a process whose rule asks `family` (`dxgi` or `d3d9`) for
+/// an implementation that cannot load for its arch (dxmt or mtld3d for a
+/// native ARM64 program). `got` is what the family's `effective` chose.
+/// `None` when the process gets what it asked for, or asked for nothing: the
+/// default always loads.
+fn fallback(family: &str, requested: Option<&str>, got: &str, arch: Arch) -> Option<String> {
     let want = requested?;
-    (want != d3d9).then(|| {
+    (want != got).then(|| {
         format!(
-            "  d3d9 = {} not available on {}, using {}",
-            want.as_str(),
-            arch_name(arch, host),
-            d3d9.as_str()
-        )
-    })
-}
-
-/// The log line for a process whose rule asks for a wined3d renderer the Wine
-/// built for `host` does not have (Vulkan in the `x86_64` Wine). `wined3d` is
-/// what [`Wined3d::effective`] chose. `None` when the process gets what it
-/// asked for: OpenGL is always there.
-fn wined3d_fallback(requested: Wined3d, host: Host, wined3d: Wined3d) -> Option<String> {
-    (requested != wined3d).then(|| {
-        format!(
-            "  wined3d = {} not available on {}, using {}",
-            requested.as_str(),
-            host_name(host),
-            wined3d.as_str()
+            "  {family} = {want} not available on {}, using {got}",
+            arch_name(arch)
         )
     })
 }
 
 /// The log line naming the wined3d renderer of a process and where it comes
-/// from, in the style of the tree lines. `set` is the renderer a rule set
-/// (after any fallback), `config` the `WINE_D3D_CONFIG` the process has
+/// from, in the style of the tree lines. `set` is the renderer a rule set,
+/// `config` the `WINE_D3D_CONFIG` the process has
 /// otherwise: from a rule's `env`, or inherited. Without either, the line says
 /// `default`: wined3d may still take a renderer from its registry settings,
 /// and uses OpenGL without one.
@@ -549,8 +424,8 @@ pub(crate) struct Process {
 }
 
 impl Process {
-    /// The current process, in the Wine built for `host`.
-    fn current(nt: &Ntdll, host: Host) -> Option<Self> {
+    /// The current process.
+    fn current(nt: &Ntdll) -> Option<Self> {
         let teb = nt.current_teb();
         if teb.is_null() {
             log::line("NtCurrentTeb returned null");
@@ -578,14 +453,13 @@ impl Process {
         }
 
         // ProcessWow64Information is the PEB32 address of a wow64 process and
-        // 0 otherwise, on either host. Both Wines run only x86 programs under
-        // wow64 (the arm64 one with an emulator), so such a process is i386.
-        // A 64-bit process is x86_64 in the x86_64 Wine. In the arm64 Wine it
-        // is native from Wine's side either way, ARM64EC for an x86_64
-        // program, so the main image's machine tells an x86_64 program from a
-        // native ARM64 one; see Arch::of_process. An x86_64 program stays
-        // Arch::X86_64 there, for the log and the Direct3D defaults; the
-        // rules themselves match on the image name and version alone.
+        // 0 otherwise. Wine runs only x86 programs under wow64, with an
+        // emulator, so such a process is i386. A 64-bit process is native
+        // from Wine's side either way, ARM64EC for an x86_64 program, so the
+        // main image's machine tells an x86_64 program from a native ARM64
+        // one; see Arch::of_process. An x86_64 program stays Arch::X86_64, for
+        // the log and the Direct3D defaults; the rules themselves match on
+        // the image name and version alone.
         let params32 = match nt.wow64_information() {
             Some(w) if w != 0 => {
                 let peb32 = w as *const Peb32;
@@ -601,7 +475,7 @@ impl Process {
             _ => None,
         };
         let machine = version::machine(image_base.cast_const());
-        let arch = Arch::of_process(host, params32.is_some(), machine);
+        let arch = Arch::of_process(params32.is_some(), machine);
 
         // SAFETY: `params` is the live 64-bit process parameters; each field
         // read below is a UNICODE_STRING or the environment pointer/size.
@@ -710,29 +584,6 @@ mod tests {
         assert!(query(&table, b"/nonexistent/games/").is_none());
         assert!(query(&table, b"C:\\Games\\").is_none());
         assert_eq!(x87(&Table::default(), "/nonexistent/game.exe"), Ok(None));
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn the_x87_export_has_no_opinion_without_a_file_name() {
-        // SAFETY: a null path is part of the contract.
-        assert_eq!(unsafe { compatdb_query_x87(std::ptr::null()) }, -1);
-        let empty = c"";
-        // SAFETY: a valid NUL-terminated string.
-        assert_eq!(unsafe { compatdb_query_x87(empty.as_ptr()) }, -1);
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn the_builtin_default_attaches_the_sidecar() {
-        // The exported function reads WINE_COMPATDB, which a developer's shell
-        // may set; the answer is only predictable without it.
-        if std::env::var_os(ENV_VAR).is_some() {
-            return;
-        }
-        let path = c"/nonexistent/games/game.exe";
-        // SAFETY: a valid NUL-terminated string.
-        assert_eq!(unsafe { compatdb_query_x87(path.as_ptr()) }, 1);
     }
 
     fn pair(name: &str, value: &str) -> (String, String) {
@@ -856,152 +707,52 @@ mod tests {
         assert_eq!(ret, -1);
     }
 
-    const INTEL: Host = Host::X86_64;
-    const ARM: Host = Host::Aarch64;
+    /// The fallback line for each family, as `run` asks for it.
+    fn dxgi_line(requested: Option<Dxgi>, arch: Arch) -> Option<String> {
+        let dxgi = Dxgi::effective(requested, arch);
+        fallback("dxgi", requested.map(Dxgi::as_str), dxgi.as_str(), arch)
+    }
+
+    fn d3d9_line(requested: Option<D3d9>, arch: Arch) -> Option<String> {
+        let d3d9 = D3d9::effective(requested, arch);
+        fallback("d3d9", requested.map(D3d9::as_str), d3d9.as_str(), arch)
+    }
 
     #[test]
-    fn gptk_falls_back_to_dxmt_below_macos_26_4_and_says_why() {
-        // The 64-bit default and an explicit gptk rule alike.
-        for requested in [None, Some(Dxgi::Gptk)] {
-            let old = macos::decide(Some("15.7.1"), false, Some("24.6.0"));
-            let dxgi = Dxgi::effective(requested, Arch::X86_64, INTEL, old.gptk_loads);
-            assert_eq!(dxgi, Dxgi::Dxmt);
-            assert_eq!(
-                dxgi_fallback(requested, Arch::X86_64, INTEL, &old.name, dxgi).as_deref(),
-                Some("  dxgi = gptk not available on macOS 15.7.1 (needs macOS 26.4), using dxmt")
-            );
-            // Decided on the Darwin release when the product version is shimmed.
-            let shimmed = macos::decide(Some("16.0"), true, Some("25.3.0"));
-            let dxgi = Dxgi::effective(requested, Arch::X86_64, INTEL, shimmed.gptk_loads);
-            assert_eq!(dxgi, Dxgi::Dxmt);
-            assert_eq!(
-                dxgi_fallback(requested, Arch::X86_64, INTEL, &shimmed.name, dxgi).as_deref(),
-                Some("  dxgi = gptk not available on Darwin 25.3.0 (needs macOS 26.4), using dxmt")
-            );
-            for new in [
-                macos::decide(Some("26.4"), false, Some("25.4.0")),
-                macos::decide(Some("16.0"), true, Some("25.4.0")),
-                // A version that cannot be read keeps gptk.
-                macos::decide(None, false, None),
-            ] {
-                let dxgi = Dxgi::effective(requested, Arch::X86_64, INTEL, new.gptk_loads);
-                assert_eq!(dxgi, Dxgi::Gptk);
-                assert_eq!(
-                    dxgi_fallback(requested, Arch::X86_64, INTEL, &new.name, dxgi),
-                    None
-                );
+    fn an_x86_program_gets_what_it_asks_for_without_a_word() {
+        for arch in [Arch::X86_64, Arch::I386] {
+            for requested in [None, Some(Dxgi::Dxmt), Some(Dxgi::Wined3d)] {
+                assert_eq!(dxgi_line(requested, arch), None, "{arch:?} {requested:?}");
+            }
+            for requested in [None, Some(D3d9::Mtld3d), Some(D3d9::Wined3d)] {
+                assert_eq!(d3d9_line(requested, arch), None, "{arch:?} {requested:?}");
             }
         }
-    }
-
-    #[test]
-    fn the_i386_fallback_line_names_the_arch_whatever_the_macos() {
-        for gptk_loads in [true, false] {
-            let dxgi = Dxgi::effective(Some(Dxgi::Gptk), Arch::I386, INTEL, gptk_loads);
-            assert_eq!(dxgi, Dxgi::Dxmt);
-            assert_eq!(
-                dxgi_fallback(Some(Dxgi::Gptk), Arch::I386, INTEL, "macOS 15.7.1", dxgi).as_deref(),
-                Some("  dxgi = gptk not available on i386, using dxmt")
-            );
-        }
-        // The i386 default is dxmt already, and the other implementations
-        // load everywhere, so neither logs a fallback.
-        assert_eq!(
-            dxgi_fallback(None, Arch::I386, INTEL, "macOS 15.7.1", Dxgi::Dxmt),
-            None
-        );
-        for other in [Dxgi::Dxmt, Dxgi::Wined3d] {
-            let dxgi = Dxgi::effective(Some(other), Arch::X86_64, INTEL, false);
-            assert_eq!(dxgi, other);
-            assert_eq!(
-                dxgi_fallback(Some(other), Arch::X86_64, INTEL, "macOS 15.7.1", dxgi),
-                None
-            );
-        }
-    }
-
-    #[test]
-    fn the_arm64_wine_defaults_to_dxmt_quietly_and_names_itself_for_gptk() {
-        // The macOS release is not read there, so it comes in empty. A native
-        // ARM64 program is the exception, see the next test.
-        for arch in [Arch::X86_64, Arch::I386] {
-            let dxgi = Dxgi::effective(None, arch, ARM, false);
-            assert_eq!(dxgi, Dxgi::Dxmt);
-            assert_eq!(dxgi_fallback(None, arch, ARM, "", dxgi), None);
-            // A gptk rule falls back, and the line blames the Wine, never the
-            // macOS release.
-            let dxgi = Dxgi::effective(Some(Dxgi::Gptk), arch, ARM, false);
-            assert_eq!(dxgi, Dxgi::Dxmt);
-            assert_eq!(
-                dxgi_fallback(Some(Dxgi::Gptk), arch, ARM, "", dxgi).as_deref(),
-                Some("  dxgi = gptk not available on arm64, using dxmt")
-            );
-            let dxgi = Dxgi::effective(Some(Dxgi::Wined3d), arch, ARM, false);
-            assert_eq!(dxgi, Dxgi::Wined3d);
-            assert_eq!(
-                dxgi_fallback(Some(Dxgi::Wined3d), arch, ARM, "", dxgi),
-                None
-            );
-        }
-        // So only the x86_64 Wine reads the macOS release.
-        assert!(Dxgi::Gptk.available_for(Arch::X86_64, INTEL, true));
-        assert!(!Dxgi::Gptk.available_for(Arch::X86_64, ARM, true));
     }
 
     #[test]
     fn a_native_arm64_program_gets_wined3d_quietly_and_rules_say_why() {
         let native = Arch::Aarch64;
         // The default is wined3d for both families, with nothing to log.
-        let dxgi = Dxgi::effective(None, native, ARM, false);
-        assert_eq!(dxgi, Dxgi::Wined3d);
-        assert_eq!(dxgi_fallback(None, native, ARM, "", dxgi), None);
-        let d3d9 = D3d9::effective(None, native, ARM);
-        assert_eq!(d3d9, D3d9::Wined3d);
-        assert_eq!(d3d9_fallback(None, native, ARM, d3d9), None);
-        // A rule for dxmt or mtld3d falls back, and the line names the arch;
-        // one for gptk names the Wine, as for every arch there.
-        let dxgi = Dxgi::effective(Some(Dxgi::Dxmt), native, ARM, false);
+        assert_eq!(Dxgi::effective(None, native), Dxgi::Wined3d);
+        assert_eq!(dxgi_line(None, native), None);
+        assert_eq!(D3d9::effective(None, native), D3d9::Wined3d);
+        assert_eq!(d3d9_line(None, native), None);
+        assert_eq!(dxgi_line(Some(Dxgi::Wined3d), native), None);
+        assert_eq!(d3d9_line(Some(D3d9::Wined3d), native), None);
+        // A rule for dxmt or mtld3d falls back, and the line names the arch.
         assert_eq!(
-            dxgi_fallback(Some(Dxgi::Dxmt), native, ARM, "", dxgi).as_deref(),
+            dxgi_line(Some(Dxgi::Dxmt), native).as_deref(),
             Some("  dxgi = dxmt not available on aarch64, using wined3d")
         );
-        let dxgi = Dxgi::effective(Some(Dxgi::Gptk), native, ARM, false);
         assert_eq!(
-            dxgi_fallback(Some(Dxgi::Gptk), native, ARM, "", dxgi).as_deref(),
-            Some("  dxgi = gptk not available on arm64, using wined3d")
-        );
-        let d3d9 = D3d9::effective(Some(D3d9::Mtld3d), native, ARM);
-        assert_eq!(
-            d3d9_fallback(Some(D3d9::Mtld3d), native, ARM, d3d9).as_deref(),
+            d3d9_line(Some(D3d9::Mtld3d), native).as_deref(),
             Some("  d3d9 = mtld3d not available on aarch64, using wined3d")
         );
-        // An x86 program in the same Wine keeps mtld3d without a word, as does
-        // every program in the x86_64 Wine.
-        for (arch, host) in [
-            (Arch::X86_64, ARM),
-            (Arch::I386, ARM),
-            (Arch::X86_64, INTEL),
-            (Arch::I386, INTEL),
-        ] {
-            let d3d9 = D3d9::effective(Some(D3d9::Mtld3d), arch, host);
-            assert_eq!(d3d9, D3d9::Mtld3d);
-            assert_eq!(d3d9_fallback(Some(D3d9::Mtld3d), arch, host, d3d9), None);
-        }
     }
 
     #[test]
-    fn the_wined3d_lines_name_the_renderer_and_the_wine_without_vulkan() {
-        assert_eq!(
-            wined3d_fallback(Wined3d::Vulkan, INTEL, Wined3d::Gl).as_deref(),
-            Some("  wined3d = vulkan not available on x86_64, using gl")
-        );
-        assert_eq!(
-            wined3d_fallback(Wined3d::Vulkan, ARM, Wined3d::Vulkan),
-            None
-        );
-        for host in [INTEL, ARM] {
-            assert_eq!(wined3d_fallback(Wined3d::Gl, host, Wined3d::Gl), None);
-        }
+    fn the_wined3d_line_names_the_renderer() {
         // A renderer a rule set wins the line over any config.
         for config in [None, Some("renderer=vulkan")] {
             assert_eq!(
@@ -1036,43 +787,34 @@ mod tests {
             }],
         };
         let (_, _, env) = query_env(&table, b"/nonexistent/games/game.exe").ok_or("game")?;
-        let expected = match Host::current() {
-            Host::Aarch64 => vec![
+        assert_eq!(
+            env,
+            [
                 pair("WINE_D3D_CONFIG", "csmt=0"),
                 pair("WINE_D3D_CONFIG", "renderer=vulkan,csmt=0"),
-            ],
-            Host::X86_64 => vec![
-                pair("WINE_D3D_CONFIG", "csmt=0"),
-                pair("WINE_D3D_CONFIG", "renderer=gl,csmt=0"),
-            ],
-        };
-        assert_eq!(env, expected);
+            ]
+        );
         Ok(())
     }
 
     #[test]
-    fn the_log_labels_each_arch_for_its_host() {
-        assert_eq!(arch_name(Arch::X86_64, INTEL), "x86_64");
-        assert_eq!(arch_name(Arch::I386, INTEL), "i386");
-        assert_eq!(arch_name(Arch::X86_64, ARM), "x86_64 (arm64ec)");
-        assert_eq!(arch_name(Arch::I386, ARM), "i386");
-        assert_eq!(arch_name(Arch::Aarch64, ARM), "aarch64");
+    fn the_log_labels_each_arch() {
+        assert_eq!(arch_name(Arch::X86_64), "x86_64 (arm64ec)");
+        assert_eq!(arch_name(Arch::I386), "i386");
+        assert_eq!(arch_name(Arch::Aarch64), "aarch64");
     }
 
     #[test]
     fn the_builtin_rules_set_only_the_wildcard_env_for_a_game() {
         // Beyond the CEF helpers, which builtin.rs checks, a game gets env
-        // from the built-in rules only in the arm64 Wine: the FEX and
-        // KosmicKrisp entries every process gets. The exported function reads
-        // WINE_COMPATDB, which a developer's shell may set; the answer is only
-        // predictable without it.
+        // from the built-in rules only from the FEX and KosmicKrisp entries
+        // every process gets. The exported function reads WINE_COMPATDB,
+        // which a developer's shell may set; the answer is only predictable
+        // without it.
         if std::env::var_os(ENV_VAR).is_some() {
             return;
         }
-        let expected: &[u8] = match Host::current() {
-            Host::X86_64 => b"",
-            Host::Aarch64 => b"FEX_X87REDUCEDPRECISION=1\0MESA_KK_EXPERIMENTAL=dgc,xfb,sparse\0\0",
-        };
+        let expected: &[u8] = b"FEX_X87REDUCEDPRECISION=1\0MESA_KK_EXPERIMENTAL=dgc,xfb,sparse\0\0";
         let path = c"/nonexistent/games/game.exe";
         let mut buf = [0xAA_u8; 128];
         // SAFETY: a valid NUL-terminated string and a buffer of its length.

@@ -615,18 +615,18 @@ mod tests {
 
     #[test]
     fn read_file_reads_a_wine_builtin_when_one_is_installed() {
-        // Not a fixture: the x86_64 bundle in the dist/ tree next to this
+        // Not a fixture: the bundle in the dist/ tree next to this
         // repository, where the build scripts put it. A linked worktree has no
         // such tree, so set COMPATDB_TEST_PE to the path of a Wine
         // kernel32.dll (any PE whose OriginalFilename is kernel32.dll) to run
         // it there, for example
-        // .../dist/intel/wine/lib/wine/i386-windows/kernel32.dll. Skipped
-        // when the file does not exist, with a line on stderr that cargo test
-        // only shows when run with `-- --nocapture`.
+        // .../dist/wine/lib/wine/i386-windows/kernel32.dll. Skipped when the
+        // file does not exist, with a line on stderr that cargo test only
+        // shows when run with `-- --nocapture`.
         let path = std::env::var_os("COMPATDB_TEST_PE").map_or_else(
             || {
                 Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../dist/intel/wine/lib/wine/i386-windows/kernel32.dll")
+                    .join("../../dist/wine/lib/wine/i386-windows/kernel32.dll")
             },
             std::path::PathBuf::from,
         );
