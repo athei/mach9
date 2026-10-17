@@ -56,9 +56,11 @@ MESA_SRC="${MESA_SRC:-$ROOT/src-mesa}"
 MESA_BUILD_DIR="${MESA_BUILD_DIR:-$BUILD_TOP/mesa}"
 MESA_DIST="${MESA_DIST:-$MESA_BUILD_DIR/dist}"
 # Configure arguments on top of the allowlist in build-wine.sh: the
-# toolchain and where the dependencies are. Tests are left out: nothing runs
-# them on this build. macOS ships bison 2.3, too old for Wine. The include
-# path goes into CPPFLAGS so configure keeps its default -g -O2 CFLAGS.
+# toolchain and where the dependencies are. Tests are left out: with them,
+# the build's `make` would build every Wine test, and the ones the bundle
+# carries (GRAPHICS_TESTS) come from the link-library tree. macOS ships bison
+# 2.3, too old for Wine. The include path goes into CPPFLAGS so configure
+# keeps its default -g -O2 CFLAGS.
 # Putting $DEPS_PREFIX first in both search paths keeps clang and ld from
 # taking an x86_64 header or library from /usr/local, which they search by
 # default. Ahead of it, $MESA_DIST/lib holds the Vulkan loader build-mesa.sh
@@ -115,10 +117,31 @@ RUST_TARGET=aarch64-apple-darwin
 # name is a tree under lib/wine/dxgi or lib/wine/d3d9.
 DXGI_IMPLS="dxmt wined3d"
 D3D9_IMPLS="mtld3d wined3d"
-# The link-library tree for the x86_64 PE archives and the Wine SDK
-# build-wine.sh stages from it and the main build.
+# The link-library tree for the x86_64 PE archives and the graphics tests,
+# and the Wine SDK build-wine.sh stages from it and the main build.
 X86LIBS_BUILD_DIR="${X86LIBS_BUILD_DIR:-$BUILD_TOP/x86libs}"
 WINE_SDK_DIR="${WINE_SDK_DIR:-$BUILD_TOP/sdk}"
+# Wine's graphics conformance tests, by the directory under dlls/ whose
+# tests/ they are. The Wine SDK and a full bundle carry each as
+# lib/wine/tests/<pe-dir>/<name>_test.exe for both TEST_PE_DIRS, the x86
+# code games run, so the bundle's Direct3D, OpenGL and Vulkan stack can be
+# tested in place. A name with a :<pe-dir> suffix is built for that one only:
+# Wine builds no 64-bit d3d8.dll (enable_d3d8 in its configure.ac), and so no
+# 64-bit d3d8 test.
+GRAPHICS_TESTS="ddraw d3d8:i386-windows d3d9 d3d10 d3d10_1 d3d10core d3d11 d3d12 dxgi d2d1 opengl32 vulkan-1"
+TEST_PE_DIRS="i386-windows x86_64-windows"
+
+# graphics_tests <pe-dir>: print the name of every test of GRAPHICS_TESTS
+# that is built for <pe-dir>, one per line.
+graphics_tests() {
+    local t
+    for t in $GRAPHICS_TESTS; do
+        case "$t" in
+            *:*) [ "${t#*:}" = "$1" ] || continue; t=${t%%:*} ;;
+        esac
+        echo "$t"
+    done
+}
 # DXMT's checkout and trees, the LLVM libraries it links, and DXMT as
 # build-dxmt.sh stages it for the bundle.
 DXMT_BUILD_DIR="${DXMT_BUILD_DIR:-$BUILD_TOP/dxmt}"

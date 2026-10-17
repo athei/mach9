@@ -39,6 +39,7 @@ The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](bin/lib/profile.sh).
 | `lib/wine/aarch64-unix/wine.app/` | The loader, its `Info.plist` and the embedded provisioning profile ([loader app](docs/arm64.md#loader-app)) |
 | `lib/wine/dxgi/<impl>/`, `lib/wine/d3d9/<impl>/` | One tree per Direct3D implementation (see [Direct3D backends](#direct3d-backends)) |
 | `lib/wine/x86_64-windows/` | Full bundle only: the x86_64 link libraries of the [Wine SDK](docs/arm64.md#wine-sdk). Nothing reads the directory at run time |
+| `lib/wine/tests/i386-windows/`, `lib/wine/tests/x86_64-windows/` | Full bundle only: Wine's graphics conformance tests as `<name>_test.exe`, for testing the bundle's Direct3D, OpenGL and Vulkan stack ([graphics tests](docs/arm64.md#graphics-tests)) |
 | `lib/external/` | Bundled dylibs, the Vulkan loader and KosmicKrisp |
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
 
@@ -122,8 +123,8 @@ bin/bundle-wine.sh   # assemble the bundle (see Layout)
 
 | Script | Flag | Effect |
 |--------|------|--------|
-| `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile |
-| `build-wine.sh` | `--clean` | Wipes the build directories first, and is passed on to `build-mesa.sh`, `build-fex.sh` and `build-dxmt.sh`; the only way to pick up changed configure flags or deployment target |
+| `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile, and in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk) also when its configure arguments or `WINE_SRC` (the source path) changed |
+| `build-wine.sh` | `--clean` | Wipes the build directories first, and is passed on to `build-mesa.sh`, `build-fex.sh` and `build-dxmt.sh`; the only way to pick up changed configure flags or deployment target, except in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk), which is configured again whenever its flags or `WINE_SRC` change |
 | `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the bundle in the [layout](#layout). Either way it asks before it deletes an existing one, unless `--yes` |
 | `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking, for an unattended run. A directory that is not empty and has no `bin/wine` is still refused |
 | `bundle-wine.sh` | `--runtime-only` | No development files; the flavor to put into an application |
@@ -160,7 +161,7 @@ Everything lives beside this repository, in the directory that holds it
 | `src-fex/` | The FEX checkout |
 | `src-mesa/` | The Mesa checkout, for the Vulkan driver |
 | `cache/` | Downloaded redistributables |
-| `build/<component>/` | One tree per intermediate: the Wine build, its SDK and link-library tree, FEX, DXMT and Mesa with the Vulkan loader |
+| `build/<component>/` | One tree per intermediate: the Wine build, its SDK and the x86 tree for its link libraries and tests, FEX, DXMT and Mesa with the Vulkan loader |
 | `dist/wine` | The bundle |
 | `dist/wine-symbols` | With `--symbols`, the bundle's PE files before their symbols were stripped (Step 4e of [`bundle-wine.sh`](bin/bundle-wine.sh)); not part of the bundle |
 

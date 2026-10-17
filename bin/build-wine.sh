@@ -235,19 +235,23 @@ check_arm64x_archive() {
 }
 
 # The Wine SDK: one directory, in the layout of an installed Wine, that
-# DXMT's PE build reads (-Dwine_install_path). The bundle carries the same
-# files, which is where mtld3d's builds read them. bin/winebuild and the
+# DXMT's PE build reads (-Dwine_install_path), with Wine's graphics tests
+# (GRAPHICS_TESTS in profile.sh) under lib/wine/tests. The bundle carries the
+# same files, which is where mtld3d's builds read them. bin/winebuild and the
 # aarch64-windows and i386-windows archives come from the build itself: its
 # aarch64-windows archives are ARM64X, since arm64ec is paired with aarch64
 # there (makedep's native_archs and hybrid_archs), so one set under
 # aarch64-windows carries both halves. The x86_64-windows archives are the
 # one thing that build cannot make (ARM64EC is not x64, and an x64 object
-# does not link against it). A second configure of the Wine source for
-# x86_64 alone, reusing the build's tools, makes them: only those archives
-# are built, and no unix dependency is wanted, so every package is switched
-# off. Configure still probes the host side, but runs natively, arm64 in
-# host and target. WINE_COMMIT names the source commit, which build-dxmt.sh
-# and bundle-wine.sh compare.
+# does not link against it). A second configure of the Wine source for the
+# x86 architectures, reusing the build's tools, makes them: only those
+# archives and the graphics tests are built, and no unix dependency is
+# wanted, so every package is switched off. Configure still probes the host
+# side, but runs natively, arm64 in host and target. The tests are there
+# because makedep writes test rules only for the architectures a tree is
+# configured for, and the build has no x86_64 and tests disabled; the i386
+# archives still come from the build. WINE_COMMIT names the source commit,
+# which build-dxmt.sh and bundle-wine.sh compare.
 X86LIBS_WITHOUT=(
     --without-alsa --without-capi --without-coreaudio --without-cups
     --without-dbus --without-ffmpeg --without-fontconfig --without-freetype
@@ -258,18 +262,39 @@ X86LIBS_WITHOUT=(
     --without-udev --without-usb --without-v4l2 --without-va
     --without-vulkan --without-wayland --without-x
 )
-claim_tree "$X86LIBS_BUILD_DIR" x86libs "$CLEAN"
-if [ ! -f "$X86LIBS_BUILD_DIR/Makefile" ]; then
-    echo "==> Configuring the x86_64 link library tree $X86LIBS_BUILD_DIR..."
-    (cd "$X86LIBS_BUILD_DIR" && "$WINE_SRC/configure" --enable-archs=x86_64 \
-        --with-mingw "${X86LIBS_WITHOUT[@]}" \
-        --host="$HOST_TRIPLE" --with-wine-tools="$BUILD_DIR" \
-        CC="clang -arch arm64" --disable-tests BISON="$DEPS_PREFIX/opt/bison/bin/bison")
+# shellcheck disable=SC2054 # the comma list is one argument
+X86LIBS_CONFIGURE=(--enable-archs=i386,x86_64 --with-mingw "${X86LIBS_WITHOUT[@]}"
+                   --host="$HOST_TRIPLE" --with-wine-tools="$BUILD_DIR"
+                   CC="clang -arch arm64" BISON="$DEPS_PREFIX/opt/bison/bin/bison")
+# The tree is configured again from scratch whenever the Wine source or
+# these arguments differ from the ones it was configured with, which
+# .configure-key records (build-dxmt.sh does the same for its meson trees
+# with .setup-key), so a change here needs no --clean of the whole build.
+# The tree only holds what this step builds.
+X86LIBS_KEY="$WINE_SRC ${X86LIBS_CONFIGURE[*]}"
+if [ "$CLEAN" -eq 1 ] || [ ! -f "$X86LIBS_BUILD_DIR/Makefile" ] \
+    || [ "$(cat "$X86LIBS_BUILD_DIR/.configure-key" 2>/dev/null)" != "$X86LIBS_KEY" ]; then
+    echo "==> Configuring the x86 link library and test tree $X86LIBS_BUILD_DIR..."
+    claim_tree "$X86LIBS_BUILD_DIR" x86libs 1
+    (cd "$X86LIBS_BUILD_DIR" && "$WINE_SRC/configure" "${X86LIBS_CONFIGURE[@]}")
+    echo "$X86LIBS_KEY" > "$X86LIBS_BUILD_DIR/.configure-key"
 else
-    echo "==> Skipping configure of $X86LIBS_BUILD_DIR (already configured, use --clean to reconfigure)"
+    claim_tree "$X86LIBS_BUILD_DIR" x86libs
+    echo "==> Skipping configure of $X86LIBS_BUILD_DIR (configured with these arguments)"
 fi
-# shellcheck disable=SC2046 # one word per target
-make -C "$X86LIBS_BUILD_DIR" -j"$(sysctl -n hw.ncpu)" $(link_libs x86_64-windows)
+
+# test_exe <pe-dir> <name>: print the path, relative to a build tree, of the
+# test executable of dlls/<name>/tests for <pe-dir>.
+test_exe() {
+    echo "dlls/$2/tests/$1/$2_test.exe"
+}
+read -ra X86LIBS_TARGETS <<< "$(link_libs x86_64-windows)"
+for pe in $TEST_PE_DIRS; do
+    for t in $(graphics_tests "$pe"); do
+        X86LIBS_TARGETS+=("$(test_exe "$pe" "$t")")
+    done
+done
+make -C "$X86LIBS_BUILD_DIR" -j"$(sysctl -n hw.ncpu)" "${X86LIBS_TARGETS[@]}"
 
 echo "==> Staging the Wine SDK into $WINE_SDK_DIR..."
 claim_tree "$WINE_SDK_DIR" sdk 1
@@ -286,6 +311,23 @@ for pe in "$PE64_DIR" i386-windows x86_64-windows; do
     done
 done
 check_arm64x_archive "$WINE_SDK_DIR/lib/wine/$PE64_DIR/libwinecrt0.a"
+# The graphics tests, in lib/wine/tests/<pe-dir>/ as a full bundle carries
+# them, so WINE_COMMIT covers them too. Plain executables, not builtins:
+# Wine runs them by path. Each must be of its directory's machine.
+for pe in $TEST_PE_DIRS; do
+    case "$pe" in
+        i386-windows) machine=014c ;;
+        x86_64-windows) machine=8664 ;;
+        *) echo "Error: TEST_PE_DIRS names $pe, whose PE machine this step does not know"; exit 1 ;;
+    esac
+    mkdir -p "$WINE_SDK_DIR/lib/wine/tests/$pe"
+    for t in $(graphics_tests "$pe"); do
+        f="$WINE_SDK_DIR/lib/wine/tests/$pe/${t}_test.exe"
+        cp "$X86LIBS_BUILD_DIR/$(test_exe "$pe" "$t")" "$f"
+        [ "$(pe_machine "$f")" = "$machine" ] \
+            || { echo "Error: tests/$pe/${t}_test.exe has the PE machine $(pe_machine "$f"), not $machine"; exit 1; }
+    done
+done
 wine_src_commit > "$WINE_SDK_DIR/WINE_COMMIT"
 echo "==> Wine SDK staged for $(cat "$WINE_SDK_DIR/WINE_COMMIT")."
 
