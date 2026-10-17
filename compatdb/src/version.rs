@@ -2,16 +2,13 @@
 //! version fingerprint (company, product, original filename) that is stable
 //! across install location and patches.
 //!
-//! There are two places to read it from. The main image of the running process
-//! is already mapped when this library loads, so a resource RVA is just an
-//! offset from the image base. An executable that ntdll asks about before it
-//! starts the process is read from its file, where an RVA has to be translated
-//! through the section table first. Both go through the same resource walk
-//! over [`Rva`], and every read is bounds checked: a malformed or
-//! resource-free image yields an empty [`VersionInfo`], never a wild read.
+//! The image is the main image of the running process, which is already
+//! mapped when this library loads, so a resource RVA is just an offset from
+//! the image base. Every read is bounds checked against the image's own
+//! extent: a malformed or resource-free image yields an empty
+//! [`VersionInfo`], never a wild read.
 
 use core::ffi::c_void;
-use std::{fs::File, os::unix::fs::FileExt as _, path::Path};
 
 use compatdb_table::VersionInfo;
 
@@ -26,35 +23,12 @@ pub fn machine(image_base: *const c_void) -> Option<u16> {
     Mapped::new(image_base).map(|img| img.machine)
 }
 
-/// Read the version fingerprint of the PE file at `path`. A file that cannot
-/// be opened or is not a PE yields an empty [`VersionInfo`].
-pub fn read_file(path: &Path) -> VersionInfo {
-    File::open(path)
-        .ok()
-        .and_then(PeFile::new)
-        .map_or_else(VersionInfo::default, |img| from_image(&img))
-}
-
 /// The most bytes read for a version resource. `VS_VERSIONINFO` records its
 /// own length in a 16-bit field, so nothing past this can belong to it, and a
 /// corrupt size field cannot make the reader allocate more.
 const MAX_VERSION_BLOB: usize = 0x1_0000;
 
-/// The most sections a file may declare before it is treated as malformed.
-/// Windows XP refused images with more than 96, and real executables stay far
-/// below even that; this bound only keeps a hostile header from making the
-/// reader load and scan a section table of up to 65535 entries.
-const MAX_SECTIONS: usize = 1024;
-
-/// The granularity the loader rounds `PointerToRawData` down to, whatever the
-/// header's `FileAlignment` says.
-const RAW_DATA_ALIGNMENT: usize = 0x200;
-
-/// The smallest page size the image can be mapped with. A `SectionAlignment`
-/// below it means the loader maps the file as is, without moving sections.
-const PAGE_SIZE: usize = 0x1000;
-
-/// Bounds-checked reads by RVA from some layout of a PE image.
+/// Bounds-checked reads by RVA from a PE image.
 trait Rva {
     /// Fill `buf` with the bytes at `rva`, or return `None` when any of them
     /// lies outside what this source can supply.
@@ -70,30 +44,6 @@ trait Rva {
         let mut b = [0; 4];
         self.read(rva, &mut b)?;
         Some(u32::from_le_bytes(b))
-    }
-}
-
-/// Raw bytes, read at their own offsets. Used for the section table and, in
-/// the tests, for whole images.
-impl Rva for [u8] {
-    fn read(&self, rva: usize, buf: &mut [u8]) -> Option<()> {
-        buf.copy_from_slice(self.get(rva..rva.checked_add(buf.len())?)?);
-        Some(())
-    }
-}
-
-impl<T: Rva + ?Sized> Rva for &T {
-    fn read(&self, rva: usize, buf: &mut [u8]) -> Option<()> {
-        (**self).read(rva, buf)
-    }
-}
-
-/// A file, read at its own offsets. Only right for the headers, which sit at
-/// the start of the file at the same offsets they have in the image;
-/// [`PeFile`] translates everything else.
-impl Rva for File {
-    fn read(&self, rva: usize, buf: &mut [u8]) -> Option<()> {
-        self.read_exact_at(buf, u64::try_from(rva).ok()?).ok()
     }
 }
 
@@ -141,105 +91,11 @@ impl Rva for Mapped {
     }
 }
 
-/// One entry of the section table: where a section sits in the image and
-/// where its bytes are in the file.
-struct Section {
-    virtual_address: usize,
-    virtual_size: usize,
-    raw_offset: usize,
-    raw_size: usize,
-}
-
-/// A PE file read through its section table, so that RVAs land where the
-/// loader would have mapped them.
-struct PeFile<S> {
-    source: S,
-    size_of_headers: usize,
-    sections: Vec<Section>,
-    /// The low-alignment layout (`FileAlignment == SectionAlignment`, below
-    /// a page), which the loader maps flat, so every RVA is its file offset.
-    flat: bool,
-}
-
-impl<S: Rva> PeFile<S> {
-    /// Read the headers and the section table of `source`.
-    fn new(source: S) -> Option<Self> {
-        let headers = Headers::parse(&source)?;
-        if headers.section_count > MAX_SECTIONS {
-            return None;
-        }
-        let mut table = vec![0; headers.section_count.checked_mul(40)?];
-        source.read(headers.section_table, &mut table)?;
-        let table = table.as_slice();
-        let mut sections = Vec::with_capacity(headers.section_count);
-        for i in 0..headers.section_count {
-            let at = i.checked_mul(40)?;
-            let field = |off: usize| -> Option<usize> {
-                usize::try_from(table.u32(at.checked_add(off)?)?).ok()
-            };
-            sections.push(Section {
-                virtual_size: field(8)?,
-                virtual_address: field(12)?,
-                raw_size: field(16)?,
-                raw_offset: field(20)?,
-            });
-        }
-        Some(Self {
-            source,
-            size_of_headers: headers.header_size,
-            sections,
-            flat: headers.section_alignment != 0
-                && headers.section_alignment < PAGE_SIZE
-                && headers.section_alignment == headers.file_alignment,
-        })
-    }
-
-    /// The file offset of the `len` bytes at `rva`, when they are all backed
-    /// by the file. Bytes in a section's zero-filled tail, or outside every
-    /// section and the headers, are not.
-    fn offset(&self, rva: usize, len: usize) -> Option<usize> {
-        if self.flat {
-            return Some(rva);
-        }
-        for s in &self.sections {
-            let extent = if s.virtual_size == 0 {
-                s.raw_size
-            } else {
-                s.virtual_size
-            };
-            let Some(delta) = rva.checked_sub(s.virtual_address) else {
-                continue;
-            };
-            if delta >= extent {
-                continue;
-            }
-            if delta.checked_add(len)? > s.raw_size {
-                return None;
-            }
-            return (s.raw_offset & !(RAW_DATA_ALIGNMENT - 1)).checked_add(delta);
-        }
-        (rva.checked_add(len)? <= self.size_of_headers).then_some(rva)
-    }
-}
-
-impl<S: Rva> Rva for PeFile<S> {
-    fn read(&self, rva: usize, buf: &mut [u8]) -> Option<()> {
-        let offset = self.offset(rva, buf.len())?;
-        self.source.read(offset, buf)
-    }
-}
-
-/// The header fields the reader needs, all as RVAs or sizes.
+/// The header fields the reader needs.
 struct Headers {
     /// The COFF `Machine`.
     machine: u16,
     size_of_image: usize,
-    /// `SizeOfHeaders`.
-    header_size: usize,
-    section_alignment: usize,
-    file_alignment: usize,
-    section_count: usize,
-    section_table: usize,
     /// The resource directory's RVA, 0 when the image has none.
     resource_rva: usize,
 }
@@ -254,14 +110,9 @@ impl Headers {
         }
         let coff = e_lfanew.checked_add(4)?;
         let machine = img.u16(coff)?;
-        let section_count = usize::from(img.u16(coff.checked_add(2)?)?);
-        let optional_size = usize::from(img.u16(coff.checked_add(16)?)?);
         let opt = coff.checked_add(20)?;
         let pe32plus = img.u16(opt)? == 0x20b;
-        let section_alignment = usize::try_from(img.u32(opt.checked_add(32)?)?).ok()?;
-        let file_alignment = usize::try_from(img.u32(opt.checked_add(36)?)?).ok()?;
         let size_of_image = usize::try_from(img.u32(opt.checked_add(56)?)?).ok()?;
-        let header_size = usize::try_from(img.u32(opt.checked_add(60)?)?).ok()?;
         // NumberOfRvaAndSizes, then the data directories (8 bytes each); the
         // resource directory is entry 2.
         let (count_at, dirs_at) = if pe32plus { (108, 112) } else { (92, 96) };
@@ -274,11 +125,6 @@ impl Headers {
         Some(Self {
             machine,
             size_of_image,
-            header_size,
-            section_alignment,
-            file_alignment,
-            section_count,
-            section_table: opt.checked_add(optional_size)?,
             resource_rva,
         })
     }
@@ -367,11 +213,24 @@ fn first_child<R: Rva + ?Sized>(img: &R, res_base: usize, dir_off: usize) -> Opt
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
+
+    /// Raw bytes, read at their own offsets: a whole mapped image, or the
+    /// headers of a file.
+    impl Rva for [u8] {
+        fn read(&self, rva: usize, buf: &mut [u8]) -> Option<()> {
+            buf.copy_from_slice(self.get(rva..rva.checked_add(buf.len())?)?);
+            Some(())
+        }
+    }
 
     const SECTION_RVA: usize = 0x2000;
     const SECTION_FILE_OFFSET: usize = 0x200;
     const SIZE_OF_IMAGE: usize = 0x3000;
+    const SECTION_ALIGNMENT: usize = 0x1000;
+    const FILE_ALIGNMENT: usize = 0x200;
 
     /// What a test or fixture builder returns, so a fixture that does not
     /// fit fails the test through `?` rather than a panic.
@@ -463,8 +322,8 @@ mod tests {
         put16(&mut h, coff + 16, 0xe0)?;
         let opt = coff + 20;
         put16(&mut h, opt, 0x10b)?;
-        put32(&mut h, opt + 32, PAGE_SIZE)?;
-        put32(&mut h, opt + 36, RAW_DATA_ALIGNMENT)?;
+        put32(&mut h, opt + 32, SECTION_ALIGNMENT)?;
+        put32(&mut h, opt + 36, FILE_ALIGNMENT)?;
         put32(&mut h, opt + 56, SIZE_OF_IMAGE)?;
         put32(&mut h, opt + 60, SECTION_FILE_OFFSET)?;
         put32(&mut h, opt + 92, 16)?;
@@ -496,6 +355,48 @@ mod tests {
         Ok(image)
     }
 
+    /// Lay a PE file out as the loader maps it, closely enough for the
+    /// resource walk: the headers at the start and each section's raw bytes
+    /// at its RVA, in a buffer of `SizeOfImage` bytes. Nothing is relocated
+    /// or bound.
+    fn map_file(file: &[u8]) -> Fallible<Vec<u8>> {
+        let u16_at = |at: usize| -> Fallible<usize> {
+            Ok(usize::from(file.u16(at).ok_or("file too short")?))
+        };
+        let u32_at = |at: usize| -> Fallible<usize> {
+            Ok(usize::try_from(file.u32(at).ok_or("file too short")?)?)
+        };
+        let coff = u32_at(0x3c)? + 4;
+        let section_count = u16_at(coff + 2)?;
+        let opt = coff + 20;
+        let section_table = opt + u16_at(coff + 16)?;
+        let mut image = vec![0; u32_at(opt + 56)?];
+        let header_size = u32_at(opt + 60)?;
+        put(
+            &mut image,
+            0,
+            file.get(..header_size).ok_or("headers past the end")?,
+        )?;
+        for i in 0..section_count {
+            let sec = section_table + i * 40;
+            let virtual_size = u32_at(sec + 8)?;
+            let rva = u32_at(sec + 12)?;
+            let raw_size = u32_at(sec + 16)?;
+            // The loader rounds PointerToRawData down to 0x200.
+            let raw_offset = u32_at(sec + 20)? & !0x1ff;
+            let len = if virtual_size == 0 {
+                raw_size
+            } else {
+                raw_size.min(virtual_size)
+            };
+            let raw = file
+                .get(raw_offset..raw_offset + len)
+                .ok_or("section past the end")?;
+            put(&mut image, rva, raw)?;
+        }
+        Ok(image)
+    }
+
     fn expected() -> VersionInfo {
         VersionInfo {
             company: "Acme Games".into(),
@@ -505,21 +406,18 @@ mod tests {
     }
 
     #[test]
-    fn a_file_is_read_through_its_section_table() -> Fallible {
-        let file = file_layout()?;
-        let pe = PeFile::new(file.as_slice()).ok_or("not a PE")?;
-        assert_eq!(from_image(&pe), expected());
-        // Read at raw offsets, the resource RVA points past the end of the
-        // file, which is why the translation is needed at all.
-        assert_eq!(from_image(file.as_slice()), VersionInfo::default());
-        Ok(())
-    }
-
-    #[test]
-    fn the_mapped_and_the_file_readers_agree() -> Fallible {
+    fn the_mapped_image_is_read() -> Fallible {
         let image = mapped_layout()?;
         assert_eq!(read(image.as_ptr().cast()), expected());
         assert_eq!(from_image(image.as_slice()), expected());
+        // Read at raw offsets, the resource RVA points past the end of the
+        // file, which is why only a mapped image can be read.
+        assert_eq!(
+            from_image(file_layout()?.as_slice()),
+            VersionInfo::default()
+        );
+        // The test's own loader lays the file out the same way.
+        assert_eq!(map_file(&file_layout()?)?, image);
         Ok(())
     }
 
@@ -540,81 +438,20 @@ mod tests {
     }
 
     #[test]
-    fn pointer_to_raw_data_is_rounded_down_like_the_loader_does() -> Fallible {
-        let mut file = file_layout()?;
-        let sec = 0x44 + 20 + 0xe0;
-        put32(&mut file, sec + 20, SECTION_FILE_OFFSET + 0x1ff)?;
-        let pe = PeFile::new(file.as_slice()).ok_or("not a PE")?;
-        assert_eq!(from_image(&pe), expected());
-        Ok(())
-    }
-
-    #[test]
-    fn a_low_alignment_file_is_read_flat() -> Fallible {
-        // FileAlignment == SectionAlignment below a page: the loader maps the
-        // file as is, so the file looks exactly like the mapped image.
-        let mut file = mapped_layout()?;
-        let opt = 0x44 + 20;
-        put32(&mut file, opt + 32, 0x200)?;
-        put32(&mut file, opt + 36, 0x200)?;
-        // The section table still claims the usual raw offset, which a flat
-        // read must ignore.
-        let pe = PeFile::new(file.as_slice()).ok_or("not a PE")?;
-        assert!(pe.flat);
-        assert_eq!(from_image(&pe), expected());
-        Ok(())
-    }
-
-    #[test]
-    fn a_hostile_section_count_is_refused() -> Fallible {
-        let mut file = file_layout()?;
-        put16(&mut file, 0x44 + 2, u16::MAX)?;
-        assert!(PeFile::new(file.as_slice()).is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn a_read_past_the_raw_data_of_a_section_fails() -> Fallible {
-        let file = file_layout()?;
-        let pe = PeFile::new(file.as_slice()).ok_or("not a PE")?;
-        let end = SECTION_RVA + rsrc_section()?.len();
-        let mut buf = [0; 4];
-        assert!(pe.read(end - 4, &mut buf).is_some());
-        assert!(pe.read(end - 3, &mut buf).is_none());
-        // Between the headers and the section nothing is backed by the file.
-        assert!(pe.read(SECTION_FILE_OFFSET, &mut buf).is_none());
-        assert!(pe.read(SECTION_FILE_OFFSET - 4, &mut buf).is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn a_truncated_or_foreign_file_yields_nothing() -> Fallible {
-        let file = file_layout()?;
-        for len in [0, 0x3c, 0x60, SECTION_FILE_OFFSET, file.len() - 1] {
-            let pe = PeFile::new(file.get(..len).ok_or("cut")?);
-            assert_eq!(
-                pe.map(|pe| from_image(&pe)).unwrap_or_default(),
-                VersionInfo::default(),
-                "truncated to {len:#x}"
-            );
-        }
-        let mut not_pe = file;
+    fn a_foreign_or_missing_image_yields_nothing() -> Fallible {
+        let mut not_pe = mapped_layout()?;
         put(&mut not_pe, 0x40, b"N")?;
-        assert!(PeFile::new(not_pe.as_slice()).is_none());
+        assert_eq!(read(not_pe.as_ptr().cast()), VersionInfo::default());
         assert_eq!(read(core::ptr::null()), VersionInfo::default());
+        // A resource directory past SizeOfImage is not read.
+        let mut short = mapped_layout()?;
+        put32(&mut short, 0x44 + 20 + 56, SECTION_RVA)?;
+        assert_eq!(read(short.as_ptr().cast()), VersionInfo::default());
         Ok(())
     }
 
     #[test]
-    fn read_file_handles_a_missing_file() {
-        assert_eq!(
-            read_file(Path::new("/nonexistent/compatdb/Game.exe")),
-            VersionInfo::default()
-        );
-    }
-
-    #[test]
-    fn read_file_reads_a_wine_builtin_when_one_is_installed() {
+    fn a_wine_builtin_reads_when_one_is_installed() -> Fallible {
         // Not a fixture: the bundle in the dist/ tree next to this
         // repository, where the build scripts put it. A linked worktree has no
         // such tree, so set COMPATDB_TEST_PE to the path of a Wine
@@ -635,13 +472,15 @@ mod tests {
                 "skipping: no PE at {} (set COMPATDB_TEST_PE)",
                 path.display()
             );
-            return;
+            return Ok(());
         }
-        let version = read_file(&path);
+        let image = map_file(&std::fs::read(&path)?)?;
+        let version = read(image.as_ptr().cast());
         assert_eq!(
             version.original_filename.to_ascii_lowercase(),
             "kernel32.dll"
         );
         assert_ne!(version.company, "");
+        Ok(())
     }
 }

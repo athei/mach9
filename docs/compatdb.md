@@ -24,7 +24,7 @@ and with none, Wine does.
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` only stops forcing it: the executable's flag, `WINE_LARGE_ADDRESS_AWARE` and the `AppDefaults` registry value decide. No effect on 64-bit | At load; ntdll applies it after the library returns |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
-| `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it. An ntdll that asks also gets the entries before it execs the program, through `compatdb_query_env`; the arm64 Wine's ntdll does not ask | At load |
+| `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it | At load |
 
 The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
 `d3d9` and `wined3d` values are case-insensitive. Some values from the
@@ -47,11 +47,6 @@ retired x86_64 Wine still parse
   wins. Lists (`dll_overrides`, `arguments`, `env`) accumulate in fold order.
 - So a `*` rule from `WINE_COMPATDB` beats a built-in `*` default, and a
   rule for one executable beats both. Several `*` rules are not a conflict.
-- `compatdb_query_env` answers in the process that starts the new one and
-  matches the executable's file on disk: its basename and the version
-  resource read from the file. For a DOS path that ntdll cannot map to a
-  unix path, only the basename is known, and only rules without a
-  fingerprint can match.
 
 ## Built-in rules
 
@@ -261,11 +256,6 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
     and the env.
 - Parse diagnostics and `override names no rule` lines come just before the
   block.
-- A `compatdb: env query <exe> ...` line, with the executable, its
-  fingerprint and the `NAME=value` entries in the order ntdll sets them,
-  comes from each `compatdb_query_env` call that returns entries. It is
-  written in the process that starts the new one, so it appears before
-  that process's own block.
 - To confirm a tree took effect, look at the running process's mapped files,
   for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
   `lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.

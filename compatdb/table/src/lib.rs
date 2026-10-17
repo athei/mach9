@@ -486,11 +486,8 @@ pub struct Rule {
     /// Text appended to the command line, unless already present.
     pub arguments: Vec<String>,
     /// Environment entries; an empty value removes the variable. The library
-    /// sets them in the process's environment block and unix environment once
-    /// it runs. It also returns them through `compatdb_query_env`, for an
-    /// ntdll that asks before it execs the process. An entry whose name is
-    /// empty or holds `=`, or whose name or value holds NUL, is left out of
-    /// that answer.
+    /// sets them in the process's environment block and unix environment
+    /// when it loads, before any PE code runs.
     pub env: Vec<(String, String)>,
     /// `WINEDEBUG` channels for this process. Applied by the launcher through
     /// wine's own `WINEDEBUG=<exe>:` prefix, not by the library, because the
