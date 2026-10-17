@@ -2,29 +2,25 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# ROOT, the layout and the profiles.
+# ROOT, the layout, the paths and the floor (MACOS_FLOOR, the deployment
+# target build-wine.sh builds with, which every Mach-O is checked against).
 # shellcheck source=profile.sh
 . "$SCRIPT_DIR/profile.sh"
 CACHE_DIR="${CACHE_DIR:-$ROOT/cache}"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
-# URL and SHA-256 of every third-party artifact (GPTK_URL/GPTK_SHA256 etc.).
+# The pins of every third-party input (MTLD3D_URL/MTLD3D_SHA256 etc.).
 # shellcheck source=redist.env
 . "$SCRIPT_DIR/redist.env"
 DIST_DIR=""
-# Set by unpack_dxmt or from DXMT_DIST; never taken from the environment.
-DXMT_SRC=""
-# The files installed from the GPTK image (Step 4); never from the environment.
-GPTK_FILES=""
 RUNTIME_ONLY=0
 COMPATDB_ONLY=0
 STRICT_FLOOR=0
 WITH_SYMBOLS=0
 ASSUME_YES=0
-ARCH_PROFILE=intel
-# Whether wine.app (arm64 profile) gets a secure timestamp, which needs
-# Apple's timestamp server. LOADER_TIMESTAMP=0 signs without one, for an
-# offline local build; such a bundle cannot be notarized.
+# Whether wine.app gets a secure timestamp, which needs Apple's timestamp
+# server. LOADER_TIMESTAMP=0 signs without one, for an offline local build;
+# such a bundle cannot be notarized.
 LOADER_TIMESTAMP="${LOADER_TIMESTAMP:-1}"
 case "$LOADER_TIMESTAMP" in
     0|1) ;;
@@ -36,30 +32,25 @@ if [ -d "$MINGW_DIR/bin" ]; then
     export PATH="$PATH:$MINGW_DIR/bin"
 fi
 
-# The floor for Apple's D3DMetal.framework, which is copied in unmodified and
-# needs a newer macOS than the rest. Must equal GPTK_MIN in
-# compatdb/src/macos.rs, which is where compatdb.so decides that gptk can load.
-GPTK_FLOOR=26.4
-
 usage() {
-    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--compatdb-only] [--strict-floor] [--symbols] [--yes] [--arm64]"
+    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--compatdb-only] [--strict-floor] [--symbols] [--yes]"
     exit 1
 }
 
 # --dest names the directory the bundle goes into as <dir>/wine; without it,
-# the profile's place in the layout (BUNDLE_DEST in profile.sh).
-# --compatdb-only replaces compatdb.so in the bundle already at <dir>/wine and
-# leaves everything else alone. --runtime-only is accepted alongside it and
-# ignored, since it only affects what a full bundle installs. --strict-floor
-# turns a Mach-O that needs a newer macOS than MACOS_FLOOR into an error
-# instead of a warning. CI passes it: its libraries come from the deps
-# tarball package-deps.sh builds, which meets the floor. A local build copies
-# whatever Homebrew has, which on a newer macOS can carry a newer minos, and
-# is not distributed. --symbols keeps the PE files as they were before Step
-# 4e stripped them in <dir>/wine-symbols (the release workflow publishes
-# them). --yes deletes an existing bundle at <dir>/wine without asking first,
-# for a run nobody watches. --arm64 bundles the native arm64 build
-# (profile.sh).
+# its place in the layout (BUNDLE_DEST in profile.sh). --compatdb-only
+# replaces compatdb.so in the bundle already at <dir>/wine and leaves
+# everything else alone. --runtime-only is accepted alongside it and ignored,
+# since it only affects what a full bundle installs. --strict-floor turns a
+# Mach-O that needs a newer macOS than MACOS_FLOOR into an error instead of a
+# warning, for a CI or release build. The bundled libraries are Homebrew's
+# bottles, which carry the minos of the macOS they were poured for, so they
+# meet the floor only on a host of the floor's major version, where such a
+# build has to run (docs/arm64.md). A local build on a newer macOS gets
+# newer bottles and is not distributed, so a warning is enough there.
+# --symbols keeps the PE files as they were before Step 4e stripped them in
+# <dir>/wine-symbols. --yes deletes an existing bundle at <dir>/wine without
+# asking first, for a run nobody watches.
 while [ $# -gt 0 ]; do
     case "$1" in
         --dest) [ $# -ge 2 ] || usage; DIST_DIR="$2"; shift 2 ;;
@@ -68,14 +59,10 @@ while [ $# -gt 0 ]; do
         --strict-floor) STRICT_FLOOR=1; shift ;;
         --symbols) WITH_SYMBOLS=1; shift ;;
         --yes) ASSUME_YES=1; shift ;;
-        --arm64) ARCH_PROFILE=arm64; shift ;;
         *) usage ;;
     esac
 done
 
-# Paths, the floor every Mach-O is checked against (MACOS_FLOOR, the
-# deployment target build-wine.sh builds with) and the feature flags.
-set_profile "$ARCH_PROFILE"
 if [ -z "$DIST_DIR" ]; then
     DIST_DIR="$BUNDLE_DEST"
 fi
@@ -88,11 +75,7 @@ unixdir="$WINE_DIR/lib/wine/$UNIX_DIR"
 COMPATDB_BUILD="$BUILD_DIR/compatdb/$RUST_TARGET/release/libcompatdb.dylib"
 
 TMP_DIR=$(mktemp -d)
-GPTK_MNT="$TMP_DIR/gptk"
 cleanup() {
-    if [ -d "$GPTK_MNT" ]; then
-        hdiutil detach "$GPTK_MNT" -quiet 2>/dev/null || true
-    fi
     rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
@@ -299,7 +282,7 @@ drop_coff_symtab() {
 # off set -e for everything they run.
 
 # build_compatdb: build the compatdb/ crate and install it as
-# $unixdir/compatdb.so. The profile exports MACOSX_DEPLOYMENT_TARGET, which
+# $unixdir/compatdb.so. profile.sh exports MACOSX_DEPLOYMENT_TARGET, which
 # cargo hands to rustc and which takes precedence over the same pin in
 # .cargo/config.toml; cargo only reads that file relative to the working
 # directory, hence the subshell in $SCRIPT_DIR all the same. The new file is
@@ -344,28 +327,19 @@ check_no_leaks() {
 }
 
 # check_minos <path>...: report every Mach-O under the paths whose minos is
-# newer than its floor, then exit with --strict-floor or warn without it.
-# Like package-deps.sh, this looks at executables, .dylib and .so files, and
-# skips files with no LC_BUILD_VERSION (not Mach-O, or too old to have one).
-# For a universal file the newest slice counts. The floor is MACOS_FLOOR,
-# except for lib/external/D3DMetal.framework: its libdxccontainer.dylib needs
-# macOS 26.4, so those files are held to GPTK_FLOOR, and below that compatdb.so
-# gives 64-bit processes DXMT instead. libd3dshared.dylib is not part of that:
-# ntdll loads it in every process that runs a game executable, so it has to
-# meet MACOS_FLOOR. If no file had a minos at all, nothing was checked, which
-# is an error with or without --strict-floor.
+# newer than MACOS_FLOOR, then exit with --strict-floor or warn without it.
+# This looks at executables, .dylib and .so files, and skips files with no
+# LC_BUILD_VERSION (not Mach-O, or too old to have one). For a universal file
+# the newest slice counts. If no file had a minos at all, nothing was
+# checked, which is an error with or without --strict-floor.
 check_minos() {
-    local f rel minos floor bad=0 checked=0
+    local f rel minos bad=0 checked=0
     if ! command -v otool >/dev/null; then
         echo "Error: otool not found (it comes with the Xcode command line tools)"
         exit 1
     fi
     while IFS= read -r f; do
         rel=${f#"$WINE_DIR"/}
-        case "$rel" in
-            lib/external/D3DMetal.framework/*) floor=$GPTK_FLOOR ;;
-            *) floor=$MACOS_FLOOR ;;
-        esac
         minos=$(otool -arch all -l "$f" 2>/dev/null | awk '
             $1 == "cmd" && $2 == "LC_BUILD_VERSION" { v = 1 }
             v && $1 == "minos" {
@@ -377,8 +351,8 @@ check_minos() {
             END { if (s != "") print s }')
         [ -n "$minos" ] || continue
         checked=$((checked + 1))
-        if macos_newer "$minos" "$floor"; then
-            echo "  too new: minos $minos, floor $floor  $rel"
+        if macos_newer "$minos" "$MACOS_FLOOR"; then
+            echo "  too new: minos $minos, floor $MACOS_FLOOR  $rel"
             bad=1
         fi
     done < <(find "$@" -type f \( -perm +111 -o -name '*.dylib' -o -name '*.so' \))
@@ -388,14 +362,14 @@ check_minos() {
         exit 1
     fi
     if [ "$bad" -eq 0 ]; then
-        echo "  $checked Mach-O files meet their floor (macOS $MACOS_FLOOR, D3DMetal $GPTK_FLOOR)."
+        echo "  $checked Mach-O files meet the floor (macOS $MACOS_FLOOR)."
         return 0
     fi
     if [ "$STRICT_FLOOR" -eq 1 ]; then
-        echo "Error: the above need a newer macOS than their floor"
+        echo "Error: the above need a newer macOS than the floor"
         exit 1
     fi
-    echo "  WARNING: the above need a newer macOS than their floor and will not"
+    echo "  WARNING: the above need a newer macOS than the floor and will not"
     echo "  load on older systems (--strict-floor makes this an error)"
 }
 
@@ -405,12 +379,11 @@ check_minos() {
 # configure, but a build tree configured before that, or one whose configure
 # ran without the override, still calls them, weak-imported, and minos does
 # not show it. The unix modules of the default dir (DXMT's winemetal.so
-# among them, which the dxmt tree links to) and of the d3d9 trees are checked,
-# but not those of the gptk tree: they are links to Apple's
-# libd3dshared.dylib, which ships as it is. A path that resolves to a file
-# already checked (the loader's symlinks) is skipped. A module that checks
-# availability before it calls the function would be flagged as well,
-# although it is safe; none in the bundle does that today.
+# among them, which the dxmt tree links to) and of the d3d9 trees are
+# checked. A path that resolves to a file already checked (the loader's
+# symlinks) is skipped. A module that checks availability before it calls
+# the function would be flagged as well, although it is safe; none in the
+# bundle does that today.
 check_floor_newer_imports() {
     local func name f real rel syms seen checked=0 bad=0 files=()
     if ! command -v nm >/dev/null; then
@@ -464,74 +437,13 @@ floor_import_hint() {
         */compatdb.so)
             echo "It is compatdb.so, which this script builds from compatdb/; fix the crate." ;;
         */winemetal.so)
-            if [ "$WITH_DXMT_BUILD" -eq 1 ]; then
-                echo "It is DXMT's, built by build-dxmt.sh; fix DXMT or how it is built."
-            else
-                echo "It is DXMT's, from the release pinned in redist.env, which needs the fix."
-            fi ;;
+            echo "It is DXMT's, built by build-dxmt.sh; fix DXMT or how it is built." ;;
         */libwow64fex.so|*/libarm64ecfex.so)
             echo "It is FEX's, built by build-fex.sh; fix FEX or how it is built." ;;
         *)
             echo "It comes from the Wine build, which configure set up without the"
             echo "    FLOOR_NEWER_FUNCS overrides: run build-wine.sh with --clean." ;;
     esac
-}
-
-# check_query_export: fail unless the installed compatdb.so exports
-# compatdb_query_env and, with the x87sidecar, compatdb_query_x87. ntdll
-# reads a missing compatdb_query_x87 as no opinion, which means attaching the
-# x87sidecar to every i386 process, and without compatdb_query_env a rule's
-# env reaches the process too late for its x87sidecar and Rosetta. Either way
-# a stripped or renamed export would otherwise go unnoticed. A build without
-# the x87sidecar has no Rosetta to start one under, so the x87 query is not
-# asked for there (check_no_x87 makes sure it is gone).
-check_query_export() {
-    local sym syms="compatdb_query_x87 compatdb_query_env"
-    if [ "$WITH_X87SIDECAR" -eq 0 ]; then
-        syms="compatdb_query_env"
-    fi
-    for sym in $syms; do
-        if ! nm -gU "$unixdir/compatdb.so" 2>/dev/null | grep -q "_${sym}\$"; then
-            echo "Error: $UNIX_DIR/compatdb.so does not export $sym"
-            exit 1
-        fi
-        echo "  compatdb.so exports $sym."
-    done
-}
-
-# check_no_x87: for a build without the x87sidecar, fail if anything of it
-# is left: the binary, or an exported x87 symbol in compatdb.so or ntdll.so
-# (compatdb_query_x87, or the ntdll side that would look for a sidecar).
-check_no_x87() {
-    local f
-    if [ -e "$WINE_DIR/bin/x87sidecar" ]; then
-        echo "Error: bin/x87sidecar is present in a build without the x87sidecar"
-        exit 1
-    fi
-    for f in compatdb.so ntdll.so; do
-        if nm -gU "$unixdir/$f" 2>/dev/null | grep -qi x87; then
-            echo "Error: $UNIX_DIR/$f exports x87 symbols:"
-            nm -gU "$unixdir/$f" | grep -i x87
-            exit 1
-        fi
-    done
-    echo "  No x87sidecar, and no x87 exports in compatdb.so or ntdll.so."
-}
-
-# check_x87sidecar_binary: fail unless bin/x87sidecar is an executable arm64
-# Mach-O. ntdll checks the sidecar with access(X_OK) and skips it otherwise,
-# and only an arm64 binary can attach to Rosetta, so an x86_64 file or a
-# non-executable one must not pass for a working sidecar.
-check_x87sidecar_binary() {
-    if [ ! -x "$WINE_DIR/bin/x87sidecar" ]; then
-        echo "Error: bin/x87sidecar is missing or not executable"
-        exit 1
-    fi
-    if ! lipo -archs "$WINE_DIR/bin/x87sidecar" 2>/dev/null | grep -qw arm64; then
-        echo "Error: bin/x87sidecar is not an arm64 Mach-O"
-        exit 1
-    fi
-    echo "  bin/x87sidecar is an arm64 executable."
 }
 
 # run_limited <seconds> <log> <command>...: run the command with its output in
@@ -550,17 +462,11 @@ run_limited() {
 # check_default_trees <log> [<dxgi> <d3d9>]: exit unless compatdb.so reported
 # those trees in <log>. The "(from ...)" lines only appear once it found and
 # prepended them. Without the two names, the default tree of each family for
-# an x86 program: the first in the profile's list. D3DMetal needs macOS
-# $GPTK_FLOOR or later, and below that compatdb.so gives the 64-bit cmd.exe
-# DXMT instead, so on an older host that is the line to expect.
+# an x86 program: the first in its list in profile.sh.
 check_default_trees() {
     local want dxgi_want d3d9_want
     dxgi_want="dxgi = ${2:-${DXGI_IMPLS%% *}} (from"
     d3d9_want="d3d9 = ${3:-${D3D9_IMPLS%% *}} (from"
-    if [ -z "${2:-}" ] && [ "${DXGI_IMPLS%% *}" = gptk ] \
-        && macos_newer "$GPTK_FLOOR" "$(sw_vers -productVersion)"; then
-        dxgi_want="dxgi = dxmt (from"
-    fi
     for want in "$dxgi_want" "$d3d9_want"; do
         if ! grep -q "compatdb: .*$want" "$1"; then
             echo "Error: compatdb.so did not report '$want'"
@@ -571,116 +477,15 @@ check_default_trees() {
     echo "  compatdb.so loads and finds its trees."
 }
 
-# smoke_test: run the bundled wine and check that compatdb.so loads in it, and
-# that an i386 process starts under the bundled x87sidecar.
-smoke_test() {
-    local version smoke_log x87_log
-    version=$("$WINE_DIR/bin/wine" --version) || {
-        echo "Error: bundled wine failed to run"
-        exit 1
-    }
-    echo "  Testing: $version"
-
-    # `wine --version` never loads ntdll, so it proves nothing about compatdb.so.
-    # Booting a throwaway prefix does: the library logs one block per process,
-    # and its "(from ...)" lines only appear once it found and prepended the
-    # trees. The Mono and Gecko installers are kept out so nothing pops a dialog.
-    time_mark "smoke: prefix boot"
-    echo "  Booting a throwaway prefix to check compatdb.so..."
-    smoke_log="$TMP_DIR/smoke.log"
-    WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all \
-        "$WINE_DIR/bin/wine" cmd /c exit >/dev/null 2>"$smoke_log" || {
-        echo "Error: bundled wine failed to boot a prefix"
-        cat "$smoke_log"
-        exit 1
-    }
-
-    # An ntdll from before the per-executable x87sidecar decision lacks this
-    # export and only starts the sidecar named by ROSETTA_X87_PATH, so there is
-    # nothing to check. --compatdb-only meets that on an older release and
-    # skips the check. A full bundle without the export was built from a Wine
-    # tree that lacks the ntdll commits, which is an error.
-    x87_log=""
-    if nm -gU "$unixdir/ntdll.so" 2>/dev/null | grep -q '_compatdb_preinit_query$'; then
-        check_x87sidecar_binary
-        # ntdll maps the DOS path through the prefix's dosdevices and resolves
-        # it to a unix path before it starts the first process, so compatdb.so
-        # can read the file's version resource; when the path cannot be
-        # resolved, only the basename is used. Either way the built-in
-        # x87-sidecar rule says yes. ntdll logs the launch before it execs the
-        # sidecar, and that line is what this looks for. Together with a clean
-        # exit, that proves ntdll started bin/x87sidecar and the program ran
-        # to the end under it; it does not prove that the sidecar's x87 hook
-        # took effect. Run in the prefix just booted, while its server is
-        # still up, so it takes about a second; the alarm stops a hung run
-        # after two minutes. The caller's ROSETTA_X87_PATH and WINE_COMPATDB
-        # are dropped so that the bundled sidecar and the built-in rules
-        # decide.
-        time_mark "smoke: i386 process under the x87sidecar"
-        echo "  Starting an i386 process to check the x87sidecar..."
-        x87_log="$TMP_DIR/x87.log"
-        local x87_status=0
-        env -u ROSETTA_X87_PATH -u WINE_COMPATDB \
-            WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all,err+module \
-            perl -e 'alarm shift; exec @ARGV or die "exec: $!\n"' 120 \
-            "$WINE_DIR/bin/wine" 'C:\windows\syswow64\cmd.exe' /c exit >"$x87_log" 2>&1 \
-            || x87_status=$?
-        if [ "$x87_status" -ne 0 ]; then
-            # 142 is 128 + SIGALRM: the alarm fired.
-            if [ "$x87_status" -eq 142 ]; then
-                echo "Error: the i386 cmd.exe did not exit within 120 seconds"
-            else
-                echo "Error: the i386 cmd.exe failed under the bundled wine (status $x87_status)"
-            fi
-            cat "$x87_log"
-            WINEPREFIX="$TMP_DIR/prefix" "$WINE_DIR/bin/wineserver" -k 2>/dev/null || true
-            exit 1
-        fi
-    elif [ "$COMPATDB_ONLY" -eq 1 ]; then
-        echo "  Skipping the x87sidecar check: this ntdll predates the per-executable decision."
-    else
-        echo "Error: ntdll.so lacks compatdb_preinit_query; the Wine tree is missing"
-        echo "the ntdll commits for the x87sidecar"
-        WINEPREFIX="$TMP_DIR/prefix" "$WINE_DIR/bin/wineserver" -k 2>/dev/null || true
-        exit 1
-    fi
-
-    # Every Direct3D tree, in x86_64 and i386 programs. Not for
-    # --compatdb-only, which leaves the PE side as it was and has no
-    # llvm-mingw to build the program with.
-    if [ "$COMPATDB_ONLY" -eq 0 ]; then
-        echo "  Loading each Direct3D tree's modules..."
-        check_tree_loads x86_64 env -u WINE_COMPATDB -u ROSETTA_X87_PATH \
-            WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all
-        check_tree_loads i686 env -u WINE_COMPATDB -u ROSETTA_X87_PATH \
-            WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all
-    fi
-
-    # The server is persistent, so it has to be told to go rather than waited for.
-    WINEPREFIX="$TMP_DIR/prefix" "$WINE_DIR/bin/wineserver" -k 2>/dev/null || true
-    check_default_trees "$smoke_log"
-
-    if [ -n "$x87_log" ]; then
-        # "x87sidecar:" rather than "ROSETTA_X87_PATH:" is how ntdll says the
-        # sidecar is the one in bin/.
-        if ! grep -q "x87sidecar: attaching rosettax87 --cooperative" "$x87_log"; then
-            echo "Error: ntdll did not start the i386 cmd.exe under bin/x87sidecar"
-            cat "$x87_log"
-            exit 1
-        fi
-        echo "  i386 processes start under bin/x87sidecar."
-    fi
-}
-
-# smoke_test_arm64: run the bundled arm64 wine through the signed loader and
-# check that native, x86_64 and i386 programs run, the last two under FEX.
+# smoke_test: run the bundled wine through the signed loader and check that
+# native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
 # hang rather than an error. The caller's WINE_COMPATDB and WINE_D3D_CONFIG
 # and every WINEMSYNC*, FEX_*, VK_*, MESA_*, MTL_* and METAL_* variable are
 # dropped so that the built-in rules and the defaults of Wine, FEX, the
 # Vulkan loader, KosmicKrisp and Metal decide.
-smoke_test_arm64() {
-    local version log arch cc exe marker markers sidecar var
+smoke_test() {
+    local version log arch cc exe marker markers var
     local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG)
     for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|MESA_|MTL_|METAL_)'); do
         wine_env+=(-u "$var")
@@ -707,18 +512,6 @@ smoke_test_arm64() {
         smoke_stop
         exit 1
     fi
-    # Nothing may try to start or ask about the x87sidecar. The pattern names
-    # the sidecar's traces only, not x87 as such: the arm64 compatdb.so logs
-    # its fex-x87-reduced-precision rule and that rule's FEX variable in every
-    # process.
-    sidecar='x87sidecar|x87_sidecar|x87 query|rosettax87|rosetta_x87'
-    if grep -qiE "$sidecar" "$log"; then
-        echo "Error: the prefix boot shows x87sidecar traces in a build without it:"
-        grep -iE "$sidecar" "$log"
-        smoke_stop
-        exit 1
-    fi
-    echo "  Nothing involves the x87sidecar."
     # msync is on by default, and the caller's WINEMSYNC* variables are
     # dropped above. The wineserver the boot started writes "msync: up and
     # running." to stderr, whatever WINEDEBUG says, only once its launchd
@@ -800,21 +593,19 @@ smoke_test_arm64() {
     check_tree_loads i686 "${wine_env[@]}"
     # --compatdb-only has already refused a bundle without Vulkan
     # (check_vulkan_present), so every bundle that gets here has it.
-    if [ "$WITH_VULKAN" -eq 1 ]; then
-        check_vulkan_runs "${wine_env[@]}"
-        check_wined3d_device "${wine_env[@]}"
-    fi
+    check_vulkan_runs "${wine_env[@]}"
+    check_wined3d_device "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run; the x86 ones load their Direct3D trees."
 }
 
-# check_vulkan_present: for a profile with Vulkan, exit unless the bundle
-# has the Vulkan loader, KosmicKrisp and its manifest, naming each one that
-# is missing. Such a profile's compatdb.so has no no-vulkan rule, so in a
-# bundle without Vulkan a game's own vulkan-1.dll would load and find no
-# driver, and the smoke test's Vulkan checks need it anyway. --compatdb-only
-# runs it before it builds anything, since it may meet a bundle from before
-# Vulkan; a full bundle checks the same files in Step 5.
+# check_vulkan_present: exit unless the bundle has the Vulkan loader,
+# KosmicKrisp and its manifest, naming each one that is missing. compatdb.so
+# does not disable vulkan-1, so in a bundle without Vulkan a game's own
+# vulkan-1.dll would load and find no driver, and the smoke test's Vulkan
+# checks need it anyway. --compatdb-only runs it before it builds anything,
+# since it may meet a bundle from before Vulkan; a full bundle checks the
+# same files in Step 5.
 check_vulkan_present() {
     local f missing=0
     for f in share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json \
@@ -825,7 +616,7 @@ check_vulkan_present() {
         fi
     done
     if [ "$missing" -ne 0 ]; then
-        echo "This bundle has no Vulkan. This profile's compatdb.so does not disable a"
+        echo "This bundle has no Vulkan. compatdb.so does not disable a"
         echo "game's own vulkan-1.dll, which would find no driver, and the smoke test"
         echo "needs Vulkan. Bundle the whole build instead of using --compatdb-only."
         exit 1
@@ -974,8 +765,7 @@ smoke_stop() {
 # program loads every module in it, plus the other family's d3d9.dll or
 # dxgi.dll. This is what proves the default-dir placeholders let each tree's
 # modules into a process of that arch. <env-command> is the env invocation
-# the runs start with; the rule is appended to it. gptk is skipped on a
-# macOS older than GPTK_FLOOR, where compatdb.so hands out dxmt instead.
+# the runs start with; the rule is appended to it.
 check_tree_loads() {
     local arch="$1" dir=i386-windows exe log family impl other names f want header
     shift
@@ -988,10 +778,6 @@ check_tree_loads() {
         if [ "$family" = dxgi ]; then other=d3d9.dll; else other=dxgi.dll; fi
         for impl in $(if [ "$family" = dxgi ]; then echo "$DXGI_IMPLS"; else echo "$D3D9_IMPLS"; fi); do
             [ -d "$WINE_DIR/lib/wine/$family/$impl/$dir" ] || continue
-            if [ "$impl" = gptk ] && macos_newer "$GPTK_FLOOR" "$(sw_vers -productVersion)"; then
-                echo "    $arch, $family=$impl: skipped below macOS $GPTK_FLOOR"
-                continue
-            fi
             names=()
             for f in "$WINE_DIR/lib/wine/$family/$impl/$dir"/*.dll; do
                 names+=("$(basename "$f")")
@@ -1017,20 +803,6 @@ check_tree_loads() {
     done
 }
 
-# unpack_dxmt: fetch DXMT's release tarball and unpack it once, setting
-# DXMT_TAR and DXMT_SRC (its top-level directory).
-unpack_dxmt() {
-    [ -z "${DXMT_SRC:-}" ] || return 0
-    DXMT_TAR=$(fetch "$DXMT_URL" "$DXMT_SHA256")
-    mkdir -p "$TMP_DIR/dxmt"
-    tar xzf "$DXMT_TAR" -C "$TMP_DIR/dxmt"
-    DXMT_SRC=$(find "$TMP_DIR/dxmt" -mindepth 1 -maxdepth 1 -type d -print -quit)
-    if [ -z "$DXMT_SRC" ]; then
-        echo "Error: $(basename "$DXMT_TAR") has no top-level directory"
-        exit 1
-    fi
-}
-
 # check_fex_build: exit unless build-fex.sh built all of FEX from the commit
 # fex-src.ref names now. Needs the network, to resolve a branch or tag.
 check_fex_build() {
@@ -1043,7 +815,7 @@ check_fex_build() {
     done
     for t in wow64 arm64ec unixlib; do
         if [ ! -f "$FEX_BUILD_DIR/$t/build.ninja" ]; then
-            echo "Error: no FEX build at $FEX_BUILD_DIR/$t (run build-wine.sh --arm64)"
+            echo "Error: no FEX build at $FEX_BUILD_DIR/$t (run build-wine.sh)"
             exit 1
         fi
     done
@@ -1070,7 +842,7 @@ check_fex_build() {
 check_mesa_build() {
     local f built want
     built=$(cat "$MESA_DIST/COMMIT" 2>/dev/null) || {
-        echo "Error: $MESA_DIST has no COMMIT; build-mesa.sh has not staged it (run build-wine.sh --arm64)"
+        echo "Error: $MESA_DIST has no COMMIT; build-mesa.sh has not staged it (run build-wine.sh)"
         exit 1
     }
     want=$(src_ref_commit mesa-src.ref "$MESA_REPO")
@@ -1137,7 +909,7 @@ check_vulkan() {
 check_wine_sdk() {
     if [ "$(cat "$WINE_SDK_DIR/WINE_COMMIT" 2>/dev/null)" != "$(wine_src_commit)" ]; then
         echo "Error: the Wine SDK at $WINE_SDK_DIR is for $(cat "$WINE_SDK_DIR/WINE_COMMIT" 2>/dev/null || echo nothing),"
-        echo "but $WINE_SRC is at $(wine_src_commit) (run build-wine.sh --arm64)"
+        echo "but $WINE_SRC is at $(wine_src_commit) (run build-wine.sh)"
         exit 1
     fi
     echo "  Wine SDK: $(cat "$WINE_SDK_DIR/WINE_COMMIT")"
@@ -1182,13 +954,14 @@ check_dxmt_build() {
 # with which the kernel leaves most of the 4 GB __PAGEZERO replaceable, so
 # Wine can claim the low address space its i386 code needs (the same
 # entitlement gates the hardware x86 memory ordering FEX runs x86 code with,
-# see FEX_HARDWARE_TSO in docs/arm64.md). That entitlement is restricted: it is
-# only honoured with a provisioning profile that grants it, embedded in an
-# app bundle, and a signature by a certificate of the same team. So the
-# loader moves into lib/wine/<unix>/wine.app and everything that
-# starts a Wine process reaches it through a symlink. Everything about the
-# signature comes from the profile in LOADER_PROFILE: the entitlements, the
-# bundle identifier and the team whose certificate signs.
+# see FEX_HARDWARE_TSO in the environment variables of README.md). That
+# entitlement is restricted: it is only honoured with a provisioning profile
+# that grants it, embedded in an app bundle, and a signature by a
+# certificate of the same team. So the loader moves into
+# lib/wine/<unix>/wine.app and everything that starts a Wine process reaches
+# it through a symlink. Everything about the signature comes from the
+# profile in LOADER_PROFILE: the entitlements, the bundle identifier and the
+# team whose certificate signs.
 
 # loader_preflight: read LOADER_PROFILE and find the signing identity, or
 # exit. Sets LOADER_PLIST (the decoded profile), LOADER_TEAM,
@@ -1479,17 +1252,15 @@ check_loader_app() {
 # ── compatdb-only: replace compatdb.so in an existing bundle ────────────
 # For a change confined to the compatdb/ crate. Nothing is wiped, nothing is
 # prompted for and nothing is read from $BUILD_DIR except cargo's target dir,
-# so this works on an unpacked release tarball as well as on a bundle this
-# script built.
+# so this works on any existing arm64 bundle, one this script built or one
+# unpacked there.
 if [ "$COMPATDB_ONLY" -eq 1 ]; then
     if [ ! -x "$WINE_DIR/bin/wine" ]; then
         echo "Error: no bundle at $WINE_DIR (--compatdb-only updates an existing"
-        echo "bundle; build one without it first, or unpack a release tarball there)"
+        echo "arm64 bundle; build or unpack one there first)"
         exit 1
     fi
-    if [ "$WITH_VULKAN" -eq 1 ]; then
-        check_vulkan_present
-    fi
+    check_vulkan_present
 
     echo "==> Step 1: Build compatdb.so"
     build_compatdb
@@ -1513,14 +1284,10 @@ if [ "$COMPATDB_ONLY" -eq 1 ]; then
         echo "Error: compatdb.so is not self-contained"
         exit 1
     fi
-    # Only compatdb.so: the rest of the bundle was not built here, and a base
-    # release keeps whatever floor it shipped with.
+    # Only compatdb.so: the rest of the bundle was not built here, and keeps
+    # whatever floor it was built for.
     check_minos "$unixdir/compatdb.so"
-    check_query_export
-    if [ "$WITH_X87SIDECAR" -eq 0 ]; then
-        check_no_x87
-    fi
-    "$SMOKE_TEST"
+    smoke_test
 
     echo ""
     echo "==> Done! compatdb.so updated in:"
@@ -1535,18 +1302,10 @@ time_mark "Preflight"
 echo "==> Preflight"
 check_sdk_floor
 check_deps_formulae
-if [ "$WITH_FEX" -eq 1 ]; then
-    check_fex_build
-fi
-if [ "$WITH_WINE_SDK" -eq 1 ]; then
-    check_wine_sdk
-fi
-if [ "$WITH_DXMT_BUILD" -eq 1 ]; then
-    check_dxmt_build
-fi
-if [ "$WITH_VULKAN" -eq 1 ]; then
-    check_mesa_build
-fi
+check_fex_build
+check_wine_sdk
+check_dxmt_build
+check_mesa_build
 for arch in $SMOKE_PE_ARCHS x86_64 i686; do
     if [ ! -x "$MINGW_DIR/bin/$arch-w64-mingw32-clang" ]; then
         echo "Error: no $arch-w64-mingw32-clang in $MINGW_DIR/bin (the smoke test needs it)"
@@ -1559,9 +1318,7 @@ for tool in llvm-strip llvm-objdump; do
         exit 1
     fi
 done
-if [ "$WITH_LOADER_APP" -eq 1 ]; then
-    loader_preflight
-fi
+loader_preflight
 
 time_mark "Step 0: Clean previous bundle"
 # ── Step 0: Clean previous bundle ──────────────────────────────────────
@@ -1605,14 +1362,13 @@ mkdir -p "$DIST_DIR"
 
 # ── Step 1: Staged install ──────────────────────────────────────────────
 time_mark "Step 1: Staged install"
-# Under the same wrapper as configure, since it can rerun configure's probes.
 cd "$BUILD_DIR"
 if [ "$RUNTIME_ONLY" -eq 1 ]; then
     echo "==> Step 1: Staged install (runtime only)"
-    "${CONFIGURE_WRAPPER[@]}" make install-lib DESTDIR="$DIST_DIR"
+    make install-lib DESTDIR="$DIST_DIR"
 else
     echo "==> Step 1: Staged install with DESTDIR"
-    "${CONFIGURE_WRAPPER[@]}" make install DESTDIR="$DIST_DIR"
+    make install DESTDIR="$DIST_DIR"
 fi
 
 # ── Step 2: Flatten prefix ──────────────────────────────────────────────
@@ -1626,31 +1382,6 @@ rmdir "$DIST_DIR/$INSTALL_TOP"
 
 EXT_DIR="$WINE_DIR/lib/external"
 
-# ── Step 2b: Bundle the d3d9 test binaries ──────────────────────────────
-# Wine's `make install` skips test binaries, so copy the two `d3d9_test.exe`
-# in by hand. They are the de-facto D3D9 conformance suite, and shipping them
-# lets a consumer gate its own d3d9 builtin against the suite with nothing but
-# this bundle (no Wine build tree, which is what a CI job has). Plain PEs that
-# `wine` executes, so they are NOT builtin-marked, and they live outside the
-# per-arch module directories the loader searches by module name.
-#
-# Development files only: the runtime-only bundle goes into an application, and
-# a test suite has no business there.
-if [ "$RUNTIME_ONLY" -eq 0 ] && [ "$WITH_D3D9_TESTS" -eq 1 ]; then
-    time_mark "Step 2b: d3d9 test binaries"
-    echo "==> Step 2b: Bundle the d3d9 test binaries"
-    for arch in i386-windows "$PE64_DIR"; do
-        src="$BUILD_DIR/dlls/d3d9/tests/$arch/d3d9_test.exe"
-        if [ ! -f "$src" ]; then
-            echo "Error: $src not found (run build-wine.sh first)"
-            exit 1
-        fi
-        echo "    $arch/d3d9_test.exe"
-        mkdir -p "$WINE_DIR/lib/wine/tests/$arch"
-        cp "$src" "$WINE_DIR/lib/wine/tests/$arch/"
-    done
-fi
-
 # ── Step 2c: x86_64 link libraries ─────────────────────────────────────
 # A full bundle carries Wine's link libraries, so it can serve as the Wine
 # SDK of PE code built against it. `make install` puts those of the build's
@@ -1660,7 +1391,7 @@ fi
 # reads it at run time: on an arm64 host ntdll looks for an x64 builtin in
 # aarch64-windows, and the loader and setupapi's fake-DLL install only pick
 # .dll and .exe files that are PE images.
-if [ "$RUNTIME_ONLY" -eq 0 ] && [ "$WITH_WINE_SDK" -eq 1 ]; then
+if [ "$RUNTIME_ONLY" -eq 0 ]; then
     time_mark "Step 2c: x86_64 link libraries"
     echo "==> Step 2c: x86_64 link libraries"
     mkdir -p "$WINE_DIR/lib/wine/x86_64-windows"
@@ -1691,8 +1422,8 @@ if [ ! -f "$CONFIG_H" ]; then
 fi
 LIBS=()
 for name in $(sed -n 's|.*"@loader_path/\.\./\.\./external/\([^"]*\)".*|\1|p' "$CONFIG_H" | sort -u); do
-    case "$WITH_VULKAN:$name" in
-        1:libvulkan.*) LIBS+=("$MESA_DIST/lib/$name") ;;
+    case "$name" in
+        libvulkan.*) LIBS+=("$MESA_DIST/lib/$name") ;;
         *) LIBS+=("$DEPS_PREFIX/lib/$name") ;;
     esac
 done
@@ -1708,9 +1439,7 @@ LIBS+=("$DEPS_PREFIX/lib/libSDL3.dylib")
 # (Step 3c). It loads system libraries only, so the walk below adds nothing
 # for it or the loader, and the install name and signature steps treat both
 # like the rest.
-if [ "$WITH_VULKAN" -eq 1 ]; then
-    LIBS+=("$MESA_DIST/lib/libvulkan_kosmickrisp.dylib")
-fi
+LIBS+=("$MESA_DIST/lib/libvulkan_kosmickrisp.dylib")
 
 echo "  Copying direct deps..."
 MISSED=0
@@ -1779,33 +1508,20 @@ done
 # and arm64 code with a broken signature is killed on load. An ad-hoc
 # signature is enough for a library the signed loader loads: the loader runs
 # with library validation disabled (LOADER_RUNTIME_ENTITLEMENTS).
-if [ "$SIGN_RELINKED" -eq 1 ]; then
-    echo "  Re-signing the relinked dylibs ad hoc..."
-    for dylib in "$EXT_DIR"/*.dylib; do
-        codesign --force --sign - "$dylib" 2>/dev/null
-    done
-fi
+echo "  Re-signing the relinked dylibs ad hoc..."
+for dylib in "$EXT_DIR"/*.dylib; do
+    codesign --force --sign - "$dylib" 2>/dev/null
+done
 
-# ── Step 3b: Remove Wine's D3D12, and its Vulkan where it has none ──────
+# ── Step 3b: Remove Wine's D3D12 ────────────────────────────────────────
 # Wine's own D3D12 (d3d12.dll and d3d12core.dll, on vkd3d) is never shipped.
-# In a build configured --without-vulkan it cannot work. Where Vulkan is on,
 # D3D12 is meant to run on vkd3d-proton, which the bundle does not carry yet
-# (docs/arm64.md), so Wine's is left out rather than shipped untried. An
-# x86_64 d3d12.dll that a Direct3D tree supplies (D3DMetal's) is installed
-# after this, in Step 4. Without Vulkan, Wine's Vulkan modules go too, rather
-# than ship modules that advertise an API they cannot serve. d3d10core
-# stays: i386's is replaced by DXMT, and on x86_64 it is Wine's, loaded only
-# by the wined3d side tree (D3DMetal's dxgi cannot back it, so the default
-# GPTK stack never reaches it).
-time_mark "Step 3b: D3D12 and Vulkan removal"
-echo "==> Step 3b: Remove Wine's D3D12, and its Vulkan where it has none"
+# (docs/arm64.md), so Wine's is left out rather than shipped untried.
+# d3d10core stays: the Direct3D trees of Step 4 take it over.
+time_mark "Step 3b: D3D12 removal"
+echo "==> Step 3b: Remove Wine's D3D12"
 DEAD=(i386-windows/d3d12.dll i386-windows/d3d12core.dll
       "$PE64_DIR/d3d12.dll" "$PE64_DIR/d3d12core.dll")
-if [ "$WITH_VULKAN" -eq 0 ]; then
-    DEAD+=(i386-windows/vulkan-1.dll i386-windows/winevulkan.dll
-           "$PE64_DIR/vulkan-1.dll" "$PE64_DIR/winevulkan.dll"
-           "$UNIX_DIR/winevulkan.so")
-fi
 for dead in "${DEAD[@]}"; do
     if [ -e "$WINE_DIR/lib/wine/$dead" ]; then
         echo "    $dead"
@@ -1820,63 +1536,39 @@ done
 # MESA_DIST's layout; here it is pointed at lib/external, again relative to
 # the manifest, which is how the loader reads a relative library_path, so the
 # bundle stays relocatable.
-if [ "$WITH_VULKAN" -eq 1 ]; then
-    time_mark "Step 3c: Vulkan driver manifest"
-    echo "==> Step 3c: Vulkan driver manifest"
-    ICD_DIR="$WINE_DIR/share/vulkan/icd.d"
-    ICD="$ICD_DIR/kosmickrisp_mesa_icd.aarch64.json"
-    ICD_LIBRARY=../../../lib/external/libvulkan_kosmickrisp.dylib
-    mkdir -p "$ICD_DIR"
-    cp "$MESA_DIST/share/vulkan/icd.d/$(basename "$ICD")" "$ICD"
-    plutil -replace ICD.library_path -string "$ICD_LIBRARY" "$ICD"
-    if [ "$(plutil -extract ICD.library_path raw -o - "$ICD")" != "$ICD_LIBRARY" ]; then
-        echo "Error: $(basename "$ICD") does not name $ICD_LIBRARY after rewriting it"
-        exit 1
-    fi
-    echo "    share/vulkan/icd.d/$(basename "$ICD") -> $ICD_LIBRARY"
+time_mark "Step 3c: Vulkan driver manifest"
+echo "==> Step 3c: Vulkan driver manifest"
+ICD_DIR="$WINE_DIR/share/vulkan/icd.d"
+ICD="$ICD_DIR/kosmickrisp_mesa_icd.aarch64.json"
+ICD_LIBRARY=../../../lib/external/libvulkan_kosmickrisp.dylib
+mkdir -p "$ICD_DIR"
+cp "$MESA_DIST/share/vulkan/icd.d/$(basename "$ICD")" "$ICD"
+plutil -replace ICD.library_path -string "$ICD_LIBRARY" "$ICD"
+if [ "$(plutil -extract ICD.library_path raw -o - "$ICD")" != "$ICD_LIBRARY" ]; then
+    echo "Error: $(basename "$ICD") does not name $ICD_LIBRARY after rewriting it"
+    exit 1
 fi
+echo "    share/vulkan/icd.d/$(basename "$ICD") -> $ICD_LIBRARY"
 
 # ── Step 4: Direct3D backends ───────────────────────────────────────────
 # Direct3D comes from third-party implementations that talk to Metal
-# directly, plus Wine's own wined3d as the fallback for each: Apple's D3DMetal
-# (Game Porting Toolkit, gptk) for x86_64 D3D10-12, DXMT for D3D10 and D3D11
-# (all of it where D3DMetal does not exist, the i386 half where it does), and
-# mtld3d for D3D9. Which of them a build carries is DXGI_IMPLS and D3D9_IMPLS
-# in profile.sh. Every one lives in its own tree under lib/wine/dxgi/<impl>
-# or lib/wine/d3d9/<impl>, with <pe64>-windows, i386-windows and, where it
-# has a unix half, <unix> subdirectories; the default dirs hold only
-# fake-module markers, and compatdb.so (Step 4b) picks one tree per family
-# per process. D3D8 and DDraw stay on wined3d only.
-#
-# Deliberately after Step 3: that step's dependency walk, chmod and
-# install_name_tool loops all iterate $EXT_DIR/*.dylib, and none of them may
-# touch the Apple-signed libd3dshared.dylib. Staging afterwards keeps them out
-# of reach without any exemption logic. Nothing below rewrites install names,
+# directly, plus Wine's own wined3d as the fallback for each: DXMT for D3D10
+# and D3D11, and mtld3d for D3D9. The trees are DXGI_IMPLS and D3D9_IMPLS in
+# profile.sh. Every one lives in its own tree under lib/wine/dxgi/<impl> or
+# lib/wine/d3d9/<impl>, with <pe64>-windows, i386-windows and, where it has
+# a unix half, <unix> subdirectories; the default dirs hold only fake-module
+# markers, and compatdb.so (Step 4b) picks one tree per family per process.
+# D3D8 and DDraw stay on wined3d only. Nothing below rewrites install names,
 # re-signs, or walks the otool closure.
 time_mark "Step 4: Direct3D backends"
 echo "==> Step 4: Direct3D backends"
 
-# Every artifact, the x87sidecar of Step 4c included, is downloaded (or taken
-# from the cache) before anything is installed, so a bad pin fails the run
-# before the tree is half-modified.
+# Every download is fetched (or taken from the cache) before anything is
+# installed, so a bad pin fails the run before the tree is half-modified.
+# DXMT is what build-dxmt.sh staged, as the preflight checked.
 echo "  Fetching artifacts into $CACHE_DIR..."
-if in_list gptk "$DXGI_IMPLS"; then
-    GPTK_DMG=$(fetch "$GPTK_URL" "$GPTK_SHA256")
-fi
-if in_list dxmt "$DXGI_IMPLS"; then
-    if [ "$WITH_DXMT_BUILD" -eq 1 ]; then
-        DXMT_SRC="$DXMT_DIST"
-    else
-        unpack_dxmt
-    fi
-fi
 if in_list mtld3d "$D3D9_IMPLS"; then
     MTLD3D_TAR=$(fetch "$MTLD3D_URL" "$MTLD3D_SHA256")
-fi
-if [ "$WITH_X87SIDECAR" -eq 1 ]; then
-    X87SIDECAR_TAR=$(fetch "$X87SIDECAR_URL" "$X87SIDECAR_SHA256")
-    X87SIDECAR_LICENSE=$(fetch "$X87SIDECAR_LICENSE_URL" "$X87SIDECAR_LICENSE_SHA256" \
-        x87sidecar-LICENSE)
 fi
 
 WINEBUILD="$BUILD_DIR/tools/winebuild/winebuild"
@@ -1886,8 +1578,8 @@ tree="$WINE_DIR/lib/wine/dxgi"
 d3d9tree="$WINE_DIR/lib/wine/d3d9"
 
 # wined3d (both arches): Wine's own dxgi/d3d10/d3d10core/d3d11/d3d10_1 from the
-# build tree. No d3d12 (vkd3d is unusable --without-vulkan); wined3d.dll itself
-# stays in the default dir (the GL engine, shared, reached by fall-through).
+# build tree. No d3d12 (Step 3b); wined3d.dll itself stays in the default dir
+# (the engine, shared, reached by fall-through).
 if in_list wined3d "$DXGI_IMPLS"; then
     echo "  Building dxgi/wined3d from the Wine build..."
     for arch in i386-windows "$PE64_DIR"; do
@@ -1904,151 +1596,34 @@ if in_list wined3d "$DXGI_IMPLS"; then
     done
 fi
 
-if in_list gptk "$DXGI_IMPLS"; then
-    # D3DMetal, straight off the GPTK image. Apple's license allows
-    # redistributing the Redistributables unmodified for non-commercial
-    # purposes, so the files are copied byte for byte, signatures and all.
-    # `ditto` preserves the framework's symlinks and its _CodeSignature
-    # directory; `cp -R` would not. The image carries a click-through license
-    # agreement, which hdiutil prompts for on stdin and would otherwise block
-    # a CI run forever. The here-string answers it and PAGER keeps the
-    # agreement text from being paged. D3DMetal is x86_64 only, so this
-    # profile's 64-bit dirs are x86_64 ones.
-    echo "  Mounting $(basename "$GPTK_DMG")..."
-    mkdir -p "$GPTK_MNT"
-    PAGER=cat hdiutil attach "$GPTK_DMG" \
-        -readonly -nobrowse -noautoopen -mountpoint "$GPTK_MNT" -quiet <<< "Y"
-
-    # Located rather than hardcoded, so a renamed volume or a reshuffled image
-    # does not silently install nothing.
-    GPTK_LIB=$(find "$GPTK_MNT" -maxdepth 4 -type d -path '*/redist/lib' -print -quit)
-    if [ -z "$GPTK_LIB" ]; then
-        echo "Error: no redist/lib directory on $(basename "$GPTK_DMG")"
-        exit 1
-    fi
-    # A copy as it is on the image, which Step 5 compares the installed files
-    # with.
-    ditto "$GPTK_LIB" "$TMP_DIR/gptk-image"
-
-    # D3DMetal's PE modules, each as <name on the image>:<name in the bundle>.
-    # Each goes into the gptk tree with a unixlib symlink at the deeper path,
-    # which stands in for the image's own x86_64-unix symlink of that name.
-    # nvngx is what games look for when probing DLSS; Apple ships its MetalFX
-    # implementation under a descriptive name that no game ever loads, and
-    # wine.inf already registers nvapi64.dll and nvngx.dll as fake DLLs. This
-    # one list drives the install, the record of Apple's files that Step 4e
-    # and Step 5 work from, and the check that the image holds nothing else.
-    GPTK_MODULES="dxgi:dxgi d3d10:d3d10 d3d11:d3d11 d3d12:d3d12 nvapi64:nvapi64 nvngx-on-metalfx:nvngx"
-    echo "  Installing D3DMetal..."
-    ditto "$GPTK_LIB/external" "$EXT_DIR"
-    gw="$tree/gptk/$PE64_DIR"
-    gu="$tree/gptk/$UNIX_DIR"
-    mkdir -p "$gw" "$gu"
-    for m in $GPTK_MODULES; do
-        echo "    ${m%%:*}.dll -> dxgi/gptk/$PE64_DIR/${m#*:}.dll"
-        ditto "$GPTK_LIB/wine/x86_64-windows/${m%%:*}.dll" "$gw/${m#*:}.dll"
-        ln -sf ../../../../external/libd3dshared.dylib "$gu/${m#*:}.so"
-    done
-
-    GPTK_LICENSE=$(find "$GPTK_MNT" -maxdepth 2 -iname 'License.rtf' -print -quit)
-    if [ -n "$GPTK_LICENSE" ]; then
-        echo "    D3DMetal-License.rtf"
-        cp "$GPTK_LICENSE" "$EXT_DIR/D3DMetal-License.rtf"
-    else
-        echo "Error: no License.rtf on $(basename "$GPTK_DMG")"
-        exit 1
-    fi
-
-    hdiutil detach "$GPTK_MNT" -quiet
-    rmdir "$GPTK_MNT" 2>/dev/null || true
-
-    # D3DMetal ships no d3d10core/d3d10_1; Wine's were reachable by GPTK
-    # processes in the old default dir (they return E_FAIL on GPTK's dxgi but
-    # must be present so anything probing D3D10 keeps its old behaviour rather
-    # than failing to load). Pure PE, no unixlib.
-    cp "$BUILD_DIR/dlls/d3d10core/$PE64_DIR/d3d10core.dll" "$gw/"
-    cp "$BUILD_DIR/dlls/d3d10_1/$PE64_DIR/d3d10_1.dll"     "$gw/"
-
-    # Every regular file the bundle takes from the image, as
-    # "<path on the image>|<path in the bundle>" lines. Step 4e leaves these
-    # alone and Step 5 checks them against the image copy: they ship as
-    # Apple made them. Every entry of the image has to be accounted for: a
-    # file or symlink under external/ is installed at the same path under
-    # lib/external/, a module named in GPTK_MODULES goes into the gptk tree,
-    # and the x86_64-unix symlink of such a module is replaced by the tree's
-    # own. Anything else, or a file missing where it should be, is an error,
-    # so a change to the image or to this step cannot let an Apple file slip
-    # past Step 4e and Step 5.
-    while IFS= read -r -d '' f; do
-        src="${f#"$TMP_DIR/gptk-image/"}"
-        name="${src##*/}"
-        dst=""
-        case "$src" in
-            external/*) dst="lib/$src" ;;
-            wine/x86_64-windows/*.dll|wine/x86_64-unix/*.so)
-                for m in $GPTK_MODULES; do
-                    if [ "${m%%:*}" = "${name%.*}" ]; then
-                        dst="lib/wine/dxgi/gptk/$PE64_DIR/${m#*:}.dll"
-                    fi
-                done ;;
-        esac
-        if [ -z "$dst" ]; then
-            echo "Error: $src on the GPTK image is not installed (GPTK_MODULES does not name it)"
-            exit 1
-        fi
-        if [ -L "$f" ]; then
-            case "$src" in
-                wine/x86_64-unix/*) ;;
-                *)
-                    if [ "$(readlink "$f")" != "$(readlink "$WINE_DIR/$dst" 2>/dev/null)" ]; then
-                        echo "Error: $src on the GPTK image is not installed as the same symlink at $dst"
-                        exit 1
-                    fi ;;
-            esac
-            continue
-        fi
-        if [ ! -f "$WINE_DIR/$dst" ] || [ -L "$WINE_DIR/$dst" ]; then
-            echo "Error: $src from the GPTK image is not installed at $dst"
-            exit 1
-        fi
-        GPTK_FILES+="$src|$dst"$'\n'
-    done < <(find "$TMP_DIR/gptk-image" \( -type f -o -type l \) -print0)
-fi
-
 if in_list dxmt "$DXGI_IMPLS"; then
-    # DXMT_SRC is the release tarball (unpacked above) or, with
-    # WITH_DXMT_BUILD, what build-dxmt.sh staged, as the preflight checked.
-    # Both have the same layout, with a winemetal.so for this profile.
+    # What build-dxmt.sh staged in DXMT_DIST, as the preflight checked.
     echo "  Installing DXMT..."
-    echo "    $DXMT_SRC"
-    if [ ! -f "$DXMT_SRC/$UNIX_DIR/winemetal.so" ]; then
-        echo "Error: no $UNIX_DIR/winemetal.so in $DXMT_SRC"
-        exit 1
-    fi
+    echo "    $DXMT_DIST"
 
     # dxmt tree: DXMT's dxgi/d3d10core/d3d11/winemetal plus Wine's
-    # d3d10/d3d10_1, for both arches. DXMT's x86_64 DLLs go into the profile's
-    # 64-bit dir, which on arm64 is aarch64-windows (x64 processes run as
-    # ARM64EC there). The single winemetal.so stays in the default unix dir,
-    # where its @rpath finds winemac.so and ntdll.so, and serves the i386 PE
-    # modules too through its wow64 entry points; the tree links to it.
+    # d3d10/d3d10_1, for both arches. DXMT's x86_64 DLLs go into the 64-bit
+    # dir, aarch64-windows (x64 processes run as ARM64EC). The single
+    # winemetal.so stays in the default unix dir, where its @rpath finds
+    # winemac.so and ntdll.so, and serves the i386 PE modules too through
+    # its wow64 entry points; the tree links to it.
     dx64="$tree/dxmt/$PE64_DIR"
     dxu="$tree/dxmt/$UNIX_DIR"
     dx32="$tree/dxmt/i386-windows"
     mkdir -p "$dx64" "$dxu" "$dx32"
-    cp "$DXMT_SRC/$UNIX_DIR/winemetal.so" "$unixdir/"
-    cp "$DXMT_SRC"/x86_64-windows/dxgi.dll \
-       "$DXMT_SRC"/x86_64-windows/d3d10core.dll \
-       "$DXMT_SRC"/x86_64-windows/d3d11.dll \
-       "$DXMT_SRC"/x86_64-windows/winemetal.dll \
+    cp "$DXMT_DIST/$UNIX_DIR/winemetal.so" "$unixdir/"
+    cp "$DXMT_DIST"/x86_64-windows/dxgi.dll \
+       "$DXMT_DIST"/x86_64-windows/d3d10core.dll \
+       "$DXMT_DIST"/x86_64-windows/d3d11.dll \
+       "$DXMT_DIST"/x86_64-windows/winemetal.dll \
        "$dx64/"
     cp "$BUILD_DIR/dlls/d3d10/$PE64_DIR/d3d10.dll"     "$dx64/"
     cp "$BUILD_DIR/dlls/d3d10_1/$PE64_DIR/d3d10_1.dll" "$dx64/"
     ln -sf "../../../$UNIX_DIR/winemetal.so" "$dxu/winemetal.so"
-    cp "$DXMT_SRC"/i386-windows/dxgi.dll \
-       "$DXMT_SRC"/i386-windows/d3d10core.dll \
-       "$DXMT_SRC"/i386-windows/d3d11.dll \
-       "$DXMT_SRC"/i386-windows/winemetal.dll \
+    cp "$DXMT_DIST"/i386-windows/dxgi.dll \
+       "$DXMT_DIST"/i386-windows/d3d10core.dll \
+       "$DXMT_DIST"/i386-windows/d3d11.dll \
+       "$DXMT_DIST"/i386-windows/winemetal.dll \
        "$dx32/"
     cp "$BUILD_DIR/dlls/d3d10/i386-windows/d3d10.dll"     "$dx32/"
     cp "$BUILD_DIR/dlls/d3d10_1/i386-windows/d3d10_1.dll" "$dx32/"
@@ -2060,12 +1635,12 @@ fi
 # wined3d.dll, which stays in the default dir.
 if in_list mtld3d "$D3D9_IMPLS"; then
     # mtld3d's tarball mirrors the lib/wine layout under wine/, with an
-    # x86_64-unix and an aarch64-unix mtld3d.so; the one for this profile's
-    # unix dir is taken. Its x86_64 PE DLLs go into the profile's 64-bit dir,
-    # like DXMT's. The tarball's prefix-markers/ holds the system32 and
-    # syswow64 placeholders for installs into an existing prefix and is not
-    # used: the prefixes this bundle creates get their markers from wine.inf's
-    # wildcard over the default dirs (stamped below).
+    # x86_64-unix and an aarch64-unix mtld3d.so; the one for UNIX_DIR is
+    # taken. Its x86_64 PE DLLs go into the 64-bit dir, like DXMT's. The
+    # tarball's prefix-markers/ holds the system32 and syswow64 placeholders
+    # for installs into an existing prefix and is not used: the prefixes this
+    # bundle creates get their markers from wine.inf's wildcard over the
+    # default dirs (stamped below).
     echo "  Installing mtld3d..."
     mkdir -p "$TMP_DIR/mtld3d"
     tar xf "$MTLD3D_TAR" -C "$TMP_DIR/mtld3d"
@@ -2102,21 +1677,19 @@ fi
 # default, or a database override) via prepend_dll_path, so a DXGI stack is
 # never mixed and nothing is ever removed. Every module any tree of a family
 # supplies is therefore taken out of the default dir (Wine's own copies from
-# `make install`, D3DMetal's from the image) and replaced by a fake-module
-# marker. wineboot's 11,,* wildcard stamps a system32/syswow64 placeholder
-# for each, which is what lets the prepended tree supply the real DLL (a
-# builtin will not load without its placeholder). Each marker mirrors the
-# exports of the real DLL it stands in for, taken from the first tree in the
-# profile's order that has it. Its machine is that of the processes the
-# directory serves, not the real DLL's: i386 in i386-windows, AMD64 in the
-# 64-bit dir. In aarch64-windows of the arm64 bundle the placeholder's
-# machine decides which module the loader accepts, and an x64 (ARM64EC)
-# process rejects an ARM64 placeholder with error 193 even when the real
-# module, like Wine's own d3d10.dll there, is an ARM64X one it could load.
-# x64 programs are what the bundle is for, so every 64-bit marker says AMD64
-# (docs/arm64.md, Limitations). An arm64 winebuild has no default PE target,
-# hence the explicit -b; for the x86_64 profile it gives the same bytes as
-# the -m32/-m64 used before.
+# `make install`) and replaced by a fake-module marker. wineboot's 11,,*
+# wildcard stamps a system32/syswow64 placeholder for each, which is what
+# lets the prepended tree supply the real DLL (a builtin will not load
+# without its placeholder). Each marker mirrors the exports of the real DLL
+# it stands in for, taken from the first tree in the order of DXGI_IMPLS or
+# D3D9_IMPLS that has it. Its machine is that of the processes the directory
+# serves, not the real DLL's: i386 in i386-windows, AMD64 in the 64-bit dir.
+# In aarch64-windows the placeholder's machine decides which module the
+# loader accepts, and an x64 (ARM64EC) process rejects an ARM64 placeholder
+# with error 193 even when the real module, like Wine's own d3d10.dll there,
+# is an ARM64X one it could load. x64 programs are what the bundle is for, so
+# every 64-bit marker says AMD64 (docs/arm64.md, Limitations). An arm64
+# winebuild has no default PE target, hence the explicit -b.
 time_mark "Step 4: fake-module markers"
 echo "  Stamping fake-module markers in the default dirs..."
 mark() { # <out-dir> <arch-dir> <real-dll> <name>
@@ -2145,36 +1718,13 @@ done
 
 # ── Step 4b: Compat database ────────────────────────────────────────────
 # compatdb.so is what turns the trees above into a working Direct3D: ntdll
-# dlopens <ntdll_dir>/compatdb.so in every process (the slot CrossOver hack
-# 24067 provides) and the library prepends one dxgi/ and one d3d9/ tree,
-# chosen per process from its built-in rules plus whatever WINE_COMPATDB
-# carries. Built here from the compatdb/ crate for this profile's Rust
-# target, the one Wine in this bundle.
+# dlopens <ntdll_dir>/compatdb.so in every process and the library prepends
+# one dxgi/ and one d3d9/ tree, chosen per process from its built-in rules
+# plus whatever WINE_COMPATDB carries. Built here from the compatdb/ crate
+# for RUST_TARGET.
 time_mark "Step 4b: Compat database"
 echo "==> Step 4b: Compat database"
 build_compatdb
-
-# ── Step 4c: x87sidecar ─────────────────────────────────────────────────
-# ntdll starts i386 processes under bin/x87sidecar when it exists and
-# compatdb.so does not keep it away from the executable. ROSETTA_X87_PATH
-# overrides the path, and an empty value turns the sidecar off. The binary is
-# an ad-hoc signed arm64 executable and is copied as is: no install_name_tool,
-# no re-signing, and the leak check in Step 5 does not look at bin/. Only for
-# a Wine under Rosetta; a native arm64 Wine runs i386 code under FEX.
-if [ "$WITH_X87SIDECAR" -eq 1 ]; then
-    time_mark "Step 4c: x87sidecar"
-    echo "==> Step 4c: x87sidecar"
-    mkdir -p "$TMP_DIR/x87sidecar"
-    tar xJf "$X87SIDECAR_TAR" -C "$TMP_DIR/x87sidecar"
-    if [ ! -f "$TMP_DIR/x87sidecar/x87sidecar" ]; then
-        echo "Error: $(basename "$X87SIDECAR_TAR") has no x87sidecar at its top level"
-        exit 1
-    fi
-    echo "    bin/x87sidecar"
-    install -m 0755 "$TMP_DIR/x87sidecar/x87sidecar" "$WINE_DIR/bin/x87sidecar"
-    echo "    x87sidecar-LICENSE"
-    cp "$X87SIDECAR_LICENSE" "$EXT_DIR/x87sidecar-LICENSE"
-fi
 
 # ── Step 4d: FEX ────────────────────────────────────────────────────────
 # FEX from the trees build-fex.sh built, installed into a scratch prefix
@@ -2183,58 +1733,51 @@ fi
 # under WoW64) and xtajit64.dll (x86_64 as ARM64EC) unless the registry names
 # others, so FEX's DLLs are installed under their own names and as those two,
 # replacing the stubs `make install` put there.
-if [ "$WITH_FEX" -eq 1 ]; then
-    time_mark "Step 4d: FEX"
-    echo "==> Step 4d: FEX"
-    for t in wow64 arm64ec unixlib; do
-        if [ ! -f "$FEX_BUILD_DIR/$t/build.ninja" ]; then
-            echo "Error: no FEX build at $FEX_BUILD_DIR/$t (run build-wine.sh --arm64)"
-            exit 1
-        fi
-        cmake --install "$FEX_BUILD_DIR/$t" --prefix "$TMP_DIR/fex" >/dev/null
-    done
-    fexpe="$TMP_DIR/fex/lib/wine/$PE64_DIR"
-    fexunix="$TMP_DIR/fex/lib/wine/$UNIX_DIR"
-    for f in "$fexpe/libwow64fex.dll" "$fexpe/libarm64ecfex.dll" \
-             "$fexunix/libwow64fex.so" "$fexunix/libarm64ecfex.so"; do
-        if [ ! -f "$f" ]; then
-            echo "Error: the FEX install has no $(basename "$f")"
-            exit 1
-        fi
-    done
-    echo "    $PE64_DIR/libwow64fex.dll, xtajit.dll"
-    cp "$fexpe/libwow64fex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/"
-    cp "$fexpe/libwow64fex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/xtajit.dll"
-    echo "    $PE64_DIR/libarm64ecfex.dll, xtajit64.dll"
-    cp "$fexpe/libarm64ecfex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/"
-    cp "$fexpe/libarm64ecfex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/xtajit64.dll"
-    echo "    $UNIX_DIR/libwow64fex.so, libarm64ecfex.so"
-    cp "$fexunix/libwow64fex.so" "$fexunix/libarm64ecfex.so" "$unixdir/"
-fi
+time_mark "Step 4d: FEX"
+echo "==> Step 4d: FEX"
+for t in wow64 arm64ec unixlib; do
+    if [ ! -f "$FEX_BUILD_DIR/$t/build.ninja" ]; then
+        echo "Error: no FEX build at $FEX_BUILD_DIR/$t (run build-wine.sh)"
+        exit 1
+    fi
+    cmake --install "$FEX_BUILD_DIR/$t" --prefix "$TMP_DIR/fex" >/dev/null
+done
+fexpe="$TMP_DIR/fex/lib/wine/$PE64_DIR"
+fexunix="$TMP_DIR/fex/lib/wine/$UNIX_DIR"
+for f in "$fexpe/libwow64fex.dll" "$fexpe/libarm64ecfex.dll" \
+         "$fexunix/libwow64fex.so" "$fexunix/libarm64ecfex.so"; do
+    if [ ! -f "$f" ]; then
+        echo "Error: the FEX install has no $(basename "$f")"
+        exit 1
+    fi
+done
+echo "    $PE64_DIR/libwow64fex.dll, xtajit.dll"
+cp "$fexpe/libwow64fex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/"
+cp "$fexpe/libwow64fex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/xtajit.dll"
+echo "    $PE64_DIR/libarm64ecfex.dll, xtajit64.dll"
+cp "$fexpe/libarm64ecfex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/"
+cp "$fexpe/libarm64ecfex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/xtajit64.dll"
+echo "    $UNIX_DIR/libwow64fex.so, libarm64ecfex.so"
+cp "$fexunix/libwow64fex.so" "$fexunix/libarm64ecfex.so" "$unixdir/"
 
 # ── Step 4e: Split off PE symbols ───────────────────────────────────────
-# Wine, DXMT, FEX and the d3d9 tests are built with DWARF debug info, and
-# most PE files also carry a COFF symbol table. Together they make up more
-# than half the size of the PE modules and only serve a debugger or the
-# symbolizing of a crash report, so the bundle ships none of them. Every PE
-# file under lib/wine is stripped of both here, except those from the GPTK
-# image, which may only be redistributed unmodified (Step 4) and are left
-# alone. With --symbols the unstripped copy of each stripped file goes to
-# <dest>/wine-symbols (cleared in Step 0), next to the bundle, under the same
-# relative path: an address in lib/wine/<arch>-windows/foo.dll is looked up
-# in wine-symbols/lib/wine/<arch>-windows/foo.dll. The files are stripped in
+# Wine, DXMT and FEX are built with DWARF debug info, and most PE files also
+# carry a COFF symbol table. Together they make up more than half the size
+# of the PE modules and only serve a debugger or the symbolizing of a crash
+# report, so the bundle ships none of them. Every PE file under lib/wine is
+# stripped of both here. With --symbols the unstripped copy of each stripped
+# file goes to <dest>/wine-symbols (cleared in Step 0), next to the bundle,
+# under the same relative path: an address in
+# lib/wine/<arch>-windows/foo.dll is looked up in
+# wine-symbols/lib/wine/<arch>-windows/foo.dll. The files are stripped in
 # parallel batches (strip_pe), and errors are listed sorted by file once all
 # are done. llvm-strip keeps the DOS stub, which holds Wine's builtin
 # marker, and handles ARM64X images. It cannot read the symbol table GNU ld
-# writes for some i386 DLLs (DXMT's release); there the table and its
-# strings, which end the file, are cut off instead (drop_coff_symtab). Step 5
-# checks that no PE file kept either.
+# writes for some i386 DLLs; there the table and its strings, which end the
+# file, are cut off instead (drop_coff_symtab). Step 5 checks that no PE
+# file kept either.
 time_mark "Step 4e: Split off PE symbols"
 echo "==> Step 4e: Split off PE symbols"
-if in_list gptk "$DXGI_IMPLS" && [ -z "$GPTK_FILES" ]; then
-    echo "Error: no record of the files from the GPTK image; nothing would keep them unmodified"
-    exit 1
-fi
 # mtld3d's d3d9.dll as installed, for Step 5's comparison with the release.
 if in_list mtld3d "$D3D9_IMPLS"; then
     for arch in i386-windows "$PE64_DIR"; do
@@ -2242,8 +1785,7 @@ if in_list mtld3d "$D3D9_IMPLS"; then
         cp -p "$d3d9tree/mtld3d/$arch/d3d9.dll" "$TMP_DIR/installed/$arch/"
     done
 fi
-# Every PE file but Apple's (they ship unmodified, Step 4; Step 5 checks
-# them), in parallel batches.
+# Every PE file, in parallel batches.
 STRIP_WORK="$TMP_DIR/strip"
 STRIP_ERRORS="$TMP_DIR/strip-errors"
 mkdir -p "$STRIP_WORK" "$STRIP_ERRORS"
@@ -2255,9 +1797,7 @@ export -f strip_pe drop_coff_symtab coff_symtab
     set -o pipefail
     find "$WINE_DIR/lib/wine" -type f ! -name '*.a' -print0 | pe_scan | cut -f1 \
         | while IFS= read -r f; do
-              rel="${f#"$WINE_DIR"/}"
-              case "$GPTK_FILES" in *"|$rel"$'\n'*) continue ;; esac
-              printf '%s\0' "$rel"
+              printf '%s\0' "${f#"$WINE_DIR"/}"
           done \
         | xargs -0 -n 32 -P "$(sysctl -n hw.ncpu)" /bin/bash -c 'strip_pe "$@"' _ > "$TMP_DIR/stripped.list"
 )
@@ -2275,7 +1815,7 @@ else
 fi
 
 # ── Step 4f: Remove inherited quarantine ──────────────────────────────
-# Extracting and copying the checksum-verified redistributables can preserve
+# Extracting and copying the checksum-verified downloads can preserve
 # download quarantine, which blocks libraries such as winemetal.so at load time.
 # Clear only that attribute from the assembled bundle before running it. Keep
 # signatures and other metadata intact; -s acts on symlinks themselves so this
@@ -2290,11 +1830,9 @@ fi
 # ── Step 4g: Loader app ─────────────────────────────────────────────────
 # Last of all that touches the loader, so nothing changes the signed bundle
 # after it is sealed.
-if [ "$WITH_LOADER_APP" -eq 1 ]; then
-    time_mark "Step 4g: Loader app"
-    echo "==> Step 4g: Loader app"
-    package_loader
-fi
+time_mark "Step 4g: Loader app"
+echo "==> Step 4g: Loader app"
+package_loader
 
 # ── Step 5: Verify ──────────────────────────────────────────────────────
 time_mark "Step 5: library references"
@@ -2310,10 +1848,8 @@ LEAKED=0
 check_no_leaks "$EXT_DIR"/*.dylib
 check_no_leaks "$unixdir"/*.so \
                "$WINE_DIR"/lib/wine/dxgi/*/"$UNIX_DIR"/*.so \
-               "$WINE_DIR"/lib/wine/d3d9/*/"$UNIX_DIR"/*.so
-if [ "$WITH_LOADER_APP" -eq 1 ]; then
-    check_no_leaks "$unixdir/wine.app/Contents/MacOS/wine"
-fi
+               "$WINE_DIR"/lib/wine/d3d9/*/"$UNIX_DIR"/*.so \
+               "$unixdir/wine.app/Contents/MacOS/wine"
 if [ $LEAKED -ne 0 ]; then
     echo "Error: bundle is not self-contained"
     exit 1
@@ -2325,15 +1861,18 @@ echo "  All binaries clean, no ${LEAK_PREFIXES// / or } references."
 time_mark "Step 5: copied-in components"
 WANT=("lib/wine/$UNIX_DIR/compatdb.so"
       "lib/wine/$PE64_DIR/dxgi.dll" "lib/wine/i386-windows/dxgi.dll"
-      "lib/wine/$PE64_DIR/d3d9.dll" "lib/wine/i386-windows/d3d9.dll")
-if in_list gptk "$DXGI_IMPLS"; then
-    WANT+=("lib/external/D3DMetal.framework/Versions/A/D3DMetal"
-           "lib/external/libd3dshared.dylib"
-           "lib/wine/dxgi/gptk/$PE64_DIR/dxgi.dll"
-           "lib/wine/dxgi/gptk/$PE64_DIR/d3d12.dll"
-           "lib/wine/dxgi/gptk/$UNIX_DIR/d3d11.so"
-           "lib/wine/dxgi/gptk/$UNIX_DIR/nvngx.so")
-fi
+      "lib/wine/$PE64_DIR/d3d9.dll" "lib/wine/i386-windows/d3d9.dll"
+      "lib/wine/$PE64_DIR/xtajit.dll" "lib/wine/$PE64_DIR/xtajit64.dll"
+      "lib/wine/$PE64_DIR/libwow64fex.dll" "lib/wine/$PE64_DIR/libarm64ecfex.dll"
+      "lib/wine/$UNIX_DIR/libwow64fex.so" "lib/wine/$UNIX_DIR/libarm64ecfex.so"
+      "lib/external/libvulkan.1.dylib" "lib/external/libvulkan_kosmickrisp.dylib"
+      "share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json"
+      "lib/wine/$UNIX_DIR/winevulkan.so"
+      "lib/wine/$PE64_DIR/vulkan-1.dll" "lib/wine/$PE64_DIR/winevulkan.dll"
+      "lib/wine/i386-windows/vulkan-1.dll" "lib/wine/i386-windows/winevulkan.dll"
+      "lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine"
+      "lib/wine/$UNIX_DIR/wine.app/Contents/Info.plist"
+      "lib/wine/$UNIX_DIR/wine.app/Contents/embedded.provisionprofile")
 if in_list dxmt "$DXGI_IMPLS"; then
     WANT+=("lib/wine/$UNIX_DIR/winemetal.so"
            "lib/wine/dxgi/dxmt/$PE64_DIR/dxgi.dll"
@@ -2357,32 +1896,12 @@ if in_list wined3d "$D3D9_IMPLS"; then
     WANT+=("lib/wine/d3d9/wined3d/i386-windows/d3d9.dll"
            "lib/wine/d3d9/wined3d/$PE64_DIR/d3d9.dll")
 fi
-if [ "$WITH_X87SIDECAR" -eq 1 ]; then
-    WANT+=("bin/x87sidecar" "lib/external/x87sidecar-LICENSE")
-fi
-if [ "$RUNTIME_ONLY" -eq 0 ] && [ "$WITH_WINE_SDK" -eq 1 ]; then
+if [ "$RUNTIME_ONLY" -eq 0 ]; then
     WANT+=("lib/wine/x86_64-windows/libwinecrt0.a" "lib/wine/x86_64-windows/libntdll.a")
-fi
-if [ "$WITH_FEX" -eq 1 ]; then
-    WANT+=("lib/wine/$PE64_DIR/xtajit.dll" "lib/wine/$PE64_DIR/xtajit64.dll"
-           "lib/wine/$PE64_DIR/libwow64fex.dll" "lib/wine/$PE64_DIR/libarm64ecfex.dll"
-           "lib/wine/$UNIX_DIR/libwow64fex.so" "lib/wine/$UNIX_DIR/libarm64ecfex.so")
-fi
-if [ "$WITH_VULKAN" -eq 1 ]; then
-    WANT+=("lib/external/libvulkan.1.dylib" "lib/external/libvulkan_kosmickrisp.dylib"
-           "share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json"
-           "lib/wine/$UNIX_DIR/winevulkan.so"
-           "lib/wine/$PE64_DIR/vulkan-1.dll" "lib/wine/$PE64_DIR/winevulkan.dll"
-           "lib/wine/i386-windows/vulkan-1.dll" "lib/wine/i386-windows/winevulkan.dll")
-fi
-if [ "$WITH_LOADER_APP" -eq 1 ]; then
-    WANT+=("lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine"
-           "lib/wine/$UNIX_DIR/wine.app/Contents/Info.plist"
-           "lib/wine/$UNIX_DIR/wine.app/Contents/embedded.provisionprofile")
 fi
 MISSING=0
 for want in "${WANT[@]}"; do
-    # -e follows symlinks, so this also proves the GPTK .so links resolve.
+    # -e follows symlinks, so this also proves the tree .so links resolve.
     if [ ! -e "$WINE_DIR/$want" ]; then
         echo "  ERROR: missing $want"
         MISSING=1
@@ -2402,27 +1921,22 @@ if in_list mtld3d "$D3D9_IMPLS"; then
     done
 fi
 # The emulator Wine loads by default has to be FEX, not the stub it replaced.
-if [ "$WITH_FEX" -eq 1 ]; then
-    for pair in libwow64fex:xtajit libarm64ecfex:xtajit64; do
-        if ! cmp -s "$WINE_DIR/lib/wine/$PE64_DIR/${pair%%:*}.dll" \
-                    "$WINE_DIR/lib/wine/$PE64_DIR/${pair##*:}.dll"; then
-            echo "  ERROR: $PE64_DIR/${pair##*:}.dll is not FEX's ${pair%%:*}.dll"
-            MISSING=1
-        fi
-    done
-fi
+for pair in libwow64fex:xtajit libarm64ecfex:xtajit64; do
+    if ! cmp -s "$WINE_DIR/lib/wine/$PE64_DIR/${pair%%:*}.dll" \
+                "$WINE_DIR/lib/wine/$PE64_DIR/${pair##*:}.dll"; then
+        echo "  ERROR: $PE64_DIR/${pair##*:}.dll is not FEX's ${pair%%:*}.dll"
+        MISSING=1
+    fi
+done
 if [ $MISSING -ne 0 ]; then
     echo "Error: copied-in components are not installed correctly"
     exit 1
 fi
 echo "  Direct3D trees (dxgi: $DXGI_IMPLS; d3d9: $D3D9_IMPLS) and the other copied-in components in place."
 
-# Step 4e stripped every PE file's symbols; none may be left, except in
-# Apple's files, which ship as they are on the image. Those are checked for
-# exactly that, by content (shasum reads the file; cmp maps it, which macOS
-# can kill for a signed Mach-O). One header scan (pe_scan) finds the PE files
-# and their COFF symbol tables, and llvm-objdump reads their section tables
-# in parallel batches (pe_debug_files).
+# Step 4e stripped every PE file's symbols; none may be left. One header scan
+# (pe_scan) finds the PE files and their COFF symbol tables, and llvm-objdump
+# reads their section tables in parallel batches (pe_debug_files).
 time_mark "Step 5: PE symbol check"
 (
     set -o pipefail
@@ -2438,7 +1952,6 @@ fi
 : > "$TMP_DIR/pe-symboled"
 while IFS=$'\t' read -r f ptr count; do
     rel="${f#"$WINE_DIR"/}"
-    case "$GPTK_FILES" in *"|$rel"$'\n'*) continue ;; esac
     printf '%s\0' "$f" >> "$TMP_DIR/pe-check"
     if [ "$ptr" != 0 ] || [ "$count" != 0 ]; then
         echo "$rel" >> "$TMP_DIR/pe-symboled"
@@ -2463,23 +1976,6 @@ if [ -s "$TMP_DIR/pe-symboled" ]; then
     exit 1
 fi
 echo "  No PE file carries debug sections or a symbol table."
-if in_list gptk "$DXGI_IMPLS"; then
-    if [ -z "$GPTK_FILES" ]; then
-        echo "  ERROR: no record of the files from the GPTK image"
-        exit 1
-    fi
-    time_mark "Step 5: GPTK files against the image"
-    gptk_count=0
-    while IFS='|' read -r src dst; do
-        [ -n "$src" ] || continue
-        if [ "$(shasum -a 256 < "$TMP_DIR/gptk-image/$src")" != "$(shasum -a 256 < "$WINE_DIR/$dst")" ]; then
-            echo "  ERROR: $dst differs from $src on the GPTK image"
-            exit 1
-        fi
-        gptk_count=$((gptk_count + 1))
-    done <<< "$GPTK_FILES"
-    echo "  The $gptk_count files from the GPTK image are byte-identical to it."
-fi
 
 # A symlink whose target a step removed or never installed fails only at run
 # time, or, inside wine.app, as a signature that does not verify.
@@ -2492,19 +1988,11 @@ if [ -n "$DANGLING" ]; then
 fi
 echo "  No dangling symlinks."
 
-time_mark "Step 5: exports and loader signature"
-check_query_export
-if [ "$WITH_X87SIDECAR" -eq 0 ]; then
-    check_no_x87
-fi
-if [ "$WITH_VULKAN" -eq 1 ]; then
-    check_vulkan
-fi
-if [ "$WITH_LOADER_APP" -eq 1 ]; then
-    check_loader_app
-fi
+time_mark "Step 5: Vulkan and loader signature"
+check_vulkan
+check_loader_app
 
-# After everything above is in place, so the copied-in redistributables and
+# After everything above is in place, so the copied-in components and
 # compatdb.so are checked as well as what Wine built.
 time_mark "Step 5: minos"
 echo "  Checking every Mach-O against macOS $MACOS_FLOOR..."
@@ -2512,10 +2000,8 @@ check_minos "$WINE_DIR"
 if [ -n "$FLOOR_NEWER_FUNCS" ]; then
     check_floor_newer_imports
 fi
-# smoke_test checks that bin/x87sidecar is an arm64 executable before it
-# starts the i386 process, for this mode and --compatdb-only alike.
 
-"$SMOKE_TEST"
+smoke_test
 
 echo ""
 print_timings

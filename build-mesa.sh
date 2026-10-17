@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Builds the Vulkan stack of the arm64 Wine and stages it in MESA_DIST:
+# Builds the Vulkan stack of the Wine and stages it in MESA_DIST:
 #
 #   lib/libvulkan.1.dylib            the Khronos Vulkan loader, which
 #                                    win32u.so loads
@@ -16,9 +16,8 @@ set -e
 # Mesa comes from athei/mesa (upstream Mesa plus our topic commits,
 # originally from Hadron's patches; MESA_REPO names another repository) at
 # the ref in mesa-src.ref (a branch, tag or commit). Called by build-wine.sh
-# --arm64 before Wine's configure, which links against this loader; running
-# it alone rebuilds the Vulkan stack only. bundle-wine.sh --arm64 installs
-# from MESA_DIST.
+# before Wine's configure, which links against this loader; running it alone
+# rebuilds the Vulkan stack only. bundle-wine.sh installs from MESA_DIST.
 #
 # The loader is built from the Vulkan-Loader and Vulkan-Headers tags pinned
 # in redist.env, for the floor: Homebrew's vulkan-loader bottle needs a newer
@@ -49,11 +48,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# The Vulkan stack is only built for the arm64 profile, which names Mesa's
-# repository and clone, says where the trees go and pins the floor.
+# profile.sh names Mesa's repository and clone, says where the trees go and
+# pins the floor.
 # shellcheck source=profile.sh
 . "$SCRIPT_DIR/profile.sh"
-set_profile arm64
 # shellcheck source=redist.env
 . "$SCRIPT_DIR/redist.env"
 
@@ -269,7 +267,7 @@ EOF
 )
 
 # ── KosmicKrisp, stage 2: the driver ────────────────────────────────────
-# For the floor, which the profile exports as MACOSX_DEPLOYMENT_TARGET and
+# For the floor, which profile.sh exports as MACOSX_DEPLOYMENT_TARGET and
 # the native file passes on as well. CoreGraphics is linked explicitly: the
 # driver calls CGColorSpace functions, which it otherwise only finds through
 # QuartzCore at run time, as flat-namespace imports. The key carries a hash

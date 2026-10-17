@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-# Builds FEX, the x86 emulator of the arm64 Wine, from athei/FEX (upstream FEX
+# Builds FEX, the x86 emulator of the Wine, from athei/FEX (upstream FEX
 # with our commits on top; FEX_REPO names another repository) at the ref in
-# fex-src.ref (a branch, tag or commit). Called by build-wine.sh --arm64;
-# running it alone rebuilds FEX only. Three CMake trees under FEX_BUILD_DIR,
+# fex-src.ref (a branch, tag or commit). Called by build-wine.sh; running it
+# alone rebuilds FEX only. Three CMake trees under FEX_BUILD_DIR,
 # following Hadron's recipe:
 #
 #   wow64/    libwow64fex.dll, an aarch64 PE that runs i386 code under WoW64
@@ -13,7 +13,7 @@ set -e
 #             (Wine loads it as xtajit64.dll)
 #   unixlib/  libwow64fex.so and libarm64ecfex.so, their macOS halves
 #
-# Nothing is installed here: bundle-wine.sh --arm64 installs from these trees.
+# Nothing is installed here: bundle-wine.sh installs from these trees.
 #
 # --clean wipes FEX_BUILD_DIR first.
 
@@ -28,11 +28,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# FEX only exists in the arm64 profile, which also names its repository and
-# clone, says where the trees go and pins the floor of the unix half.
+# profile.sh names FEX's repository and clone, says where the trees go and
+# pins the floor of the unix half.
 # shellcheck source=profile.sh
 . "$SCRIPT_DIR/profile.sh"
-set_profile arm64
 
 FEX_REF="$(tr -d '[:space:]' < "$SCRIPT_DIR/fex-src.ref")"
 if [ -z "$FEX_REF" ]; then
@@ -113,8 +112,8 @@ for target in wow64 arm64ec; do
 done
 
 # ── Unix half ───────────────────────────────────────────────────────────
-# Apple's compilers named explicitly, held to the profile's floor like the
-# rest of the bundle.
+# Apple's compilers named explicitly, held to the floor in profile.sh like
+# the rest of the bundle.
 echo "==> Building the FEX unixlib..."
 cmake -S "$FEX_SRC/Source/Windows/UnixLib" -B "$FEX_BUILD_DIR/unixlib" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \

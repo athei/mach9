@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Builds DXMT for the arm64 bundle from the upstream commit pinned in
+# Builds DXMT for the bundle from the upstream commit pinned in
 # redist.env and stages it in DXMT_DIST, in the layout of DXMT's release
 # tarball:
 #
@@ -12,8 +12,8 @@ set -e
 #   DESCRIBE     its `git describe`, the version string DXMT builds into d3d11.dll
 #   WINE_COMMIT  the Wine source commit it was linked against
 #
-# Called by build-wine.sh --arm64, after the Wine build and the Wine SDK,
-# which this links against. bundle-wine.sh --arm64 installs from DXMT_DIST.
+# Called by build-wine.sh, after the Wine build and the Wine SDK, which this
+# links against. bundle-wine.sh installs from DXMT_DIST.
 #
 # The Windows half is x86 code, x86_64 and i386, built with DXMT's own
 # build-win64.txt and build-win32.txt cross files and llvm-mingw against the
@@ -56,12 +56,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# DXMT is only built for the arm64 profile, which names the Wine build tree
-# and SDK to link against, DXMT_BUILD_DIR, DXMT_LLVM, DXMT_DIST and the
-# floor.
+# profile.sh names the Wine build tree and SDK to link against,
+# DXMT_BUILD_DIR, DXMT_LLVM, DXMT_DIST and the floor.
 # shellcheck source=profile.sh
 . "$SCRIPT_DIR/profile.sh"
-set_profile arm64
 # shellcheck source=redist.env
 . "$SCRIPT_DIR/redist.env"
 
@@ -80,37 +78,31 @@ if ! xcrun -sdk macosx -f metal >/dev/null 2>&1; then
     exit 1
 fi
 if [ ! -f "$BUILD_DIR/Makefile" ]; then
-    echo "Error: no arm64 Wine build at $BUILD_DIR (run build-wine.sh --arm64 first)"
+    echo "Error: no Wine build at $BUILD_DIR (run build-wine.sh first)"
     exit 1
 fi
 # winemetal.so links the two .so files; its configure also looks up the PE
 # link libraries for the ARM64EC winemetal.dll it never builds, and fails
 # without them.
 for f in dlls/winemac.drv/winemac.so dlls/ntdll/ntdll.so \
-         "dlls/ntdll/$PE64_DIR/libntdll.a" "dlls/dbghelp/$PE64_DIR/libdbghelp.a"; do
+         "dlls/ntdll/$PE64_DIR/libntdll.a" "dlls/dbghelp/$PE64_DIR/libdbghelp.a" \
+         "libs/winecrt0/$PE64_DIR/libwinecrt0.a"; do
     if [ ! -f "$BUILD_DIR/$f" ]; then
-        echo "Error: $BUILD_DIR/$f not found (run build-wine.sh --arm64 first)"
+        echo "Error: $BUILD_DIR/$f not found (run build-wine.sh first)"
         exit 1
     fi
 done
-# Upstream Wine builds winecrt0 under libs/, older trees under dlls/; DXMT's
-# meson looks in both.
-if [ ! -f "$BUILD_DIR/libs/winecrt0/$PE64_DIR/libwinecrt0.a" ] \
-    && [ ! -f "$BUILD_DIR/dlls/winecrt0/$PE64_DIR/libwinecrt0.a" ]; then
-    echo "Error: no $PE64_DIR/libwinecrt0.a under $BUILD_DIR/libs or dlls (run build-wine.sh --arm64 first)"
-    exit 1
-fi
 # The SDK must be the one staged from this Wine source, or the DLLs would
 # link against another Wine's unix call setup.
 WINE_COMMIT=$(wine_src_commit)
 if [ "$(cat "$WINE_SDK_DIR/WINE_COMMIT" 2>/dev/null)" != "$WINE_COMMIT" ]; then
     echo "Error: the Wine SDK at $WINE_SDK_DIR is for $(cat "$WINE_SDK_DIR/WINE_COMMIT" 2>/dev/null || echo nothing),"
-    echo "but $WINE_SRC is at $WINE_COMMIT (run build-wine.sh --arm64)"
+    echo "but $WINE_SRC is at $WINE_COMMIT (run build-wine.sh)"
     exit 1
 fi
 for f in bin/winebuild lib/wine/x86_64-windows/libwinecrt0.a lib/wine/i386-windows/libwinecrt0.a; do
     if [ ! -f "$WINE_SDK_DIR/$f" ]; then
-        echo "Error: the Wine SDK at $WINE_SDK_DIR has no $f (run build-wine.sh --arm64)"
+        echo "Error: the Wine SDK at $WINE_SDK_DIR has no $f (run build-wine.sh)"
         exit 1
     fi
 done
