@@ -7,10 +7,10 @@
 # the x86 emulator.
 #
 # Everything lives under ROOT, the directory that holds this repository: the
-# sources (the Wine checkout in src/arm64/, FEX in src-fex/, Mesa in
-# src-mesa/), downloads (cache/), every intermediate under BUILD_TOP and the
-# bundle under dist/arm64/wine. WINE_BUILD_ROOT overrides ROOT, for a checkout
-# kept elsewhere (a worktree) that should use the same trees.
+# sources (the Wine checkout in src/, FEX in src-fex/, Mesa in src-mesa/),
+# downloads (cache/), every intermediate under build/, one directory per
+# component, and the bundle in dist/wine. WINE_BUILD_ROOT overrides ROOT,
+# for a checkout kept elsewhere (a worktree) that should use the same trees.
 #
 # A path set below as "${NAME:-default}" is overridden by an environment
 # variable of the same name. MACOSX_DEPLOYMENT_TARGET may raise the floor but
@@ -18,7 +18,7 @@
 ROOT="${WINE_BUILD_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # Where the build trees go by default, and where claim_tree adopts an
 # unmarked one.
-BUILD_TOP="$ROOT/build/arm64"
+BUILD_TOP="$ROOT/build"
 
 # macos_newer <a> <b>: succeed when macOS version <a> is newer than <b>.
 # Major, minor and patch are compared as numbers and a missing part counts as
@@ -32,10 +32,10 @@ macos_newer() {
 }
 
 # The Wine source: upstream Wine with our series, a checkout of athei/wine.
-WINE_SRC="${WINE_SRC:-$ROOT/src/arm64}"
+WINE_SRC="${WINE_SRC:-$ROOT/src}"
 BUILD_DIR="${BUILD_DIR:-$BUILD_TOP/wine}"
 # What bundle-wine.sh writes <dest>/wine into without --dest.
-BUNDLE_DEST="$ROOT/dist/arm64"
+BUNDLE_DEST="$ROOT/dist"
 HOST_TRIPLE=aarch64-apple-darwin
 WINE_ARCHS=arm64ec,aarch64,i386
 # The arm64 Homebrew. Configure finds the libraries here and the bundle
