@@ -5,25 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
 usage() {
-    echo "Usage: $0 [--clean] [--arm64]"
+    echo "Usage: $0 [--clean]"
     exit 1
 }
 
-# Parse flags. --arm64 selects the native arm64 profile; without it the
-# x86_64 Wine is built, as every release is.
 CLEAN=0
-ARCH_PROFILE=intel
 while [ $# -gt 0 ]; do
     case "$1" in
         --clean) CLEAN=1; shift ;;
-        --arm64) ARCH_PROFILE=arm64; shift ;;
         *) usage ;;
     esac
 done
 
 # shellcheck source=profile.sh
 . "$SCRIPT_DIR/profile.sh"
-set_profile "$ARCH_PROFILE"
 
 if [ ! -f "$WINE_SRC/configure" ]; then
     echo "Error: Wine source not found at $WINE_SRC"
@@ -36,14 +31,10 @@ if [ ! -x "$MINGW_DIR/bin/x86_64-w64-mingw32-clang" ]; then
 fi
 export PATH="$PATH:$MINGW_DIR/bin"
 
-case ",$WINE_ARCHS," in
-    *,arm64ec,*)
-        if [ ! -x "$MINGW_DIR/bin/arm64ec-w64-mingw32-clang" ]; then
-            echo "Error: llvm-mingw at $MINGW_DIR has no arm64ec toolchain"
-            exit 1
-        fi
-        ;;
-esac
+if [ ! -x "$MINGW_DIR/bin/arm64ec-w64-mingw32-clang" ]; then
+    echo "Error: llvm-mingw at $MINGW_DIR has no arm64ec toolchain"
+    exit 1
+fi
 
 # The floor is pinned in profile.sh, which exports it as
 # MACOSX_DEPLOYMENT_TARGET for everything built below. The SDK stays whatever
@@ -57,7 +48,7 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 claim_tree "$BUILD_DIR" wine "$CLEAN"
 
-# build-fex.sh, build-mesa.sh and build-dxmt.sh read the same profile and
+# build-fex.sh, build-mesa.sh and build-dxmt.sh read the same profile.sh and
 # take --clean the same way.
 SUB_FLAGS=()
 if [ "$CLEAN" -eq 1 ]; then
@@ -65,25 +56,22 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 
 # The Vulkan loader and driver, built first: configure links against the
-# loader build-mesa.sh stages (the profile's LDFLAGS name its directory
+# loader build-mesa.sh stages (the LDFLAGS in profile.sh name its directory
 # first), and records its soname.
-if [ "$WITH_VULKAN" -eq 1 ]; then
-    "$SCRIPT_DIR/build-mesa.sh" "${SUB_FLAGS[@]}"
-fi
+"$SCRIPT_DIR/build-mesa.sh" "${SUB_FLAGS[@]}"
 
 # Every optional dependency is switched off unless it is switched back on
 # here, so a package missing from the dependency prefix fails configure
-# instead of silently changing the feature set. A profile adds the options
-# only its Wine tree knows through CONFIGURE_FEATURES_EXTRA; together they
-# cover every --with-*/--without-* package of `configure --help`, except:
-# vulkan, which follows the profile's WITH_VULKAN (VULKAN_OPTION below);
-# opengl, which stays at configure's default (never --with-opengl: on macOS
-# it starts an EGL probe that always fails, and the Mac driver links
-# -framework OpenGL on its own); pthread, which is required; gettextpo,
-# which is off unless asked for (--without-gettextpo would only skip a header
-# probe and change config.h for nothing); and the options that name a path
-# rather than a package. The X extensions are moot under --without-x and
-# denied anyway, so nothing depends on that.
+# instead of silently changing the feature set. The list covers every
+# --with-*/--without-* package of `configure --help`, except: opengl, which
+# stays at configure's default (never --with-opengl: on macOS it starts an
+# EGL probe that always fails, and the Mac driver links -framework OpenGL on
+# its own); pthread, which is required; gettextpo, which is off unless asked
+# for (--without-gettextpo would only skip a header probe and change config.h
+# for nothing); and the options that name a path rather than a package. The
+# X extensions are moot under --without-x and denied anyway, so nothing
+# depends on that. Vulkan runs on the loader and KosmicKrisp build-mesa.sh
+# built.
 CONFIGURE_ALLOWLIST=(
     --with-coreaudio
     --with-freetype
@@ -91,6 +79,7 @@ CONFIGURE_ALLOWLIST=(
     --with-mingw
     --with-opencl
     --with-sdl
+    --with-vulkan
     --without-alsa
     --without-capi
     --without-cups
@@ -113,6 +102,7 @@ CONFIGURE_ALLOWLIST=(
     --without-udev
     --without-usb
     --without-v4l2
+    --without-va
     --without-wayland
     --without-x
     --without-xcomposite
@@ -127,23 +117,14 @@ CONFIGURE_ALLOWLIST=(
     --without-xshm
     --without-xxf86vm
 )
-# Only for this configure: the x86_64 link-library tree below shares
-# CONFIGURE_FEATURES_EXTRA and keeps Vulkan off.
-if [ "$WITH_VULKAN" -eq 1 ]; then
-    VULKAN_OPTION=--with-vulkan
-else
-    VULKAN_OPTION=--without-vulkan
-fi
 
 # Configure (skip if already configured unless --clean was passed)
 cd "$BUILD_DIR"
 if [ "$CLEAN" -eq 1 ] || [ ! -f "$BUILD_DIR/Makefile" ]; then
-    echo "==> Configuring Wine ($PROFILE)..."
-    "${CONFIGURE_WRAPPER[@]}" "$WINE_SRC/configure" \
+    echo "==> Configuring Wine..."
+    "$WINE_SRC/configure" \
         --enable-archs="$WINE_ARCHS" \
         "${CONFIGURE_ALLOWLIST[@]}" \
-        "$VULKAN_OPTION" \
-        "${CONFIGURE_FEATURES_EXTRA[@]}" \
         "${CONFIGURE_TOOLCHAIN[@]}"
 else
     echo "==> Skipping configure (already configured, use --clean to reconfigure)"
@@ -160,12 +141,9 @@ fi
 # --without-* for; when it does not find one it writes a placeholder define
 # (FALLBACK_SONAMES), which stays as it is. Any other define means configure
 # found a library the allowlist does not account for, and stops the build.
-# The Vulkan loader is one of them where the profile has Vulkan; the bundle
-# step takes it from MESA_DIST.
-BUNDLED_SONAMES="SONAME_LIBFREETYPE SONAME_LIBGNUTLS SONAME_LIBSDL2"
-if [ "$WITH_VULKAN" -eq 1 ]; then
-    BUNDLED_SONAMES="$BUNDLED_SONAMES SONAME_LIBVULKAN"
-fi
+# The Vulkan loader is one of the patched ones; the bundle step takes it from
+# MESA_DIST.
+BUNDLED_SONAMES="SONAME_LIBFREETYPE SONAME_LIBGNUTLS SONAME_LIBSDL2 SONAME_LIBVULKAN"
 FALLBACK_SONAMES="SONAME_LIBODBC=libodbc.dylib"
 CONFIG_H="$BUILD_DIR/include/config.h"
 soname_value() { # <define>: its string value in config.h, or nothing
@@ -216,14 +194,6 @@ if [ -n "$(unpatched_sonames)" ]; then
     patch_sonames
 fi
 
-# Build. make runs natively even for the x86_64 profile: clang is a universal
-# binary and CC/CROSSCC already pin `-arch x86_64`, so putting make under
-# `arch -x86_64` only means translating every compiler invocation. A clean
-# build measured 642s that way against 208s this way, producing the same 2843
-# artifacts at identical sizes. The tools the build generates for itself
-# (winebuild, widl, wrc, makedep) are x86_64 there and get exec'd through
-# Rosetta from this arm64 make, which works and is a small share of the time.
-# Configure stays translated; that is where the host probing happens.
 echo "==> Building Wine..."
 make -j$(sysctl -n hw.ncpu)
 
@@ -232,18 +202,6 @@ if [ -n "$(unpatched_sonames)" ]; then
     check_soname_defines
     patch_sonames
     make -j$(sysctl -n hw.ncpu)
-fi
-
-# The d3d9 test binaries, which bundle-wine.sh publishes so a consumer can run
-# Wine's de-facto D3D9 conformance suite against its own d3d9 builtin without a
-# Wine build tree of its own. The toplevel `all` happens to produce them today,
-# but only as a side effect of programs/winetest embedding every test binary as
-# a resource; naming the target keeps a bundle input a stated dependency instead
-# of a by-product, and costs nothing when they are already built.
-# `dlls/d3d9/tests/all` depends on exactly the two per-arch `d3d9_test.exe`.
-if [ "$WITH_D3D9_TESTS" -eq 1 ]; then
-    echo "==> Building the d3d9 test binaries..."
-    make -j$(sysctl -n hw.ncpu) dlls/d3d9/tests/all
 fi
 
 # Verify
@@ -258,14 +216,9 @@ file "$BUILD_DIR/loader/wine"
 # that code.
 
 # link_libs <pe-dir>: print the paths, relative to a build tree, of the three
-# archives for <pe-dir>. Upstream Wine builds winecrt0 under libs/, the
-# CrossOver tree under dlls/.
+# archives for <pe-dir>.
 link_libs() {
-    local crt0=dlls
-    if [ -d "$WINE_SRC/libs/winecrt0" ]; then
-        crt0=libs
-    fi
-    echo "$crt0/winecrt0/$1/libwinecrt0.a dlls/ntdll/$1/libntdll.a dlls/dbghelp/$1/libdbghelp.a"
+    echo "libs/winecrt0/$1/libwinecrt0.a dlls/ntdll/$1/libntdll.a dlls/dbghelp/$1/libdbghelp.a"
 }
 
 # check_arm64x_archive <libwinecrt0.a>: exit unless the archive carries both
@@ -281,20 +234,20 @@ check_arm64x_archive() {
     done
 }
 
-# The Wine SDK of the arm64 build: one directory, in the layout of an
-# installed Wine, that DXMT's PE build reads (-Dwine_install_path). The
-# bundle carries the same files, which is where mtld3d's builds read them.
-# bin/winebuild and the aarch64-windows and i386-windows archives come from
-# the arm64 build itself: its aarch64-windows archives are ARM64X, since
-# arm64ec is paired with aarch64 there (makedep's native_archs and
-# hybrid_archs), so one set under aarch64-windows carries both halves. The
-# x86_64-windows archives are the one thing that build cannot make (ARM64EC
-# is not x64, and an x64 object does not link against it). A second configure
-# of the Wine source for x86_64 alone, reusing the build's tools, makes them:
-# only those archives are built, and no unix dependency is wanted, so every
-# package is switched off. Configure still probes the host side, but runs
-# natively, arm64 in host and target. WINE_COMMIT names the source commit,
-# which build-dxmt.sh and bundle-wine.sh compare.
+# The Wine SDK: one directory, in the layout of an installed Wine, that
+# DXMT's PE build reads (-Dwine_install_path). The bundle carries the same
+# files, which is where mtld3d's builds read them. bin/winebuild and the
+# aarch64-windows and i386-windows archives come from the build itself: its
+# aarch64-windows archives are ARM64X, since arm64ec is paired with aarch64
+# there (makedep's native_archs and hybrid_archs), so one set under
+# aarch64-windows carries both halves. The x86_64-windows archives are the
+# one thing that build cannot make (ARM64EC is not x64, and an x64 object
+# does not link against it). A second configure of the Wine source for
+# x86_64 alone, reusing the build's tools, makes them: only those archives
+# are built, and no unix dependency is wanted, so every package is switched
+# off. Configure still probes the host side, but runs natively, arm64 in
+# host and target. WINE_COMMIT names the source commit, which build-dxmt.sh
+# and bundle-wine.sh compare.
 X86LIBS_WITHOUT=(
     --without-alsa --without-capi --without-coreaudio --without-cups
     --without-dbus --without-ffmpeg --without-fontconfig --without-freetype
@@ -302,48 +255,42 @@ X86LIBS_WITHOUT=(
     --without-gstreamer --without-hwloc --without-inotify --without-krb5
     --without-netapi --without-opencl --without-oss --without-pcap
     --without-pcsclite --without-pulse --without-sane --without-sdl
-    --without-udev --without-usb --without-v4l2
+    --without-udev --without-usb --without-v4l2 --without-va
     --without-vulkan --without-wayland --without-x
 )
-if [ "$WITH_WINE_SDK" -eq 1 ]; then
-    claim_tree "$X86LIBS_BUILD_DIR" x86libs "$CLEAN"
-    if [ ! -f "$X86LIBS_BUILD_DIR/Makefile" ]; then
-        echo "==> Configuring the x86_64 link library tree $X86LIBS_BUILD_DIR..."
-        (cd "$X86LIBS_BUILD_DIR" && "$WINE_SRC/configure" --enable-archs=x86_64 \
-            --with-mingw "${X86LIBS_WITHOUT[@]}" "${CONFIGURE_FEATURES_EXTRA[@]}" \
-            --host="$HOST_TRIPLE" --with-wine-tools="$BUILD_DIR" \
-            CC="clang -arch arm64" --disable-tests BISON="$DEPS_PREFIX/opt/bison/bin/bison")
-    else
-        echo "==> Skipping configure of $X86LIBS_BUILD_DIR (already configured, use --clean to reconfigure)"
+claim_tree "$X86LIBS_BUILD_DIR" x86libs "$CLEAN"
+if [ ! -f "$X86LIBS_BUILD_DIR/Makefile" ]; then
+    echo "==> Configuring the x86_64 link library tree $X86LIBS_BUILD_DIR..."
+    (cd "$X86LIBS_BUILD_DIR" && "$WINE_SRC/configure" --enable-archs=x86_64 \
+        --with-mingw "${X86LIBS_WITHOUT[@]}" \
+        --host="$HOST_TRIPLE" --with-wine-tools="$BUILD_DIR" \
+        CC="clang -arch arm64" --disable-tests BISON="$DEPS_PREFIX/opt/bison/bin/bison")
+else
+    echo "==> Skipping configure of $X86LIBS_BUILD_DIR (already configured, use --clean to reconfigure)"
+fi
+# shellcheck disable=SC2046 # one word per target
+make -C "$X86LIBS_BUILD_DIR" -j"$(sysctl -n hw.ncpu)" $(link_libs x86_64-windows)
+
+echo "==> Staging the Wine SDK into $WINE_SDK_DIR..."
+claim_tree "$WINE_SDK_DIR" sdk 1
+mkdir -p "$WINE_SDK_DIR/bin"
+cp "$BUILD_DIR/tools/winebuild/winebuild" "$WINE_SDK_DIR/bin/"
+for pe in "$PE64_DIR" i386-windows x86_64-windows; do
+    tree="$BUILD_DIR"
+    if [ "$pe" = x86_64-windows ]; then
+        tree="$X86LIBS_BUILD_DIR"
     fi
-    # shellcheck disable=SC2046 # one word per target
-    make -C "$X86LIBS_BUILD_DIR" -j"$(sysctl -n hw.ncpu)" $(link_libs x86_64-windows)
-
-    echo "==> Staging the Wine SDK into $WINE_SDK_DIR..."
-    claim_tree "$WINE_SDK_DIR" sdk 1
-    mkdir -p "$WINE_SDK_DIR/bin"
-    cp "$BUILD_DIR/tools/winebuild/winebuild" "$WINE_SDK_DIR/bin/"
-    for pe in "$PE64_DIR" i386-windows x86_64-windows; do
-        tree="$BUILD_DIR"
-        if [ "$pe" = x86_64-windows ]; then
-            tree="$X86LIBS_BUILD_DIR"
-        fi
-        mkdir -p "$WINE_SDK_DIR/lib/wine/$pe"
-        for lib in $(link_libs "$pe"); do
-            cp "$tree/$lib" "$WINE_SDK_DIR/lib/wine/$pe/"
-        done
+    mkdir -p "$WINE_SDK_DIR/lib/wine/$pe"
+    for lib in $(link_libs "$pe"); do
+        cp "$tree/$lib" "$WINE_SDK_DIR/lib/wine/$pe/"
     done
-    check_arm64x_archive "$WINE_SDK_DIR/lib/wine/$PE64_DIR/libwinecrt0.a"
-    wine_src_commit > "$WINE_SDK_DIR/WINE_COMMIT"
-    echo "==> Wine SDK staged for $(cat "$WINE_SDK_DIR/WINE_COMMIT")."
-fi
+done
+check_arm64x_archive "$WINE_SDK_DIR/lib/wine/$PE64_DIR/libwinecrt0.a"
+wine_src_commit > "$WINE_SDK_DIR/WINE_COMMIT"
+echo "==> Wine SDK staged for $(cat "$WINE_SDK_DIR/WINE_COMMIT")."
 
-# FEX, the x86 emulator of the arm64 Wine, and DXMT, whose unix half links
-# against this Wine's winemac.so and ntdll.so and whose PE half links against
-# the SDK, so both are built after them.
-if [ "$WITH_FEX" -eq 1 ]; then
-    "$SCRIPT_DIR/build-fex.sh" "${SUB_FLAGS[@]}"
-fi
-if [ "$WITH_DXMT_BUILD" -eq 1 ]; then
-    "$SCRIPT_DIR/build-dxmt.sh" "${SUB_FLAGS[@]}"
-fi
+# FEX, the x86 emulator, and DXMT, whose unix half links against this Wine's
+# winemac.so and ntdll.so and whose PE half links against the SDK, so both
+# are built after them.
+"$SCRIPT_DIR/build-fex.sh" "${SUB_FLAGS[@]}"
+"$SCRIPT_DIR/build-dxmt.sh" "${SUB_FLAGS[@]}"
