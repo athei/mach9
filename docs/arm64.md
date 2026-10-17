@@ -91,7 +91,7 @@ of the same name; the defaults are set in
 |----------|------------|
 | `WINE_SRC` | The Wine source, a checkout of athei/wine |
 | `BUILD_DIR` | The Wine build tree; with `--compatdb-only` only cargo's target directory, `$BUILD_DIR/compatdb` |
-| `X86LIBS_BUILD_DIR` | The link-library tree for the x86_64 archives of the SDK |
+| `X86LIBS_BUILD_DIR` | The x86 tree for the x86_64 archives and the [graphics tests](#graphics-tests) of the SDK |
 | `WINE_SDK_DIR` | The [Wine SDK](#wine-sdk) |
 | `FEX_REPO`, `FEX_SRC` | FEX repository and the local clone `build-fex.sh` checks out |
 | `FEX_BUILD_DIR` | FEX's CMake trees |
@@ -150,9 +150,11 @@ commit. What goes in is the Wine SDK step of
   carrying ARM64 and ARM64EC members, since arm64ec is paired with aarch64
   there.
 - The `x86_64-windows` archives are what the arm64 build cannot make: x64
-  objects do not link against ARM64EC ones. A link-library tree, a second
-  configure of the same source for x86_64 alone that reuses the build's
-  tools, builds just those.
+  objects do not link against ARM64EC ones. The x86 tree, a second
+  configure of the same source for i386 and x86_64 that reuses the build's
+  tools, builds just those and the [graphics tests](#graphics-tests).
+  `build-wine.sh` configures that tree again from scratch whenever its
+  configure arguments or `WINE_SRC` change, so neither needs a `--clean`.
 - DXMT's PE build reads it through `-Dwine_install_path` (see
   [`build-dxmt.sh`](../bin/build-dxmt.sh)).
 - A full bundle carries the same files, so the bundle is an installed Wine
@@ -162,6 +164,49 @@ commit. What goes in is the Wine SDK step of
   names the variables and lists what else that build needs.
 - `build-dxmt.sh` and the bundle step refuse an SDK whose `WINE_COMMIT` is
   not the Wine source's current commit.
+
+### Graphics tests
+
+The SDK and a full bundle carry Wine's graphics conformance tests, the
+programs of `dlls/<name>/tests` in the Wine source, as
+`lib/wine/tests/<pe-dir>/<name>_test.exe`. They exist to test the bundle's
+own stack (mtld3d, DXMT, wined3d on OpenGL or on KosmicKrisp, the Vulkan
+loader) with nothing but the bundle; mtld3d's conformance suite runs the
+`d3d9_test.exe` of both directories.
+
+- The list is `GRAPHICS_TESTS` in [`profile.sh`](../bin/lib/profile.sh):
+  `ddraw`, `d3d8`, `d3d9`, `d3d10`, `d3d10_1`, `d3d10core`, `d3d11`,
+  `d3d12`, `dxgi`, `d2d1`, `opengl32` and `vulkan-1`.
+- Each is built for `i386-windows` and `x86_64-windows`, the x86 code games
+  run, except `d3d8`, which is i386 only: Wine builds no 64-bit `d3d8.dll`.
+  An x86_64 test runs as ARM64EC, as an x64 game does. There are no
+  `aarch64-windows` tests: the games the bundle is for are x86 code, and a
+  native ARM64 program gets wined3d anyway
+  ([native ARM64 programs](compatdb.md#native-arm64-programs)).
+- The main build has tests disabled, since its `make` would otherwise build
+  every Wine test, and makedep writes test rules only for the architectures
+  a tree is configured for. So the x86 tree builds them, by name.
+- They are plain executables, not builtins, outside the directories Wine
+  searches for modules, and Step 4e strips them like every PE file.
+- `d3d12_test.exe` cannot start until a D3D12 implementation is bundled.
+  It imports `d3d12.dll`, which the bundle leaves out ([Vulkan](#vulkan)),
+  so the loader stops it with `c0000135` (a missing DLL) and it exits
+  with 53.
+
+To run one against the bundle, in a prefix of its own, give the test's path
+to the bundle's `wine`, with the names of the parts to run (all of them
+without a name; the names are the `START_TEST` entries in the test's
+sources):
+
+```bash
+WINEPREFIX=/tmp/gfx-prefix dist/wine/bin/wine \
+    dist/wine/lib/wine/tests/x86_64-windows/d3d9_test.exe device
+```
+
+The test picks its Direct3D tree as a game does, through compatdb, so a
+`WINE_COMPATDB` rule for `d3d9_test.exe` puts it on another tree
+([recipes](compatdb.md#recipes)). It prints a summary line per part and
+exits with the number of failed checks, at most 255.
 
 ## DXMT
 
@@ -327,7 +372,8 @@ does not run without it.
 ## What the bundle step checks
 
 Before anything is deleted, the preflight checks the macOS SDK, the
-formulae, the Wine SDK (staged from the current Wine source), the FEX build
+formulae, the Wine SDK (staged from the current Wine source and, for a full
+bundle, holding every [graphics test](#graphics-tests)), the FEX build
 (complete, and built from the commit `fex-src.ref` names now, which it asks
 `FEX_REPO` for with `git ls-remote`, so the step needs the network), the
 staged DXMT (complete, from the pinned commit, linked against the current
@@ -347,7 +393,8 @@ After assembly:
   included, and not the loader references any of the `LEAK_PREFIXES` in
   `profile.sh`.
 - The Direct3D trees, FEX, the Vulkan files, the loader app and, in a full
-  bundle, the x86_64 link libraries are in place; the mtld3d tree's
+  bundle, the x86_64 link libraries and every graphics test are in place;
+  the mtld3d tree's
   `d3d9.dll` is byte-identical to mtld3d's, and `xtajit.dll` and
   `xtajit64.dll` are FEX's.
 - No PE file has `.debug_*` sections or a COFF symbol table; Step 4e
