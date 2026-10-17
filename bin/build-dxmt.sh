@@ -58,10 +58,10 @@ done
 
 # profile.sh names the Wine build tree and SDK to link against,
 # DXMT_BUILD_DIR, DXMT_LLVM, DXMT_DIST and the floor.
-# shellcheck source=profile.sh
-. "$SCRIPT_DIR/profile.sh"
-# shellcheck source=redist.env
-. "$SCRIPT_DIR/redist.env"
+# shellcheck source=lib/profile.sh
+. "$SCRIPT_DIR/lib/profile.sh"
+# shellcheck source=../pins/redist.env
+. "$PINS_DIR/redist.env"
 
 DXMT_SRC="$DXMT_BUILD_DIR/src"
 PE_DLLS="dxgi d3d10core d3d11 winemetal"

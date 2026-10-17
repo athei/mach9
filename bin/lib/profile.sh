@@ -1,7 +1,9 @@
 # shellcheck shell=bash
 # The settings build-wine.sh, bundle-wine.sh, build-fex.sh, build-mesa.sh and
 # build-dxmt.sh share, and the helpers they use. Source it with SCRIPT_DIR set
-# (this repository); it sets everything as it is sourced.
+# to the directory of those scripts (bin/ of this repository); it sets
+# everything as it is sourced. REPO_DIR is the repository itself, PINS_DIR
+# its pins/ (redist.env and the *-src.ref files).
 #
 # The build is a native arm64 Wine (aarch64, arm64ec and i386 PE) with FEX as
 # the x86 emulator.
@@ -15,7 +17,9 @@
 # A path set below as "${NAME:-default}" is overridden by an environment
 # variable of the same name. MACOSX_DEPLOYMENT_TARGET may raise the floor but
 # not lower it.
-ROOT="${WINE_BUILD_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PINS_DIR="$REPO_DIR/pins"
+ROOT="${WINE_BUILD_ROOT:-$(cd "$REPO_DIR/.." && pwd)}"
 # Where the build trees go by default, and where claim_tree adopts an
 # unmarked one.
 BUILD_TOP="$ROOT/build"
@@ -125,7 +129,7 @@ DXMT_DIST="${DXMT_DIST:-$DXMT_BUILD_DIR/dist}"
 FEX_REPO="${FEX_REPO:-https://github.com/athei/FEX}"
 FEX_SRC="${FEX_SRC:-$ROOT/src-fex}"
 FEX_BUILD_DIR="${FEX_BUILD_DIR:-$BUILD_TOP/fex}"
-LOADER_PROFILE="${LOADER_PROFILE:-$SCRIPT_DIR/signing/loader.provisionprofile}"
+LOADER_PROFILE="${LOADER_PROFILE:-$REPO_DIR/signing/loader.provisionprofile}"
 # The llvm-mingw targets the smoke test builds smoke/hello.c for and runs:
 # native, and the two x86 ones FEX emulates.
 SMOKE_PE_ARCHS="aarch64 x86_64 i686"
@@ -236,14 +240,14 @@ wine_src_commit() {
 }
 
 # src_ref_commit <ref-file> <repo>: print the commit the ref in <ref-file>
-# (a file of this repository, such as fex-src.ref) names in <repo>: the ref
-# itself when it is a full commit hash, else the tag (peeled, for an
-# annotated one) or branch of that name, preferring a tag as git does.
-# Prints nothing when the ref cannot be resolved, also when <repo> wants
-# credentials: git is not allowed to ask for them.
+# (a file in PINS_DIR, such as fex-src.ref) names in <repo>: the ref itself
+# when it is a full commit hash, else the tag (peeled, for an annotated one)
+# or branch of that name, preferring a tag as git does. Prints nothing when
+# the ref cannot be resolved, also when <repo> wants credentials: git is not
+# allowed to ask for them.
 src_ref_commit() {
     local ref
-    ref=$(tr -d '[:space:]' < "$SCRIPT_DIR/$1")
+    ref=$(tr -d '[:space:]' < "$PINS_DIR/$1")
     if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
         echo "$ref"
         return 0

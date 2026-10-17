@@ -21,7 +21,7 @@ check when something upstream changes.
   them and their `DEPS_PREFIX` closure into `lib/external/`, rewrites their
   install names to `@loader_path/`, re-signs them ad hoc, since arm64 code
   does not load with a broken signature, and fails if any reference to one
-  of the `LEAK_PREFIXES` in [`profile.sh`](../profile.sh) survives.
+  of the `LEAK_PREFIXES` in [`profile.sh`](../bin/lib/profile.sh) survives.
 - The Vulkan loader's soname is one of the patched ones, but the bundle
   step copies the loader from `MESA_DIST`, where `build-mesa.sh` staged it
   built for the floor, and not from `DEPS_PREFIX`. KosmicKrisp goes into
@@ -35,13 +35,13 @@ check when something upstream changes.
 ## Direct3D trees
 
 - Which trees a build has is `DXGI_IMPLS` and `D3D9_IMPLS` in
-  [`profile.sh`](../profile.sh), in the order a default-dir marker prefers
-  them.
+  [`profile.sh`](../bin/lib/profile.sh), in the order a default-dir
+  marker prefers them.
 - Each tree under `lib/wine/dxgi/` and `lib/wine/d3d9/` has
   `<arch>-windows/` and, where the implementation has a unix half,
   `aarch64-unix/`. DXMT's and mtld3d's single `.so` also serves the i386 PE
   modules through wow64 entry points. Which modules go into which tree is
-  in Step 4 of [`bundle-wine.sh`](../bundle-wine.sh).
+  in Step 4 of [`bundle-wine.sh`](../bin/bundle-wine.sh).
 - Every module a family's trees supply is removed from the default
   `<arch>-windows/` directory and replaced by a fake-module marker made from
   the first tree that has it. Every 64-bit marker is an x64 one
@@ -54,8 +54,8 @@ What the bundle step checks is in
 
 | Setting | Defined in | Applies to | Constraint |
 |---------|------------|------------|------------|
-| `MACOS_FLOOR` | [`profile.sh`](../profile.sh) | Exported as `MACOSX_DEPLOYMENT_TARGET` for everything the scripts build (Wine, `compatdb.so`, FEX, DXMT, KosmicKrisp and the Vulkan loader, though not KosmicKrisp's build tools, which only run on the build host), and the floor every Mach-O in the bundle is checked against | The loader's cross-architecture entitlement needs it; equals the `.cargo/config.toml` row |
-| `MACOSX_DEPLOYMENT_TARGET` | [`.cargo/config.toml`](../.cargo/config.toml) | `compatdb.so` built by a plain `cargo build`; the scripts override it | Same as `MACOS_FLOOR` |
+| `MACOS_FLOOR` | [`profile.sh`](../bin/lib/profile.sh) | Exported as `MACOSX_DEPLOYMENT_TARGET` for everything the scripts build (Wine, `compatdb.so`, FEX, DXMT, KosmicKrisp and the Vulkan loader, though not KosmicKrisp's build tools, which only run on the build host), and the floor every Mach-O in the bundle is checked against | The loader's cross-architecture entitlement needs it; equals the `.cargo/config.toml` row |
+| `MACOSX_DEPLOYMENT_TARGET` | [`.cargo/config.toml`](../compatdb/.cargo/config.toml) | `compatdb.so` built by a plain `cargo build` in `compatdb/`, where cargo finds the file; the scripts override it | Same as `MACOS_FLOOR` |
 
 - Without the pin, clang takes the deployment target from the build host.
 - Only the minimum is fixed; the SDK is whatever the build host has, and
@@ -66,11 +66,11 @@ What the bundle step checks is in
   on an older macOS the call jumps to address 0. `minos` does not show
   this, but the compiler warns `'<function>' is only available on macOS
   <version> or newer`. Such functions are listed in `FLOOR_NEWER_FUNCS` in
-  [`profile.sh`](../profile.sh), and configure is told each is missing
-  while the floor is below its version; a change takes effect on the next
-  `build-wine.sh --clean`, and until then the bundle step fails on a module
-  that still imports one. After a new SDK, search a clean build's log for
-  that warning.
+  [`profile.sh`](../bin/lib/profile.sh), and configure is told each is
+  missing while the floor is below its version; a change takes effect on
+  the next `build-wine.sh --clean`, and until then the bundle step fails on
+  a module that still imports one. After a new SDK, search a clean build's
+  log for that warning.
 - Wine picks up a changed pin on the next `build-wine.sh --clean`.
 - A `MACOSX_DEPLOYMENT_TARGET` in the environment may raise `MACOS_FLOOR`
   but not lower it, and overrides the `.cargo/config.toml` value.
@@ -85,7 +85,7 @@ What the bundle step checks is in
 
 What is pinned, and where, is in [arm64.md](arm64.md#pinned-inputs).
 
-- `bundle-wine.sh` downloads each artifact in [`redist.env`](../redist.env)
+- `bundle-wine.sh` downloads each artifact in [`redist.env`](../pins/redist.env)
   into `CACHE_DIR` and reuses the cached copy while its checksum matches
   the pin. A fresh download that does not match is an error, never a
   silent retry. To update one, change both its URL and its SHA-256.
@@ -156,7 +156,7 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
 ### Mesa and the Vulkan loader
 
 - Mesa is a fork: upstream Mesa plus our topic commits, originally from
-  Hadron's patches, at the ref in [`mesa-src.ref`](../mesa-src.ref)
+  Hadron's patches, at the ref in [`mesa-src.ref`](../pins/mesa-src.ref)
   ([arm64.md](arm64.md#vulkan)). To move it to a newer Mesa main:
   - Rebase the topic series onto the new upstream main with `git rerere`
     enabled, so a conflict resolved once is resolved again on the next
@@ -173,12 +173,12 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
     it for transform feedback. A feature upstream now advertises by default
     no longer needs its flag.
   - Check that the two-stage build still holds: the stage 1 targets and
-    options and the stage 2 options in [`build-mesa.sh`](../build-mesa.sh),
-    the disabled optional dependencies included, must still exist under
-    those names, and the driver must still pass the script's checks
-    (system libraries only, no flat-namespace imports, `minos` at the
-    floor). A new optional dependency in Mesa's stage 2 meson log gets
-    disabled there too.
+    options and the stage 2 options in
+    [`build-mesa.sh`](../bin/build-mesa.sh), the disabled optional
+    dependencies included, must still exist under those names, and the
+    driver must still pass the script's checks (system libraries only, no
+    flat-namespace imports, `minos` at the floor). A new optional
+    dependency in Mesa's stage 2 meson log gets disabled there too.
   - Keep a copy of `MESA_DIST`, rebuild with `build-mesa.sh`, and compare
     `vulkaninfo` for the old and the new driver, each with
     `VK_DRIVER_FILES` naming its own manifest and `MESA_KK_EXPERIMENTAL`
@@ -188,7 +188,7 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
   - Push the branch to athei/mesa before building without `MESA_REPO`
     pointing at the local clone; the default builds what the remote has.
 - The Vulkan loader and headers are pinned together, from one Vulkan SDK
-  release, in [`redist.env`](../redist.env). Bump both tags and commits
+  release, in [`redist.env`](../pins/redist.env). Bump both tags and commits
   together; `build-mesa.sh` refuses a tag that is not at its commit.
 - A Wine build tree configured without Vulkan has no `SONAME_LIBVULKAN`;
   `build-wine.sh` stops and asks for `--clean`.

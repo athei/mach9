@@ -2,15 +2,16 @@
 
 `build-wine.sh` and `bundle-wine.sh` build and bundle a native arm64 Wine
 that runs x86 programs through [FEX](https://github.com/FEX-Emu/FEX). The
-settings they share are in [`profile.sh`](../profile.sh). In short:
+settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
 
 - The Wine source is upstream Wine with our own series on top, the branch
   [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched) of
   athei/wine. Some of its commits come from Hadron, and it carries
   CrossOver's msync (see [Runtime](#runtime)). It is configured against the
   arm64 Homebrew with the allowlist in
-  [`build-wine.sh`](../build-wine.sh), plus the configure results the floor
-  overrides (`FLOOR_NEWER_FUNCS`, [macOS floors](maintenance.md#macos-floors)).
+  [`build-wine.sh`](../bin/build-wine.sh), plus the configure results
+  the floor overrides (`FLOOR_NEWER_FUNCS`,
+  [macOS floors](maintenance.md#macos-floors)).
 - `WINE_ARCHS` in `profile.sh` names the PE architectures: aarch64 with
   arm64ec, so that x64 code runs as ARM64EC, and i386 for WoW64.
 - No-execute follows upstream Wine by default. With no-execute off, every
@@ -24,7 +25,7 @@ settings they share are in [`profile.sh`](../profile.sh). In short:
   ([recipes](compatdb.md#recipes)).
 - FEX is upstream FEX with our own commits on top, from
   [athei/FEX](https://github.com/athei/FEX) at the ref
-  [`fex-src.ref`](../fex-src.ref) names. compatdb's built-in
+  [`fex-src.ref`](../pins/fex-src.ref) names. compatdb's built-in
   `fex-x87-reduced-precision` rule asks FEX for faster x87 emulation
   ([defaults](../README.md#defaults-that-differ-from-wine),
   [FEX and KosmicKrisp](compatdb.md#fex-and-kosmickrisp)).
@@ -40,12 +41,12 @@ settings they share are in [`profile.sh`](../profile.sh). In short:
 ## Requirements
 
 - An Apple Silicon Mac and a macOS SDK at least as new as `MACOS_FLOOR` in
-  [`profile.sh`](../profile.sh).
+  [`profile.sh`](../bin/lib/profile.sh).
 - The arm64 Homebrew at `DEPS_PREFIX` with the formulae in `DEPS_FORMULAE`
   (both in `profile.sh`), plus `cmake`, `ninja` and `meson`, and what the
-  preflight of [`build-mesa.sh`](../build-mesa.sh) checks for, among it the
-  formulae KosmicKrisp's build tools link. Only a host on the floor's major
-  macOS version gets bottles that meet the floor (see
+  preflight of [`build-mesa.sh`](../bin/build-mesa.sh) checks for,
+  among it the formulae KosmicKrisp's build tools link. Only a host on the
+  floor's major macOS version gets bottles that meet the floor (see
   [Homebrew libraries and the floor](#homebrew-libraries-and-the-floor)).
 - Xcode's Metal toolchain (`xcrun metal`), for DXMT's shaders.
 - [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) at `MINGW_DIR`,
@@ -70,9 +71,9 @@ settings they share are in [`profile.sh`](../profile.sh). In short:
 | Script | What it does |
 |--------|--------------|
 | `build-wine.sh` | Runs `build-mesa.sh`, builds Wine against the loader it staged, stages the [Wine SDK](#wine-sdk), then runs `build-fex.sh` and `build-dxmt.sh`; `--clean` is passed on to all three |
-| [`build-mesa.sh`](../build-mesa.sh) | Checks out the ref in [`mesa-src.ref`](../mesa-src.ref) in `MESA_SRC` (refusing a tree with local changes), builds the Vulkan loader from the tags pinned in [`redist.env`](../redist.env) and KosmicKrisp, and stages both with the driver's manifest and their commits in `MESA_DIST` (see [Vulkan](#vulkan)). Runs alone too |
-| [`build-fex.sh`](../build-fex.sh) | Checks out the ref in [`fex-src.ref`](../fex-src.ref) in `FEX_SRC` (refusing a tree with local changes), builds FEX's emulator DLLs and their unix halves, and records the commit. Runs alone too |
-| [`build-dxmt.sh`](../build-dxmt.sh) | Builds DXMT from the commit pinned in [`redist.env`](../redist.env) against the Wine build and SDK, and stages it with its commit and `git describe` in `DXMT_DIST`. Runs alone too, after a Wine build |
+| [`build-mesa.sh`](../bin/build-mesa.sh) | Checks out the ref in [`mesa-src.ref`](../pins/mesa-src.ref) in `MESA_SRC` (refusing a tree with local changes), builds the Vulkan loader from the tags pinned in [`redist.env`](../pins/redist.env) and KosmicKrisp, and stages both with the driver's manifest and their commits in `MESA_DIST` (see [Vulkan](#vulkan)). Runs alone too |
+| [`build-fex.sh`](../bin/build-fex.sh) | Checks out the ref in [`fex-src.ref`](../pins/fex-src.ref) in `FEX_SRC` (refusing a tree with local changes), builds FEX's emulator DLLs and their unix halves, and records the commit. Runs alone too |
+| [`build-dxmt.sh`](../bin/build-dxmt.sh) | Builds DXMT from the commit pinned in [`redist.env`](../pins/redist.env) against the Wine build and SDK, and stages it with its commit and `git describe` in `DXMT_DIST`. Runs alone too, after a Wine build |
 | `bundle-wine.sh` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT, the Vulkan loader and KosmicKrisp, and the mtld3d release, signs the loader and runs the smoke test |
 
 The flags are in the [README](../README.md#commands).
@@ -81,10 +82,10 @@ The flags are in the [README](../README.md#commands).
 
 Every tree lives under `build/` and the bundle in `dist/wine`, in the
 [layout](../README.md#layout). Each variable below overrides the default
-of the same name; the defaults are set in [`profile.sh`](../profile.sh),
-except `MINGW_DIR` and `CACHE_DIR`, which are set at the top of the scripts
-that use them. A `MACOSX_DEPLOYMENT_TARGET` may raise the floor but not
-lower it.
+of the same name; the defaults are set in
+[`profile.sh`](../bin/lib/profile.sh), except `MINGW_DIR` and
+`CACHE_DIR`, which are set at the top of the scripts that use them. A
+`MACOSX_DEPLOYMENT_TARGET` may raise the floor but not lower it.
 
 | Variable | What it is |
 |----------|------------|
@@ -142,7 +143,7 @@ PE code built outside Wine links against Wine's `libwinecrt0.a` (for the
 with all of it, in the layout of an installed Wine, for every architecture
 that code is built for, plus a `WINE_COMMIT` file naming the Wine source
 commit. What goes in is the Wine SDK step of
-[`build-wine.sh`](../build-wine.sh).
+[`build-wine.sh`](../bin/build-wine.sh).
 
 - `bin/winebuild` and the `aarch64-windows` and `i386-windows` archives come
   from the build itself. Its `aarch64-windows` archives are ARM64X,
@@ -153,7 +154,7 @@ commit. What goes in is the Wine SDK step of
   configure of the same source for x86_64 alone that reuses the build's
   tools, builds just those.
 - DXMT's PE build reads it through `-Dwine_install_path` (see
-  [`build-dxmt.sh`](../build-dxmt.sh)).
+  [`build-dxmt.sh`](../bin/build-dxmt.sh)).
 - A full bundle carries the same files, so the bundle is an installed Wine
   with its SDK. [mtld3d](https://github.com/athei/mtld3d) builds against
   an installed Wine, not the SDK directory; its
@@ -165,7 +166,7 @@ commit. What goes in is the Wine SDK step of
 ## DXMT
 
 - DXMT is built from the upstream commit pinned in
-  [`redist.env`](../redist.env), not taken from a release: the release's
+  [`redist.env`](../pins/redist.env), not taken from a release: the release's
   Metal shaders do not compile with the Metal toolchain this build uses.
   The comment there says which fix the pin carries.
 - The PE DLLs are x86 code, x86_64 and i386, built with DXMT's own x86 cross
@@ -183,9 +184,9 @@ commit. What goes in is the Wine SDK step of
   relinked, whenever the DXMT, Wine or LLVM commit or its options change.
 - `winemetal.so` contains DXMT's shader converter (airconv), which links
   LLVM; the PE side only uses its headers. `build-dxmt.sh` builds the LLVM
-  static libraries from the tag pinned in [`redist.env`](../redist.env) into
-  `DXMT_LLVM`, records the commit there, and rebuilds them only when the pin
-  changes; `--clean` keeps them.
+  static libraries from the tag pinned in
+  [`redist.env`](../pins/redist.env) into `DXMT_LLVM`, records the commit
+  there, and rebuilds them only when the pin changes; `--clean` keeps them.
 
 ## Vulkan
 
@@ -195,7 +196,7 @@ Direct3D implementations, mtld3d and DXMT, go to Metal directly and do not
 use it; wined3d can, per game (see below).
 
 - Mesa is [athei/mesa](https://github.com/athei/mesa) at the ref
-  [`mesa-src.ref`](../mesa-src.ref) names: upstream Mesa plus our topic
+  [`mesa-src.ref`](../pins/mesa-src.ref) names: upstream Mesa plus our topic
   commits, originally from
   [Hadron's Mesa patches](https://github.com/Broyojo/hadron/tree/main/patches/mesa)
   and regrouped by topic. Commits of upstream merge requests that are not
@@ -216,7 +217,7 @@ use it; wined3d can, per game (see below).
   the Python environment and the first stage's tools are kept while what
   they were built from is unchanged, as `build-dxmt.sh` keeps its LLVM.
 - The loader is built from source, from the Vulkan-Loader and
-  Vulkan-Headers tags pinned in [`redist.env`](../redist.env), because
+  Vulkan-Headers tags pinned in [`redist.env`](../pins/redist.env), because
   Homebrew's vulkan-loader bottle needs a newer macOS than the floor. The
   bundle step copies it from `MESA_DIST` into `lib/external/`, which is
   what keeps Homebrew's loader out of the bundle: `SONAME_LIBVULKAN` holds
@@ -311,7 +312,7 @@ does not run without it.
   identifiers and the cross-architecture entitlement, all taken from the
   profile, the self-granted `com.apple.security.custom-x18-abi-toggle`, and
   the entitlements the hardened runtime needs for Wine and FEX, which
-  `LOADER_RUNTIME_ENTITLEMENTS` in [`bundle-wine.sh`](../bundle-wine.sh)
+  `LOADER_RUNTIME_ENTITLEMENTS` in [`bundle-wine.sh`](../bin/bundle-wine.sh)
   lists with the reason for each. The bundle identifier is the application
   identifier without the team prefix. The identity of the profile's team in
   the keychain signs, passed by SHA-1.
@@ -473,13 +474,13 @@ dependency, search a clean build's log for it.
 
 | Input | Pinned in |
 |-------|-----------|
-| FEX | [`fex-src.ref`](../fex-src.ref): a branch, tag or commit of `FEX_REPO` |
-| mtld3d | [`redist.env`](../redist.env), URL and SHA-256 of the release tarball |
-| DXMT | [`redist.env`](../redist.env), by commit |
-| LLVM for DXMT's `winemetal.so` | [`redist.env`](../redist.env), tag and commit; `build-dxmt.sh` fails when the tag is not at the commit |
-| Mesa (KosmicKrisp) | [`mesa-src.ref`](../mesa-src.ref): a branch, tag or commit of `MESA_REPO` |
-| Vulkan loader and headers | [`redist.env`](../redist.env), tag and commit of each, from one SDK release; `build-mesa.sh` fails when a tag is not at its commit |
-| Python modules of Mesa's build scripts | [`redist.env`](../redist.env), as pip requirements with exact versions |
+| FEX | [`fex-src.ref`](../pins/fex-src.ref): a branch, tag or commit of `FEX_REPO` |
+| mtld3d | [`redist.env`](../pins/redist.env), URL and SHA-256 of the release tarball |
+| DXMT | [`redist.env`](../pins/redist.env), by commit |
+| LLVM for DXMT's `winemetal.so` | [`redist.env`](../pins/redist.env), tag and commit; `build-dxmt.sh` fails when the tag is not at the commit |
+| Mesa (KosmicKrisp) | [`mesa-src.ref`](../pins/mesa-src.ref): a branch, tag or commit of `MESA_REPO` |
+| Vulkan loader and headers | [`redist.env`](../pins/redist.env), tag and commit of each, from one SDK release; `build-mesa.sh` fails when a tag is not at its commit |
+| Python modules of Mesa's build scripts | [`redist.env`](../pins/redist.env), as pip requirements with exact versions |
 | Wine | Whatever `WINE_SRC` has checked out, normally [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched); nothing pins a commit. The SDK and DXMT record the commit they were built against (with `-dirty` when tracked files differ, which counts all uncommitted states as one), and the bundle step refuses either when it is not the current one |
 | Homebrew libraries | Not pinned: whatever the host's Homebrew has ([Homebrew libraries and the floor](#homebrew-libraries-and-the-floor)) |
 | Provisioning profile | [`signing/loader.provisionprofile`](../signing/loader.provisionprofile); replace the file when it expires or the App ID changes |
