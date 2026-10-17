@@ -1042,15 +1042,16 @@ loader_preflight() {
 # lifts a restriction of the runtime that Wine runs into:
 #   cs.allow-jit                      FEX's code buffers are MAP_JIT memory
 #                                     (MEM_EXTENDED_PARAMETER_WINE_UNIX_JIT)
-#   cs.allow-unsigned-executable-memory
+#   cs.disable-executable-page-protection
 #                                     ntdll gives anonymous memory an
 #                                     executable protection (VirtualAlloc and
-#                                     VirtualProtect with PAGE_EXECUTE_*)
-#   cs.disable-executable-page-protection
+#                                     VirtualProtect with PAGE_EXECUTE_*), and
 #                                     Windows code expects a
 #                                     PAGE_EXECUTE_READWRITE page to be
-#                                     writable and executable at once, which
-#                                     the first two do not allow
+#                                     writable and executable at once. It
+#                                     covers what
+#                                     cs.allow-unsigned-executable-memory
+#                                     would allow, so that one is not claimed
 #   cs.disable-library-validation     the unix modules, Homebrew's dylibs and
 #                                     FEX's unixlibs are signed ad hoc, not by
 #                                     the loader's team
@@ -1062,13 +1063,12 @@ loader_preflight() {
 #                                     the microphone prompt is for; without it
 #                                     macOS kills the process on access
 # On macOS 27 a process with the cross-architecture entitlement runs Wine and
-# FEX with only library validation disabled, but the first three are what
+# FEX with only library validation disabled, but the first two are what
 # Apple documents for what Wine does, and they keep it running if that
 # relaxation goes. Not claimed: device.camera (this Wine has no video capture
 # on macOS) and cs.allow-dyld-environment-variables (nothing in the bundle
 # uses DYLD_* variables; the libraries are found through @loader_path).
 LOADER_RUNTIME_ENTITLEMENTS="com.apple.security.cs.allow-jit
-com.apple.security.cs.allow-unsigned-executable-memory
 com.apple.security.cs.disable-executable-page-protection
 com.apple.security.cs.disable-library-validation
 com.apple.security.device.audio-input"
