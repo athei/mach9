@@ -496,10 +496,17 @@ After assembly:
   the Metal 4 family, and a Mac without one, such as the virtual machine of
   a hosted CI runner, gives it no device. There, `vulkan.exe` has to fail
   creating its instance after the Vulkan loader read the bundled manifest
-  and found no GPU, and the `wined3d=vulkan` runs are left out. The step
-  decides this from the hardware alone, with
-  [`smoke/metal4.m`](../smoke/metal4.m), and says which checks it left
-  out. Every run has a time limit, and
+  and found no GPU, and the `wined3d=vulkan` runs are left out. The Mac
+  driver only asks for an accelerated OpenGL renderer, and a Mac without
+  one, such as the same virtual machine with only Apple's software
+  renderer, gives wined3d no OpenGL context. There, the runs with the
+  default renderer have to fail creating the Direct3D object after the Mac
+  driver's request for a renderer failed and wined3d got no context for
+  its adapter, still with the `wined3d` d3d9 tree for the x86_64 one. The
+  step decides each case from the hardware alone, with
+  [`smoke/metal4.m`](../smoke/metal4.m) and
+  [`smoke/opengl.m`](../smoke/opengl.m), one independent of the other,
+  and says which checks it left out. Every run has a time limit, and
   none may print Wine's message that it cannot find FreeType: Wine then
   runs without TrueType fonts, and the program still succeeds.
 
