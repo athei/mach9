@@ -77,7 +77,7 @@ git -C "$FEX_SRC" checkout --quiet --detach FETCH_HEAD
 git -C "$FEX_SRC" submodule update --init --recursive
 # A leading '+', '-' or 'U' marks a submodule that is not at the recorded
 # commit, not checked out, or in conflict.
-if git -C "$FEX_SRC" submodule status --recursive | grep -q '^[-+U]'; then
+if git -C "$FEX_SRC" submodule status --recursive | grep '^[-+U]' >/dev/null; then
     echo "Error: FEX submodules do not match $FEX_REF:"
     git -C "$FEX_SRC" submodule status --recursive | grep '^[-+U]'
     exit 1

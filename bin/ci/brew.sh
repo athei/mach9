@@ -122,7 +122,7 @@ check_brew() {
 cmd_check() {
     local f absent="" missing=""
     for f in $DEPS_FORMULAE $MESA_FORMULAE; do
-        formulae | grep -qxF "$f" || absent="$absent $f"
+        formulae | grep -xF "$f" >/dev/null || absent="$absent $f"
     done
     if [ -n "$absent" ]; then
         echo "Error: $LIST does not name$absent, which profile.sh lists"

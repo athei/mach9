@@ -384,7 +384,7 @@ check_dylib() {
         echo "$deps" | sed 's/^/    /'
         exit 1
     fi
-    if otool -l "$f" | grep -q LC_RPATH; then
+    if otool -l "$f" | grep LC_RPATH >/dev/null; then
         echo "Error: $name has an LC_RPATH"
         exit 1
     fi
@@ -395,7 +395,7 @@ check_dylib() {
         exit 1
     fi
     for sym in "$@"; do
-        if ! nm -gU "$f" | awk '{print $NF}' | grep -qxF "$sym"; then
+        if ! nm -gU "$f" | awk '{print $NF}' | grep -xF "$sym" >/dev/null; then
             echo "Error: $name does not export $sym"
             exit 1
         fi
