@@ -492,7 +492,14 @@ After assembly:
   report the Vulkan renderer, and with a `wined3d=vulkan` rule for the
   program, where it must. The i686 program uses Direct3D 8. Wine builds no
   64-bit `d3d8.dll`, so the x86_64 one uses Direct3D 9, with a rule giving
-  it the `wined3d` d3d9 tree in both runs. Every run has a time limit, and
+  it the `wined3d` d3d9 tree in both runs. KosmicKrisp only uses a GPU of
+  the Metal 4 family, and a Mac without one, such as the virtual machine of
+  a hosted CI runner, gives it no device. There, `vulkan.exe` has to fail
+  creating its instance after the Vulkan loader read the bundled manifest
+  and found no GPU, and the `wined3d=vulkan` runs are left out. The step
+  decides this from the hardware alone, with
+  [`smoke/metal4.m`](../smoke/metal4.m), and says which checks it left
+  out. Every run has a time limit, and
   none may print Wine's message that it cannot find FreeType: Wine then
   runs without TrueType fonts, and the program still succeeds.
 
