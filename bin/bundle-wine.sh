@@ -658,7 +658,8 @@ check_default_trees() {
 # hang rather than an error. The caller's WINE_COMPATDB and WINE_D3D_CONFIG
 # and every WINEMSYNC*, FEX_*, VK_*, MESA_*, MTL_* and METAL_* variable are
 # dropped so that the built-in rules and the defaults of Wine, FEX, the
-# Vulkan loader, KosmicKrisp and Metal decide.
+# Vulkan loader, KosmicKrisp and Metal decide. The checks that need a Vulkan
+# device change on a Mac without a Metal 4 GPU (metal4_probe).
 smoke_test() {
     local version log arch cc exe marker markers var dlls
     local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG)
@@ -673,6 +674,14 @@ smoke_test() {
         exit 1
     }
     echo "  Testing: $version"
+    metal4_probe
+    if [ "$METAL4" -eq 1 ]; then
+        echo "  Metal 4 GPU for KosmicKrisp: $METAL_DEVICES"
+    else
+        echo "  No Metal 4 GPU ($METAL_DEVICES): skipping the checks that need a"
+        echo "  KosmicKrisp device. vulkan.exe has to find the driver and no GPU instead, and"
+        echo "  wined3d.exe runs on wined3d's default renderer only, not on Vulkan."
+    fi
 
     # wineboot creates the prefix here, so the limit is generous. The Mono
     # and Gecko installers are kept out so nothing pops a dialog.
@@ -814,7 +823,9 @@ check_vulkan_present() {
 # program's rule also sets wined3d=vulkan, as a rule for a game does, and
 # wined3d must report the Vulkan renderer and the program create its device
 # on it. wined3d does not fall back to OpenGL when its Vulkan adapter fails,
-# so the second run is what shows the opt-in works.
+# so the second run is what shows the opt-in works. It needs a KosmicKrisp
+# device, so on a Mac without a Metal 4 GPU (metal4_probe) only the first
+# run happens.
 check_wined3d_device() {
     local arch exe log want header api flags rule tree
     header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$REPO_DIR/compatdb/table/src/lib.rs")
@@ -861,6 +872,8 @@ check_wined3d_device() {
             exit 1
         fi
         grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+        # wined3d on Vulkan needs a KosmicKrisp device (metal4_probe).
+        [ "$METAL4" -eq 1 ] || continue
         time_mark "smoke: wined3d.exe $arch ($api) on Vulkan"
         echo "  Running wined3d.exe for $arch ($api) with wined3d on Vulkan..."
         log="$TMP_DIR/wined3d-vulkan-$arch.log"
@@ -889,13 +902,19 @@ check_wined3d_device() {
 # device is found through vulkan-1.dll, winevulkan, the loader win32u.so
 # loads from lib/external and the manifest in share/vulkan/icd.d, which
 # ntdll names in VK_DRIVER_FILES since <env-command> drops the caller's VK_*
-# variables.
+# variables. On a Mac without a Metal 4 GPU (METAL4=0, see metal4_probe)
+# KosmicKrisp finds no device, so each run must fail the way a missing
+# device makes it fail (check_vulkan_no_gpu) instead.
 check_vulkan_runs() {
     local arch exe log want
     for arch in x86_64 i686; do
         exe="$TMP_DIR/vulkan-$arch.exe"
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/vulkan.c"
         time_mark "smoke: vulkan.exe $arch"
+        if [ "$METAL4" -eq 0 ]; then
+            check_vulkan_no_gpu "$arch" "$exe" "$@"
+            continue
+        fi
         echo "  Running vulkan.exe for $arch..."
         log="$TMP_DIR/vulkan-$arch.log"
         run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
@@ -911,6 +930,78 @@ check_vulkan_runs() {
         done
         grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
     done
+}
+
+# check_vulkan_no_gpu <arch> <exe> <env-command>...: run the vulkan.exe
+# <exe> for <arch> as check_vulkan_runs does, on a Mac without a Metal 4
+# GPU, with the Vulkan loader's errors, warnings and driver search in the
+# log, and exit unless it failed as vulkan_no_gpu describes, had FreeType
+# and got the KosmicKrisp variable from compatdb.so. That still shows that
+# vulkan-1.dll, winevulkan, the loader, the manifest and the driver all
+# load; only the device is missing.
+check_vulkan_no_gpu() {
+    local arch="$1" exe="$2" log want
+    shift 2
+    echo "  Running vulkan.exe for $arch, which must find the bundled driver and no GPU..."
+    log="$TMP_DIR/vulkan-$arch.log"
+    run_limited 120 "$log" "$@" VK_LOADER_DEBUG=error,warn,driver "$WINE_DIR/bin/wine" "$exe"
+    want="compatdb: .*env = .*MESA_KK_EXPERIMENTAL="
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: vulkan.exe for $arch did not exit within 120 seconds"
+    elif [ "$RUN_STATUS" -eq 0 ]; then
+        echo "Error: vulkan.exe for $arch found a Vulkan device, though smoke/metal4.m found no Metal 4 GPU"
+    elif ! vulkan_no_gpu "$arch" "$RUN_STATUS" "$log"; then
+        echo "Error: vulkan.exe for $arch failed (status $RUN_STATUS), but not with vkCreateInstance"
+        echo "result -3 after the Vulkan loader read the bundled manifest and found no GPU"
+    elif ! grep "$want" "$log" >/dev/null; then
+        echo "Error: vulkan.exe for $arch did not print '$want'"
+    else
+        check_freetype "vulkan.exe for $arch" "$log"
+        grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+        echo "    The Vulkan loader read the bundled manifest, and the driver found no GPU."
+        return 0
+    fi
+    cat "$log"
+    smoke_stop
+    exit 1
+}
+
+# vulkan_no_gpu <arch> <status> <log>: succeed when the vulkan.exe for
+# <arch> exited with <status> 1 after printing in <log> that vkCreateInstance
+# returned -3 (VK_ERROR_INITIALIZATION_FAILED), and the Vulkan loader's
+# debug output in <log> says it read the bundled KosmicKrisp manifest and
+# found no valid GPU. The loader only reaches that point with a driver
+# loaded: one that does not load, or a manifest it cannot find, leaves it
+# with no driver at all, which is another result and another message.
+vulkan_no_gpu() {
+    local arch="$1" status="$2" log="$3" want
+    [ "$status" -eq 1 ] || return 1
+    # The number has to end the line, so that a result such as -30 does not
+    # count; Wine's text-mode output may end the line with a CR.
+    for want in "wine-build smoke test: $arch vkCreateInstance failed, result -3[^0-9]*\$" \
+                "Found ICD manifest file .*/share/vulkan/icd\.d/kosmickrisp_mesa_icd\.aarch64\.json" \
+                "Failed to detect any valid GPUs"; do
+        grep "$want" "$log" >/dev/null || return 1
+    done
+}
+
+# metal4_probe: set METAL4 to 1 when this Mac has a Metal device that
+# supports MTLGPUFamilyMetal4, the only kind KosmicKrisp uses, and to 0 when
+# it has none, such as a virtual machine's paravirtual GPU. METAL_DEVICES
+# gets what smoke/metal4.m printed: the device KosmicKrisp would take, or
+# every device there is. Without one, the smoke test cannot check what needs
+# a Vulkan device, and says so. Only the hardware decides this; nothing
+# skips those checks on a Mac that has such a device.
+metal4_probe() {
+    local status=0
+    xcrun clang -O2 -fobjc-arc -framework Foundation -framework Metal \
+        -o "$TMP_DIR/metal4" "$REPO_DIR/smoke/metal4.m"
+    METAL_DEVICES=$("$TMP_DIR/metal4") || status=$?
+    case "$status" in
+        0) METAL4=1 ;;
+        1) METAL4=0 ;;
+        *) echo "Error: smoke/metal4.m failed (status $status)"; exit 1 ;;
+    esac
 }
 
 # smoke_check <what> <seconds> <log>: after run_limited, exit with the log
