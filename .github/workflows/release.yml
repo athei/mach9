@@ -79,43 +79,18 @@ jobs:
       - name: Report the runner, select Xcode and its Metal toolchain
         run: scripts/bin/ci/host.sh --metal
 
+      # The formulae at the newest versions Homebrew has, from and into the
+      # cache brew-cache.yml keeps current on the default branch.
+      - name: Install the Homebrew formulae
+        uses: ./scripts/.github/actions/brew
+
       - name: Compute the cache keys
         id: keys
         run: |
           SCRIPT_DIR=scripts/bin . scripts/bin/lib/profile.sh
           . scripts/pins/redist.env
           xcode=$(xcodebuild -version | awk 'NR == 1 { print $2 }')
-          echo "brew=brew-$RUNNER_OS-$ImageOS-$ImageVersion-${{ hashFiles('scripts/pins/brew-formulae', 'scripts/bin/ci/brew.sh') }}" >> "$GITHUB_OUTPUT"
           echo "llvm15=dxmt-llvm15-$LLVM15_GIT_COMMIT-floor$MACOS_FLOOR-xcode$xcode-$ImageOS-${{ hashFiles('scripts/bin/build-dxmt.sh') }}" >> "$GITHUB_OUTPUT"
-
-      # Restored and saved separately, so the kegs are saved right after
-      # brew.sh wrote them, even when the build fails later.
-      - name: Restore the Homebrew kegs
-        id: brew-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ runner.temp }}/brew
-          key: ${{ steps.keys.outputs.brew }}
-
-      - name: Install the Homebrew formulae
-        env:
-          CACHE_HIT: ${{ steps.brew-cache.outputs.cache-hit }}
-        run: |
-          if [ "$CACHE_HIT" = true ]; then
-            scripts/bin/ci/brew.sh restore "$RUNNER_TEMP/brew"
-          else
-            scripts/bin/ci/brew.sh install "$RUNNER_TEMP/brew"
-          fi
-
-      - name: Save the Homebrew kegs
-        if: steps.brew-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ runner.temp }}/brew
-          key: ${{ steps.keys.outputs.brew }}
-
-      - name: Free the Homebrew cache directory
-        run: rm -rf "$RUNNER_TEMP/brew"
 
       # The downloads redist.env pins: llvm-mingw here, mtld3d in the bundle
       # step. Each is checked against its SHA-256 whether it was cached or not.

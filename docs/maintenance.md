@@ -155,14 +155,51 @@ releases. Their steps call the build and bundle scripts and the scripts in
   which can be a `compatdb-*` one. It replaces `compatdb.so` with
   `bundle-wine.sh --compatdb-only`, which runs the smoke test, and attaches
   the base's symbols again under its own tag. It needs no signing identity:
-  the loader is the base's.
-- The runner caches the Homebrew kegs the build installs, keyed on the
-  runner image version, DXMT's LLVM libraries, the downloads `redist.env`
-  pins and cargo's registry. A run on a tag writes caches that only later
-  runs on the same tag can read, so a failed release that is run again
-  reuses them. A manual run on `main` writes caches every run can read;
-  start one after a pin or the runner image changed to keep the tag builds
-  fast.
+  the loader is the base's. So are the Homebrew libraries, so such a
+  release does not pick up newer ones.
+
+### Homebrew formulae
+
+`release.yml` bundles the newest versions Homebrew has, not the ones the
+runner image came with. The steps are the local action
+[`.github/actions/brew`](../.github/actions/brew/action.yml), and the
+commands and the manifest are described in the header of
+[`brew.sh`](../bin/ci/brew.sh).
+
+- Every run updates Homebrew's formula data first and writes a manifest of
+  the formulae in [`brew-formulae`](../pins/brew-formulae) and everything
+  they need at run time, each with the version and bottle Homebrew has and
+  what the image has installed of it. A formula without a bottle for the
+  runner's macOS stops the run there, since building it from source would
+  take hours.
+- The kegs a run adds to the image are cached under a key that ends in the
+  manifest's hash. A run whose manifest has a cache unpacks it and installs
+  nothing. Otherwise it unpacks the newest cache made by the same scripts,
+  leaving out the kegs that are older than the manifest's versions or of
+  formulae the manifest no longer names, then upgrades and installs only
+  the formulae of the manifest that are still behind or missing, never the
+  rest of the image's, and saves the result under its own key.
+- Either way the step fails when a formula of the manifest is not installed
+  and linked at the version it names, or `brew outdated` names one. A
+  bottle Homebrew rebuilt at the same version is only poured where the
+  runner lacks the formula; Homebrew ships fixes as new versions or
+  revisions, which this check catches.
+- [`brew-cache.yml`](../.github/workflows/brew-cache.yml) runs the same
+  steps on the default branch every day, on demand, and on a push to
+  `main` that changes the scripts the key hashes. Caches made there can be
+  read by the runs on every tag, so a release build usually finds the kegs
+  of its own manifest, or of a recent one, and downloads little.
+- GitHub disables the scheduled workflows of a public repository after 60
+  days without activity in it; re-enable `brew-cache.yml` in the Actions
+  tab then.
+
+### Other caches
+
+The runner also caches DXMT's LLVM libraries, the downloads `redist.env`
+pins and cargo's registry. A run on a tag writes caches that only later runs
+on the same tag can read, so a failed release that is run again reuses them.
+A manual run on `main` writes caches every run can read; start one after a
+pin changed to keep the tag builds fast.
 
 ### Signing identity
 
