@@ -1,7 +1,7 @@
 # shellcheck shell=bash
-# The settings build-wine.sh, bundle-wine.sh, build-fex.sh, build-mesa.sh and
-# build-dxmt.sh share, and the helpers they use. Source it with SCRIPT_DIR set
-# to the directory of those scripts (bin/ of this repository); it sets
+# The settings build-wine.sh, bundle-wine.sh, build-fex.sh, build-mesa.sh,
+# build-dxmt.sh and the CI scripts in ci/ share, and the helpers they use.
+# Source it with SCRIPT_DIR set to bin/ of this repository; it sets
 # everything as it is sourced. REPO_DIR is the repository itself, PINS_DIR
 # its pins/ (redist.env and the *-src.ref files).
 #
