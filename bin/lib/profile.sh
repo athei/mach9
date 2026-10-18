@@ -46,6 +46,10 @@ WINE_ARCHS=arm64ec,aarch64,i386
 # copies them from here.
 DEPS_PREFIX=/opt/homebrew
 DEPS_FORMULAE="freetype gnutls sdl2-compat sdl3 bison pkgconf"
+# What the host tools of build-mesa.sh's first stage link, from the same
+# prefix. A CI build installs the formulae of both lists, and the build tools,
+# from pins/brew-formulae.
+MESA_FORMULAE="llvm spirv-llvm-translator spirv-tools"
 # Mesa's repository (upstream Mesa plus our topic commits, for its Vulkan
 # driver KosmicKrisp), the local clone build-mesa.sh checks out mesa-src.ref
 # in, its trees, and the Vulkan loader and driver as build-mesa.sh stages
