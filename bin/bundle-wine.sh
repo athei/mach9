@@ -964,8 +964,9 @@ check_vulkan() {
 # check_wine_sdk: exit unless the Wine SDK build-wine.sh staged is for the
 # Wine source as it is now, which DXMT's DLLs were linked against and whose
 # x86_64 link libraries and graphics tests a full bundle carries, and, for a
-# full bundle, holds every test of GRAPHICS_TESTS (an SDK staged before the
-# tests were has a current WINE_COMMIT and none of them).
+# full bundle, holds every test of GRAPHICS_TESTS and their VERSION (an SDK
+# staged before the tests or VERSION were has a current WINE_COMMIT and lacks
+# them).
 check_wine_sdk() {
     local pe t
     if [ "$(cat "$WINE_SDK_DIR/WINE_COMMIT" 2>/dev/null)" != "$(wine_src_commit)" ]; then
@@ -982,6 +983,10 @@ check_wine_sdk() {
                 fi
             done
         done
+        if [ ! -s "$WINE_SDK_DIR/lib/wine/tests/VERSION" ]; then
+            echo "Error: the Wine SDK at $WINE_SDK_DIR has no lib/wine/tests/VERSION (run build-wine.sh)"
+            exit 1
+        fi
     fi
     echo "  Wine SDK: $(cat "$WINE_SDK_DIR/WINE_COMMIT")"
 }
@@ -1484,7 +1489,9 @@ fi
 # their own machine, x86_64-windows and not PE64_DIR, where the 64-bit
 # builtins live: plain executables that Wine runs by path, outside the
 # directories it searches for modules. Development files only, like the
-# link libraries.
+# link libraries. tests/VERSION, the `wine --version` string of the Wine they
+# were built from, goes with them, so the directory taken alone still names
+# its build; Step 5 checks it against this bundle's wine.
 if [ "$RUNTIME_ONLY" -eq 0 ]; then
     time_mark "Step 2d: Graphics tests"
     echo "==> Step 2d: Graphics tests"
@@ -1495,6 +1502,8 @@ if [ "$RUNTIME_ONLY" -eq 0 ]; then
             cp "$WINE_SDK_DIR/lib/wine/tests/$pe/${t}_test.exe" "$WINE_DIR/lib/wine/tests/$pe/"
         done
     done
+    echo "    tests/VERSION"
+    cp "$WINE_SDK_DIR/lib/wine/tests/VERSION" "$WINE_DIR/lib/wine/tests/"
 fi
 
 # ── Step 3: Bundle dynamic libraries ────────────────────────────────────
@@ -2011,6 +2020,7 @@ if [ "$RUNTIME_ONLY" -eq 0 ]; then
             WANT+=("lib/wine/tests/$pe/${t}_test.exe")
         done
     done
+    WANT+=("lib/wine/tests/VERSION")
 fi
 MISSING=0
 for want in "${WANT[@]}"; do
@@ -2041,6 +2051,18 @@ for pair in libwow64fex:xtajit libarm64ecfex:xtajit64; do
         MISSING=1
     fi
 done
+# The tests' VERSION has to name the Wine this bundle runs, since both come
+# from one build: its first line is what bin/wine --version prints.
+if [ "$RUNTIME_ONLY" -eq 0 ] && [ -f "$WINE_DIR/lib/wine/tests/VERSION" ]; then
+    tests_version=$(head -n 1 "$WINE_DIR/lib/wine/tests/VERSION")
+    if ! wine_version=$("$WINE_DIR/bin/wine" --version) || [ -z "$wine_version" ]; then
+        echo "  ERROR: bin/wine --version failed"
+        MISSING=1
+    elif [ "$tests_version" != "$wine_version" ]; then
+        echo "  ERROR: lib/wine/tests/VERSION says $tests_version, but bin/wine --version prints $wine_version (run build-wine.sh)"
+        MISSING=1
+    fi
+fi
 if [ $MISSING -ne 0 ]; then
     echo "Error: copied-in components are not installed correctly"
     exit 1

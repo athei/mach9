@@ -312,8 +312,9 @@ for pe in "$PE64_DIR" i386-windows x86_64-windows; do
 done
 check_arm64x_archive "$WINE_SDK_DIR/lib/wine/$PE64_DIR/libwinecrt0.a"
 # The graphics tests, in lib/wine/tests/<pe-dir>/ as a full bundle carries
-# them, so WINE_COMMIT covers them too. Plain executables, not builtins:
-# Wine runs them by path. Each must be of its directory's machine.
+# them, so WINE_COMMIT covers them and their VERSION too. Plain executables,
+# not builtins: Wine runs them by path. Each must be of its directory's
+# machine.
 for pe in $TEST_PE_DIRS; do
     case "$pe" in
         i386-windows) machine=014c ;;
@@ -328,6 +329,21 @@ for pe in $TEST_PE_DIRS; do
             || { echo "Error: tests/$pe/${t}_test.exe has the PE machine $(pe_machine "$f"), not $machine"; exit 1; }
     done
 done
+# lib/wine/tests/VERSION: the `wine --version` string of the Wine the tests
+# were built from, so a copy of lib/wine/tests taken alone still says which
+# build it is (mtld3d's conformance runner reads its first line). ntdll prints
+# wine_build for --version, which make writes into dlls/ntdll/unix/version.c
+# from `git describe` of the source on every build, so the string is read
+# from that file in the build tree, as compiled into the ntdll.so the bundle
+# installs. The build's loader cannot be asked: it refuses to start outside
+# the signed wine.app. The x86 tree builds the same WINE_SRC, so the string
+# names the tests' source too.
+tests_version=$(sed -n 's/^const char wine_build\[\] = "\(.*\)";$/\1/p' "$BUILD_DIR/dlls/ntdll/unix/version.c")
+if [ -z "$tests_version" ]; then
+    echo "Error: $BUILD_DIR/dlls/ntdll/unix/version.c defines no wine_build"
+    exit 1
+fi
+echo "$tests_version" > "$WINE_SDK_DIR/lib/wine/tests/VERSION"
 wine_src_commit > "$WINE_SDK_DIR/WINE_COMMIT"
 echo "==> Wine SDK staged for $(cat "$WINE_SDK_DIR/WINE_COMMIT")."
 

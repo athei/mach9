@@ -187,6 +187,10 @@ loader) with nothing but the bundle; mtld3d's conformance suite runs the
   a tree is configured for. So the x86 tree builds them, by name.
 - They are plain executables, not builtins, outside the directories Wine
   searches for modules, and Step 4e strips them like every PE file.
+- `lib/wine/tests/VERSION` holds one line, the `wine --version` string of
+  the Wine the tests were built from (`wine_build` in the build tree's
+  `dlls/ntdll/unix/version.c`), so a copy of `lib/wine/tests` taken alone
+  still names its build; mtld3d's conformance runner reads its first line.
 - `d3d12_test.exe` cannot start until a D3D12 implementation is bundled.
   It imports `d3d12.dll`, which the bundle leaves out ([Vulkan](#vulkan)),
   so the loader stops it with `c0000135` (a missing DLL) and it exits
@@ -377,9 +381,10 @@ does not run without it.
 
 Before anything is deleted, the preflight checks the macOS SDK, the
 formulae, the Wine SDK (staged from the current Wine source and, for a full
-bundle, holding every [graphics test](#graphics-tests)), the FEX build
-(complete, and built from the commit `fex-src.ref` names now, which it asks
-`FEX_REPO` for with `git ls-remote`, so the step needs the network), the
+bundle, holding every [graphics test](#graphics-tests) and their
+`VERSION`), the FEX build (complete, and built from the commit
+`fex-src.ref` names now, which it asks `FEX_REPO` for with
+`git ls-remote`, so the step needs the network), the
 staged DXMT (complete, from the pinned commit, linked against the current
 Wine source, its DLLs carrying the recorded version), the staged Vulkan
 loader and KosmicKrisp (complete, Mesa built from the commit `mesa-src.ref`
@@ -398,8 +403,8 @@ After assembly:
   included, and not the loader references any of the `LEAK_PREFIXES` in
   `profile.sh`.
 - The Direct3D trees, FEX, the Vulkan files, the loader app and, in a full
-  bundle, the x86_64 link libraries and every graphics test are in place;
-  the mtld3d tree's
+  bundle, the x86_64 link libraries and every graphics test are in place,
+  with a tests `VERSION` equal to `bin/wine --version`; the mtld3d tree's
   `d3d9.dll` is byte-identical to mtld3d's, and `xtajit.dll` and
   `xtajit64.dll` are FEX's.
 - Every module of a Direct3D tree has a fake-module marker in the default
