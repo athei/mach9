@@ -659,7 +659,9 @@ check_default_trees() {
 # and every WINEMSYNC*, FEX_*, VK_*, MESA_*, MTL_* and METAL_* variable are
 # dropped so that the built-in rules and the defaults of Wine, FEX, the
 # Vulkan loader, KosmicKrisp and Metal decide. The checks that need a Vulkan
-# device change on a Mac without a Metal 4 GPU (metal4_probe).
+# device change on a Mac without a Metal 4 GPU (metal4_probe), and the one
+# that needs an OpenGL context on a Mac without an accelerated OpenGL
+# renderer (gl_probe). Each probe decides only its own checks.
 smoke_test() {
     local version log arch cc exe marker markers var dlls
     local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG)
@@ -680,7 +682,15 @@ smoke_test() {
     else
         echo "  No Metal 4 GPU ($METAL_DEVICES): skipping the checks that need a"
         echo "  KosmicKrisp device. vulkan.exe has to find the driver and no GPU instead, and"
-        echo "  wined3d.exe runs on wined3d's default renderer only, not on Vulkan."
+        echo "  wined3d.exe does not run with wined3d on Vulkan."
+    fi
+    gl_probe
+    if [ "$ACCEL_GL" -eq 1 ]; then
+        echo "  Accelerated OpenGL renderer for winemac.drv: $GL_RENDERERS"
+    else
+        echo "  No accelerated OpenGL renderer ($GL_RENDERERS): skipping the check"
+        echo "  that needs an OpenGL context. wined3d.exe has to find no adapter on wined3d's"
+        echo "  default renderer instead of creating a device there."
     fi
 
     # wineboot creates the prefix here, so the limit is generous. The Mono
@@ -825,7 +835,11 @@ check_vulkan_present() {
 # on it. wined3d does not fall back to OpenGL when its Vulkan adapter fails,
 # so the second run is what shows the opt-in works. It needs a KosmicKrisp
 # device, so on a Mac without a Metal 4 GPU (metal4_probe) only the first
-# run happens.
+# run happens. The first needs an OpenGL context, which winemac.drv only
+# gets from an accelerated renderer, so on a Mac without one (gl_probe) it
+# must fail the way a missing renderer makes it fail instead
+# (check_wined3d_no_gl). The second does not use OpenGL and still happens
+# on a Mac with a Metal 4 GPU.
 check_wined3d_device() {
     local arch exe log want header api flags rule tree
     header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$REPO_DIR/compatdb/table/src/lib.rs")
@@ -852,26 +866,30 @@ check_wined3d_device() {
         fi
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 "${flags[@]}" -o "$exe" "$REPO_DIR/smoke/wined3d.c"
         time_mark "smoke: wined3d.exe $arch ($api)"
-        echo "  Running wined3d.exe for $arch ($api) with the default renderer..."
-        log="$TMP_DIR/wined3d-$arch.log"
-        run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag \
-            WINE_COMPATDB="$header"$'\n'"$rule" "$WINE_DIR/bin/wine" "$exe"
-        smoke_check "wined3d.exe for $arch ($api)" 120 "$log"
-        if ! grep -q "wine-build smoke test: $arch $api device on " "$log" \
-            || grep -q "err:winediag:.*Using the Vulkan renderer\." "$log"; then
-            echo "Error: wined3d.exe for $arch did not create a $api device on wined3d's default renderer"
-            cat "$log"
-            smoke_stop
-            exit 1
+        if [ "$ACCEL_GL" -eq 0 ]; then
+            check_wined3d_no_gl "$arch" "$api" "$exe" "$header"$'\n'"$rule" "$tree" "$@"
+        else
+            echo "  Running wined3d.exe for $arch ($api) with the default renderer..."
+            log="$TMP_DIR/wined3d-$arch.log"
+            run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag \
+                WINE_COMPATDB="$header"$'\n'"$rule" "$WINE_DIR/bin/wine" "$exe"
+            smoke_check "wined3d.exe for $arch ($api)" 120 "$log"
+            if ! grep -q "wine-build smoke test: $arch $api device on " "$log" \
+                || grep -q "err:winediag:.*Using the Vulkan renderer\." "$log"; then
+                echo "Error: wined3d.exe for $arch did not create a $api device on wined3d's default renderer"
+                cat "$log"
+                smoke_stop
+                exit 1
+            fi
+            if [ -n "$tree" ] && ! grep -q "$tree" "$log"; then
+                echo "Error: compatdb.so did not give wined3d.exe for $arch the wined3d d3d9 tree"
+                echo "its rule asks for (no '$tree' line), so the run proves nothing about wined3d"
+                cat "$log"
+                smoke_stop
+                exit 1
+            fi
+            grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
         fi
-        if [ -n "$tree" ] && ! grep -q "$tree" "$log"; then
-            echo "Error: compatdb.so did not give wined3d.exe for $arch the wined3d d3d9 tree"
-            echo "its rule asks for (no '$tree' line), so the run proves nothing about wined3d"
-            cat "$log"
-            smoke_stop
-            exit 1
-        fi
-        grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
         # wined3d on Vulkan needs a KosmicKrisp device (metal4_probe).
         [ "$METAL4" -eq 1 ] || continue
         time_mark "smoke: wined3d.exe $arch ($api) on Vulkan"
@@ -890,6 +908,73 @@ check_wined3d_device() {
             fi
         done
         grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+    done
+}
+
+# check_wined3d_no_gl <arch> <api> <exe> <rules> <tree> <env-command>...:
+# run the wined3d.exe <exe> for <arch> as check_wined3d_device's first run
+# does, with the WINE_COMPATDB rules <rules>, on a Mac without an accelerated
+# OpenGL renderer, with wined3d's errors and the OpenGL driver's errors and
+# warnings in the log, and exit unless it failed as wined3d_no_gl describes,
+# had FreeType, did not report the Vulkan renderer or a failure to load
+# OpenGL (an error of macdrv_OpenGLInit), and, when <tree> is not empty, got
+# the compatdb line <tree> for its wined3d tree. That still shows that the
+# program's <api> DLL, wined3d, winemac.drv and Apple's OpenGL all load; only
+# the accelerated renderer is missing. A failure prints the log without the
+# driver's warnings about each GL function it did not find, which run to
+# thousands of lines when its OpenGL does not start.
+check_wined3d_no_gl() {
+    local arch="$1" api="$2" exe="$3" rules="$4" tree="$5" log want
+    shift 5
+    echo "  Running wined3d.exe for $arch ($api), which must find no accelerated OpenGL renderer..."
+    log="$TMP_DIR/wined3d-$arch.log"
+    run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag,err+wgl,warn+wgl,err+d3d \
+        WINE_COMPATDB="$rules" "$WINE_DIR/bin/wine" "$exe"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: wined3d.exe for $arch ($api) did not exit within 120 seconds"
+    elif [ "$RUN_STATUS" -eq 0 ]; then
+        echo "Error: wined3d.exe for $arch created a $api device, though smoke/opengl.m found no"
+        echo "accelerated OpenGL renderer"
+    elif grep "err:wgl:macdrv_OpenGLInit" "$log" >/dev/null; then
+        echo "Error: winemac.drv could not load OpenGL in wined3d.exe for $arch ($api)"
+    elif grep "err:winediag:.*Using the Vulkan renderer\." "$log" >/dev/null; then
+        echo "Error: wined3d.exe for $arch ($api) reported the Vulkan renderer, which is opt-in"
+    elif ! wined3d_no_gl "$arch" "$api" "$RUN_STATUS" "$log"; then
+        echo "Error: wined3d.exe for $arch ($api) failed (status $RUN_STATUS), but not with wined3d"
+        echo "finding no adapter after winemac.drv found no accelerated OpenGL renderer"
+    elif [ -n "$tree" ] && ! grep "$tree" "$log" >/dev/null; then
+        echo "Error: compatdb.so did not give wined3d.exe for $arch the wined3d d3d9 tree"
+        echo "its rule asks for (no '$tree' line), so the run proves nothing about wined3d"
+    else
+        check_freetype "wined3d.exe for $arch ($api)" "$log"
+        grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+        echo "    winemac.drv found no accelerated OpenGL renderer, and wined3d no adapter."
+        return 0
+    fi
+    want=':warn:wgl:display_funcs_init [^ ]* not found\.'
+    grep -v "$want" "$log" || true
+    echo "(left out: $(grep -c "$want" "$log" || true) lines of display_funcs_init's 'not found.' warnings)"
+    smoke_stop
+    exit 1
+}
+
+# wined3d_no_gl <arch> <api> <status> <log>: succeed when the wined3d.exe
+# for <arch> and <api> exited with <status> 1 after printing in <log> that
+# its Direct3DCreate8 or Direct3DCreate9 found no adapter, and the debug
+# output in <log> says that winemac.drv's request for an accelerated
+# renderer failed with kCGLBadPixelFormat (10002) and that wined3d then got
+# no OpenGL context for its adapter. That is the failure a Mac without such
+# a renderer gives; OpenGL that does not load fails earlier, with other
+# messages.
+wined3d_no_gl() {
+    local arch="$1" api="$2" status="$3" log="$4" want
+    [ "$status" -eq 1 ] || return 1
+    # Only text without a digit, CGL's name for the error, may follow its
+    # number, so that an error such as 100020 does not count.
+    for want in "wine-build smoke test: $arch Direct3DCreate${api#d3d} failed: wined3d has no adapter" \
+                "warn:wgl:init_context CGLChoosePixelFormat() failed with error 10002[^0-9]*\$" \
+                "err:d3d:wined3d_adapter_gl_init Failed to get a GL context"; do
+        grep "$want" "$log" >/dev/null || return 1
     done
 }
 
@@ -1001,6 +1086,26 @@ metal4_probe() {
         0) METAL4=1 ;;
         1) METAL4=0 ;;
         *) echo "Error: smoke/metal4.m failed (status $status)"; exit 1 ;;
+    esac
+}
+
+# gl_probe: set ACCEL_GL to 1 when this Mac has an accelerated OpenGL
+# renderer for the main display, the only kind winemac.drv asks for, and to
+# 0 when it has none, such as a virtual machine whose only renderer is
+# Apple's software one. GL_RENDERERS gets what smoke/opengl.m printed: the
+# renderer winemac.drv would get, or every renderer of the main display.
+# Without one, wined3d cannot run on OpenGL, and the smoke test says so.
+# Only the hardware decides this, independently of metal4_probe; nothing
+# skips the OpenGL check on a Mac that has such a renderer.
+gl_probe() {
+    local status=0
+    xcrun clang -O2 -fobjc-arc -framework Foundation -framework CoreGraphics -framework OpenGL \
+        -o "$TMP_DIR/opengl" "$REPO_DIR/smoke/opengl.m"
+    GL_RENDERERS=$("$TMP_DIR/opengl") || status=$?
+    case "$status" in
+        0) ACCEL_GL=1 ;;
+        1) ACCEL_GL=0 ;;
+        *) echo "Error: smoke/opengl.m failed (status $status)"; exit 1 ;;
     esac
 }
 
