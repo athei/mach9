@@ -181,9 +181,7 @@ loader) with nothing but the bundle; mtld3d's conformance suite runs the
 - Each is built for `i386-windows` and `x86_64-windows`, the x86 code games
   run, except `d3d8`, which is i386 only: Wine builds no 64-bit `d3d8.dll`.
   An x86_64 test runs as ARM64EC, as an x64 game does. There are no
-  `aarch64-windows` tests: the games the bundle is for are x86 code, and a
-  native ARM64 program gets wined3d anyway
-  ([native ARM64 programs](compatdb.md#native-arm64-programs)).
+  `aarch64-windows` tests: the games the bundle is for are x86 code.
 - The main build has tests disabled, since its `make` would otherwise build
   every Wine test, and makedep writes test rules only for the architectures
   a tree is configured for. So the x86 tree builds them, by name.
@@ -439,14 +437,16 @@ After assembly:
   so a program that crashes exits with a backtrace in the log instead of
   waiting for the time limit; the i386 `cmd.exe` runs; and
   [`smoke/hello.c`](../smoke/hello.c), compiled for each architecture in
-  `SMOKE_PE_ARCHS`, prints its marker and reports whether it
-  loads `dxgi.dll` and `d3d9.dll`. Each one's compatdb lines must name the
-  trees for its arch (the x86 defaults, or `wined3d` for the native one),
-  and the x86 programs must load both DLLs; the native one cannot (see
-  [Limitations](#limitations)). Then the x86_64 and i686 programs load
-  every module of each Direct3D tree in turn, the tree picked with a
-  `WINE_COMPATDB` rule, which shows that the prefix placeholders made from
-  the default-dir markers let each tree in. Last,
+  `SMOKE_PE_ARCHS`, prints its marker and must load its DLLs. Each one's
+  compatdb lines must name the trees for its arch (the x86 defaults, or
+  `dxmt` and the `wined3d` d3d9 tree for the native one). The x86 programs
+  load `dxgi.dll` and `d3d9.dll`; the native one loads `dxgi.dll` and
+  `winemetal.dll`, which only the `dxmt` tree has, and `d3d9.dll` only
+  once its marker is a hybrid one (see [Limitations](#limitations)). Then
+  the x86_64 and i686 programs load every module of each Direct3D tree in
+  turn, and the native one every module of each dxgi tree, the tree picked
+  with a `WINE_COMPATDB` rule, which shows that the prefix placeholders made
+  from the default-dir markers let each tree in. Last,
   [`smoke/vulkan.c`](../smoke/vulkan.c), compiled for x86_64 and i686,
   creates a Vulkan instance without a window and must find a device; its
   compatdb lines must carry `MESA_KK_EXPERIMENTAL`. Then

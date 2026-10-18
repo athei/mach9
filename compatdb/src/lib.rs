@@ -93,7 +93,7 @@ extern "C" fn run() {
 
     // Every process gets one tree of each family prepended: a rule's choice,
     // or the arch default, and wined3d where the one asked for cannot load
-    // (dxmt or mtld3d for a native ARM64 program). Purely additive: the
+    // (mtld3d for a native ARM64 program). Purely additive: the
     // default dirs hold nothing that could conflict, so nothing is ever
     // disabled.
     let pe_dir = process.arch.pe_dir();
@@ -173,8 +173,8 @@ const fn arch_name(arch: Arch) -> &'static str {
 }
 
 /// The log line for a process whose rule asks `family` (`dxgi` or `d3d9`) for
-/// an implementation that cannot load for its arch (dxmt or mtld3d for a
-/// native ARM64 program). `got` is what the family's `effective` chose.
+/// an implementation that cannot load for its arch (mtld3d for a native
+/// ARM64 program). `got` is what the family's `effective` chose.
 /// `None` when the process gets what it asked for, or asked for nothing: the
 /// default always loads.
 fn fallback(family: &str, requested: Option<&str>, got: &str, arch: Arch) -> Option<String> {
@@ -387,20 +387,20 @@ mod tests {
     }
 
     #[test]
-    fn a_native_arm64_program_gets_wined3d_quietly_and_rules_say_why() {
+    fn a_native_arm64_program_gets_dxmt_and_wined3d_for_d3d9_and_rules_say_why() {
         let native = Arch::Aarch64;
-        // The default is wined3d for both families, with nothing to log.
-        assert_eq!(Dxgi::effective(None, native), Dxgi::Wined3d);
+        // The defaults are dxmt and wined3d, with nothing to log.
+        assert_eq!(Dxgi::effective(None, native), Dxgi::Dxmt);
         assert_eq!(dxgi_line(None, native), None);
         assert_eq!(D3d9::effective(None, native), D3d9::Wined3d);
         assert_eq!(d3d9_line(None, native), None);
-        assert_eq!(dxgi_line(Some(Dxgi::Wined3d), native), None);
+        // Either dxgi tree is what it gets when a rule asks for it.
+        for requested in [Dxgi::Dxmt, Dxgi::Wined3d] {
+            assert_eq!(Dxgi::effective(Some(requested), native), requested);
+            assert_eq!(dxgi_line(Some(requested), native), None, "{requested:?}");
+        }
         assert_eq!(d3d9_line(Some(D3d9::Wined3d), native), None);
-        // A rule for dxmt or mtld3d falls back, and the line names the arch.
-        assert_eq!(
-            dxgi_line(Some(Dxgi::Dxmt), native).as_deref(),
-            Some("  dxgi = dxmt not available on aarch64, using wined3d")
-        );
+        // A rule for mtld3d falls back, and the line names the arch.
         assert_eq!(
             d3d9_line(Some(D3d9::Mtld3d), native).as_deref(),
             Some("  d3d9 = mtld3d not available on aarch64, using wined3d")
