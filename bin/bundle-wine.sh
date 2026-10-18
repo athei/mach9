@@ -330,10 +330,12 @@ drop_coff_symtab() {
 # $unixdir/compatdb.so. profile.sh exports MACOSX_DEPLOYMENT_TARGET, which
 # cargo hands to rustc and which takes precedence over the same pin in
 # compatdb/.cargo/config.toml; cargo only reads that file from the working
-# directory upward, hence the subshell in the workspace all the same. The
-# new file is copied next to the old one and renamed over it, so a Wine
-# process that has the old library mapped keeps a valid mapping instead of a
-# file that changes underneath it.
+# directory upward, hence the subshell in the workspace all the same.
+# --locked builds the versions Cargo.lock names, and fails at once when the
+# file does not match Cargo.toml instead of rewriting it. The new file is
+# copied next to the old one and renamed over it, so a Wine process that has
+# the old library mapped keeps a valid mapping instead of a file that changes
+# underneath it.
 build_compatdb() {
     if ! command -v cargo >/dev/null; then
         echo "Error: cargo not found (compatdb.so needs a Rust toolchain with the"
@@ -347,7 +349,7 @@ build_compatdb() {
         exit 1
     fi
     (cd "$REPO_DIR/compatdb" && CARGO_TARGET_DIR="$BUILD_DIR/compatdb" \
-        cargo build --quiet --release --manifest-path "$REPO_DIR/compatdb/Cargo.toml" \
+        cargo build --quiet --release --locked --manifest-path "$REPO_DIR/compatdb/Cargo.toml" \
             -p compatdb --target "$RUST_TARGET")
     echo "    $UNIX_DIR/compatdb.so"
     cp "$COMPATDB_BUILD" "$unixdir/compatdb.so.new"
