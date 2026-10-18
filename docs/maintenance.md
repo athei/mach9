@@ -43,8 +43,21 @@ check when something upstream changes.
   modules through wow64 entry points. Which modules go into which tree is
   in Step 4 of [`bundle-wine.sh`](../bin/bundle-wine.sh).
 - Every module a family's trees supply is removed from the default
-  `<arch>-windows/` directory and replaced by a fake-module marker made from
-  the first tree that has it. Every 64-bit marker is an x64 one
+  `<arch>-windows/` directory and replaced by a fake-module marker, which
+  wineboot turns into the prefix's placeholder. The marker carries no
+  exports; only its machine matters.
+- An i386 marker is i386. A 64-bit marker serves every 64-bit process and
+  every tree of its family, and its machine decides who can load the name:
+  an x64 process, which runs as ARM64EC, accepts an AMD64 placeholder and an
+  ARM64 one with ARM64EC (CHPE) metadata in its load config, and a native
+  ARM64 process accepts only the ARM64 one. So a name gets such a hybrid
+  marker (`winebuild --fake-module -b aarch64-windows -marm64x`) when every
+  tree of its family that has it holds an ARM64X build, and an AMD64
+  marker otherwise, as when a tree holds an x86_64 build. The rule is
+  `hybrid_marker` in [`bundle-wine.sh`](../bin/bundle-wine.sh), which reads
+  the trees, so a tree whose DLLs become ARM64X moves its names to hybrid
+  markers on the next bundle step, and Step 5 checks every marker against
+  it. A native ARM64 program cannot load a name with an AMD64 marker
   ([limitations](arm64.md#limitations)).
 
 What the bundle step checks is in

@@ -95,7 +95,7 @@ of the same name; the defaults are set in
 | `WINE_SDK_DIR` | The [Wine SDK](#wine-sdk) |
 | `FEX_REPO`, `FEX_SRC` | FEX repository and the local clone `build-fex.sh` checks out |
 | `FEX_BUILD_DIR` | FEX's CMake trees |
-| `DXMT_BUILD_DIR` | DXMT's checkout, its meson trees (x86_64 and i386 PE, arm64 unix) and, by default, `DXMT_LLVM` and `DXMT_DIST` |
+| `DXMT_BUILD_DIR` | DXMT's checkout, its meson trees (ARM64X PE with the arm64 unix half, and i386 PE) and, by default, `DXMT_LLVM` and `DXMT_DIST` |
 | `DXMT_LLVM` | The LLVM static libraries `winemetal.so` links |
 | `DXMT_DIST` | All of DXMT as the bundle installs it, with the commits it was built from |
 | `MESA_REPO`, `MESA_SRC` | Mesa repository and the local clone `build-mesa.sh` checks out |
@@ -155,7 +155,8 @@ commit. What goes in is the Wine SDK step of
   tools, builds just those and the [graphics tests](#graphics-tests).
   `build-wine.sh` configures that tree again from scratch whenever its
   configure arguments or `WINE_SRC` change, so neither needs a `--clean`.
-- DXMT's PE build reads it through `-Dwine_install_path` (see
+- DXMT's i386 build reads it through `-Dwine_install_path`; its ARM64X
+  build links against the build tree itself (see
   [`build-dxmt.sh`](../bin/build-dxmt.sh)).
 - A full bundle carries the same files, so the bundle is an installed Wine
   with its SDK. [mtld3d](https://github.com/athei/mtld3d) builds against
@@ -214,13 +215,18 @@ exits with the number of failed checks, at most 255.
   [`redist.env`](../pins/redist.env), not taken from a release: the release's
   Metal shaders do not compile with the Metal toolchain this build uses.
   The comment there says which fix the pin carries.
-- The PE DLLs are x86 code, x86_64 and i386, built with DXMT's own x86 cross
-  files against the [Wine SDK](#wine-sdk), so they run under FEX together
-  with the game. An ARM64EC build of DXMT would be a different DXMT.
+- The 64-bit DLLs are ARM64X, built with DXMT's own `build-arm64ec.txt`
+  cross file against the Wine build tree, whose `aarch64-windows` archives
+  are ARM64X too. An x64 game runs as ARM64EC and loads their ARM64EC half,
+  so DXMT's own code runs natively and only the game's x86 code goes
+  through FEX. A native ARM64 program loads their ARM64 half.
+- The i386 DLLs are x86 code, built with DXMT's `build-win32.txt` against
+  the [Wine SDK](#wine-sdk). A 32-bit game runs under WoW64 and FEX, and
+  they run there with it.
 - `winemetal.so` is arm64, linked against this Wine's `winemac.so` and
-  `ntdll.so`. DXMT builds its unix half as a native target whose architecture
-  follows the cross file, so `build-dxmt.sh` configures a meson tree with
-  DXMT's `build-arm64ec.txt` and builds that one target.
+  `ntdll.so`. DXMT builds its unix half as a native target whose
+  architecture follows the cross file, so it comes out of the same meson
+  tree as the ARM64X DLLs.
 - The DLLs and the `.so` share a private call interface, so they come from
   one checkout. `build-dxmt.sh` records the commit, its `git describe` (which
   DXMT also builds into `d3d11.dll` as its version) and the Wine commit it
@@ -380,9 +386,10 @@ staged DXMT (complete, from the pinned commit, linked against the current
 Wine source, its DLLs carrying the recorded version), the staged Vulkan
 loader and KosmicKrisp (complete, Mesa built from the commit `mesa-src.ref`
 names now, asked of `MESA_REPO` the same way, and the loader from the
-pinned commit), the llvm-mingw compilers and tools the smoke test and Step
-4e use, and the provisioning profile (not expired, granting the
-entitlement, with an identity of its team in the keychain).
+pinned commit), the llvm-mingw compilers and tools the smoke test, the
+markers of Step 4 and Step 4e use, and the provisioning profile (not
+expired, granting the entitlement, with an identity of its team in the
+keychain).
 
 After assembly:
 
@@ -397,6 +404,10 @@ After assembly:
   the mtld3d tree's
   `d3d9.dll` is byte-identical to mtld3d's, and `xtajit.dll` and
   `xtajit64.dll` are FEX's.
+- Every module of a Direct3D tree has a fake-module marker in the default
+  directory, with the machine the marker rule gives its name: i386, or in
+  `aarch64-windows` hybrid or AMD64
+  ([Direct3D trees](maintenance.md#direct3d-trees)).
 - No PE file has `.debug_*` sections or a COFF symbol table; Step 4e
   stripped them, keeping the unstripped files in `wine-symbols` next to the
   bundle with `--symbols`.
@@ -502,20 +513,21 @@ dependency, search a clean build's log for it.
 
 ## Limitations
 
-- A native ARM64 program cannot load `dxgi.dll`, `d3d9.dll` or the other
-  modules of the Direct3D trees; the loader fails with error 193
-  (`ERROR_BAD_EXE_FORMAT`). The prefix's placeholder for each of those names
-  comes from the fake-module marker in `aarch64-windows`, and the
-  placeholder's machine decides which module Wine looks for. Every 64-bit
-  marker is an x64 one, even where the module behind it is one of Wine's
-  ARM64X modules (`d3d10.dll` and `d3d10_1.dll` in every tree), because x64
-  games are what the bundle is for and an x64 process needs them: with an
-  ARM64 marker the native program loads Wine's ARM64X module and the x64
-  program fails with the same error instead. compatdb.so still gives a
-  native ARM64 program the `wined3d` trees
-  ([native ARM64 programs](compatdb.md#native-arm64-programs)), the only
-  ones with ARM64 code, so the choice is right once a placeholder lets it
-  through.
+- A native ARM64 program cannot load a Direct3D name whose marker in
+  `aarch64-windows` is AMD64; the loader fails with error 193
+  (`ERROR_BAD_EXE_FORMAT`). The prefix's placeholder for each name comes
+  from that marker, and the placeholder's machine decides which module Wine
+  looks for. A name keeps an AMD64 marker, which x64 games need and a native
+  ARM64 process rejects, as long as one tree of its family holds a build of
+  it that is not ARM64X, even when another tree's build is, such as Wine's
+  own `d3d9.dll` in the `wined3d` tree. The dxgi names have hybrid markers,
+  which both kinds of process accept, since DXMT's and Wine's 64-bit modules
+  there are ARM64X. Which marker a name gets is decided at the bundle step
+  from the trees as they are then
+  ([Direct3D trees](maintenance.md#direct3d-trees)), so a d3d9 tree that
+  turns ARM64X moves its names to hybrid markers with no change to the
+  scripts. Which d3d9 tree a native ARM64 program gets is compatdb's choice
+  ([native ARM64 programs](compatdb.md#native-arm64-programs)).
 
 ## Pinned inputs
 

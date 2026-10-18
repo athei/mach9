@@ -2,11 +2,11 @@
 set -e
 
 # Builds DXMT for the bundle from the upstream commit pinned in
-# redist.env and stages it in DXMT_DIST, in the layout of DXMT's release
-# tarball:
+# redist.env and stages it in DXMT_DIST, in the layout of a Wine install's
+# lib/wine:
 #
-#   x86_64-windows/{dxgi,d3d10core,d3d11,winemetal}.dll
-#   i386-windows/{dxgi,d3d10core,d3d11,winemetal}.dll
+#   aarch64-windows/{dxgi,d3d10core,d3d11,winemetal}.dll   ARM64X
+#   i386-windows/{dxgi,d3d10core,d3d11,winemetal}.dll      i386
 #   aarch64-unix/winemetal.so
 #   COMMIT       the source commit
 #   DESCRIBE     its `git describe`, the version string DXMT builds into d3d11.dll
@@ -15,29 +15,41 @@ set -e
 # Called by build-wine.sh, after the Wine build and the Wine SDK, which this
 # links against. bundle-wine.sh installs from DXMT_DIST.
 #
-# The Windows half is x86 code, x86_64 and i386, built with DXMT's own
-# build-win64.txt and build-win32.txt cross files and llvm-mingw against the
-# Wine SDK (-Dwine_install_path): its libwinecrt0.a, libntdll.a, libdbghelp.a
-# and winebuild. Games are x86 programs and run under FEX, and these DLLs run
-# in the same emulated code; an ARM64EC build of DXMT would be a different
-# DXMT. Only the DLLs and the targets that mark them as Wine builtins are
-# built there: the default targets include an x86_64 winemetal.so, which
-# cannot link against this Wine's arm64 libraries.
+# The 64-bit DLLs are ARM64X, built with DXMT's own build-arm64ec.txt cross
+# file, whose -marm64x has the arm64ec llvm-mingw compile every source for
+# ARM64EC and for ARM64 and link both halves into one image. An x64 game
+# runs as ARM64EC, so it loads the ARM64EC half, and DXMT's code runs
+# natively in it instead of under FEX; only the game's own x86 code is
+# emulated. A native ARM64 program loads the ARM64 half. Wine looks up both
+# kinds of 64-bit builtin in aarch64-windows, where they are staged. The
+# configure takes the link libraries (libwinecrt0.a, libntdll.a,
+# libdbghelp.a) from the Wine build tree (-Dwine_build_path), whose
+# aarch64-windows archives are ARM64X themselves, and the same tree's
+# winebuild marks the DLLs as builtins.
 #
-# The unix half has to be an arm64 winemetal.so. DXMT builds it as a native
-# target of its meson project, with the architecture taken from the cross
-# file: -arch arm64 only under build-arm64ec.txt. So a third tree is
-# configured with that cross file against the Wine build tree, and only
-# winemetal.so is built there; none of its ARM64EC PE targets are. All three
-# trees use one checkout, so the DLLs and the .so come from one commit, which
-# their private call interface needs.
+# The same tree builds the unix half, the arm64 winemetal.so. DXMT builds it
+# as a native target of its meson project, with the architecture taken from
+# the cross file, -arch arm64 under build-arm64ec.txt, and links it against
+# the Wine build tree's winemac.so and ntdll.so. So the 64-bit DLLs and the
+# .so come out of one meson tree, from one commit, as their private call
+# interface needs.
+#
+# The i386 DLLs are x86 code, built with DXMT's build-win32.txt and
+# llvm-mingw against the Wine SDK (-Dwine_install_path): its i386
+# libwinecrt0.a, libntdll.a, libdbghelp.a and winebuild. A 32-bit game runs
+# under WoW64 and FEX, and these DLLs run there with it, emulated. Only the
+# DLLs and the targets that mark them as Wine builtins are built in that
+# tree: the default targets include a winemetal.so, which there is built for
+# x86_64 (DXMT takes -arch arm64 only for an aarch64 cross file) and cannot
+# link against this Wine's arm64 libraries. It uses the same checkout as the
+# 64-bit tree, so the i386 DLLs match the .so too.
 #
 # winemetal.so needs LLVM 15: it links airconv_dep_darwin, the static airconv
 # library (DXMT's DXBC to Metal shader converter) that
 # src/airconv/darwin/meson.build builds natively against native_llvm_path.
 # The PE side only takes airconv's headers (airconv_forward_dep) unless
 # build_airconv_for_windows is set, which it is not, but its configure still
-# requires native_llvm_path to exist, so all three trees point at DXMT_LLVM.
+# requires native_llvm_path to exist, so both trees point at DXMT_LLVM.
 # There is no arm64 LLVM 15 to install, so its static libraries are built
 # from the pinned tag into DXMT_LLVM, following Hadron's recipe, and reused
 # while the pin stays.
@@ -81,26 +93,27 @@ if [ ! -f "$BUILD_DIR/Makefile" ]; then
     echo "Error: no Wine build at $BUILD_DIR (run build-wine.sh first)"
     exit 1
 fi
-# winemetal.so links the two .so files; its configure also looks up the PE
-# link libraries for the ARM64EC winemetal.dll it never builds, and fails
-# without them.
+# The 64-bit tree links winemetal.so against the two .so files and the
+# ARM64X DLLs against the build's ARM64X archives, and marks them as
+# builtins with its winebuild.
 for f in dlls/winemac.drv/winemac.so dlls/ntdll/ntdll.so \
          "dlls/ntdll/$PE64_DIR/libntdll.a" "dlls/dbghelp/$PE64_DIR/libdbghelp.a" \
-         "libs/winecrt0/$PE64_DIR/libwinecrt0.a"; do
+         "libs/winecrt0/$PE64_DIR/libwinecrt0.a" tools/winebuild/winebuild; do
     if [ ! -f "$BUILD_DIR/$f" ]; then
         echo "Error: $BUILD_DIR/$f not found (run build-wine.sh first)"
         exit 1
     fi
 done
-# The SDK must be the one staged from this Wine source, or the DLLs would
-# link against another Wine's unix call setup.
+# The SDK, which the i386 DLLs link against, must be the one staged from
+# this Wine source, or they would link against another Wine's unix call
+# setup.
 WINE_COMMIT=$(wine_src_commit)
 if [ "$(cat "$WINE_SDK_DIR/WINE_COMMIT" 2>/dev/null)" != "$WINE_COMMIT" ]; then
     echo "Error: the Wine SDK at $WINE_SDK_DIR is for $(cat "$WINE_SDK_DIR/WINE_COMMIT" 2>/dev/null || echo nothing),"
     echo "but $WINE_SRC is at $WINE_COMMIT (run build-wine.sh)"
     exit 1
 fi
-for f in bin/winebuild lib/wine/x86_64-windows/libwinecrt0.a lib/wine/i386-windows/libwinecrt0.a; do
+for f in bin/winebuild lib/wine/i386-windows/libwinecrt0.a; do
     if [ ! -f "$WINE_SDK_DIR/$f" ]; then
         echo "Error: the Wine SDK at $WINE_SDK_DIR has no $f (run build-wine.sh)"
         exit 1
@@ -112,7 +125,7 @@ done
 # name the tools without a path, so check that each resolves into
 # llvm-mingw and not to some other mingw earlier in PATH.
 export PATH="$PATH:$MINGW_DIR/bin"
-for triple in x86_64-w64-mingw32 i686-w64-mingw32 arm64ec-w64-mingw32; do
+for triple in i686-w64-mingw32 arm64ec-w64-mingw32; do
     for tool in gcc g++ ar strip windres; do
         if [ "$(command -v "$triple-$tool")" != "$MINGW_DIR/bin/$triple-$tool" ]; then
             echo "Error: $triple-$tool does not resolve to $MINGW_DIR/bin"
@@ -121,6 +134,11 @@ for triple in x86_64-w64-mingw32 i686-w64-mingw32 arm64ec-w64-mingw32; do
         fi
     done
 done
+# The check that the 64-bit DLLs are ARM64X (pe_is_arm64x) reads them with it.
+if [ ! -x "$MINGW_DIR/bin/llvm-readobj" ]; then
+    echo "Error: no llvm-readobj in $MINGW_DIR/bin"
+    exit 1
+fi
 
 # The checkouts and meson trees this script deletes and recreates are fixed
 # paths in DXMT_BUILD_DIR. DXMT_LLVM and DXMT_DIST are inside it unless
@@ -128,10 +146,12 @@ done
 # below.
 claim_tree "$DXMT_BUILD_DIR" dxmt
 claim_tree "$DXMT_LLVM" dxmt-llvm
+# win64 and unix are the x86_64 PE and arm64 unix trees of the layout before
+# the arm64x tree, which nothing builds any more.
 if [ "$CLEAN" -eq 1 ]; then
     echo "==> Cleaning the DXMT trees..."
-    remove_tree "$DXMT_SRC" "$DXMT_BUILD_DIR/win64" "$DXMT_BUILD_DIR/win32" \
-                "$DXMT_BUILD_DIR/unix"
+    remove_tree "$DXMT_SRC" "$DXMT_BUILD_DIR/arm64x" "$DXMT_BUILD_DIR/win32" \
+                "$DXMT_BUILD_DIR/win64" "$DXMT_BUILD_DIR/unix"
 fi
 claim_tree "$DXMT_DIST" dxmt-dist "$CLEAN"
 
@@ -214,46 +234,49 @@ dxmt_setup() {
 PE_TARGETS=(src/dxgi/dxgi.dll.postproc src/d3d10/d3d10core.dll.postproc
             src/d3d11/d3d11.dll.postproc src/winemetal/winemetal.dll.postproc)
 
-echo "==> Building DXMT's x86_64 PE DLLs..."
-dxmt_setup "$DXMT_BUILD_DIR/win64" build-win64.txt -Dwine_install_path="$WINE_SDK_DIR"
-ninja -C "$DXMT_BUILD_DIR/win64" "${PE_TARGETS[@]}"
+# The 64-bit tree: the ARM64X DLLs, linked against the Wine build tree's
+# ARM64X archives, and winemetal.so, whose target pulls in only native
+# libraries (DXBCParserNative and the darwin airconv library).
+echo "==> Building DXMT's ARM64X PE DLLs and arm64 winemetal.so..."
+dxmt_setup "$DXMT_BUILD_DIR/arm64x" build-arm64ec.txt -Dwine_build_path="$BUILD_DIR"
+ninja -C "$DXMT_BUILD_DIR/arm64x" "${PE_TARGETS[@]}" src/winemetal/unix/winemetal.so
 
 echo "==> Building DXMT's i386 PE DLLs..."
 dxmt_setup "$DXMT_BUILD_DIR/win32" build-win32.txt -Dwine_install_path="$WINE_SDK_DIR"
 ninja -C "$DXMT_BUILD_DIR/win32" "${PE_TARGETS[@]}"
 
-# The build-arm64ec.txt configure finds the ARM64EC link libraries in the
-# arm64 Wine tree's aarch64-windows directories, and this one target pulls in
-# only native ones (DXBCParserNative and the darwin airconv library).
-echo "==> Building DXMT's arm64 winemetal.so..."
-dxmt_setup "$DXMT_BUILD_DIR/unix" build-arm64ec.txt -Dwine_build_path="$BUILD_DIR"
-ninja -C "$DXMT_BUILD_DIR/unix" src/winemetal/unix/winemetal.so
-
 # ── Stage ───────────────────────────────────────────────────────────────
 echo "==> Staging DXMT into $DXMT_DIST..."
 claim_tree "$DXMT_DIST" dxmt-dist 1
-mkdir -p "$DXMT_DIST/x86_64-windows" "$DXMT_DIST/i386-windows" "$DXMT_DIST/$UNIX_DIR"
+mkdir -p "$DXMT_DIST/$PE64_DIR" "$DXMT_DIST/i386-windows" "$DXMT_DIST/$UNIX_DIR"
 for dll in $PE_DLLS; do
     case $dll in
         d3d10core) dir=d3d10 ;;
         *) dir=$dll ;;
     esac
-    cp "$DXMT_BUILD_DIR/win64/src/$dir/$dll.dll" "$DXMT_DIST/x86_64-windows/"
+    cp "$DXMT_BUILD_DIR/arm64x/src/$dir/$dll.dll" "$DXMT_DIST/$PE64_DIR/"
     cp "$DXMT_BUILD_DIR/win32/src/$dir/$dll.dll" "$DXMT_DIST/i386-windows/"
 done
-cp "$DXMT_BUILD_DIR/unix/src/winemetal/unix/winemetal.so" "$DXMT_DIST/$UNIX_DIR/"
+cp "$DXMT_BUILD_DIR/arm64x/src/winemetal/unix/winemetal.so" "$DXMT_DIST/$UNIX_DIR/"
 
 # A cross file that silently fell back to another compiler would still
-# produce DLLs, only of the wrong machine; an ARM64EC DLL carries the x86_64
-# machine too, which the tool check in the preflight rules out. Each DLL must
-# also carry Wine's builtin marker, which the postproc targets put there.
+# produce DLLs, only of the wrong machine, and an ARM64EC DLL linked without
+# -marm64x would carry the x86_64 machine and no ARM64 half. So each 64-bit
+# DLL must be ARM64X (the ARM64 machine with ARM64EC metadata, pe_is_arm64x)
+# and each i386 one i386. Each DLL must also carry Wine's builtin marker,
+# which the postproc targets put there.
 for dll in $PE_DLLS; do
-    for pe in x86_64-windows:8664 i386-windows:014c; do
-        f="$DXMT_DIST/${pe%%:*}/$dll.dll"
-        [ "$(pe_machine "$f")" = "${pe#*:}" ] \
-            || { echo "Error: ${pe%%:*}/$dll.dll has the PE machine $(pe_machine "$f"), not ${pe#*:}"; exit 1; }
-        head -c 128 "$f" | grep -qa "Wine builtin DLL" \
-            || { echo "Error: ${pe%%:*}/$dll.dll is not marked as a Wine builtin"; exit 1; }
+    f="$DXMT_DIST/$PE64_DIR/$dll.dll"
+    if ! pe_is_arm64x "$f"; then
+        echo "Error: $PE64_DIR/$dll.dll is not ARM64X (PE machine $(pe_machine "$f"))"
+        exit 1
+    fi
+    f="$DXMT_DIST/i386-windows/$dll.dll"
+    [ "$(pe_machine "$f")" = 014c ] \
+        || { echo "Error: i386-windows/$dll.dll has the PE machine $(pe_machine "$f"), not 014c"; exit 1; }
+    for f in "$PE64_DIR/$dll.dll" "i386-windows/$dll.dll"; do
+        head -c 128 "$DXMT_DIST/$f" | grep -qa "Wine builtin DLL" \
+            || { echo "Error: $f is not marked as a Wine builtin"; exit 1; }
     done
 done
 if [ "$(lipo -archs "$DXMT_DIST/$UNIX_DIR/winemetal.so")" != arm64 ]; then
@@ -262,7 +285,7 @@ if [ "$(lipo -archs "$DXMT_DIST/$UNIX_DIR/winemetal.so")" != arm64 ]; then
 fi
 # The DLLs carry the describe output as their version string; checked here so
 # the record and the build cannot disagree.
-if ! strings -a "$DXMT_DIST/x86_64-windows/d3d11.dll" | grep -qxF "$DXMT_DESCRIBE"; then
+if ! strings -a "$DXMT_DIST/$PE64_DIR/d3d11.dll" | grep -qxF "$DXMT_DESCRIBE"; then
     echo "Error: d3d11.dll does not carry the version $DXMT_DESCRIBE"
     exit 1
 fi
