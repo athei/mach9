@@ -110,7 +110,9 @@ export MACOSX_DEPLOYMENT_TARGET="$MACOS_FLOOR"
 UNIX_DIR=aarch64-unix
 # An x64 process runs as ARM64EC, and Wine looks up its builtins in
 # aarch64-windows only, so the 64-bit PE modules of every Direct3D tree go
-# there too, whether they are ARM64X or x86_64.
+# there too. They have to be ARM64X, so that native ARM64 programs can load
+# them as well, and nothing in an aarch64-windows directory may be code an
+# x64 process would not run natively (check_pe64_native).
 PE64_DIR=aarch64-windows
 RUST_TARGET=aarch64-apple-darwin
 # The Direct3D trees, in the order a default-dir marker prefers them. Each
@@ -269,6 +271,121 @@ pe_is_arm64x() {
     fi
     grep -qx "Format: COFF-ARM64X" <<< "$out"
 }
+
+# The plain ARM64 DLLs of PE64_DIR that hold code and still pass
+# check_pe64_native: the host side of WoW64, which only a 32-bit process
+# loads, into its native ARM64 half, and no x64 process ever does. wow64.dll
+# and wow64win.dll are Wine's (built for aarch64 only), libwow64fex.dll is
+# FEX's i386 emulator, and xtajit.dll the copy of it under the name Wine's
+# wow64 loads.
+PE64_WOW64_HOST="wow64.dll wow64win.dll libwow64fex.dll xtajit.dll"
+
+# check_pe64_native <wine-dir>: succeed when an x64 process, which runs as
+# ARM64EC and looks up its 64-bit modules in PE64_DIR, can load nothing from
+# a PE64_DIR directory of the bundle at <wine-dir> (the default one and every
+# Direct3D tree's) that would not run natively. Every real PE file there
+# (placeholders, with "Wine placeholder DLL" at 0x40, are skipped, and so is
+# every file that is not a PE image) must have an ARM64EC view: ARM64X
+# (COFF-ARM64X, as pe_is_arm64x tells) or ARM64EC (COFF-ARM64EC, the AMD64
+# machine with ARM64EC metadata in its load config). llvm-readobj names the
+# format of each from its machine and load config. A plain ARM64 file
+# (COFF-ARM64), which only a native ARM64 process can load, passes only when
+# no x64 process loads it as code:
+#  - a program (.exe, .com), which runs as its own native process;
+#  - a file with no code: no section that holds code or is executable
+#    (IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE) and no entry point. Such a
+#    file is only ever read for its data, as Wine's resource-only DLLs,
+#    type libraries (.tlb) and themes (.msstyles) are;
+#  - one of PE64_WOW64_HOST.
+# Everything else fails, x86_64 code without an ARM64EC view (COFF-x86-64)
+# above all, which an x64 process would run under FEX. Prints one line per
+# file that fails and a summary when none does; needs llvm-readobj from
+# llvm-mingw (MINGW_DIR).
+#
+# It fails as well when it finds no real PE file at all, and when find
+# fails: a scan that read nothing would pass for a clean bundle. It runs in
+# a subshell for the pipefail that tells a failed find.
+check_pe64_native() (
+    set -o pipefail
+    readobj="${MINGW_DIR:-/opt/llvm-mingw}/bin/llvm-readobj"
+    find "$1/lib/wine" -path "*/$PE64_DIR/*" -type f -print0 \
+        | perl -0 -e '
+            use strict;
+            use warnings;
+            my ($root, $pe64, $readobj, @host) = @ARGV;
+            my %host = map { lc($_) => 1 } @host;
+            my (%placeholder, %code, @real);
+            while (my $f = <STDIN>) {
+                chomp $f;
+                open(my $h, "<", $f) or die "Error: cannot open $f: $!\n";
+                binmode $h;
+                my ($mz, $hdr, $opt, $sect);
+                next unless read($h, $mz, 0x60) == 0x60 && substr($mz, 0, 2) eq "MZ";
+                seek($h, unpack("V", substr($mz, 60, 4)), 0) or next;
+                next unless read($h, $hdr, 24) == 24 && substr($hdr, 0, 4) eq "PE\0\0";
+                if (substr($mz, 0x40, 20) eq "Wine placeholder DLL") {
+                    $placeholder{$f} = 1;
+                    next;
+                }
+                my $nsect = unpack("v", substr($hdr, 6, 2));
+                my $optsize = unpack("v", substr($hdr, 20, 2));
+                die "Error: $f has a truncated PE header\n"
+                    unless $optsize >= 20 && read($h, $opt, $optsize) == $optsize;
+                my $code = unpack("V", substr($opt, 16, 4)) != 0;
+                for (1 .. $nsect) {
+                    die "Error: $f has a truncated section table\n" unless read($h, $sect, 40) == 40;
+                    $code = 1 if unpack("V", substr($sect, 36, 4)) & 0x20000020;
+                }
+                $code{$f} = $code;
+                push @real, $f;
+            }
+            # One llvm-readobj per batch; it prints "File:" and the top-level
+            # "Format:" for each file (a hybrid view follows, indented).
+            my (%format, @todo);
+            @todo = @real;
+            while (my @batch = splice(@todo, 0, 64)) {
+                open(my $p, "-|", $readobj, @batch) or die "Error: cannot run $readobj: $!\n";
+                local $/ = "\n";
+                my $cur;
+                while (<$p>) {
+                    if (/^File: (.*)$/) { $cur = $1; }
+                    elsif (/^Format: (\S+)$/ && defined $cur) { $format{$cur} //= $1; }
+                }
+                close($p);
+            }
+            my (@bad, %n);
+            for my $f (sort @real) {
+                (my $rel = $f) =~ s{^\Q$root\E/}{};
+                (my $base = lc $f) =~ s{.*/}{};
+                my $fmt = $format{$f} // "";
+                if ($fmt eq "COFF-ARM64X" || $fmt eq "COFF-ARM64EC") {
+                    $n{$fmt}++;
+                } elsif ($fmt eq "COFF-ARM64") {
+                    if ($base =~ /\.(exe|com)$/) { $n{program}++; }
+                    elsif (!$code{$f}) { $n{nocode}++; }
+                    elsif ($host{$base}) { $n{host}++; }
+                    else { push @bad, "$rel is plain ARM64 code (COFF-ARM64), which an x64 process cannot load"; }
+                } elsif ($fmt eq "") {
+                    push @bad, "$rel cannot be read by llvm-readobj";
+                } else {
+                    push @bad, "$rel is $fmt without an ARM64EC view, which an x64 process would not run natively";
+                }
+            }
+            if (@bad) {
+                print "  ERROR: $_\n" for @bad;
+                exit 1;
+            }
+            if (!@real) {
+                print "  ERROR: no PE file found in the $pe64 dirs under $root/lib/wine\n";
+                exit 1;
+            }
+            printf "  %d PE files in the %s dirs run natively in an x64 process or are never loaded into one:\n"
+                 . "    %d ARM64X, %d ARM64EC, plain ARM64: %d programs, %d without code, %d of the WoW64 host;"
+                 . " %d placeholders skipped.\n",
+                scalar(@real), $pe64, $n{"COFF-ARM64X"} // 0, $n{"COFF-ARM64EC"} // 0,
+                $n{program} // 0, $n{nocode} // 0, $n{host} // 0, scalar(keys %placeholder);
+        ' "$1" "$PE64_DIR" "$readobj" $PE64_WOW64_HOST
+)
 
 # wine_src_commit: print the commit WINE_SRC is at, with "-dirty" appended
 # when tracked files differ from it, so a Wine SDK and what links against it

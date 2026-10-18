@@ -46,8 +46,10 @@ The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](bin/lib/profile.sh).
 
 An x64 process runs as ARM64EC, and Wine looks up its builtins in
 `aarch64-windows`, so the 64-bit modules of every Direct3D tree live under
-`<impl>/aarch64-windows/`, whether they are ARM64X or x86_64 PE. Which
-machine each default-dir marker carries follows from that
+`<impl>/aarch64-windows/`. They are all ARM64X, so the default-dir markers
+of their names are hybrid ones, which x64 and native ARM64 processes both
+accept, and the bundle step fails on any file in an `aarch64-windows`
+directory that an x64 process would load but not run natively
 ([Direct3D trees](docs/maintenance.md#direct3d-trees)).
 
 ## Runtime configuration

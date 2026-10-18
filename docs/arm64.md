@@ -426,11 +426,15 @@ After assembly:
   bundle, the x86_64 link libraries and every graphics test are in place,
   with a tests `VERSION` equal to `bin/wine --version`; the mtld3d tree's
   `d3d9.dll` and `mtld3d.dll` are byte-identical to the release's, and
-  `xtajit.dll` and
-  `xtajit64.dll` are FEX's.
-- Every module of a Direct3D tree has a fake-module marker in the default
-  directory, with the machine the marker rule gives its name: i386, or in
-  `aarch64-windows` hybrid or AMD64
+  `xtajit.dll` and `xtajit64.dll` are FEX's.
+- Every 64-bit DLL of a Direct3D tree is ARM64X (checked in Step 4, before
+  the markers are stamped), and every module of a tree has a fake-module
+  marker in the default directory: i386 in `i386-windows`, hybrid in
+  `aarch64-windows` ([Direct3D trees](maintenance.md#direct3d-trees)).
+- Every real PE file in an `aarch64-windows` directory, the default one or
+  a tree's, runs natively in an x64 process (ARM64X or ARM64EC) or is never
+  loaded into one as code: a program, a file without code, or one of the
+  WoW64 host DLLs. Each file that is neither is named, and the step fails
   ([Direct3D trees](maintenance.md#direct3d-trees)).
 - No PE file has `.debug_*` sections or a COFF symbol table; Step 4e
   stripped them, keeping the unstripped files in `wine-symbols` next to the
@@ -549,15 +553,14 @@ dependency, search a clean build's log for it.
   `aarch64-windows` is AMD64; the loader fails with error 193
   (`ERROR_BAD_EXE_FORMAT`). The prefix's placeholder for each name comes
   from that marker, and the placeholder's machine decides which module Wine
-  looks for. A name would get an AMD64 marker, which x64 games accept and a
-  native ARM64 process rejects, as soon as one tree of its family held a
-  build of it that is not ARM64X. Today every 64-bit module of every tree is
-  ARM64X (DXMT's, mtld3d's and Wine's), so every name has a hybrid marker,
-  which both kinds of process accept. Which marker a name gets is decided
-  at the bundle step from the trees as they are then
-  ([Direct3D trees](maintenance.md#direct3d-trees)); a tree changed after
-  that, such as by a development install of mtld3d, does not move its
-  markers. Which tree a native ARM64 program gets is compatdb's choice
+  looks for. The bundle step therefore gives every 64-bit Direct3D name a
+  hybrid marker, which both kinds of process accept, and requires every
+  64-bit module of every tree to be ARM64X (DXMT's, mtld3d's and Wine's
+  are), so that it serves both
+  ([Direct3D trees](maintenance.md#direct3d-trees)). A tree changed after
+  the bundle step, such as by a development install of mtld3d, has to keep
+  to that, or a native ARM64 program cannot load its module. Which tree a
+  native ARM64 program gets is compatdb's choice
   ([native ARM64 programs](compatdb.md#native-arm64-programs)).
 
 ## Pinned inputs
