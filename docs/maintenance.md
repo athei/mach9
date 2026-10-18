@@ -50,15 +50,27 @@ check when something upstream changes.
   every tree of its family, and its machine decides who can load the name:
   an x64 process, which runs as ARM64EC, accepts an AMD64 placeholder and an
   ARM64 one with ARM64EC (CHPE) metadata in its load config, and a native
-  ARM64 process accepts only the ARM64 one. So a name gets such a hybrid
-  marker (`winebuild --fake-module -b aarch64-windows -marm64x`) when every
-  tree of its family that has it holds an ARM64X build, and an AMD64
-  marker otherwise, as when a tree holds an x86_64 build. The rule is
-  `hybrid_marker` in [`bundle-wine.sh`](../bin/bundle-wine.sh), which reads
-  the trees, so a tree whose DLLs become ARM64X moves its names to hybrid
-  markers on the next bundle step, and Step 5 checks every marker against
-  it. A native ARM64 program cannot load a name with an AMD64 marker
-  ([limitations](arm64.md#limitations)).
+  ARM64 process accepts only the ARM64 one. compatdb.so gives both kinds
+  of process either tree, so every 64-bit name gets such a hybrid marker
+  (`winebuild --fake-module -b aarch64-windows -marm64x`), and every 64-bit
+  DLL of every tree has to be ARM64X, so that one module serves both kinds
+  of process, each from its own half. Step 4 stops on a tree DLL that is not
+  (`check_trees_arm64x` in [`bundle-wine.sh`](../bin/bundle-wine.sh)), such
+  as an x86_64 build, and Step 5 checks every marker's machine. No AMD64
+  marker is stamped any more; a native ARM64 program could not load a name
+  with one ([limitations](arm64.md#limitations)).
+- Beyond the trees, nothing in any `aarch64-windows` directory, the
+  default one included, may be code an x64 process would load but not run
+  natively. Step 5's `check_pe64_native` in
+  [`profile.sh`](../bin/lib/profile.sh) holds every real PE file there to
+  an ARM64EC view (ARM64X, or ARM64EC: the AMD64 machine with ARM64EC
+  metadata, as FEX's `libarm64ecfex.dll` is). Plain ARM64 passes only for
+  programs (`.exe`, `.com`), files without code (no code or executable
+  section and no entry point: Wine's resource-only DLLs, `.tlb`,
+  `.msstyles`), and the WoW64 host DLLs in `PE64_WOW64_HOST`, which only
+  the native half of a 32-bit process loads. A new plain ARM64 DLL with
+  code fails the step; if it really is never loaded by an x64 process, it
+  goes into that list with the reason.
 
 What the bundle step checks is in
 [arm64.md](arm64.md#what-the-bundle-step-checks).
