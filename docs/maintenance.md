@@ -114,8 +114,75 @@ What is pinned, and where, is in [arm64.md](arm64.md#pinned-inputs).
   into `CACHE_DIR` and reuses the cached copy while its checksum matches
   the pin. A fresh download that does not match is an error, never a
   silent retry. To update one, change both its URL and its SHA-256.
+  [`bin/ci/llvm-mingw.sh`](../bin/ci/llvm-mingw.sh) handles the llvm-mingw
+  of a CI build the same way; to update it, change its version and SHA-256.
 - The sources pinned by commit are cloned by the script that builds them,
   which fails when a pinned tag is not at its commit.
+
+## Releases
+
+The workflows in [`.github/workflows/`](../.github/workflows) make the
+releases. Their steps call the build and bundle scripts and the scripts in
+[`bin/ci/`](../bin/ci), each of which says in its header what it does.
+
+| Tag | Workflow | Result |
+|-----|----------|--------|
+| `arm64-<Wine version>-<n>` | [`release.yml`](../.github/workflows/release.yml) | A draft release of the tag with the bundle and its symbols |
+| `ci-*` | [`release.yml`](../.github/workflows/release.yml) | The same build, kept as a workflow artifact for a few days; no release |
+| `compatdb-*` | [`release-compatdb.yml`](../.github/workflows/release-compatdb.yml) | A draft release with the bundle of an `arm64-*` release, `compatdb.so` replaced |
+
+- `release.yml` builds everything from scratch on a hosted runner of the
+  floor's major macOS version, from the branch of athei/wine that
+  [`wine-src.ref`](../pins/wine-src.ref) names and the pins of the tagged
+  commit, and runs the bundle step with `--strict-floor` and `--symbols`. A
+  manual run of it builds the same as a `ci-*` tag.
+- The first lines of a release's notes name what it was built from
+  (`package.sh` in [`bin/ci/`](../bin/ci)). The list of changes is added by
+  hand before the draft is published.
+- `release-compatdb.yml` takes the newest published `arm64-*` release by
+  publication date, or the one a manual run names as `base`, never a draft
+  or a pre-release, and never just the release GitHub marks as the latest,
+  which can be a `compatdb-*` one. It replaces `compatdb.so` with
+  `bundle-wine.sh --compatdb-only`, which runs the smoke test, and attaches
+  the base's symbols again under its own tag. It needs no signing identity:
+  the loader is the base's.
+- The runner caches the Homebrew kegs the build installs, keyed on the
+  runner image version, DXMT's LLVM libraries, the downloads `redist.env`
+  pins and cargo's registry. A run on a tag writes caches that only later
+  runs on the same tag can read, so a failed release that is run again
+  reuses them. A manual run on `main` writes caches every run can read;
+  start one after a pin or the runner image changed to keep the tag builds
+  fast.
+
+### Signing identity
+
+The loader is signed in `release.yml`, by the identity of the
+[provisioning profile](arm64.md#loader-app)'s team, from the secrets of the
+GitHub environment `release`. `bin/ci/keychain.sh` imports it into a
+keychain of its own for the bundle step and deletes that keychain at the end
+of the job.
+
+- Create the environment `release` in the repository settings, and limit its
+  deployments to the tag patterns `arm64-*` and `ci-*` and the branch `main`,
+  from which the manual runs start. A run from any other ref cannot use the
+  secrets.
+- Export the identity: in Keychain Access, under My Certificates, select the
+  "Developer ID Application" certificate of the profile's team with its
+  private key (it must be one of the certificates the profile lists, which
+  the bundle step checks), choose File > Export Items, save it as a `.p12`
+  file and give it a password.
+- Store both as secrets of the environment, and delete the file:
+
+  ```bash
+  base64 -i identity.p12 | gh secret set MACOS_SIGNING_P12 --env release
+  gh secret set MACOS_SIGNING_P12_PASSWORD --env release
+  rm identity.p12
+  ```
+
+  The second command asks for the password.
+- When the certificate is renewed, or the profile replaced with one that
+  lists another certificate, export and store the new identity the same
+  way.
 
 ## Wine-side contract
 

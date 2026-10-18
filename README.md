@@ -17,15 +17,18 @@ built from [`compatdb/`](compatdb).
 
 ## Getting a build
 
-The bundle is built locally with the commands under [Building](#building).
-No workflow publishes it yet. Its loader is signed by a certificate of the
-team that the provisioning profile in [`signing/`](signing) belongs to
-([loader app](docs/arm64.md#loader-app)).
+The `arm64-*` [releases](https://github.com/athei/wine-build/releases)
+carry the bundle and, in a second archive, its PE files before their
+symbols were stripped. The [release workflow](.github/workflows/release.yml)
+builds them, and a `compatdb-*` release is the bundle of an `arm64-*` one
+with only `compatdb.so` replaced ([releases](docs/maintenance.md#releases)).
+The loader is signed by a certificate of the team that the provisioning
+profile in [`signing/`](signing) belongs to
+([loader app](docs/arm64.md#loader-app)). To build the bundle locally, see
+[Building](#building).
 
-The `cx-*` and `compatdb-*`
-[releases](https://github.com/athei/wine-build/releases) are the x86_64
-Wine this repository built before, run under Rosetta. They are frozen and
-kept for comparison.
+The `cx-*` releases are the x86_64 Wine this repository built before, run
+under Rosetta. They are frozen and kept for comparison.
 
 The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](bin/lib/profile.sh).
 
@@ -120,9 +123,10 @@ by the patched Wine.
 ### Requirements
 
 What the build needs is in [docs/arm64.md](docs/arm64.md#requirements): an
-Apple Silicon Mac, the arm64 Homebrew with the formulae `profile.sh` names,
-Xcode's Metal toolchain, llvm-mingw, Rust with the `aarch64-apple-darwin`
-target, for `compatdb.so`, and the signing identity of the loader's
+Apple Silicon Mac, the arm64 Homebrew with the formulae in
+[`pins/brew-formulae`](pins/brew-formulae), Xcode's Metal toolchain,
+llvm-mingw, Rust with the `aarch64-apple-darwin` target, for
+`compatdb.so`, and the signing identity of the loader's
 provisioning profile.
 
 ### Commands
@@ -153,8 +157,9 @@ bin/bundle-wine.sh   # assemble the bundle (see Layout)
 
 | Path | What it holds |
 |------|---------------|
-| [`bin/`](bin) | The build and bundle scripts; [`bin/lib/profile.sh`](bin/lib/profile.sh) holds the settings and helpers they share |
-| [`pins/`](pins) | The pinned inputs: [`redist.env`](pins/redist.env) and the refs of the sources the build checks out |
+| [`bin/`](bin) | The build and bundle scripts; [`bin/lib/profile.sh`](bin/lib/profile.sh) holds the settings and helpers they share, [`bin/ci/`](bin/ci) what the release workflows run besides them |
+| [`pins/`](pins) | The pinned inputs: [`redist.env`](pins/redist.env), the refs of the sources the build checks out, and the Homebrew formulae a CI build installs |
+| [`.github/workflows/`](.github/workflows) | The release workflows ([releases](docs/maintenance.md#releases)) |
 | [`compatdb/`](compatdb) | The Cargo workspace of `compatdb.so` and the `compatdb-table` crate ([docs/compatdb.md](docs/compatdb.md)); run cargo there |
 | [`smoke/`](smoke) | The programs the bundle step's smoke test builds and runs |
 | [`signing/`](signing) | The loader's provisioning profile |

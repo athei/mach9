@@ -42,17 +42,18 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
 
 - An Apple Silicon Mac and a macOS SDK at least as new as `MACOS_FLOOR` in
   [`profile.sh`](../bin/lib/profile.sh).
-- The arm64 Homebrew at `DEPS_PREFIX` with the formulae in `DEPS_FORMULAE`
-  (both in `profile.sh`), plus `cmake`, `ninja` and `meson`, and what the
-  preflight of [`build-mesa.sh`](../bin/build-mesa.sh) checks for,
-  among it the formulae KosmicKrisp's build tools link. Only a host on the
-  floor's major macOS version gets bottles that meet the floor (see
+- The arm64 Homebrew at `DEPS_PREFIX` (in `profile.sh`) with the formulae
+  in [`brew-formulae`](../pins/brew-formulae): those of `DEPS_FORMULAE` and
+  `MESA_FORMULAE` in `profile.sh`, which the scripts check for, and the
+  build tools they run. A CI build installs exactly these. Only a host on
+  the floor's major macOS version gets bottles that meet the floor (see
   [Homebrew libraries and the floor](#homebrew-libraries-and-the-floor)).
 - Xcode's Metal toolchain (`xcrun metal`), for DXMT's shaders.
 - [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) at `MINGW_DIR`,
   including its arm64ec toolchain. The scripts append its `bin/` to `PATH`;
   never prepend it, since its unprefixed `clang` breaks configure's host
-  compiler detection.
+  compiler detection. A CI build uses the release pinned in
+  [`redist.env`](../pins/redist.env).
 - Rust with the `aarch64-apple-darwin` target (`RUST_TARGET` in
   `profile.sh`), for `compatdb.so`.
 - In the keychain, a code signing identity of the team that
@@ -521,7 +522,8 @@ host therefore decides whether those libraries meet the floor:
 - On a host of the floor's major version, every bottle's `minos` is below
   the floor. A CI or release build has to run on such a host, takes the
   libraries from Homebrew and passes `--strict-floor`, so a file above the
-  floor fails the bundle step.
+  floor fails the bundle step. The release workflows run on a runner of that
+  version ([releases](maintenance.md#releases)).
 - On a newer macOS, Homebrew pours that version's bottles, and the bundle
   step warns about each of them. That is expected for a local build, which
   is not distributed.
@@ -574,6 +576,7 @@ dependency, search a clean build's log for it.
 | Mesa (KosmicKrisp) | [`mesa-src.ref`](../pins/mesa-src.ref): a branch, tag or commit of `MESA_REPO` |
 | Vulkan loader and headers | [`redist.env`](../pins/redist.env), tag and commit of each, from one SDK release; `build-mesa.sh` fails when a tag is not at its commit |
 | Python modules of Mesa's build scripts | [`redist.env`](../pins/redist.env), as pip requirements with exact versions |
-| Wine | Whatever `WINE_SRC` has checked out, normally [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched); nothing pins a commit. The SDK and DXMT record the commit they were built against (with `-dirty` when tracked files differ, which counts all uncommitted states as one), and the bundle step refuses either when it is not the current one |
-| Homebrew libraries | Not pinned: whatever the host's Homebrew has ([Homebrew libraries and the floor](#homebrew-libraries-and-the-floor)) |
+| Wine | Whatever `WINE_SRC` has checked out, normally [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched); nothing pins a commit. A CI build checks out the branch [`wine-src.ref`](../pins/wine-src.ref) names. The SDK and DXMT record the commit they were built against (with `-dirty` when tracked files differ, which counts all uncommitted states as one), and the bundle step refuses either when it is not the current one |
+| Homebrew libraries | Not pinned: whatever the host's Homebrew has ([Homebrew libraries and the floor](#homebrew-libraries-and-the-floor)). A CI build installs the formulae in [`brew-formulae`](../pins/brew-formulae) at the versions the runner image's Homebrew offers |
+| llvm-mingw | Of a CI build: [`redist.env`](../pins/redist.env), version and SHA-256 of the release archive. A local build uses `MINGW_DIR` |
 | Provisioning profile | [`signing/loader.provisionprofile`](../signing/loader.provisionprofile); replace the file when it expires or the App ID changes |
