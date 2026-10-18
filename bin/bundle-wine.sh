@@ -373,6 +373,105 @@ check_no_leaks() {
     done
 }
 
+# rpath_entries <dylib>: print the LC_RPATH entries of <dylib>, one per line.
+rpath_entries() {
+    otool -l "$1" | awk '$1 == "cmd" { r = ($2 == "LC_RPATH") } r && $1 == "path" { print $2 }'
+}
+
+# dir_in_bundle <dir>: succeed when <dir> exists and lies inside WINE_DIR,
+# with symlinks resolved on both sides.
+dir_in_bundle() {
+    local dir top
+    dir=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    top=$(cd "$WINE_DIR" && pwd -P)
+    case "$dir/" in
+        "$top"/*) return 0 ;;
+    esac
+    return 1
+}
+
+# rpath_dep_source <dep> <src>: print the file that the @rpath dependency
+# <dep> of the library <src> names where <src> is installed, outside the
+# bundle: the first <rpath>/<name> that exists for an LC_RPATH entry of
+# <src>, with @loader_path read as the directory of <src>, first as it is
+# named and then with its symlinks resolved, and otherwise
+# DEPS_PREFIX/lib/<name>. An entry dyld cannot read here (@executable_path)
+# is skipped. What it prints may not exist; the caller checks.
+rpath_dep_source() {
+    local name="${1#@rpath/}" src="$2" rp dir cand
+    while IFS= read -r rp; do
+        case "$rp" in
+            @loader_path|@loader_path/*)
+                for dir in "$(dirname "$src")" "$(dirname "$(realpath "$src")")"; do
+                    cand="$dir${rp#@loader_path}/$name"
+                    if [ -f "$cand" ]; then echo "$cand"; return; fi
+                done
+                ;;
+            /*)
+                if [ -f "$rp/$name" ]; then echo "$rp/$name"; return; fi
+                ;;
+        esac
+    done < <(rpath_entries "$src")
+    echo "$DEPS_PREFIX/lib/$name"
+}
+
+# check_rpath_deps <dylib>...: report every @rpath dependency of the dylibs
+# in lib/external that does not resolve inside the bundle through one of the
+# dylib's own LC_RPATH entries, and set LEAKED=1. Step 3 rewrites each one
+# it copies to @loader_path, so any left over would be resolved by dyld
+# against whatever the host has, or not at all.
+check_rpath_deps() {
+    local f dep name rp dir found
+    for f in "$@"; do
+        [ -e "$f" ] || continue
+        for dep in $(otool -L "$f" | tail -n +3 | awk '{print $1}'); do
+            case "$dep" in
+                @rpath/*) ;;
+                *) continue ;;
+            esac
+            name="${dep#@rpath/}"
+            found=0
+            while IFS= read -r rp; do
+                case "$rp" in
+                    @loader_path|@loader_path/*)
+                        dir="$(dirname "$f")${rp#@loader_path}"
+                        if dir_in_bundle "$dir" && [ -f "$dir/$name" ]; then
+                            found=1
+                            break
+                        fi
+                        ;;
+                esac
+            done < <(rpath_entries "$f")
+            if [ "$found" -eq 0 ]; then
+                echo "  ERROR: $(basename "$f") loads $dep, which no LC_RPATH entry of it resolves inside the bundle"
+                LEAKED=1
+            fi
+        done
+    done
+}
+
+# check_dylibs_load <dylib>...: dlopen each dylib, in a process of its own
+# with no DYLD_* variable set, so that dyld resolves its dependencies from
+# the bundle as Wine's modules do, and exit naming every one that does not
+# load. A missing dependency otherwise only shows when Wine tries the
+# library at run time, and Wine falls back without it (no FreeType, for
+# one). The program comes from smoke/dlopen.c.
+check_dylibs_load() {
+    local f bad=0
+    xcrun clang -O2 -o "$TMP_DIR/dlopen" "$REPO_DIR/smoke/dlopen.c"
+    for f in "$@"; do
+        if ! env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH \
+                -u DYLD_FRAMEWORK_PATH -u DYLD_FALLBACK_FRAMEWORK_PATH \
+                -u DYLD_INSERT_LIBRARIES "$TMP_DIR/dlopen" "$f"; then
+            bad=1
+        fi
+    done
+    if [ "$bad" -ne 0 ]; then
+        echo "Error: bundled libraries do not load; the bundle is not self-contained"
+        exit 1
+    fi
+}
+
 # check_minos <path>...: report every Mach-O under the paths whose minos is
 # newer than MACOS_FLOOR, then exit with --strict-floor or warn without it.
 # This looks at executables, .dylib and .so files, and skips files with no
@@ -815,16 +914,32 @@ check_vulkan_runs() {
 }
 
 # smoke_check <what> <seconds> <log>: after run_limited, exit with the log
-# unless the run ended cleanly.
+# unless the run ended cleanly and Wine had FreeType (check_freetype).
 smoke_check() {
     if [ "$RUN_STATUS" -eq 142 ]; then
         echo "Error: $1 did not exit within $2 seconds"
     elif [ "$RUN_STATUS" -ne 0 ]; then
         echo "Error: $1 failed under the bundled wine (status $RUN_STATUS)"
     else
+        check_freetype "$1" "$3"
         return 0
     fi
     cat "$3"
+    smoke_stop
+    exit 1
+}
+
+# check_freetype <what> <log>: exit with the log if Wine said in it that it
+# cannot load FreeType. win32u then runs without it, with no TrueType fonts,
+# and the program itself still succeeds, so its status shows nothing. Wine
+# prints the message whatever WINEDEBUG says.
+check_freetype() {
+    if grep -F "Wine cannot find the FreeType font library" "$2" >/dev/null; then
+        echo "Error: $1 ran without FreeType: Wine could not load the bundled libfreetype"
+    else
+        return 0
+    fi
+    cat "$2"
     smoke_stop
     exit 1
 }
@@ -1581,32 +1696,41 @@ for lib in "${LIBS[@]}"; do
     fi
 done
 
-# Transitive deps: walk the otool -L closure, copying every $DEPS_PREFIX
-# dependency until no new ones appear. Line 2 of otool -L is the dylib's
-# own install name, not a dependency, so skip it.
+# Transitive deps: walk the otool -L closure of the libraries where they are
+# installed, copying every $DEPS_PREFIX dependency and every @rpath one, until
+# no new ones appear. An @rpath dependency is found the way dyld finds it
+# for the installed library, through that library's LC_RPATH entries
+# (rpath_dep_source); Homebrew links some libraries that way, such as
+# brotli's, whose libbrotlidec loads @rpath/libbrotlicommon.1.dylib with the
+# entry @loader_path/../lib. The walk reads the originals because those
+# entries only resolve from there. Line 2 of otool -L is the dylib's own
+# install name, not a dependency, so skip it.
 echo "  Copying transitive deps..."
-while :; do
-    added=0
-    for dylib in "$EXT_DIR"/*.dylib; do
-        for dep in $(otool -L "$dylib" | tail -n +3 | awk '{print $1}'); do
-            case "$dep" in
-                "$DEPS_PREFIX"/*)
-                    depname=$(basename "$dep")
-                    if [ -f "$EXT_DIR/$depname" ]; then
-                        :
-                    elif [ -f "$dep" ]; then
-                        echo "    $depname (needed by $(basename "$dylib"))"
-                        cp -L "$dep" "$EXT_DIR/$depname"
-                        added=1
-                    else
-                        echo "    MISSING: $depname (needed by $(basename "$dylib")) from $dep"
-                        MISSED=1
-                    fi
-                    ;;
-            esac
-        done
+WALK=("${LIBS[@]}")
+i=0
+while [ $i -lt ${#WALK[@]} ]; do
+    src="${WALK[$i]}"
+    i=$((i + 1))
+    # A direct dep that is missing was reported above.
+    [ -f "$src" ] || continue
+    for dep in $(otool -L "$src" | tail -n +3 | awk '{print $1}'); do
+        case "$dep" in
+            "$DEPS_PREFIX"/*) depsrc="$dep" ;;
+            @rpath/*) depsrc=$(rpath_dep_source "$dep" "$src") ;;
+            *) continue ;;
+        esac
+        depname=$(basename "$dep")
+        if [ -f "$EXT_DIR/$depname" ]; then
+            :
+        elif [ -f "$depsrc" ]; then
+            echo "    $depname (needed by $(basename "$src"))"
+            cp -L "$depsrc" "$EXT_DIR/$depname"
+            WALK+=("$depsrc")
+        else
+            echo "    MISSING: $depname (needed by $(basename "$src")) from $depsrc"
+            MISSED=1
+        fi
     done
-    [ $added -eq 0 ] && break
 done
 if [ $MISSED -ne 0 ]; then
     echo "Error: required libraries are missing, bundle would not be self-contained"
@@ -1614,20 +1738,33 @@ if [ $MISSED -ne 0 ]; then
 fi
 chmod +w "$EXT_DIR"/*.dylib
 
-# Fix install names so bundled dylibs reference each other via @loader_path
+# Fix install names so bundled dylibs reference each other via @loader_path,
+# the @rpath ones included. Then drop every LC_RPATH entry that does not
+# name a directory inside the bundle, such as Homebrew's @loader_path/../lib,
+# which from lib/external would point at the bundle's parent or at nothing,
+# so that nothing is looked up outside the bundle through them.
 echo "  Fixing install names..."
 for dylib in "$EXT_DIR"/*.dylib; do
     name=$(basename "$dylib")
     install_name_tool -id "@loader_path/$name" "$dylib"
     for dep in $(otool -L "$dylib" | tail -n +2 | awk '{print $1}'); do
         case "$dep" in
-            "$DEPS_PREFIX"/*)
+            "$DEPS_PREFIX"/*|@rpath/*)
                 depname=$(basename "$dep")
                 if [ -f "$EXT_DIR/$depname" ]; then
                     install_name_tool -change "$dep" "@loader_path/$depname" "$dylib"
                 fi
                 ;;
         esac
+    done
+    for rp in $(rpath_entries "$dylib"); do
+        case "$rp" in
+            @loader_path|@loader_path/*)
+                if dir_in_bundle "$EXT_DIR${rp#@loader_path}"; then continue; fi
+                ;;
+        esac
+        echo "    $name: dropping the LC_RPATH entry $rp"
+        install_name_tool -delete_rpath "$rp" "$dylib"
     done
 done
 
@@ -1998,11 +2135,16 @@ check_no_leaks "$unixdir"/*.so \
                "$WINE_DIR"/lib/wine/dxgi/*/"$UNIX_DIR"/*.so \
                "$WINE_DIR"/lib/wine/d3d9/*/"$UNIX_DIR"/*.so \
                "$unixdir/wine.app/Contents/MacOS/wine"
+check_rpath_deps "$EXT_DIR"/*.dylib
 if [ $LEAKED -ne 0 ]; then
     echo "Error: bundle is not self-contained"
     exit 1
 fi
-echo "  All binaries clean, no ${LEAK_PREFIXES// / or } references."
+echo "  All binaries clean, no ${LEAK_PREFIXES// / or } references, no @rpath dependency outside the bundle."
+# With nothing left that points outside the bundle, a library that loads
+# has found every dependency inside it.
+check_dylibs_load "$EXT_DIR"/*.dylib
+echo "  Every dylib in lib/external loads."
 
 # The Direct3D backends and everything else copied in rather than built,
 # which nothing the build does would have caught.

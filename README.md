@@ -161,7 +161,7 @@ bin/bundle-wine.sh   # assemble the bundle (see Layout)
 | [`pins/`](pins) | The pinned inputs: [`redist.env`](pins/redist.env), the refs of the sources the build checks out, and the Homebrew formulae a CI build installs |
 | [`.github/workflows/`](.github/workflows) | The release workflows ([releases](docs/maintenance.md#releases)) |
 | [`compatdb/`](compatdb) | The Cargo workspace of `compatdb.so` and the `compatdb-table` crate ([docs/compatdb.md](docs/compatdb.md)); run cargo there |
-| [`smoke/`](smoke) | The programs the bundle step's smoke test builds and runs |
+| [`smoke/`](smoke) | The programs the bundle step builds and runs to check the bundle |
 | [`signing/`](signing) | The loader's provisioning profile |
 | [`docs/`](docs) | The documentation this README links to |
 

@@ -423,6 +423,10 @@ After assembly:
 - No dylib in `lib/external/`, no `.so` module, the tree unix modules
   included, and not the loader references any of the `LEAK_PREFIXES` in
   `profile.sh`.
+- No dylib in `lib/external/` has an `@rpath/` dependency that does not
+  resolve inside the bundle, and each of them loads with `dlopen` in a
+  process of its own, built from [`smoke/dlopen.c`](../smoke/dlopen.c)
+  ([relocation](maintenance.md#relocation)).
 - The Direct3D trees, FEX, the Vulkan files, the loader app and, in a full
   bundle, the x86_64 link libraries and every graphics test are in place,
   with a tests `VERSION` equal to `bin/wine --version`; the mtld3d tree's
@@ -488,7 +492,9 @@ After assembly:
   report the Vulkan renderer, and with a `wined3d=vulkan` rule for the
   program, where it must. The i686 program uses Direct3D 8. Wine builds no
   64-bit `d3d8.dll`, so the x86_64 one uses Direct3D 9, with a rule giving
-  it the `wined3d` d3d9 tree in both runs. Every run has a time limit.
+  it the `wined3d` d3d9 tree in both runs. Every run has a time limit, and
+  none may print Wine's message that it cannot find FreeType: Wine then
+  runs without TrueType fonts, and the program still succeeds.
 
 With `--compatdb-only`, the bundle step:
 
