@@ -73,21 +73,23 @@ machine each default-dir marker carries follows from that
 |--------|------|------------|------|-------------|
 | `dxgi` | D3D10, D3D11 | `dxmt` ([DXMT](https://github.com/3Shain/dxmt)) | `lib/wine/dxgi/dxmt/` | i386, x86_64, native ARM64 |
 | `dxgi` | D3D10, D3D10.1, D3D11 | `wined3d` | `lib/wine/dxgi/wined3d/` | none |
-| `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | i386, x86_64 |
-| `d3d9` | D3D9 | `wined3d` | `lib/wine/d3d9/wined3d/` | native ARM64 |
+| `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | i386, x86_64, native ARM64 |
+| `d3d9` | D3D9 | `wined3d` | `lib/wine/d3d9/wined3d/` | none |
 
 - compatdb.so prepends one tree per family to every process's builtin search
   path, so a process sees one coherent set of modules. To pick a tree per
   game, see [recipes](docs/compatdb.md#recipes).
 - D3D10 and D3D11 form one family because they create their device through
   one `dxgi.dll` and only work with their own implementation's copy.
-- DXMT's 64-bit modules are ARM64X: an x64 game loads their ARM64EC half
-  and a native ARM64 program their ARM64 half, so DXMT runs natively in
-  both, and only its i386 modules run under FEX with the game
-  ([DXMT](docs/arm64.md#dxmt)).
-- A native ARM64 program gets DXMT for `dxgi` and wined3d for `d3d9`
-  ([native ARM64 programs](docs/compatdb.md#native-arm64-programs)), and
-  can load a Direct3D name only where its marker is a hybrid one
+- DXMT's and mtld3d's 64-bit modules are ARM64X: an x64 game loads their
+  ARM64EC half and a native ARM64 program their ARM64 half, so both run
+  natively in either, and only their i386 modules run under FEX with the
+  game ([DXMT](docs/arm64.md#dxmt), [mtld3d](docs/arm64.md#mtld3d)).
+- A native ARM64 program gets the same defaults, DXMT for `dxgi` and
+  mtld3d for `d3d9`, and a rule can give it either tree of each family
+  ([native ARM64 programs](docs/compatdb.md#native-arm64-programs)). It
+  can load a Direct3D name only where its marker is a hybrid one, which
+  every name has while every tree is ARM64X
   ([limitations](docs/arm64.md#limitations)).
 - D3D12 is not available: the bundle leaves out Wine's own D3D12. D3D8 and
   DirectDraw stay on wined3d. Which modules each tree holds is in Step 4 of

@@ -30,8 +30,8 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
   ([defaults](../README.md#defaults-that-differ-from-wine),
   [FEX and KosmicKrisp](compatdb.md#fex-and-kosmickrisp)).
 - DXMT is built from source against this Wine (see [DXMT](#dxmt)); mtld3d
-  comes from its release. The trees the bundle carries are `DXGI_IMPLS` and
-  `D3D9_IMPLS` in `profile.sh`.
+  comes from its release (see [mtld3d](#mtld3d)). The trees the bundle
+  carries are `DXGI_IMPLS` and `D3D9_IMPLS` in `profile.sh`.
 - Wine's Vulkan is on, on KosmicKrisp, Mesa's Vulkan driver on Metal, and
   a Vulkan loader built for the floor (see [Vulkan](#vulkan)).
 - A [Wine SDK](#wine-sdk) is staged for the PE code built outside Wine.
@@ -241,6 +241,26 @@ exits with the number of failed checks, at most 255.
   [`redist.env`](../pins/redist.env) into `DXMT_LLVM`, records the commit
   there, and rebuilds them only when the pin changes; `--clean` keeps them.
 
+## mtld3d
+
+- mtld3d comes from the release tarball pinned in
+  [`redist.env`](../pins/redist.env), not built here. Its `wine/` directory
+  mirrors `lib/wine`, and Step 4 of
+  [`bundle-wine.sh`](../bin/bundle-wine.sh) takes `d3d9.dll` and
+  `mtld3d.dll` from its `i386-windows` and `aarch64-windows` and
+  `mtld3d.so` from its `aarch64-unix`. Its `x86_64-windows` and
+  `x86_64-unix` builds are for an x86_64 Wine and are not used.
+- The `aarch64-windows` DLLs are ARM64X builtins. An x64 game runs as
+  ARM64EC and loads their ARM64EC half, so mtld3d's PE code runs natively
+  and only the game's x86 code goes through FEX; a native ARM64 program
+  loads their ARM64 half. The bundle step refuses a tarball whose
+  `aarch64-windows` DLLs are not ARM64X, since compatdb.so gives native
+  ARM64 programs the mtld3d tree
+  ([native ARM64 programs](compatdb.md#native-arm64-programs)).
+- The i386 DLLs are x86 code; a 32-bit game runs under WoW64 and FEX, and
+  they run there with it. The one `mtld3d.so` serves them too, through its
+  wow64 entry points.
+
 ## Vulkan
 
 Wine's Vulkan (`vulkan-1.dll`, `winevulkan`) runs on KosmicKrisp, Mesa's
@@ -405,7 +425,8 @@ After assembly:
 - The Direct3D trees, FEX, the Vulkan files, the loader app and, in a full
   bundle, the x86_64 link libraries and every graphics test are in place,
   with a tests `VERSION` equal to `bin/wine --version`; the mtld3d tree's
-  `d3d9.dll` is byte-identical to mtld3d's, and `xtajit.dll` and
+  `d3d9.dll` and `mtld3d.dll` are byte-identical to the release's, and
+  `xtajit.dll` and
   `xtajit64.dll` are FEX's.
 - Every module of a Direct3D tree has a fake-module marker in the default
   directory, with the machine the marker rule gives its name: i386, or in
@@ -443,15 +464,16 @@ After assembly:
   waiting for the time limit; the i386 `cmd.exe` runs; and
   [`smoke/hello.c`](../smoke/hello.c), compiled for each architecture in
   `SMOKE_PE_ARCHS`, prints its marker and must load its DLLs. Each one's
-  compatdb lines must name the trees for its arch (the x86 defaults, or
-  `dxmt` and the `wined3d` d3d9 tree for the native one). The x86 programs
-  load `dxgi.dll` and `d3d9.dll`; the native one loads `dxgi.dll` and
-  `winemetal.dll`, which only the `dxmt` tree has, and `d3d9.dll` only
-  once its marker is a hybrid one (see [Limitations](#limitations)). Then
-  the x86_64 and i686 programs load every module of each Direct3D tree in
-  turn, and the native one every module of each dxgi tree, the tree picked
-  with a `WINE_COMPATDB` rule, which shows that the prefix placeholders made
-  from the default-dir markers let each tree in. Last,
+  compatdb lines must name the default trees, `dxmt` and `mtld3d`, which
+  are the same for every arch. The x86 programs load `dxgi.dll` and
+  `d3d9.dll`; the native one also loads `winemetal.dll` and `mtld3d.dll`,
+  which only the `dxmt` and `mtld3d` trees have. Before any of this runs,
+  every 64-bit marker of a Direct3D name must be a hybrid one, which a
+  native ARM64 process needs (see [Limitations](#limitations)). Then the
+  x86_64, i686 and native programs load every module of each Direct3D tree
+  in turn, the tree picked with a `WINE_COMPATDB` rule, which shows that
+  the prefix placeholders made from the default-dir markers let each tree
+  in. Last,
   [`smoke/vulkan.c`](../smoke/vulkan.c), compiled for x86_64 and i686,
   creates a Vulkan instance without a window and must find a device; its
   compatdb lines must carry `MESA_KK_EXPERIMENTAL`. Then
@@ -471,6 +493,11 @@ With `--compatdb-only`, the bundle step:
   a game's own `vulkan-1.dll` would load and find no driver, and the smoke
   test's Vulkan checks need Vulkan anyway. Such a bundle needs a full
   bundle step;
+- refuses, before it replaces anything, a bundle whose 64-bit marker of a
+  Direct3D name is not a hybrid one, such as one from before the `dxmt` and
+  `mtld3d` trees were ARM64X: this compatdb.so gives native ARM64 programs
+  those trees, which they could not load there. Such a bundle needs a full
+  bundle step too;
 - builds `compatdb.so` and replaces the installed copy by copy and rename,
   so a running process keeps a valid mapping;
 - removes quarantine from `compatdb.so` only, and only when it is there;
@@ -522,16 +549,15 @@ dependency, search a clean build's log for it.
   `aarch64-windows` is AMD64; the loader fails with error 193
   (`ERROR_BAD_EXE_FORMAT`). The prefix's placeholder for each name comes
   from that marker, and the placeholder's machine decides which module Wine
-  looks for. A name keeps an AMD64 marker, which x64 games need and a native
-  ARM64 process rejects, as long as one tree of its family holds a build of
-  it that is not ARM64X, even when another tree's build is, such as Wine's
-  own `d3d9.dll` in the `wined3d` tree. The dxgi names have hybrid markers,
-  which both kinds of process accept, since DXMT's and Wine's 64-bit modules
-  there are ARM64X. Which marker a name gets is decided at the bundle step
-  from the trees as they are then
-  ([Direct3D trees](maintenance.md#direct3d-trees)), so a d3d9 tree that
-  turns ARM64X moves its names to hybrid markers with no change to the
-  scripts. Which d3d9 tree a native ARM64 program gets is compatdb's choice
+  looks for. A name would get an AMD64 marker, which x64 games accept and a
+  native ARM64 process rejects, as soon as one tree of its family held a
+  build of it that is not ARM64X. Today every 64-bit module of every tree is
+  ARM64X (DXMT's, mtld3d's and Wine's), so every name has a hybrid marker,
+  which both kinds of process accept. Which marker a name gets is decided
+  at the bundle step from the trees as they are then
+  ([Direct3D trees](maintenance.md#direct3d-trees)); a tree changed after
+  that, such as by a development install of mtld3d, does not move its
+  markers. Which tree a native ARM64 program gets is compatdb's choice
   ([native ARM64 programs](compatdb.md#native-arm64-programs)).
 
 ## Pinned inputs
