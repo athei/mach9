@@ -92,30 +92,13 @@ extern "C" fn run() {
     }
 
     // Every process gets one tree of each family prepended: a rule's choice,
-    // or the arch default, and wined3d where the one asked for cannot load
-    // (mtld3d for a native ARM64 program). Purely additive: the
+    // or the arch default. Every tree serves every arch. Purely additive: the
     // default dirs hold nothing that could conflict, so nothing is ever
     // disabled.
     let pe_dir = process.arch.pe_dir();
     let dxgi = Dxgi::effective(resolution.dxgi, process.arch);
-    if let Some(note) = fallback(
-        "dxgi",
-        resolution.dxgi.map(Dxgi::as_str),
-        dxgi.as_str(),
-        process.arch,
-    ) {
-        log::line(&note);
-    }
     apply::tree(&nt, pe_dir, "dxgi", dxgi.as_str());
     let d3d9 = D3d9::effective(resolution.d3d9, process.arch);
-    if let Some(note) = fallback(
-        "d3d9",
-        resolution.d3d9.map(D3d9::as_str),
-        d3d9.as_str(),
-        process.arch,
-    ) {
-        log::line(&note);
-    }
     apply::tree(&nt, pe_dir, "d3d9", d3d9.as_str());
     // One renderer for every wined3d user in the process, whichever tree or
     // API brought wined3d in. A renderer a rule sets travels as an env
@@ -170,21 +153,6 @@ const fn arch_name(arch: Arch) -> &'static str {
         Arch::I386 => "i386",
         Arch::Aarch64 => "aarch64",
     }
-}
-
-/// The log line for a process whose rule asks `family` (`dxgi` or `d3d9`) for
-/// an implementation that cannot load for its arch (mtld3d for a native
-/// ARM64 program). `got` is what the family's `effective` chose.
-/// `None` when the process gets what it asked for, or asked for nothing: the
-/// default always loads.
-fn fallback(family: &str, requested: Option<&str>, got: &str, arch: Arch) -> Option<String> {
-    let want = requested?;
-    (want != got).then(|| {
-        format!(
-            "  {family} = {want} not available on {}, using {got}",
-            arch_name(arch)
-        )
-    })
 }
 
 /// The log line naming the wined3d renderer of a process and where it comes
@@ -363,48 +331,19 @@ unsafe fn read_environment(env: *mut u16, size_bytes: usize) -> Vec<u16> {
 mod tests {
     use super::*;
 
-    /// The fallback line for each family, as `run` asks for it.
-    fn dxgi_line(requested: Option<Dxgi>, arch: Arch) -> Option<String> {
-        let dxgi = Dxgi::effective(requested, arch);
-        fallback("dxgi", requested.map(Dxgi::as_str), dxgi.as_str(), arch)
-    }
-
-    fn d3d9_line(requested: Option<D3d9>, arch: Arch) -> Option<String> {
-        let d3d9 = D3d9::effective(requested, arch);
-        fallback("d3d9", requested.map(D3d9::as_str), d3d9.as_str(), arch)
-    }
-
     #[test]
-    fn an_x86_program_gets_what_it_asks_for_without_a_word() {
-        for arch in [Arch::X86_64, Arch::I386] {
-            for requested in [None, Some(Dxgi::Dxmt), Some(Dxgi::Wined3d)] {
-                assert_eq!(dxgi_line(requested, arch), None, "{arch:?} {requested:?}");
-            }
-            for requested in [None, Some(D3d9::Mtld3d), Some(D3d9::Wined3d)] {
-                assert_eq!(d3d9_line(requested, arch), None, "{arch:?} {requested:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_native_arm64_program_gets_dxmt_and_wined3d_for_d3d9_and_rules_say_why() {
+    fn a_native_arm64_program_gets_dxmt_and_mtld3d_and_either_tree_a_rule_asks_for() {
         let native = Arch::Aarch64;
-        // The defaults are dxmt and wined3d, with nothing to log.
+        // The defaults are dxmt and mtld3d, as for an x86 program.
         assert_eq!(Dxgi::effective(None, native), Dxgi::Dxmt);
-        assert_eq!(dxgi_line(None, native), None);
-        assert_eq!(D3d9::effective(None, native), D3d9::Wined3d);
-        assert_eq!(d3d9_line(None, native), None);
-        // Either dxgi tree is what it gets when a rule asks for it.
+        assert_eq!(D3d9::effective(None, native), D3d9::Mtld3d);
+        // Either tree of each family is what it gets when a rule asks for it.
         for requested in [Dxgi::Dxmt, Dxgi::Wined3d] {
             assert_eq!(Dxgi::effective(Some(requested), native), requested);
-            assert_eq!(dxgi_line(Some(requested), native), None, "{requested:?}");
         }
-        assert_eq!(d3d9_line(Some(D3d9::Wined3d), native), None);
-        // A rule for mtld3d falls back, and the line names the arch.
-        assert_eq!(
-            d3d9_line(Some(D3d9::Mtld3d), native).as_deref(),
-            Some("  d3d9 = mtld3d not available on aarch64, using wined3d")
-        );
+        for requested in [D3d9::Mtld3d, D3d9::Wined3d] {
+            assert_eq!(D3d9::effective(Some(requested), native), requested);
+        }
     }
 
     #[test]

@@ -211,53 +211,32 @@ impl Dxgi {
     }
 
     /// What a process gets when no rule names an implementation: DXMT, for
-    /// every arch, a native ARM64 program included (see
-    /// [`Dxgi::available_for`]).
+    /// every arch, a native ARM64 program included. Either tree serves every
+    /// arch: the 64-bit modules of both are ARM64X, so a native ARM64 program
+    /// loads their ARM64 half and an x64 program, which runs as ARM64EC,
+    /// their ARM64EC half; an i386 program gets their i386 builds under
+    /// emulation.
     #[must_use]
     pub const fn default_for(_arch: Arch) -> Self {
         Self::Dxmt
     }
 
-    /// Whether the implementation can load for `arch`: each one can, for
-    /// every arch. The 64-bit modules of both trees are ARM64X, so a native
-    /// ARM64 program loads their ARM64 half and an x64 program, which runs as
-    /// ARM64EC, their ARM64EC half; an i386 program gets their i386 builds
-    /// under emulation.
-    #[must_use]
-    pub const fn available_for(self, _arch: Arch) -> bool {
-        match self {
-            Self::Dxmt | Self::Wined3d => true,
-        }
-    }
-
-    /// The implementation a process actually loads: the requested one, or the
-    /// default for the arch when nothing was requested, and wined3d when that
-    /// one cannot load (see [`Dxgi::available_for`]).
+    /// The implementation a process loads: the requested one, or the default
+    /// for the arch when nothing was requested.
     #[must_use]
     pub const fn effective(requested: Option<Self>, arch: Arch) -> Self {
-        let want = match requested {
+        match requested {
             Some(want) => want,
             None => Self::default_for(arch),
-        };
-        if want.available_for(arch) {
-            want
-        } else {
-            Self::Wined3d
         }
     }
-}
-
-/// Whether `arch` is a native ARM64 program, for which the mtld3d tree, which
-/// holds x86 code only, cannot load.
-const fn native_arm64(arch: Arch) -> bool {
-    matches!(arch, Arch::Aarch64)
 }
 
 /// Which D3D9 implementation a process loads. Independent of [`Dxgi`]: neither
 /// implementation's `d3d9.dll` touches `dxgi.dll`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum D3d9 {
-    /// mtld3d, the default everywhere but for a native ARM64 program.
+    /// mtld3d, the default for every program.
     Mtld3d,
     /// Wine's own wined3d.
     Wined3d,
@@ -283,43 +262,24 @@ impl D3d9 {
         }
     }
 
-    /// What a process gets when no rule names an implementation: mtld3d,
-    /// except for a native ARM64 program, which gets wined3d (see
-    /// [`D3d9::available_for`]).
+    /// What a process gets when no rule names an implementation: mtld3d, for
+    /// every arch, a native ARM64 program included. Either tree serves every
+    /// arch: the 64-bit modules of both, mtld3d's release build and Wine's
+    /// own `d3d9.dll`, are ARM64X, so a native ARM64 program loads their
+    /// ARM64 half and an x64 program, which runs as ARM64EC, their ARM64EC
+    /// half; an i386 program gets their i386 builds under emulation.
     #[must_use]
-    pub const fn default_for(arch: Arch) -> Self {
-        if native_arm64(arch) {
-            Self::Wined3d
-        } else {
-            Self::Mtld3d
-        }
+    pub const fn default_for(_arch: Arch) -> Self {
+        Self::Mtld3d
     }
 
-    /// Whether the implementation can load for `arch`. The mtld3d tree holds
-    /// mtld3d's x86 builds, which serve x86 programs but not a native ARM64
-    /// one; the wined3d tree holds Wine's own ARM64X module, which serves
-    /// both.
-    #[must_use]
-    pub const fn available_for(self, arch: Arch) -> bool {
-        match self {
-            Self::Mtld3d => !native_arm64(arch),
-            Self::Wined3d => true,
-        }
-    }
-
-    /// The implementation a process actually loads: the requested one, or the
-    /// default for the arch when nothing was requested, and wined3d when that
-    /// one cannot load.
+    /// The implementation a process loads: the requested one, or the default
+    /// for the arch when nothing was requested.
     #[must_use]
     pub const fn effective(requested: Option<Self>, arch: Arch) -> Self {
-        let want = match requested {
+        match requested {
             Some(want) => want,
             None => Self::default_for(arch),
-        };
-        if want.available_for(arch) {
-            want
-        } else {
-            Self::Wined3d
         }
     }
 }
@@ -2526,7 +2486,6 @@ mod tests {
         for arch in X86_ARCHES {
             assert_eq!(Dxgi::default_for(arch), Dxgi::Dxmt, "{arch:?}");
             for dxgi in [Dxgi::Dxmt, Dxgi::Wined3d] {
-                assert!(dxgi.available_for(arch), "{arch:?} {dxgi:?}");
                 assert_eq!(Dxgi::effective(Some(dxgi), arch), dxgi);
             }
             assert_eq!(Dxgi::effective(None, arch), Dxgi::Dxmt);
@@ -2568,19 +2527,17 @@ mod tests {
         assert_eq!(Dxgi::default_for(native), Dxgi::Dxmt);
         assert_eq!(Dxgi::effective(None, native), Dxgi::Dxmt);
         for dxgi in [Dxgi::Dxmt, Dxgi::Wined3d] {
-            assert!(dxgi.available_for(native), "{dxgi:?}");
             assert_eq!(Dxgi::effective(Some(dxgi), native), dxgi);
         }
     }
 
     #[test]
-    fn a_native_arm64_program_gets_wined3d_for_d3d9_whatever_it_asks_for() {
+    fn a_native_arm64_program_defaults_to_mtld3d_and_gets_what_it_asks_for() {
         let native = Arch::Aarch64;
-        assert_eq!(D3d9::default_for(native), D3d9::Wined3d);
-        assert!(!D3d9::Mtld3d.available_for(native));
-        assert!(D3d9::Wined3d.available_for(native));
-        for requested in [None, Some(D3d9::Mtld3d), Some(D3d9::Wined3d)] {
-            assert_eq!(D3d9::effective(requested, native), D3d9::Wined3d);
+        assert_eq!(D3d9::default_for(native), D3d9::Mtld3d);
+        assert_eq!(D3d9::effective(None, native), D3d9::Mtld3d);
+        for d3d9 in [D3d9::Mtld3d, D3d9::Wined3d] {
+            assert_eq!(D3d9::effective(Some(d3d9), native), d3d9);
         }
     }
 

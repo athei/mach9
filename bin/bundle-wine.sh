@@ -497,14 +497,43 @@ run_limited() {
         || RUN_STATUS=$?
 }
 
-# check_default_trees <log> [<dxgi> <d3d9>]: exit unless compatdb.so reported
-# those trees in <log>. The "(from ...)" lines only appear once it found and
-# prepended them. Without the two names, the default tree of each family for
-# an x86 program: the first in its list in profile.sh.
+# check_hybrid_markers: exit unless the default dir's marker of every 64-bit
+# name a Direct3D tree supplies is a hybrid one. A native ARM64 process
+# rejects an AMD64 placeholder (docs/arm64.md, Limitations), and compatdb.so
+# gives such a process the dxmt and mtld3d trees by default, so with an AMD64
+# marker it could not load that name. A bundle from before the dxmt or
+# mtld3d tree was ARM64X has such markers; --compatdb-only runs this before
+# it replaces compatdb.so, so it leaves such a bundle as it was, and the
+# smoke test runs it first. The markers and not the trees are read, since a
+# tree can change after the bundle step (a development install of mtld3d)
+# without its marker following.
+check_hybrid_markers() {
+    local family dll f bad=0
+    for family in dxgi d3d9; do
+        for dll in $(family_dlls "$family" "$PE64_DIR"); do
+            f="$WINE_DIR/lib/wine/$PE64_DIR/$dll.dll"
+            if ! pe_is_arm64x "$f"; then
+                echo "Error: the marker $PE64_DIR/$dll.dll is not a hybrid one (PE machine $(pe_machine "$f")),"
+                echo "  so a native ARM64 program cannot load $dll.dll from any $family tree"
+                bad=1
+            fi
+        done
+    done
+    if [ "$bad" -ne 0 ]; then
+        echo "This bundle predates ARM64X builds of every Direct3D tree; bundle the"
+        echo "whole build instead of using --compatdb-only."
+        exit 1
+    fi
+}
+
+# check_default_trees <log>: exit unless compatdb.so reported the default
+# tree of each family in <log>, the first in its list in profile.sh, which is
+# the same for every arch. The "(from ...)" lines only appear once it found
+# and prepended them.
 check_default_trees() {
     local want dxgi_want d3d9_want
-    dxgi_want="dxgi = ${2:-${DXGI_IMPLS%% *}} (from"
-    d3d9_want="d3d9 = ${3:-${D3D9_IMPLS%% *}} (from"
+    dxgi_want="dxgi = ${DXGI_IMPLS%% *} (from"
+    d3d9_want="d3d9 = ${D3D9_IMPLS%% *} (from"
     for want in "$dxgi_want" "$d3d9_want"; do
         if ! grep -q "compatdb: .*$want" "$1"; then
             echo "Error: compatdb.so did not report '$want'"
@@ -529,6 +558,8 @@ smoke_test() {
         wine_env+=(-u "$var")
     done
     wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all)
+    # Before any Wine process runs, so a failure leaves no wineserver behind.
+    check_hybrid_markers
     version=$("$WINE_DIR/bin/wine" --version) || {
         echo "Error: bundled wine failed to run"
         exit 1
@@ -590,21 +621,13 @@ smoke_test() {
     # the test does not depend on what the prefix happens to contain. Each
     # prints a marker naming the architecture it was compiled for, then loads
     # the DLLs it is given and says whether all of them loaded. Its compatdb
-    # lines say which trees it got: the x86 defaults for an x86 program, and
-    # dxmt and the wined3d d3d9 tree for a native ARM64 one
+    # lines say which trees it got: the defaults, the same for every arch
     # (Dxgi::default_for and D3d9::default_for in compatdb/table). An x86
-    # program loads dxgi.dll and d3d9.dll. A native ARM64 program loads
-    # dxgi.dll and winemetal.dll, which only the dxmt tree has, so the loads
-    # show that the ARM64 half of DXMT's ARM64X DLLs came in through the
-    # hybrid placeholders of the dxgi names (Step 4, the markers). It tries
-    # d3d9.dll only when the bundle's marker for it, which the prefix's
-    # placeholder was made from, is a hybrid one too: while a d3d9 tree holds
-    # an x86_64 build, the marker is AMD64, which a native ARM64 process
-    # rejects (docs/arm64.md, Limitations). The marker and not the trees
-    # decides, since a tree can change after the bundle step (a development
-    # install of mtld3d) without its marker following. A bundle whose dxmt
-    # tree is not ARM64X, which --compatdb-only may meet, fails here, as a
-    # native ARM64 program would with this compatdb.so.
+    # program loads dxgi.dll and d3d9.dll. A native ARM64 program also loads
+    # winemetal.dll and mtld3d.dll, which only the dxmt and mtld3d trees
+    # have, so the loads show that the ARM64 halves of DXMT's and mtld3d's
+    # ARM64X DLLs came in through the hybrid placeholders of their names
+    # (Step 4, the markers), which check_hybrid_markers has checked above.
     for arch in $SMOKE_PE_ARCHS; do
         cc="$MINGW_DIR/bin/$arch-w64-mingw32-clang"
         exe="$TMP_DIR/hello-$arch.exe"
@@ -612,8 +635,7 @@ smoke_test() {
         if [ "$arch" != aarch64 ]; then
             dlls=(dxgi.dll d3d9.dll)
         else
-            dlls=(dxgi.dll winemetal.dll)
-            if pe_is_arm64x "$WINE_DIR/lib/wine/$PE64_DIR/d3d9.dll"; then dlls+=(d3d9.dll); fi
+            dlls=(dxgi.dll winemetal.dll d3d9.dll mtld3d.dll)
         fi
         time_mark "smoke: hello.exe $arch"
         echo "  Running hello.exe for $arch..."
@@ -631,11 +653,7 @@ smoke_test() {
             fi
         done
         grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
-        if [ "$arch" = aarch64 ]; then
-            check_default_trees "$log" dxmt wined3d
-        else
-            check_default_trees "$log"
-        fi
+        check_default_trees "$log"
     done
     echo "  Loading each Direct3D tree's modules..."
     check_tree_loads x86_64 "${wine_env[@]}"
@@ -814,33 +832,28 @@ smoke_stop() {
 # the program that tree, and exit unless compatdb.so reports the tree and the
 # program loads every module in it, plus the other family's d3d9.dll or
 # dxgi.dll. This is what proves the default-dir placeholders let each tree's
-# modules into a process of that arch, for x86_64 the hybrid ones (Step 4,
-# the markers) as well as the AMD64 ones. For aarch64, a native ARM64
-# program, only the dxgi trees are run, whose markers are all hybrid, and
-# d3d9.dll is added only when its marker is hybrid too, as in the hello.exe
-# run of smoke_test: a native ARM64 process rejects an AMD64 placeholder,
-# and compatdb.so gives it no tree but wined3d for d3d9 anyway.
-# <env-command> is the env invocation the runs start with; the rule is
-# appended to it.
+# modules into a process of that arch: for x86_64 the hybrid ones (Step 4,
+# the markers) as well as any AMD64 ones, and for aarch64, a native ARM64
+# program, the hybrid ones, which smoke_test has already checked every
+# 64-bit name has. <env-command> is the env invocation the runs start with;
+# the rule is appended to it.
 check_tree_loads() {
-    local arch="$1" dir=i386-windows exe log family families="dxgi d3d9" impl other names f want header
+    local arch="$1" dir=i386-windows exe log family impl other names f want header
     shift
     [ "$arch" = i686 ] || dir="$PE64_DIR"
-    if [ "$arch" = aarch64 ]; then families=dxgi; fi
     # The table format header WINE_COMPATDB starts with, from its source.
     header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$REPO_DIR/compatdb/table/src/lib.rs")
     exe="$TMP_DIR/trees-$arch.exe"
     "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/hello.c"
-    for family in $families; do
+    for family in dxgi d3d9; do
         if [ "$family" = dxgi ]; then other=d3d9.dll; else other=dxgi.dll; fi
-        if [ "$arch" = aarch64 ] && ! pe_is_arm64x "$WINE_DIR/lib/wine/$dir/$other"; then other=""; fi
         for impl in $(family_impls "$family"); do
             [ -d "$WINE_DIR/lib/wine/$family/$impl/$dir" ] || continue
             names=()
             for f in "$WINE_DIR/lib/wine/$family/$impl/$dir"/*.dll; do
                 names+=("$(basename "$f")")
             done
-            if [ -n "$other" ]; then names+=("$other"); fi
+            names+=("$other")
             time_mark "smoke: $arch on $family/$impl"
             log="$TMP_DIR/trees-$arch-$family-$impl.log"
             run_limited 120 "$log" "$@" \
@@ -1337,6 +1350,7 @@ if [ "$COMPATDB_ONLY" -eq 1 ]; then
         exit 1
     fi
     check_vulkan_present
+    check_hybrid_markers
 
     echo "==> Step 1: Build compatdb.so"
     build_compatdb
@@ -1742,11 +1756,18 @@ fi
 if in_list mtld3d "$D3D9_IMPLS"; then
     # mtld3d's tarball mirrors the lib/wine layout under wine/, with an
     # x86_64-unix and an aarch64-unix mtld3d.so; the one for UNIX_DIR is
-    # taken. Its x86_64 PE DLLs go into the 64-bit dir, like DXMT's. The
-    # tarball's prefix-markers/ holds the system32 and syswow64 placeholders
-    # for installs into an existing prefix and is not used: the prefixes this
-    # bundle creates get their markers from wine.inf's wildcard over the
-    # default dirs (stamped below).
+    # taken. It carries x86_64 and ARM64X builds of the 64-bit PE DLLs; the
+    # ARM64X ones, in its aarch64-windows, go into the 64-bit dir, like
+    # DXMT's, so an x64 game loads their ARM64EC half and a native ARM64
+    # program their ARM64 half, and compatdb.so gives both mtld3d. They have
+    # to be ARM64X for that, which is checked here, since hybrid_marker
+    # would otherwise quietly give their names AMD64 markers that a native
+    # ARM64 process rejects. Its x86_64 builds, for an x86_64 Wine, are not
+    # used. The tarball's
+    # prefix-markers/ holds the system32 and syswow64 placeholders for
+    # installs into an existing prefix and is not used either: the prefixes
+    # this bundle creates get their markers from wine.inf's wildcard over
+    # the default dirs (stamped below).
     echo "  Installing mtld3d..."
     mkdir -p "$TMP_DIR/mtld3d"
     tar xf "$MTLD3D_TAR" -C "$TMP_DIR/mtld3d"
@@ -1755,11 +1776,20 @@ if in_list mtld3d "$D3D9_IMPLS"; then
         echo "Error: $(basename "$MTLD3D_TAR") has no wine/ directory"
         exit 1
     fi
+    for dll in d3d9 mtld3d; do
+        f="$MTLD3D_SRC/$PE64_DIR/$dll.dll"
+        if [ ! -f "$f" ]; then
+            echo "Error: $(basename "$MTLD3D_TAR") has no $PE64_DIR/$dll.dll"
+            exit 1
+        fi
+        if ! pe_is_arm64x "$f"; then
+            echo "Error: $(basename "$MTLD3D_TAR")'s $PE64_DIR/$dll.dll is not ARM64X (PE machine $(pe_machine "$f"))"
+            exit 1
+        fi
+    done
     for arch in i386-windows "$PE64_DIR"; do
-        srcarch=$arch
-        [ "$arch" = i386-windows ] || srcarch=x86_64-windows
         mkdir -p "$d3d9tree/mtld3d/$arch"
-        cp "$MTLD3D_SRC/$srcarch/d3d9.dll" "$MTLD3D_SRC/$srcarch/mtld3d.dll" \
+        cp "$MTLD3D_SRC/$arch/d3d9.dll" "$MTLD3D_SRC/$arch/mtld3d.dll" \
            "$d3d9tree/mtld3d/$arch/"
     done
     mkdir -p "$d3d9tree/mtld3d/$UNIX_DIR"
@@ -1895,11 +1925,11 @@ cp "$fexunix/libwow64fex.so" "$fexunix/libarm64ecfex.so" "$unixdir/"
 # file kept either.
 time_mark "Step 4e: Split off PE symbols"
 echo "==> Step 4e: Split off PE symbols"
-# mtld3d's d3d9.dll as installed, for Step 5's comparison with the release.
+# mtld3d's DLLs as installed, for Step 5's comparison with the release.
 if in_list mtld3d "$D3D9_IMPLS"; then
     for arch in i386-windows "$PE64_DIR"; do
         mkdir -p "$TMP_DIR/installed/$arch"
-        cp -p "$d3d9tree/mtld3d/$arch/d3d9.dll" "$TMP_DIR/installed/$arch/"
+        cp -p "$d3d9tree/mtld3d/$arch/d3d9.dll" "$d3d9tree/mtld3d/$arch/mtld3d.dll" "$TMP_DIR/installed/$arch/"
     done
 fi
 # Every PE file, in parallel batches.
@@ -2030,17 +2060,18 @@ for want in "${WANT[@]}"; do
         MISSING=1
     fi
 done
-# A d3d9.dll named like mtld3d's could still be Wine's; only a byte comparison
-# proves the right copy landed in the tree. Step 4e kept a copy of it as it
-# was installed, before stripping.
+# A d3d9.dll named like mtld3d's could still be Wine's, and either DLL could
+# be another build of the tarball's (its x86_64 one); only a byte comparison
+# proves the right copy landed in the tree. Step 4e kept a copy of both as
+# they were installed, before stripping.
 if in_list mtld3d "$D3D9_IMPLS"; then
     for arch in i386-windows "$PE64_DIR"; do
-        srcarch=$arch
-        [ "$arch" = i386-windows ] || srcarch=x86_64-windows
-        if ! cmp -s "$MTLD3D_SRC/$srcarch/d3d9.dll" "$TMP_DIR/installed/$arch/d3d9.dll"; then
-            echo "  ERROR: d3d9/mtld3d/$arch/d3d9.dll is not mtld3d's"
-            MISSING=1
-        fi
+        for dll in d3d9 mtld3d; do
+            if ! cmp -s "$MTLD3D_SRC/$arch/$dll.dll" "$TMP_DIR/installed/$arch/$dll.dll"; then
+                echo "  ERROR: d3d9/mtld3d/$arch/$dll.dll is not the release's $arch/$dll.dll"
+                MISSING=1
+            fi
+        done
     done
 fi
 # The emulator Wine loads by default has to be FEX, not the stub it replaced.
@@ -2073,10 +2104,12 @@ echo "  Direct3D trees (dxgi: $DXGI_IMPLS; d3d9: $D3D9_IMPLS) and the other copi
 # the machine the rule of Step 4 asks for, worked out again from the trees as
 # installed: i386 in i386-windows, and in the 64-bit dir a hybrid one (ARM64
 # with ARM64EC metadata, which pe_is_arm64x tells) where hybrid_marker says
-# so and AMD64 everywhere else. A tree whose 64-bit DLLs become ARM64X, such
-# as an mtld3d release built that way, is so held to hybrid markers without a
-# change here, and a marker of the wrong machine, which would keep one kind
-# of process from the name, fails the step.
+# so and AMD64 everywhere else. Every tree's 64-bit DLLs are ARM64X now, so
+# every 64-bit name gets a hybrid marker, and a tree that went back to an
+# x86_64 build would move its names to AMD64 without a change here (the smoke
+# test then fails on the native ARM64 program). A marker of the wrong
+# machine, which would keep one kind of process from the name, fails the
+# step.
 time_mark "Step 5: marker machines"
 BADMARK=0
 HYBRID_MARKERS=""
