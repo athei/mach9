@@ -184,7 +184,7 @@ fn string_value(blob: &[u16], key: &str) -> String {
 /// work with its own.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dxgi {
-    /// DXMT, the default for every x86 program.
+    /// DXMT, the default for every program.
     Dxmt,
     /// Wine's own wined3d.
     Wined3d,
@@ -210,27 +210,23 @@ impl Dxgi {
         }
     }
 
-    /// What a process gets when no rule names an implementation: DXMT,
-    /// except for a native ARM64 program, which gets wined3d, the one
-    /// implementation that has ARM64 code (see [`Dxgi::available_for`]).
+    /// What a process gets when no rule names an implementation: DXMT, for
+    /// every arch, a native ARM64 program included (see
+    /// [`Dxgi::available_for`]).
     #[must_use]
-    pub const fn default_for(arch: Arch) -> Self {
-        if native_arm64(arch) {
-            Self::Wined3d
-        } else {
-            Self::Dxmt
-        }
+    pub const fn default_for(_arch: Arch) -> Self {
+        Self::Dxmt
     }
 
-    /// Whether the implementation can load for `arch`. The dxmt tree holds
-    /// DXMT's x86 builds, which serve x86 programs (run under emulation) but
-    /// not a native ARM64 one; the wined3d tree holds Wine's own ARM64X
-    /// modules, which serve both.
+    /// Whether the implementation can load for `arch`: each one can, for
+    /// every arch. The 64-bit modules of both trees are ARM64X, so a native
+    /// ARM64 program loads their ARM64 half and an x64 program, which runs as
+    /// ARM64EC, their ARM64EC half; an i386 program gets their i386 builds
+    /// under emulation.
     #[must_use]
-    pub const fn available_for(self, arch: Arch) -> bool {
+    pub const fn available_for(self, _arch: Arch) -> bool {
         match self {
-            Self::Dxmt => !native_arm64(arch),
-            Self::Wined3d => true,
+            Self::Dxmt | Self::Wined3d => true,
         }
     }
 
@@ -251,8 +247,8 @@ impl Dxgi {
     }
 }
 
-/// Whether `arch` is a native ARM64 program, for which the dxmt and mtld3d
-/// trees, which hold x86 code only, cannot load.
+/// Whether `arch` is a native ARM64 program, for which the mtld3d tree, which
+/// holds x86 code only, cannot load.
 const fn native_arm64(arch: Arch) -> bool {
     matches!(arch, Arch::Aarch64)
 }
@@ -2558,23 +2554,29 @@ mod tests {
         // Written back, it is dxmt.
         let first = table.rules.first().ok_or("no rule")?;
         assert_eq!(rule_to_record(first), "name=a;exe=a.exe;dxgi=dxmt");
-        // A native ARM64 program still gets wined3d.
+        // Every arch, a native ARM64 one included, gets DXMT for it.
         let resolved = table.resolve("a.exe", &VersionInfo::default());
-        assert_eq!(Dxgi::effective(resolved.dxgi, Arch::Aarch64), Dxgi::Wined3d);
-        assert_eq!(Dxgi::effective(resolved.dxgi, Arch::I386), Dxgi::Dxmt);
+        for arch in [Arch::Aarch64, Arch::X86_64, Arch::I386] {
+            assert_eq!(Dxgi::effective(resolved.dxgi, arch), Dxgi::Dxmt, "{arch:?}");
+        }
         Ok(())
     }
 
     #[test]
-    fn a_native_arm64_program_gets_wined3d_whatever_it_asks_for() {
+    fn a_native_arm64_program_defaults_to_dxmt_and_gets_what_it_asks_for() {
         let native = Arch::Aarch64;
-        assert_eq!(Dxgi::default_for(native), Dxgi::Wined3d);
-        assert_eq!(D3d9::default_for(native), D3d9::Wined3d);
-        assert!(!Dxgi::Dxmt.available_for(native));
-        assert!(Dxgi::Wined3d.available_for(native));
-        for requested in [None, Some(Dxgi::Dxmt), Some(Dxgi::Wined3d)] {
-            assert_eq!(Dxgi::effective(requested, native), Dxgi::Wined3d);
+        assert_eq!(Dxgi::default_for(native), Dxgi::Dxmt);
+        assert_eq!(Dxgi::effective(None, native), Dxgi::Dxmt);
+        for dxgi in [Dxgi::Dxmt, Dxgi::Wined3d] {
+            assert!(dxgi.available_for(native), "{dxgi:?}");
+            assert_eq!(Dxgi::effective(Some(dxgi), native), dxgi);
         }
+    }
+
+    #[test]
+    fn a_native_arm64_program_gets_wined3d_for_d3d9_whatever_it_asks_for() {
+        let native = Arch::Aarch64;
+        assert_eq!(D3d9::default_for(native), D3d9::Wined3d);
         assert!(!D3d9::Mtld3d.available_for(native));
         assert!(D3d9::Wined3d.available_for(native));
         for requested in [None, Some(D3d9::Mtld3d), Some(D3d9::Wined3d)] {

@@ -17,7 +17,7 @@ and with none, Wine does.
 
 | Key | Values | Effect | Applied |
 |-----|--------|--------|---------|
-| `dxgi` | `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. Unset: the arch default ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
+| `dxgi` | `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. Unset: `dxmt`, for every arch ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
 | `d3d9` | `mtld3d`, `wined3d` | The D3D9 tree to prepend. Unset: `mtld3d`, except for a native ARM64 program ([native ARM64 programs](#native-arm64-programs)) | At load |
 | `wined3d` | `gl`, `vulkan` | The renderer of wined3d, for the whole process: every wined3d user in it, the `wined3d` trees of both families and D3D8 and DirectDraw, shares one wined3d. Set, it names the renderer in `WINE_D3D_CONFIG` through the `env` path; unset, it sets nothing, so a `WINE_D3D_CONFIG` from elsewhere, or wined3d's default, OpenGL, applies ([wined3d on Vulkan](#wined3d-on-vulkan)) | At load, as `env` |
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
@@ -130,7 +130,7 @@ A launcher written for the retired x86_64 Wine may still send what that
 Wine understood. The library keeps such a record instead of dropping it:
 
 - `dxgi=gptk` reads as `dxmt`, which is what this Wine always loaded in its
-  place; a native ARM64 program still gets `wined3d`.
+  place.
 - `x87_sidecar` is accepted, with any value, and ignored. There is no
   x87sidecar; FEX emulates x87 code
   ([FEX and KosmicKrisp](#fex-and-kosmickrisp)).
@@ -227,15 +227,19 @@ executable.
 
 ## Native ARM64 programs
 
-- A native ARM64 program defaults to `wined3d` in both families: the `dxmt`
-  and `mtld3d` trees hold x86 code only, while the `wined3d` trees hold
-  Wine's own ARM64X modules. A rule asking such a program for `dxmt` or
-  `mtld3d` falls back to `wined3d` with a log line that names the arch.
-  `default_for` and `available_for` of `Dxgi` and `D3d9` in
+- A native ARM64 program defaults to `dxmt` for `dxgi`, as every program
+  does: the 64-bit modules of both `dxgi` trees are ARM64X, and the
+  program loads their ARM64 half. A rule may give it either tree.
+- For `d3d9` it defaults to `wined3d`, and a rule asking such a program
+  for `mtld3d` falls back to `wined3d` with a log line that names the arch:
+  `D3d9::available_for` treats `mtld3d` as x86 code only, while the
+  `wined3d` tree holds Wine's own ARM64X module. Whether the program can
+  load the d3d9 names at all depends on their markers, which are AMD64
+  while a d3d9 tree holds a build that is not ARM64X
+  ([arm64.md](arm64.md#limitations)).
+- `default_for` and `available_for` of `Dxgi` and `D3d9` in
   [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs) hold the
-  table. (The bundle's placeholders for the d3d9 names are AMD64 ones,
-  which keep a native ARM64 program from loading them at all; see
-  [arm64.md](arm64.md#limitations).)
+  table.
 - A 64-bit process loads the Direct3D trees from `aarch64-windows`, as Wine
   on an arm64 host loads its builtins from there. An i386 process uses
   `i386-windows`.

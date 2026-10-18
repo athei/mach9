@@ -523,7 +523,7 @@ check_default_trees() {
 # dropped so that the built-in rules and the defaults of Wine, FEX, the
 # Vulkan loader, KosmicKrisp and Metal decide.
 smoke_test() {
-    local version log arch cc exe marker markers var
+    local version log arch cc exe marker markers var dlls
     local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG)
     for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|MESA_|MTL_|METAL_)'); do
         wine_env+=(-u "$var")
@@ -588,29 +588,40 @@ smoke_test() {
 
     # One console program per PE architecture in SMOKE_PE_ARCHS, built here so
     # the test does not depend on what the prefix happens to contain. Each
-    # prints a marker naming the architecture it was compiled for, then
-    # tries dxgi.dll and d3d9.dll and says whether both loaded. Its compatdb
+    # prints a marker naming the architecture it was compiled for, then loads
+    # the DLLs it is given and says whether all of them loaded. Its compatdb
     # lines say which trees it got: the x86 defaults for an x86 program, and
-    # wined3d for both families for a native ARM64 one (Dxgi::default_for and
-    # D3d9::default_for in compatdb/table). The loads have to work for the
-    # x86 programs, which are what the bundle is for. A native ARM64 program
-    # may not load both: a name whose trees do not all hold ARM64X builds has
-    # an AMD64 placeholder in the prefix, which a native ARM64 process
-    # rejects (Step 4, the markers, and docs/arm64.md), so its line is only
-    # shown.
+    # dxmt and the wined3d d3d9 tree for a native ARM64 one
+    # (Dxgi::default_for and D3d9::default_for in compatdb/table). An x86
+    # program loads dxgi.dll and d3d9.dll. A native ARM64 program loads
+    # dxgi.dll and winemetal.dll, which only the dxmt tree has, so the loads
+    # show that the ARM64 half of DXMT's ARM64X DLLs came in through the
+    # hybrid placeholders of the dxgi names (Step 4, the markers). It tries
+    # d3d9.dll only when the bundle's marker for it, which the prefix's
+    # placeholder was made from, is a hybrid one too: while a d3d9 tree holds
+    # an x86_64 build, the marker is AMD64, which a native ARM64 process
+    # rejects (docs/arm64.md, Limitations). The marker and not the trees
+    # decides, since a tree can change after the bundle step (a development
+    # install of mtld3d) without its marker following. A bundle whose dxmt
+    # tree is not ARM64X, which --compatdb-only may meet, fails here, as a
+    # native ARM64 program would with this compatdb.so.
     for arch in $SMOKE_PE_ARCHS; do
         cc="$MINGW_DIR/bin/$arch-w64-mingw32-clang"
         exe="$TMP_DIR/hello-$arch.exe"
         "$cc" -O2 -o "$exe" "$REPO_DIR/smoke/hello.c"
+        if [ "$arch" != aarch64 ]; then
+            dlls=(dxgi.dll d3d9.dll)
+        else
+            dlls=(dxgi.dll winemetal.dll)
+            if pe_is_arm64x "$WINE_DIR/lib/wine/$PE64_DIR/d3d9.dll"; then dlls+=(d3d9.dll); fi
+        fi
         time_mark "smoke: hello.exe $arch"
         echo "  Running hello.exe for $arch..."
         log="$TMP_DIR/hello-$arch.log"
-        run_limited 120 "$log" "${wine_env[@]}" "$WINE_DIR/bin/wine" "$exe"
+        run_limited 120 "$log" "${wine_env[@]}" "$WINE_DIR/bin/wine" "$exe" "${dlls[@]}"
         smoke_check "hello.exe for $arch" 120 "$log"
-        markers=("wine-build smoke test: hello from $arch")
-        if [ "$arch" != aarch64 ]; then
-            markers+=("wine-build smoke test: $arch loads dxgi.dll d3d9.dll")
-        fi
+        markers=("wine-build smoke test: hello from $arch"
+                 "wine-build smoke test: $arch loads ${dlls[*]}")
         for marker in "${markers[@]}"; do
             if ! grep -q "$marker" "$log"; then
                 echo "Error: hello.exe for $arch did not print '$marker'"
@@ -621,7 +632,7 @@ smoke_test() {
         done
         grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
         if [ "$arch" = aarch64 ]; then
-            check_default_trees "$log" wined3d wined3d
+            check_default_trees "$log" dxmt wined3d
         else
             check_default_trees "$log"
         fi
@@ -629,12 +640,13 @@ smoke_test() {
     echo "  Loading each Direct3D tree's modules..."
     check_tree_loads x86_64 "${wine_env[@]}"
     check_tree_loads i686 "${wine_env[@]}"
+    check_tree_loads aarch64 "${wine_env[@]}"
     # --compatdb-only has already refused a bundle without Vulkan
     # (check_vulkan_present), so every bundle that gets here has it.
     check_vulkan_runs "${wine_env[@]}"
     check_wined3d_device "${wine_env[@]}"
     smoke_stop
-    echo "  Programs for $SMOKE_PE_ARCHS run; the x86 ones load their Direct3D trees."
+    echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
 }
 
 # check_vulkan_present: exit unless the bundle has the Vulkan loader,
@@ -797,31 +809,38 @@ smoke_stop() {
 }
 
 # check_tree_loads <arch> <env-command>...: build smoke/hello.c for <arch>
-# (x86_64 or i686) and run it in the booted throwaway prefix once per
+# (x86_64, i686 or aarch64) and run it in the booted throwaway prefix once per
 # Direct3D tree that has modules for it, with a WINE_COMPATDB rule that gives
 # the program that tree, and exit unless compatdb.so reports the tree and the
 # program loads every module in it, plus the other family's d3d9.dll or
 # dxgi.dll. This is what proves the default-dir placeholders let each tree's
 # modules into a process of that arch, for x86_64 the hybrid ones (Step 4,
-# the markers) as well as the AMD64 ones. <env-command> is the env invocation
-# the runs start with; the rule is appended to it.
+# the markers) as well as the AMD64 ones. For aarch64, a native ARM64
+# program, only the dxgi trees are run, whose markers are all hybrid, and
+# d3d9.dll is added only when its marker is hybrid too, as in the hello.exe
+# run of smoke_test: a native ARM64 process rejects an AMD64 placeholder,
+# and compatdb.so gives it no tree but wined3d for d3d9 anyway.
+# <env-command> is the env invocation the runs start with; the rule is
+# appended to it.
 check_tree_loads() {
-    local arch="$1" dir=i386-windows exe log family impl other names f want header
+    local arch="$1" dir=i386-windows exe log family families="dxgi d3d9" impl other names f want header
     shift
     [ "$arch" = i686 ] || dir="$PE64_DIR"
+    if [ "$arch" = aarch64 ]; then families=dxgi; fi
     # The table format header WINE_COMPATDB starts with, from its source.
     header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$REPO_DIR/compatdb/table/src/lib.rs")
     exe="$TMP_DIR/trees-$arch.exe"
     "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/hello.c"
-    for family in dxgi d3d9; do
+    for family in $families; do
         if [ "$family" = dxgi ]; then other=d3d9.dll; else other=dxgi.dll; fi
-        for impl in $(if [ "$family" = dxgi ]; then echo "$DXGI_IMPLS"; else echo "$D3D9_IMPLS"; fi); do
+        if [ "$arch" = aarch64 ] && ! pe_is_arm64x "$WINE_DIR/lib/wine/$dir/$other"; then other=""; fi
+        for impl in $(family_impls "$family"); do
             [ -d "$WINE_DIR/lib/wine/$family/$impl/$dir" ] || continue
             names=()
             for f in "$WINE_DIR/lib/wine/$family/$impl/$dir"/*.dll; do
                 names+=("$(basename "$f")")
             done
-            names+=("$other")
+            if [ -n "$other" ]; then names+=("$other"); fi
             time_mark "smoke: $arch on $family/$impl"
             log="$TMP_DIR/trees-$arch-$family-$impl.log"
             run_limited 120 "$log" "$@" \
