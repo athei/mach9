@@ -2,8 +2,9 @@
 # with everything they depend on: the ones profile.sh lists (DEPS_FORMULAE,
 # which the bundle and Wine's configure use, and MESA_FORMULAE, which
 # build-mesa.sh's host tools link), and the build tools the scripts run that
-# a runner image need not have. bin/ci/brew.sh installs them and fails when
-# profile.sh names a formula that is missing here.
+# a runner image need not have. bin/ci/brew.sh installs them at the newest
+# versions Homebrew has and fails when profile.sh names a formula that is
+# missing here.
 
 # DEPS_FORMULAE
 freetype

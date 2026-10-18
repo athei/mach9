@@ -1,0 +1,61 @@
+name: Homebrew formulae
+description: >-
+  Installs the formulae of pins/brew-formulae and their runtime dependencies
+  at the newest versions Homebrew has, starting from the cache of the kegs an
+  earlier run installed (bin/ci/brew.sh), and saves the result when the
+  cache was not for this exact manifest. Expects this repository checked out
+  at scripts/ in the workspace.
+
+# release.yml and brew-cache.yml run these steps. A local composite action
+# and not a reusable workflow, because the release job needs the kegs on its
+# own runner.
+runs:
+  using: composite
+  steps:
+    - name: Update Homebrew and write the manifest of its formulae
+      shell: bash
+      run: |
+        scripts/bin/ci/brew.sh update
+        scripts/bin/ci/brew.sh manifest "$RUNNER_TEMP/brew-manifest"
+
+    # The key ends in the manifest's hash. A run whose manifest has no cache
+    # yet restores the newest one with the same prefix, made by the same
+    # scripts (the list, brew.sh and this action) on the same macOS, and
+    # brew.sh installs only what changed.
+    - name: Compute the cache key
+      id: key
+      shell: bash
+      run: |
+        scripts=$(cat scripts/pins/brew-formulae scripts/bin/ci/brew.sh scripts/.github/actions/brew/action.yml |
+          shasum -a 256 | awk '{ print $1 }')
+        manifest=$(shasum -a 256 "$RUNNER_TEMP/brew-manifest" | awk '{ print $1 }')
+        echo "prefix=brew-$RUNNER_OS-$ImageOS-$scripts-" >> "$GITHUB_OUTPUT"
+        echo "key=brew-$RUNNER_OS-$ImageOS-$scripts-$manifest" >> "$GITHUB_OUTPUT"
+
+    # Restored and saved separately, so the kegs are saved right after
+    # brew.sh wrote them, even when a later step of the job fails. brew.sh
+    # ends with its check, which fails the step when a formula of the
+    # manifest is not at the version Homebrew has, so a bad install is never
+    # saved.
+    - name: Restore the Homebrew kegs
+      id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/brew
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+
+    - name: Install the Homebrew formulae
+      shell: bash
+      run: scripts/bin/ci/brew.sh install "$RUNNER_TEMP/brew" "$RUNNER_TEMP/brew-manifest"
+
+    - name: Save the Homebrew kegs
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/brew
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Free the Homebrew cache directory
+      shell: bash
+      run: rm -rf "$RUNNER_TEMP/brew"

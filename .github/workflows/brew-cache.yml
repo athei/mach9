@@ -1,0 +1,48 @@
+name: Homebrew cache
+
+# Keeps the cache of the Homebrew kegs release.yml installs current. A run
+# on the default branch writes caches that runs on every tag can read, so a
+# release build finds the kegs of its own manifest, or of one a day old, and
+# downloads little. The steps are the local action .github/actions/brew,
+# which release.yml runs too, and the logic is in bin/ci/brew.sh.
+
+# A change to the scripts the key hashes changes its prefix, so a push of one
+# to main makes main's cache for them right away.
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  push:
+    branches: [main]
+    paths:
+      - pins/brew-formulae
+      - bin/ci/brew.sh
+      - .github/actions/brew/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brew-cache
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  brew:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v7
+        with:
+          path: scripts
+          persist-credentials: false
+
+      # The Xcode release.yml selects before it installs the formulae.
+      - name: Report the runner and select Xcode
+        run: scripts/bin/ci/host.sh
+
+      - name: Install the Homebrew formulae
+        uses: ./scripts/.github/actions/brew
