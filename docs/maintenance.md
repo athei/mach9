@@ -22,6 +22,16 @@ check when something upstream changes.
   install names to `@loader_path/`, re-signs them ad hoc, since arm64 code
   does not load with a broken signature, and fails if any reference to one
   of the `LEAK_PREFIXES` in [`profile.sh`](../bin/lib/profile.sh) survives.
+- The closure includes the `@rpath/` dependencies some Homebrew libraries
+  have. The step finds each one through the `LC_RPATH` entries of the
+  library where Homebrew installed it, copies it and rewrites the reference
+  to `@loader_path/` like the others. It then removes every `LC_RPATH`
+  entry of the copied libraries that does not name a directory inside the
+  bundle, since from `lib/external/` those would point at the bundle's
+  parent or at nothing. Step 5 fails on an `@rpath/` dependency that is
+  still left and loads every library in `lib/external/` with `dlopen`, so a
+  dependency the step missed fails the bundle step instead of Wine
+  silently running without the library.
 - The Vulkan loader's soname is one of the patched ones, but the bundle
   step copies the loader from `MESA_DIST`, where `build-mesa.sh` staged it
   built for the floor, and not from `DEPS_PREFIX`. KosmicKrisp goes into
