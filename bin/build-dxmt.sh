@@ -285,7 +285,7 @@ if [ "$(lipo -archs "$DXMT_DIST/$UNIX_DIR/winemetal.so")" != arm64 ]; then
 fi
 # The DLLs carry the describe output as their version string; checked here so
 # the record and the build cannot disagree.
-if ! strings -a "$DXMT_DIST/$PE64_DIR/d3d11.dll" | grep -qxF "$DXMT_DESCRIBE"; then
+if ! strings -a "$DXMT_DIST/$PE64_DIR/d3d11.dll" | grep -xF "$DXMT_DESCRIBE" >/dev/null; then
     echo "Error: d3d11.dll does not carry the version $DXMT_DESCRIBE"
     exit 1
 fi

@@ -115,7 +115,7 @@ cmd_cleanup() {
     fi
     # delete-keychain takes it out of the search list; a keychain file that
     # is gone may still be named there.
-    if search_list | grep -qxF "$KEYCHAIN"; then
+    if search_list | grep -xF "$KEYCHAIN" >/dev/null; then
         while IFS= read -r k; do
             if [ -n "$k" ] && [ "$k" != "$KEYCHAIN" ]; then rest+=("$k"); fi
         done < <(search_list)

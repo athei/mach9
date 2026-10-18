@@ -343,7 +343,7 @@ build_compatdb() {
         exit 1
     fi
     if command -v rustup >/dev/null \
-        && ! rustup target list --installed | grep -qx "$RUST_TARGET"; then
+        && ! rustup target list --installed | grep -x "$RUST_TARGET" >/dev/null; then
         echo "Error: the Rust target $RUST_TARGET is not installed"
         echo "(rustup target add $RUST_TARGET)"
         exit 1
@@ -365,7 +365,7 @@ check_no_leaks() {
     for f in "$@"; do
         [ -e "$f" ] || continue
         for p in $LEAK_PREFIXES; do
-            if otool -L "$f" 2>/dev/null | grep -q "$p"; then
+            if otool -L "$f" 2>/dev/null | grep "$p" >/dev/null; then
                 echo "  ERROR: $(basename "$f") still references $p"
                 LEAKED=1
             fi
@@ -1084,7 +1084,7 @@ check_vulkan() {
     for f in libvulkan.1.dylib:_vkGetInstanceProcAddr libvulkan.1.dylib:_vkCreateMetalSurfaceEXT \
              libvulkan_kosmickrisp.dylib:_vk_icdGetInstanceProcAddr; do
         sym=${f#*:}
-        if ! nm -gU "$EXT_DIR/${f%%:*}" 2>/dev/null | awk '{print $NF}' | grep -qxF "$sym"; then
+        if ! nm -gU "$EXT_DIR/${f%%:*}" 2>/dev/null | awk '{print $NF}' | grep -xF "$sym" >/dev/null; then
             echo "Error: lib/external/${f%%:*} does not export $sym"
             exit 1
         fi
@@ -1153,7 +1153,7 @@ check_dxmt_build() {
     fi
     describe=$(cat "$DXMT_DIST/DESCRIBE")
     for f in "$PE64_DIR/d3d11.dll" i386-windows/d3d11.dll; do
-        if ! strings -a "$DXMT_DIST/$f" | grep -qxF "$describe"; then
+        if ! strings -a "$DXMT_DIST/$f" | grep -xF "$describe" >/dev/null; then
             echo "Error: $DXMT_DIST/$f is not DXMT $describe"
             exit 1
         fi
@@ -2298,7 +2298,7 @@ time_mark "Step 5: PE symbol check"
 )
 # A scan that came back empty, or without a module every bundle has, read
 # nothing and would pass for a clean bundle.
-if ! cut -f1 "$TMP_DIR/pe-scan" | grep -qxF "$WINE_DIR/lib/wine/$PE64_DIR/ntdll.dll"; then
+if ! cut -f1 "$TMP_DIR/pe-scan" | grep -xF "$WINE_DIR/lib/wine/$PE64_DIR/ntdll.dll" >/dev/null; then
     echo "  ERROR: the PE scan found $(wc -l < "$TMP_DIR/pe-scan" | tr -d ' ') files, not lib/wine/$PE64_DIR/ntdll.dll"
     exit 1
 fi
