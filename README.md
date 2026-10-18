@@ -40,6 +40,7 @@ The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](bin/lib/profile.sh).
 | `lib/wine/dxgi/<impl>/`, `lib/wine/d3d9/<impl>/` | One tree per Direct3D implementation (see [Direct3D backends](#direct3d-backends)) |
 | `lib/wine/x86_64-windows/` | Full bundle only: the x86_64 link libraries of the [Wine SDK](docs/arm64.md#wine-sdk). Nothing reads the directory at run time |
 | `lib/wine/tests/i386-windows/`, `lib/wine/tests/x86_64-windows/` | Full bundle only: Wine's graphics conformance tests as `<name>_test.exe`, for testing the bundle's Direct3D, OpenGL and Vulkan stack ([graphics tests](docs/arm64.md#graphics-tests)) |
+| `lib/wine/tests/VERSION` | Full bundle only: one line, the `wine --version` string of the Wine the tests were built from, the same as the bundle's own `bin/wine --version` |
 | `lib/external/` | Bundled dylibs, the Vulkan loader and KosmicKrisp |
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
 
