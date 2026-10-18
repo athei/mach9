@@ -146,7 +146,8 @@ releases. Their steps call the build and bundle scripts and the scripts in
   [`wine-src.ref`](../pins/wine-src.ref) names and the pins of the tagged
   commit, and runs the bundle step with `--strict-floor` and `--symbols`. A
   manual run of it builds the same as a `ci-*` tag.
-- The first lines of a release's notes name what it was built from
+- The first lines of a release's notes name what it was built from, with
+  the Homebrew formula and version of each library the bundle carries
   (`package.sh` in [`bin/ci/`](../bin/ci)). The list of changes is added by
   hand before the draft is published.
 - `release-compatdb.yml` takes the newest published `arm64-*` release by
@@ -156,7 +157,7 @@ releases. Their steps call the build and bundle scripts and the scripts in
   `bundle-wine.sh --compatdb-only`, which runs the smoke test, and attaches
   the base's symbols again under its own tag. It needs no signing identity:
   the loader is the base's. So are the Homebrew libraries, so such a
-  release does not pick up newer ones.
+  release does not pick up newer ones, and its notes say so.
 
 ### Homebrew formulae
 
