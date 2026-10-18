@@ -87,9 +87,10 @@ for tool in git meson ninja cmake pkg-config python3 plutil; do
         exit 1
     fi
 done
-# What the stage 1 tools link. The driver itself needs none of them.
+# What the stage 1 tools link (MESA_FORMULAE in profile.sh). The driver
+# itself needs none of them.
 missing=""
-for f in llvm spirv-llvm-translator spirv-tools; do
+for f in $MESA_FORMULAE; do
     [ -d "$DEPS_PREFIX/opt/$f" ] || missing="$missing $f"
 done
 if [ -n "$missing" ]; then
