@@ -44,8 +44,10 @@ The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](bin/lib/profile.sh).
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
 
 An x64 process runs as ARM64EC, and Wine looks up its builtins in
-`aarch64-windows`, so the 64-bit modules of every Direct3D tree, x86_64 PE
-for DXMT and mtld3d, live under `<impl>/aarch64-windows/`.
+`aarch64-windows`, so the 64-bit modules of every Direct3D tree live under
+`<impl>/aarch64-windows/`, whether they are ARM64X or x86_64 PE. Which
+machine each default-dir marker carries follows from that
+([Direct3D trees](docs/maintenance.md#direct3d-trees)).
 
 ## Runtime configuration
 

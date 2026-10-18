@@ -235,7 +235,7 @@ check_arm64x_archive() {
 }
 
 # The Wine SDK: one directory, in the layout of an installed Wine, that
-# DXMT's PE build reads (-Dwine_install_path), with Wine's graphics tests
+# DXMT's i386 build reads (-Dwine_install_path), with Wine's graphics tests
 # (GRAPHICS_TESTS in profile.sh) under lib/wine/tests. The bundle carries the
 # same files, which is where mtld3d's builds read them. bin/winebuild and the
 # aarch64-windows and i386-windows archives come from the build itself: its
@@ -331,8 +331,8 @@ done
 wine_src_commit > "$WINE_SDK_DIR/WINE_COMMIT"
 echo "==> Wine SDK staged for $(cat "$WINE_SDK_DIR/WINE_COMMIT")."
 
-# FEX, the x86 emulator, and DXMT, whose unix half links against this Wine's
-# winemac.so and ntdll.so and whose PE half links against the SDK, so both
-# are built after them.
+# FEX, the x86 emulator, and DXMT, whose unix half and ARM64X DLLs link
+# against this Wine's build tree and whose i386 DLLs link against the SDK,
+# so both are built after them.
 "$SCRIPT_DIR/build-fex.sh" "${SUB_FLAGS[@]}"
 "$SCRIPT_DIR/build-dxmt.sh" "${SUB_FLAGS[@]}"

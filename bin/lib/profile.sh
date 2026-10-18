@@ -109,8 +109,8 @@ unset floor_func
 export MACOSX_DEPLOYMENT_TARGET="$MACOS_FLOOR"
 UNIX_DIR=aarch64-unix
 # An x64 process runs as ARM64EC, and Wine looks up its builtins in
-# aarch64-windows only, so the x86_64 PE modules of DXMT and mtld3d go there
-# too.
+# aarch64-windows only, so the 64-bit PE modules of every Direct3D tree go
+# there too, whether they are ARM64X or x86_64.
 PE64_DIR=aarch64-windows
 RUST_TARGET=aarch64-apple-darwin
 # The Direct3D trees, in the order a default-dir marker prefers them. Each
@@ -248,6 +248,26 @@ pe_machine() {
     local off
     off=$(od -An -tu4 -j60 -N4 "$1" | tr -d ' ')
     od -An -tx2 -j$((off + 4)) -N2 "$1" | tr -d ' '
+}
+
+# pe_is_arm64x <file>: succeed when the PE image is ARM64X: an ARM64 image
+# (pe_machine aa64) whose load config points at ARM64EC (CHPE) metadata, so
+# that a native ARM64 process loads its ARM64 half and an x64 process, which
+# runs as ARM64EC, its ARM64EC half. llvm-readobj names the format of such an
+# image COFF-ARM64X, and only when it found that metadata; a plain ARM64
+# image is COFF-ARM64. It comes from llvm-mingw (MINGW_DIR, as the scripts
+# set it). A file it cannot read exits instead of counting as "not ARM64X",
+# which would silently pick the x64-only path, so call this directly, not in
+# a command substitution, where the exit would only end the subshell.
+pe_is_arm64x() {
+    local readobj="${MINGW_DIR:-/opt/llvm-mingw}/bin/llvm-readobj" out
+    [ "$(pe_machine "$1")" = aa64 ] || return 1
+    if ! out=$("$readobj" --coff-load-config "$1" 2>&1); then
+        echo "Error: $readobj cannot read $1:"
+        echo "$out"
+        exit 1
+    fi
+    grep -qx "Format: COFF-ARM64X" <<< "$out"
 }
 
 # wine_src_commit: print the commit WINE_SRC is at, with "-dirty" appended

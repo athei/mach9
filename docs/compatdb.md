@@ -233,8 +233,8 @@ executable.
   `mtld3d` falls back to `wined3d` with a log line that names the arch.
   `default_for` and `available_for` of `Dxgi` and `D3d9` in
   [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs) hold the
-  table. (The bundle's placeholders for these DLL names are still x64 ones,
-  which keeps a native ARM64 program from loading them at all; see
+  table. (The bundle's placeholders for the d3d9 names are AMD64 ones,
+  which keep a native ARM64 program from loading them at all; see
   [arm64.md](arm64.md#limitations).)
 - A 64-bit process loads the Direct3D trees from `aarch64-windows`, as Wine
   on an arm64 host loads its builtins from there. An i386 process uses

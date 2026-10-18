@@ -89,6 +89,44 @@ in_list() {
     return 1
 }
 
+# family_impls <family>: print the trees of <family> (dxgi or d3d9), in the
+# order a default-dir marker prefers them (DXGI_IMPLS or D3D9_IMPLS).
+family_impls() {
+    if [ "$1" = dxgi ]; then echo "$DXGI_IMPLS"; else echo "$D3D9_IMPLS"; fi
+}
+
+# family_dlls <family> <arch-dir>: print the name, without .dll, of every DLL
+# that a tree of <family> in the bundle has in <arch-dir>, once each, sorted:
+# the names the default dir holds markers for.
+family_dlls() {
+    local impl f
+    for impl in $(family_impls "$1"); do
+        for f in "$WINE_DIR/lib/wine/$1/$impl/$2"/*.dll; do
+            if [ -f "$f" ]; then basename "$f" .dll; fi
+        done
+    done | sort -u
+}
+
+# hybrid_marker <family> <name>: succeed when the default dir's 64-bit marker
+# for <name>.dll of <family> (dxgi or d3d9) is to be a hybrid one, an ARM64
+# placeholder with ARM64EC metadata, which x64 and native ARM64 processes
+# both accept: when every tree of the family in the bundle that has the DLL
+# in PE64_DIR holds an ARM64X build of it (pe_is_arm64x), and at least one
+# does. Otherwise the marker is AMD64 (Step 4, the markers). Step 4 stamps
+# the markers by this rule and Step 5 checks them by it, so a tree whose
+# DLLs become ARM64X moves its names over without a change here. Exits,
+# through pe_is_arm64x, on a DLL llvm-readobj cannot read.
+hybrid_marker() {
+    local impl f found=0
+    for impl in $(family_impls "$1"); do
+        f="$WINE_DIR/lib/wine/$1/$impl/$PE64_DIR/$2.dll"
+        [ -f "$f" ] || continue
+        pe_is_arm64x "$f" || return 1
+        found=1
+    done
+    [ "$found" -eq 1 ]
+}
+
 # Timing. time_mark <label> ends the interval of the previous mark and starts
 # one for <label>; print_timings lists them all, in order, at the end. Wall
 # time in milliseconds, through perl since bash 3.2 has no subsecond clock.
@@ -553,13 +591,13 @@ smoke_test() {
     # prints a marker naming the architecture it was compiled for, then
     # tries dxgi.dll and d3d9.dll and says whether both loaded. Its compatdb
     # lines say which trees it got: the x86 defaults for an x86 program, and
-    # wined3d for both families for a native ARM64 one, whose code the dxmt
-    # and mtld3d trees do not hold (Dxgi::default_for and D3d9::default_for in
-    # compatdb/table). The loads have to work for the x86 programs, which are
-    # what the bundle is for. A native ARM64 program cannot load them: the
-    # prefix's placeholders for those names are AMD64, because a placeholder
-    # serves one machine and an x64 process needs that one
-    # (docs/arm64.md), so its line is only shown.
+    # wined3d for both families for a native ARM64 one (Dxgi::default_for and
+    # D3d9::default_for in compatdb/table). The loads have to work for the
+    # x86 programs, which are what the bundle is for. A native ARM64 program
+    # may not load both: a name whose trees do not all hold ARM64X builds has
+    # an AMD64 placeholder in the prefix, which a native ARM64 process
+    # rejects (Step 4, the markers, and docs/arm64.md), so its line is only
+    # shown.
     for arch in $SMOKE_PE_ARCHS; do
         cc="$MINGW_DIR/bin/$arch-w64-mingw32-clang"
         exe="$TMP_DIR/hello-$arch.exe"
@@ -764,7 +802,8 @@ smoke_stop() {
 # the program that tree, and exit unless compatdb.so reports the tree and the
 # program loads every module in it, plus the other family's d3d9.dll or
 # dxgi.dll. This is what proves the default-dir placeholders let each tree's
-# modules into a process of that arch. <env-command> is the env invocation
+# modules into a process of that arch, for x86_64 the hybrid ones (Step 4,
+# the markers) as well as the AMD64 ones. <env-command> is the env invocation
 # the runs start with; the rule is appended to it.
 check_tree_loads() {
     local arch="$1" dir=i386-windows exe log family impl other names f want header
@@ -938,8 +977,8 @@ check_dxmt_build() {
         echo "Error: $DXMT_DIST was not built from $DXMT_GIT_COMMIT (run build-dxmt.sh)"
         exit 1
     fi
-    for f in x86_64-windows/dxgi.dll x86_64-windows/d3d10core.dll x86_64-windows/d3d11.dll \
-             x86_64-windows/winemetal.dll i386-windows/dxgi.dll i386-windows/d3d10core.dll \
+    for f in "$PE64_DIR/dxgi.dll" "$PE64_DIR/d3d10core.dll" "$PE64_DIR/d3d11.dll" \
+             "$PE64_DIR/winemetal.dll" i386-windows/dxgi.dll i386-windows/d3d10core.dll \
              i386-windows/d3d11.dll i386-windows/winemetal.dll "$UNIX_DIR/winemetal.so" DESCRIBE; do
         if [ ! -f "$DXMT_DIST/$f" ]; then
             echo "Error: no $f in $DXMT_DIST (run build-dxmt.sh)"
@@ -953,7 +992,7 @@ check_dxmt_build() {
         exit 1
     fi
     describe=$(cat "$DXMT_DIST/DESCRIBE")
-    for f in x86_64-windows/d3d11.dll i386-windows/d3d11.dll; do
+    for f in "$PE64_DIR/d3d11.dll" i386-windows/d3d11.dll; do
         if ! strings -a "$DXMT_DIST/$f" | grep -qxF "$describe"; then
             echo "Error: $DXMT_DIST/$f is not DXMT $describe"
             exit 1
@@ -1331,6 +1370,10 @@ for tool in llvm-strip llvm-objdump; do
         exit 1
     fi
 done
+if [ ! -x "$MINGW_DIR/bin/llvm-readobj" ]; then
+    echo "Error: no llvm-readobj in $MINGW_DIR/bin (Step 4 needs it to tell ARM64X DLLs for the markers)"
+    exit 1
+fi
 loader_preflight
 
 time_mark "Step 0: Clean previous bundle"
@@ -1636,20 +1679,21 @@ if in_list dxmt "$DXGI_IMPLS"; then
     echo "    $DXMT_DIST"
 
     # dxmt tree: DXMT's dxgi/d3d10core/d3d11/winemetal plus Wine's
-    # d3d10/d3d10_1, for both arches. DXMT's x86_64 DLLs go into the 64-bit
-    # dir, aarch64-windows (x64 processes run as ARM64EC). The single
-    # winemetal.so stays in the default unix dir, where its @rpath finds
-    # winemac.so and ntdll.so, and serves the i386 PE modules too through
-    # its wow64 entry points; the tree links to it.
+    # d3d10/d3d10_1, for both arches. DXMT's 64-bit DLLs are ARM64X, like
+    # Wine's in that directory, and go into the 64-bit dir, aarch64-windows,
+    # where an x64 process (run as ARM64EC) and a native ARM64 one both look
+    # for them. The single winemetal.so stays in the default unix dir, where
+    # its @rpath finds winemac.so and ntdll.so, and serves the i386 PE
+    # modules too through its wow64 entry points; the tree links to it.
     dx64="$tree/dxmt/$PE64_DIR"
     dxu="$tree/dxmt/$UNIX_DIR"
     dx32="$tree/dxmt/i386-windows"
     mkdir -p "$dx64" "$dxu" "$dx32"
     cp "$DXMT_DIST/$UNIX_DIR/winemetal.so" "$unixdir/"
-    cp "$DXMT_DIST"/x86_64-windows/dxgi.dll \
-       "$DXMT_DIST"/x86_64-windows/d3d10core.dll \
-       "$DXMT_DIST"/x86_64-windows/d3d11.dll \
-       "$DXMT_DIST"/x86_64-windows/winemetal.dll \
+    cp "$DXMT_DIST/$PE64_DIR/dxgi.dll" \
+       "$DXMT_DIST/$PE64_DIR/d3d10core.dll" \
+       "$DXMT_DIST/$PE64_DIR/d3d11.dll" \
+       "$DXMT_DIST/$PE64_DIR/winemetal.dll" \
        "$dx64/"
     cp "$BUILD_DIR/dlls/d3d10/$PE64_DIR/d3d10.dll"     "$dx64/"
     cp "$BUILD_DIR/dlls/d3d10_1/$PE64_DIR/d3d10_1.dll" "$dx64/"
@@ -1714,37 +1758,48 @@ fi
 # `make install`) and replaced by a fake-module marker. wineboot's 11,,*
 # wildcard stamps a system32/syswow64 placeholder for each, which is what
 # lets the prepended tree supply the real DLL (a builtin will not load
-# without its placeholder). Each marker mirrors the exports of the real DLL
-# it stands in for, taken from the first tree in the order of DXGI_IMPLS or
-# D3D9_IMPLS that has it. Its machine is that of the processes the directory
-# serves, not the real DLL's: i386 in i386-windows, AMD64 in the 64-bit dir.
-# In aarch64-windows the placeholder's machine decides which module the
-# loader accepts, and an x64 (ARM64EC) process rejects an ARM64 placeholder
-# with error 193 even when the real module, like Wine's own d3d10.dll there,
-# is an ARM64X one it could load. x64 programs are what the bundle is for, so
-# every 64-bit marker says AMD64 (docs/arm64.md, Limitations). An arm64
-# winebuild has no default PE target, hence the explicit -b.
+# without its placeholder). Each marker is made with `--dll` naming the real
+# DLL of the first tree in the order of DXGI_IMPLS or D3D9_IMPLS that has it,
+# but winebuild does not copy that DLL's exports into a fake module: the
+# marker has no export table, and none is needed, since the loader only
+# checks that the placeholder is there and which machine it says before it
+# loads the real DLL. In i386-windows every marker is i386. In the 64-bit
+# dir the placeholder's machine decides which module the loader accepts, and
+# one placeholder serves every process and every tree of the family:
+#  - An x64 process, which runs as ARM64EC, accepts an AMD64 placeholder, and
+#    an ARM64 one only when its load config carries ARM64EC (CHPE) metadata.
+#    A native ARM64 process rejects an AMD64 placeholder with error 193.
+#  - An AMD64 placeholder makes the loader take the x64 view of the real
+#    module, an ARM64 one lets the view follow the main image, so behind an
+#    ARM64 placeholder with that metadata an ARM64X module serves both kinds
+#    of process, each from its own half.
+# So a name gets such a hybrid marker (winebuild -marm64x) when every tree of
+# the family that has it holds an ARM64X build of it (hybrid_marker), and an
+# AMD64 one otherwise: an x86_64 build in any tree keeps its name on AMD64,
+# the machine of that build, for the x64 programs the bundle is for, and a
+# native ARM64 program cannot load that name (docs/arm64.md, Limitations).
+# Step 5 checks every marker against the same rule. An arm64 winebuild has
+# no default PE target, hence the explicit -b.
 time_mark "Step 4: fake-module markers"
 echo "  Stamping fake-module markers in the default dirs..."
-mark() { # <out-dir> <arch-dir> <real-dll> <name>
-    local target=x86_64-windows
-    if [ "$2" = i386-windows ]; then target=i686-windows; fi
-    "$WINEBUILD" --fake-module -o "$1/$4.dll" -b "$target" --dll "$3"
+mark() { # <family> <out-dir> <arch-dir> <real-dll> <name>
+    if [ "$3" = i386-windows ]; then
+        "$WINEBUILD" --fake-module -o "$2/$5.dll" -b i686-windows --dll "$4"
+    elif hybrid_marker "$1" "$5"; then
+        "$WINEBUILD" --fake-module -o "$2/$5.dll" -b aarch64-windows -marm64x --dll "$4"
+    else
+        "$WINEBUILD" --fake-module -o "$2/$5.dll" -b x86_64-windows --dll "$4"
+    fi
 }
 for family in dxgi d3d9; do
-    if [ "$family" = dxgi ]; then impls="$DXGI_IMPLS"; else impls="$D3D9_IMPLS"; fi
+    impls=$(family_impls "$family")
     for arch in i386-windows "$PE64_DIR"; do
         if [ "$arch" = i386-windows ]; then default="$d3d32"; else default="$d3d64"; fi
-        names=$(for impl in $impls; do
-                    for f in "$WINE_DIR/lib/wine/$family/$impl/$arch"/*.dll; do
-                        if [ -f "$f" ]; then basename "$f" .dll; fi
-                    done
-                done | sort -u)
-        for dll in $names; do
+        for dll in $(family_dlls "$family" "$arch"); do
             rm -f "$default/$dll.dll"
             for impl in $impls; do
                 real="$WINE_DIR/lib/wine/$family/$impl/$arch/$dll.dll"
-                if [ -f "$real" ]; then mark "$default" "$arch" "$real" "$dll"; break; fi
+                if [ -f "$real" ]; then mark "$family" "$default" "$arch" "$real" "$dll"; break; fi
             done
         done
     done
@@ -1972,6 +2027,50 @@ if [ $MISSING -ne 0 ]; then
     exit 1
 fi
 echo "  Direct3D trees (dxgi: $DXGI_IMPLS; d3d9: $D3D9_IMPLS) and the other copied-in components in place."
+
+# Every name a Direct3D tree supplies has a marker in the default dir, with
+# the machine the rule of Step 4 asks for, worked out again from the trees as
+# installed: i386 in i386-windows, and in the 64-bit dir a hybrid one (ARM64
+# with ARM64EC metadata, which pe_is_arm64x tells) where hybrid_marker says
+# so and AMD64 everywhere else. A tree whose 64-bit DLLs become ARM64X, such
+# as an mtld3d release built that way, is so held to hybrid markers without a
+# change here, and a marker of the wrong machine, which would keep one kind
+# of process from the name, fails the step.
+time_mark "Step 5: marker machines"
+BADMARK=0
+HYBRID_MARKERS=""
+for family in dxgi d3d9; do
+    for arch in i386-windows "$PE64_DIR"; do
+        for dll in $(family_dlls "$family" "$arch"); do
+            f="$WINE_DIR/lib/wine/$arch/$dll.dll"
+            if [ ! -f "$f" ] || ! head -c 128 "$f" | grep -qa "Wine placeholder DLL"; then
+                echo "  ERROR: $arch/$dll.dll is not a fake-module marker"
+                BADMARK=1
+            elif [ "$arch" = i386-windows ]; then
+                if [ "$(pe_machine "$f")" != 014c ]; then
+                    echo "  ERROR: the marker $arch/$dll.dll has the PE machine $(pe_machine "$f"), not 014c"
+                    BADMARK=1
+                fi
+            elif hybrid_marker "$family" "$dll"; then
+                if ! pe_is_arm64x "$f"; then
+                    echo "  ERROR: the marker $arch/$dll.dll is not a hybrid one (PE machine $(pe_machine "$f")),"
+                    echo "    although every $family tree with $dll.dll holds an ARM64X build"
+                    BADMARK=1
+                fi
+                HYBRID_MARKERS="$HYBRID_MARKERS $dll"
+            elif [ "$(pe_machine "$f")" != 8664 ]; then
+                echo "  ERROR: the marker $arch/$dll.dll has the PE machine $(pe_machine "$f"), not 8664,"
+                echo "    although not every $family tree with $dll.dll holds an ARM64X build"
+                BADMARK=1
+            fi
+        done
+    done
+done
+if [ $BADMARK -ne 0 ]; then
+    echo "Error: the Direct3D markers in the default dirs do not have the machines Step 4 gives them"
+    exit 1
+fi
+echo "  Direct3D markers in place; hybrid in $PE64_DIR:${HYBRID_MARKERS:- none}, AMD64 for the other 64-bit names."
 
 # Step 4e stripped every PE file's symbols; none may be left. One header scan
 # (pe_scan) finds the PE files and their COFF symbol tables, and llvm-objdump
