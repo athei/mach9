@@ -1,0 +1,188 @@
+name: Release compatdb
+
+# A compatdb-* tag publishes a bundle without building Wine: it takes the
+# bundle of a published arm64-* release, replaces compatdb.so with one built
+# from the tagged commit (bundle-wine.sh --compatdb-only, which runs the
+# smoke test), and attaches the result under the asset names release.yml
+# uses. By default the base is the newest published arm64-* release; a
+# manual run can name one. Drafts and pre-releases are never used as a base,
+# and neither is whatever release GitHub marks as the latest, which can be a
+# compatdb-* one. The loader is the base's, signed already, so no signing
+# identity is needed.
+
+on:
+  push:
+    tags: ['compatdb-*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing compatdb-* tag to build and release"
+        required: true
+        type: string
+      base:
+        description: "arm64-* release to take Wine from (default: the newest published one)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-compatdb-${{ inputs.tag || github.ref_name }}
+
+# bash -eo pipefail, so a failure inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    # Inputs reach the shell only through the environment, never through
+    # expressions inside a run: script. The token goes only to the steps that
+    # call gh.
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      BASE_INPUT: ${{ inputs.base }}
+    steps:
+      - name: Check the tag
+        run: |
+          case "$TAG" in
+            compatdb-*) ;;
+            *) echo "Tag '$TAG' is not a compatdb-* tag."; exit 1 ;;
+          esac
+
+      # The scripts take the workspace, the parent of scripts/, as the root of
+      # their layout, so the bundle goes to dist/wine.
+      - name: Checkout build scripts
+        uses: actions/checkout@v7
+        with:
+          path: scripts
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+
+      - name: Resolve the base release
+        id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$BASE_INPUT" ]; then
+            case "$BASE_INPUT" in
+              arm64-*) ;;
+              *) echo "Base '$BASE_INPUT' is not an arm64-* release."; exit 1 ;;
+            esac
+            state=$(gh release view "$BASE_INPUT" --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,isPrerelease -q '"\(.isDraft) \(.isPrerelease)"')
+            if [ "$state" != "false false" ]; then
+              echo "Base '$BASE_INPUT' is a draft or a pre-release."
+              exit 1
+            fi
+            base="$BASE_INPUT"
+          else
+            base=$(gh release list --repo "$GITHUB_REPOSITORY" \
+              --exclude-drafts --exclude-pre-releases --limit 100 \
+              --json tagName,publishedAt \
+              -q '[.[] | select(.tagName | startswith("arm64-"))] | sort_by(.publishedAt) | last | .tagName // empty')
+            if [ -z "$base" ]; then
+              echo "No published arm64-* release to use as the base."
+              exit 1
+            fi
+          fi
+          echo "Base: $base"
+          echo "tag=$base" >> "$GITHUB_OUTPUT"
+
+      # The digest is the one GitHub computed when the asset was uploaded, so
+      # it catches a truncated or corrupted download. The PE files, and so
+      # their symbols, are the base's: its symbols archive, when it has one,
+      # is attached again under this tag.
+      - name: Download the base bundle
+        env:
+          BASE: ${{ steps.base.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/base" "$RUNNER_TEMP/release"
+          gh release view "$BASE" --repo "$GITHUB_REPOSITORY" --json body \
+            -q '.body // ""' > "$RUNNER_TEMP/base/notes.md"
+          # fetch <asset> required|optional: download <asset> of the base into
+          # $RUNNER_TEMP/base and check it against its digest. Returns 1 only
+          # for an optional asset the base does not have; every failure
+          # exits, also when fetch is called as an if condition, where set -e
+          # does not apply.
+          gh release view "$BASE" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | [.name, .digest] | @tsv' > "$RUNNER_TEMP/base/assets.tsv"
+          fetch() {
+            digest=$(awk -F '\t' -v name="$1" '$1 == name { print $2 }' "$RUNNER_TEMP/base/assets.tsv")
+            if [ -z "$digest" ] && [ "$2" = optional ]; then
+              return 1
+            fi
+            case "$digest" in
+              sha256:*) ;;
+              *) echo "No sha256 digest for $1 on $BASE (got '$digest')."; exit 1 ;;
+            esac
+            gh release download "$BASE" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$1" --dir "$RUNNER_TEMP/base" \
+              || { echo "Cannot download $1 of $BASE."; exit 1; }
+            echo "${digest#sha256:}  $RUNNER_TEMP/base/$1" | shasum -a 256 -c - \
+              || { echo "$1 does not match its digest."; exit 1; }
+          }
+          fetch "wine-${BASE}-macos-arm64.tar.xz" required
+          mkdir -p dist
+          tar -C dist -xJf "$RUNNER_TEMP/base/wine-${BASE}-macos-arm64.tar.xz"
+          rm "$RUNNER_TEMP/base/wine-${BASE}-macos-arm64.tar.xz"
+          if fetch "wine-${BASE}-macos-arm64-symbols.tar.xz" optional; then
+            mv "$RUNNER_TEMP/base/wine-${BASE}-macos-arm64-symbols.tar.xz" \
+              "$RUNNER_TEMP/release/wine-${TAG}-macos-arm64-symbols.tar.xz"
+          fi
+
+      # The smoke test runs the base's signed loader, so the runner's macOS
+      # has to be at least the floor. No Metal toolchain: nothing is compiled
+      # for Metal.
+      - name: Report the runner and select Xcode
+        run: scripts/bin/ci/host.sh
+
+      # llvm-mingw compiles the smoke test's programs and reads the Direct3D
+      # markers.
+      - name: Cache the pinned downloads
+        uses: actions/cache@v6
+        with:
+          path: cache
+          key: redist-${{ hashFiles('scripts/pins/redist.env') }}
+
+      - name: Install llvm-mingw
+        run: |
+          scripts/bin/ci/llvm-mingw.sh "$HOME/llvm-mingw"
+          echo "MINGW_DIR=$HOME/llvm-mingw" >> "$GITHUB_ENV"
+
+      - name: Add the Rust target
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Cache the cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ hashFiles('scripts/compatdb/Cargo.lock') }}
+
+      - name: Replace compatdb.so
+        run: scripts/bin/bundle-wine.sh --compatdb-only --strict-floor
+
+      - name: Package
+        env:
+          BASE: ${{ steps.base.outputs.tag }}
+        run: |
+          scripts/bin/ci/package.sh --base "$BASE" --base-notes "$RUNNER_TEMP/base/notes.md" \
+            "$TAG" "$RUNNER_TEMP/release"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/release/notes.md" \
+            "$RUNNER_TEMP/release"/*.tar.xz

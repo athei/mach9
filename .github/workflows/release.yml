@@ -1,0 +1,218 @@
+name: Release
+
+# Builds the arm64 bundle on a hosted runner, from the Wine branch in
+# pins/wine-src.ref and the pins of this commit, and signs its loader with
+# the identity in the release environment's secrets. An arm64-* tag attaches
+# the bundle and its symbols to a draft release of that tag. A ci-* tag or a
+# manual run builds the same and keeps the tarballs as a workflow artifact.
+#
+# The logic lives in bin/ and bin/ci/, which also run on a Mac. The caches
+# a run on a tag writes serve only later runs on that tag; a manual run on
+# main writes caches that every later run can read.
+
+on:
+  push:
+    tags: ['arm64-*', 'ci-*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+# bash -eo pipefail, so a failure inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 360
+    # Holds the secrets MACOS_SIGNING_P12 and MACOS_SIGNING_P12_PASSWORD.
+    environment: release
+    steps:
+      # The scripts take the workspace, the parent of scripts/, as the root of
+      # their layout: the Wine source in src/, downloads in cache/, the trees
+      # under build/ and the bundle in dist/.
+      - name: Checkout build scripts
+        uses: actions/checkout@v7
+        with:
+          path: scripts
+          persist-credentials: false
+
+      # An empty ref would make the checkout below take the default branch.
+      - name: Read the Wine source ref
+        id: ref
+        run: |
+          ref=$(tr -d '[:space:]' < scripts/pins/wine-src.ref)
+          if [ -z "$ref" ]; then
+            echo "pins/wine-src.ref names no ref."
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      # The whole history without file contents, which come with the
+      # checkout: the build writes `git describe` into ntdll, and the notes
+      # name it.
+      - name: Checkout Wine source
+        uses: actions/checkout@v7
+        with:
+          repository: athei/wine
+          ref: ${{ steps.ref.outputs.ref }}
+          path: src
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      # athei/wine carries no Wine release tags, so git describe would find
+      # none. The tag of the release the source is based on comes from the
+      # GitHub mirror of Wine.
+      - name: Fetch the Wine release tag
+        run: |
+          version=$(sed -n 's/^Wine version //p' src/VERSION)
+          git -C src fetch --quiet --no-tags https://github.com/wine-mirror/wine \
+            "refs/tags/wine-$version:refs/tags/wine-$version"
+          git -C src describe HEAD
+
+      - name: Report the runner, select Xcode and its Metal toolchain
+        run: scripts/bin/ci/host.sh --metal
+
+      - name: Compute the cache keys
+        id: keys
+        run: |
+          SCRIPT_DIR=scripts/bin . scripts/bin/lib/profile.sh
+          . scripts/pins/redist.env
+          xcode=$(xcodebuild -version | awk 'NR == 1 { print $2 }')
+          echo "brew=brew-$RUNNER_OS-$ImageOS-$ImageVersion-${{ hashFiles('scripts/pins/brew-formulae', 'scripts/bin/ci/brew.sh') }}" >> "$GITHUB_OUTPUT"
+          echo "llvm15=dxmt-llvm15-$LLVM15_GIT_COMMIT-floor$MACOS_FLOOR-xcode$xcode-$ImageOS-${{ hashFiles('scripts/bin/build-dxmt.sh') }}" >> "$GITHUB_OUTPUT"
+
+      # Restored and saved separately, so the kegs are saved right after
+      # brew.sh wrote them, even when the build fails later.
+      - name: Restore the Homebrew kegs
+        id: brew-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/brew
+          key: ${{ steps.keys.outputs.brew }}
+
+      - name: Install the Homebrew formulae
+        env:
+          CACHE_HIT: ${{ steps.brew-cache.outputs.cache-hit }}
+        run: |
+          if [ "$CACHE_HIT" = true ]; then
+            scripts/bin/ci/brew.sh restore "$RUNNER_TEMP/brew"
+          else
+            scripts/bin/ci/brew.sh install "$RUNNER_TEMP/brew"
+          fi
+
+      - name: Save the Homebrew kegs
+        if: steps.brew-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/brew
+          key: ${{ steps.keys.outputs.brew }}
+
+      - name: Free the Homebrew cache directory
+        run: rm -rf "$RUNNER_TEMP/brew"
+
+      # The downloads redist.env pins: llvm-mingw here, mtld3d in the bundle
+      # step. Each is checked against its SHA-256 whether it was cached or not.
+      - name: Cache the pinned downloads
+        uses: actions/cache@v6
+        with:
+          path: cache
+          key: redist-${{ hashFiles('scripts/pins/redist.env') }}
+
+      - name: Install llvm-mingw
+        run: |
+          scripts/bin/ci/llvm-mingw.sh "$HOME/llvm-mingw"
+          echo "MINGW_DIR=$HOME/llvm-mingw" >> "$GITHUB_ENV"
+
+      - name: Add the Rust target
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Cache the cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ hashFiles('scripts/compatdb/Cargo.lock') }}
+
+      # The LLVM 15 libraries DXMT's winemetal.so links, which build-dxmt.sh
+      # builds only when this directory holds no build of the pinned commit.
+      # Saved right after the build step, even when that fails later.
+      - name: Restore DXMT's LLVM
+        id: llvm15-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: build/dxmt/llvm15
+          key: ${{ steps.keys.outputs.llvm15 }}
+
+      - name: Build
+        run: scripts/bin/build-wine.sh --clean
+
+      - name: Save DXMT's LLVM
+        if: always() && steps.llvm15-cache.outputs.cache-hit != 'true' && hashFiles('build/dxmt/llvm15/COMMIT') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: build/dxmt/llvm15
+          key: ${{ steps.keys.outputs.llvm15 }}
+
+      # The secrets reach this step only.
+      - name: Import the signing identity
+        env:
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+        run: scripts/bin/ci/keychain.sh setup
+
+      - name: Bundle
+        run: scripts/bin/bundle-wine.sh --strict-floor --symbols --yes
+
+      # A tag names the build; a manual run has none, so it is named after
+      # the scripts commit.
+      - name: Name the build
+        id: name
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "name=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=ci-$(git -C scripts rev-parse --short=11 HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package
+        env:
+          NAME: ${{ steps.name.outputs.name }}
+        run: scripts/bin/ci/package.sh "$NAME" "$RUNNER_TEMP/release"
+
+      - name: Create draft release
+        if: startsWith(github.ref, 'refs/tags/arm64-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/release/notes.md" \
+            "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64.tar.xz" \
+            "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64-symbols.tar.xz"
+
+      - name: Keep the tarballs
+        if: ${{ !startsWith(github.ref, 'refs/tags/arm64-') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: wine-${{ steps.name.outputs.name }}-macos-arm64
+          path: ${{ runner.temp }}/release
+          retention-days: 7
+          compression-level: 0
+
+      - name: Remove the signing identity
+        if: always()
+        run: |
+          if [ -x scripts/bin/ci/keychain.sh ]; then
+            scripts/bin/ci/keychain.sh cleanup
+          fi
