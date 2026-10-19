@@ -28,7 +28,7 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
   [`fex-src.ref`](../pins/fex-src.ref) names. compatdb's built-in
   `fex-x87-reduced-precision` rule asks FEX for faster x87 emulation
   ([defaults](../README.md#defaults-that-differ-from-wine),
-  [FEX and KosmicKrisp](compatdb.md#fex-and-kosmickrisp)).
+  [built-in environment rules](compatdb.md#built-in-environment-rules)).
 - DXMT is built from our fork against this Wine (see [DXMT](#dxmt)), and
   vkd3d-proton, the D3D12 in DXMT's tree, from ours (see
   [vkd3d-proton](#vkd3d-proton)); mtld3d comes from its release (see
@@ -273,7 +273,16 @@ exits with the number of failed checks, at most 255.
   ([Vulkan](#vulkan)), which it finds through `winevulkan.dll` or
   `vulkan-1.dll`. The features it needs that KosmicKrisp counts as
   experimental come from compatdb's built-in `kosmickrisp-experimental`
-  rule ([FEX and KosmicKrisp](compatdb.md#fex-and-kosmickrisp)).
+  rule ([built-in environment rules](compatdb.md#built-in-environment-rules)).
+- Our commits add `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES`, the least frame
+  latency a swapchain's frame latency handle allows. compatdb's built-in
+  `vkd3d-proton-min-latency` rule sets a minimum frame latency for every
+  process, with the value in
+  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs): at a latency of
+  1 the CPU and the GPU take turns and an Apple GPU stays at a low clock
+  ([built-in environment rules](compatdb.md#built-in-environment-rules)).
+  The smoke test checks that vkd3d-proton reports it for its waitable
+  swapchain.
 - `d3d12.dll` and `d3d12core.dll` go into the `dxmt` tree. vkd3d-proton
   has no DXGI of its own: a game creates its swapchain through DXMT's
   `dxgi.dll`, which presents vkd3d-proton's Vulkan swapchain into the

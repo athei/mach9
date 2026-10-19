@@ -71,7 +71,7 @@ directory that an x64 process would load but not run natively
 | `FEX_HOSTFEATURES` | FEX's host feature overrides. x86_64 programs, which run as ARM64EC, run without AFP (the Arm floating-point behaviour FEX uses to match x86) by default, because the floating-point mode would have to change on every call between x86 code and native code, which costs more than AFP saves. `enableafp` turns it back on. i386 programs keep AFP |
 | `VK_DRIVER_FILES` | Unset: ntdll sets it to the bundle's `share/vulkan/icd.d`, so the Vulkan loader uses the bundled KosmicKrisp and no driver installed elsewhere on the Mac. Set: the loader uses the manifests it names instead. ntdll also leaves it unset when the caller sets `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES`; the loader then uses those, and the bundled driver is not added to them ([Vulkan](docs/arm64.md#vulkan)) |
 | `MESA_KK_EXPERIMENTAL` | Which experimental features KosmicKrisp advertises. compatdb's built-in `kosmickrisp-experimental` rule sets it in every process, replacing a value from the environment; a rule changes or removes it ([Vulkan](docs/arm64.md#vulkan)) |
-| `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | vkd3d-proton's settings, as [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) describes them. A compatdb `env` rule sets one for one game ([recipes](docs/compatdb.md#recipes)) |
+| `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | vkd3d-proton's settings, as [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) describes them. A compatdb `env` rule sets one for one game ([recipes](docs/compatdb.md#recipes)). compatdb's built-in `vkd3d-proton-min-latency` rule sets `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES` in every process, replacing a value from the environment ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
 | `WINE_D3D_CONFIG` | wined3d's settings, as in Wine. `renderer=vulkan` puts wined3d on KosmicKrisp. compatdb's `wined3d=vulkan` sets it for one game, keeping the variable's other options; the programs that game starts inherit it unless a rule for them sets `wined3d` ([wined3d on Vulkan](docs/compatdb.md#wined3d-on-vulkan)) |
 
 ### Direct3D backends
@@ -125,9 +125,10 @@ by the patched Wine.
 |----------|------------------------|------------|
 | DPI awareness | Every process is system-aware | Rule `dpi-aware` ([recipes](docs/compatdb.md#recipes)) |
 | Address space | Every 32-bit process gets 4 GB, even without the large-address-aware flag | Rule `large-address-aware` ([recipes](docs/compatdb.md#recipes)) |
-| x87 precision under FEX | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([FEX and KosmicKrisp](docs/compatdb.md#fex-and-kosmickrisp)) |
+| x87 precision under FEX | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
 | Synchronization | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | wineserver; `WINEMSYNC=0` where the session starts turns it off ([runtime](docs/arm64.md#runtime)) |
-| KosmicKrisp's experimental features | Advertised to every process: the ones the rule names in `MESA_KK_EXPERIMENTAL` | Rule `kosmickrisp-experimental` ([FEX and KosmicKrisp](docs/compatdb.md#fex-and-kosmickrisp)) |
+| KosmicKrisp's experimental features | Advertised to every process: the ones the rule names in `MESA_KK_EXPERIMENTAL` | Rule `kosmickrisp-experimental` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
+| D3D12 frame latency handles | A game that waits on one runs extra frames ahead, so an Apple GPU keeps its clock up; more input latency | Rule `vkd3d-proton-min-latency` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
 | Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | Rule `no-mono-gecko` ([recipes](docs/compatdb.md#recipes)) |
 
 ## Building

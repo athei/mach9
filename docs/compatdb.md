@@ -63,7 +63,7 @@ retired x86_64 Wine still parse
 - To change or drop a built-in rule, see
   [merging with the built-in rules](#merging-with-the-built-in-rules).
 
-### FEX and KosmicKrisp
+### Built-in environment rules
 
 - The built-in `fex-x87-reduced-precision` rule sets an `env` entry for
   every process that has FEX emulate x87 code with reduced precision, which
@@ -79,9 +79,21 @@ retired x86_64 Wine still parse
   loads, before any PE code runs and so before win32u loads the Vulkan
   loader, where the driver reads it. Like the FEX entry, it replaces a
   value already in the environment.
-- The entries and the reasoning for both are in
-  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). The FEX and
-  KosmicKrisp [recipes](#recipes) turn them off or change them.
+- The built-in `vkd3d-proton-min-latency` rule sets
+  `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES` for every process, a minimum frame
+  latency for swapchains with a frame latency handle; the value is in
+  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). A D3D12 game
+  that waits on that handle at the default latency of 1 has the CPU and
+  the GPU take turns, and an Apple GPU then stays at a low clock; with the
+  variable, our vkd3d-proton lets the game run frames ahead, at the cost
+  of input latency ([vkd3d-proton](arm64.md#vkd3d-proton)). vkd3d-proton
+  reads it in the game's process when it creates such a swapchain, and
+  logs `Allowing a frame latency of at least <n> frames.` then. Like the
+  FEX entry, it replaces a value already in the environment.
+- The entries and the reasoning for all three are in
+  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). The FEX,
+  KosmicKrisp and vkd3d-proton [recipes](#recipes) turn them off or change
+  them.
 
 ## WINE_COMPATDB
 
@@ -134,7 +146,7 @@ Wine understood. The library keeps such a record instead of dropping it:
   place.
 - `x87_sidecar` is accepted, with any value, and ignored. There is no
   x87sidecar; FEX emulates x87 code
-  ([FEX and KosmicKrisp](#fex-and-kosmickrisp)).
+  ([built-in environment rules](#built-in-environment-rules)).
 - A rule that names a built-in rule only that Wine had, such as
   `name=no-vulkan;enabled=false` or `name=x87-sidecar;enabled=false`, names
   no rule here and is logged as `override names no rule`.
@@ -172,6 +184,8 @@ executable.
 | Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` (not for a D3D12 game: the `wined3d` tree has no D3D12) |
 | Hide D3D12 from one game, keeping DXMT for D3D10 and D3D11 | `name=my-game;exe=Game.exe;dll_overrides=d3d12,d3d12core=` |
 | Change a vkd3d-proton setting for one game | `name=my-game;exe=Game.exe;env=VKD3D_CONFIG=<options>` |
+| Give one game the frame latency it asks for | `name=my-game;exe=Game.exe;env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=` |
+| Give every game the frame latency it asks for | `name=vkd3d-proton-min-latency;enabled=false` |
 | Keep no-execute on for one game | `name=my-game;exe=Game.exe;env=WINE_FORCE_NX=1` |
 | Give one game FEX's full x87 precision | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision | `name=fex-x87-reduced-precision;enabled=false` |
