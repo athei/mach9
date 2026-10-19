@@ -194,6 +194,25 @@ canonical_path() {
     fi
 }
 
+# absolute_path <path>: <path> as an absolute path without trailing slashes,
+# its longest existing directory prefix with symlinks, . and .. resolved and
+# the rest, which does not exist yet, appended one component at a time. A
+# path relative to the working directory is taken from there.
+absolute_path() {
+    local path="$1" rest="" top
+    case "$path" in
+        /*) ;;
+        *) path="$PWD/$path" ;;
+    esac
+    while [ ! -d "$path" ]; do
+        rest="/$(basename "$path")$rest"
+        path=$(dirname "$path")
+    done
+    top=$(cd "$path" && pwd -P)
+    path="${top%/}$rest"
+    echo "${path:-/}"
+}
+
 # claim_tree <dir> <name> [<wipe>]: make <dir> the tree <name>, emptied first
 # when <wipe> is 1, and mark it. Every tree a script fills or deletes goes
 # through here first, since an override can point one anywhere. Exit unless
