@@ -48,8 +48,8 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 claim_tree "$BUILD_DIR" wine "$CLEAN"
 
-# build-fex.sh, build-mesa.sh and build-dxmt.sh read the same profile.sh and
-# take --clean the same way.
+# build-fex.sh, build-mesa.sh, build-dxmt.sh and build-vkd3d-proton.sh read
+# the same profile.sh and take --clean the same way.
 SUB_FLAGS=()
 if [ "$CLEAN" -eq 1 ]; then
     SUB_FLAGS=(--clean)
@@ -349,6 +349,9 @@ echo "==> Wine SDK staged for $(cat "$WINE_SDK_DIR/WINE_COMMIT")."
 
 # FEX, the x86 emulator, and DXMT, whose unix half and ARM64X DLLs link
 # against this Wine's build tree and whose i386 DLLs link against the SDK,
-# so both are built after them.
+# so both are built after them. vkd3d-proton, the D3D12 that goes into
+# DXMT's tree, links nothing of Wine but is marked as a builtin with the
+# build tree's and the SDK's winebuild.
 "$SCRIPT_DIR/build-fex.sh" "${SUB_FLAGS[@]}"
 "$SCRIPT_DIR/build-dxmt.sh" "${SUB_FLAGS[@]}"
+"$SCRIPT_DIR/build-vkd3d-proton.sh" "${SUB_FLAGS[@]}"
