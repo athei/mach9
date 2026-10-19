@@ -681,8 +681,8 @@ smoke_test() {
         echo "  Metal 4 GPU for KosmicKrisp: $METAL_DEVICES"
     else
         echo "  No Metal 4 GPU ($METAL_DEVICES): skipping the checks that need a"
-        echo "  KosmicKrisp device. vulkan.exe has to find the driver and no GPU instead, and"
-        echo "  wined3d.exe does not run with wined3d on Vulkan."
+        echo "  KosmicKrisp device. vulkan.exe and d3d12.exe have to find the driver and no"
+        echo "  GPU instead, and wined3d.exe does not run with wined3d on Vulkan."
     fi
     gl_probe
     if [ "$ACCEL_GL" -eq 1 ]; then
@@ -789,6 +789,13 @@ smoke_test() {
     # --compatdb-only has already refused a bundle without Vulkan
     # (check_vulkan_present), so every bundle that gets here has it.
     check_vulkan_runs "${wine_env[@]}"
+    # A bundle from before vkd3d-proton has no D3D12, which --compatdb-only
+    # may meet and skips, as it skips msync; a full bundle always has it.
+    if [ "$COMPATDB_ONLY" -eq 1 ] && [ ! -f "$WINE_DIR/lib/wine/dxgi/dxmt/$PE64_DIR/d3d12.dll" ]; then
+        echo "  Skipping the D3D12 check: this bundle predates vkd3d-proton."
+    else
+        check_d3d12_runs "${wine_env[@]}"
+    fi
     check_wined3d_device "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
@@ -1068,6 +1075,83 @@ vulkan_no_gpu() {
                 "Failed to detect any valid GPUs"; do
         grep "$want" "$log" >/dev/null || return 1
     done
+}
+
+# check_d3d12_runs <env-command>...: build smoke/d3d12.c for x86_64, i686
+# and aarch64 and run it in the booted throwaway prefix, and exit unless each
+# gets the default dxmt tree from compatdb.so and goes through every step:
+# vkd3d-proton's devices on DXMT's adapter, a swapchain DXMT presents for a
+# visible window, a clear read back, resizes, a frame latency handle, and
+# the swapchains Windows refuses. vkd3d-proton reaches KosmicKrisp through
+# winevulkan and the bundled loader, as vulkan.exe does. On a Mac without a
+# Metal 4 GPU (METAL4=0, see metal4_probe) KosmicKrisp has no device, so
+# each run must fail creating its first device instead (check_d3d12_no_gpu).
+check_d3d12_runs() {
+    local arch exe log want
+    for arch in x86_64 i686 aarch64; do
+        exe="$TMP_DIR/d3d12-$arch.exe"
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/d3d12.c"
+        time_mark "smoke: d3d12.exe $arch"
+        if [ "$METAL4" -eq 0 ]; then
+            check_d3d12_no_gpu "$arch" "$exe" "$@"
+            continue
+        fi
+        echo "  Running d3d12.exe for $arch..."
+        log="$TMP_DIR/d3d12-$arch.log"
+        run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
+        smoke_check "d3d12.exe for $arch" 120 "$log"
+        for want in "wine-build smoke test: $arch d3d12 works on " \
+                    "compatdb: .*dxgi = ${DXGI_IMPLS%% *} (from"; do
+            if ! grep -q "$want" "$log"; then
+                echo "Error: d3d12.exe for $arch did not print '$want'"
+                cat "$log"
+                smoke_stop
+                exit 1
+            fi
+        done
+        grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+    done
+}
+
+# check_d3d12_no_gpu <arch> <exe> <env-command>...: run the d3d12.exe <exe>
+# for <arch> as check_d3d12_runs does, on a Mac without a Metal 4 GPU, with
+# the Vulkan loader's errors, warnings and driver search in the log, and exit
+# unless it exited with 6 after D3D12CreateDevice on DXMT's adapter returned
+# E_FAIL (0x80004005), which is what vkd3d-proton makes of the instance the
+# Vulkan loader cannot create, and the loader read the bundled manifest and
+# found no GPU, as for vulkan.exe (vulkan_no_gpu). That still shows that
+# d3d12.dll, d3d12core.dll, DXMT's dxgi.dll, winevulkan and the loader load.
+check_d3d12_no_gpu() {
+    local arch="$1" exe="$2" log want
+    shift 2
+    echo "  Running d3d12.exe for $arch, which must find DXMT's adapter and no Vulkan device..."
+    log="$TMP_DIR/d3d12-$arch.log"
+    run_limited 120 "$log" "$@" VK_LOADER_DEBUG=error,warn,driver "$WINE_DIR/bin/wine" "$exe"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: d3d12.exe for $arch did not exit within 120 seconds"
+    elif [ "$RUN_STATUS" -eq 0 ]; then
+        echo "Error: d3d12.exe for $arch created a D3D12 device, though smoke/metal4.m found no Metal 4 GPU"
+    elif [ "$RUN_STATUS" -ne 6 ]; then
+        echo "Error: d3d12.exe for $arch failed (status $RUN_STATUS) before or after its first device"
+    else
+        for want in "wine-build smoke test: $arch D3D12CreateDevice on the dxgi adapter failed, 0x80004005[^0-9a-f]*\$" \
+                    "Found ICD manifest file .*/share/vulkan/icd\.d/kosmickrisp_mesa_icd\.aarch64\.json" \
+                    "Failed to detect any valid GPUs"; do
+            if ! grep "$want" "$log" >/dev/null; then
+                echo "Error: d3d12.exe for $arch failed its first device, but did not print '$want'"
+                cat "$log"
+                smoke_stop
+                exit 1
+            fi
+        done
+        check_freetype "d3d12.exe for $arch" "$log"
+        grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+        echo "    vkd3d-proton found DXMT's adapter, and the Vulkan loader no GPU."
+        return 0
+    fi
+    cat "$log"
+    smoke_stop
+    exit 1
 }
 
 # metal4_probe: set METAL4 to 1 when this Mac has a Metal device that
