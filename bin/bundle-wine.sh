@@ -656,16 +656,17 @@ check_default_trees() {
 # native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
 # hang rather than an error. The caller's WINE_COMPATDB and WINE_D3D_CONFIG
-# and every WINEMSYNC*, FEX_*, VK_*, MESA_*, MTL_* and METAL_* variable are
-# dropped so that the built-in rules and the defaults of Wine, FEX, the
-# Vulkan loader, KosmicKrisp and Metal decide. The checks that need a Vulkan
-# device change on a Mac without a Metal 4 GPU (metal4_probe), and the one
-# that needs an OpenGL context on a Mac without an accelerated OpenGL
-# renderer (gl_probe). Each probe decides only its own checks.
+# and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, MESA_*, MTL_* and METAL_*
+# variable are dropped so that the built-in rules and the defaults of Wine,
+# FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp and Metal decide. The
+# checks that need a Vulkan device change on a Mac without a Metal 4 GPU
+# (metal4_probe), and the one that needs an OpenGL context on a Mac without
+# an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
+# checks.
 smoke_test() {
     local version log arch cc exe marker markers var dlls
     local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG)
-    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|MESA_|MTL_|METAL_)'); do
+    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|MESA_|MTL_|METAL_)'); do
         wine_env+=(-u "$var")
     done
     wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all)
