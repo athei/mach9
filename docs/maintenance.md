@@ -305,13 +305,14 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
     an upstream merge request the series carries under its original author,
     and resolve what their upstream form changes in the commits on top of
     them.
-  - Check the `MESA_KK_EXPERIMENTAL` flag names in the new tree's
-    KosmicKrisp debug flags against the `kosmickrisp-experimental` rule in
-    [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs) and its tests.
-    Mesa ignores a name it does not know, so a renamed flag turns its
-    feature off without a word; the bundle's Vulkan smoke test only notices
-    it for transform feedback. A feature upstream now advertises by default
-    no longer needs its flag.
+  - Check the always-on feature list: device-generated commands, transform
+    feedback and sparse resources must still be advertised without
+    `MESA_KK_EXPERIMENTAL` (in `kk_get_device_extensions` and the sparse
+    features of the driver's physical device). An upstream change that
+    puts one of them behind an experimental flag again turns it off
+    without a word; the bundle's Vulkan smoke test only notices it for
+    transform feedback, so check the other two in the `vulkaninfo`
+    comparison below.
   - Check that the two-stage build still holds: the stage 1 targets and
     options and the stage 2 options in
     [`build-mesa.sh`](../bin/build-mesa.sh), the disabled optional
@@ -330,10 +331,9 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
     smoke test fails on.
   - Keep a copy of `MESA_DIST`, rebuild with `build-mesa.sh`, and compare
     `vulkaninfo` for the old and the new driver, each with
-    `VK_DRIVER_FILES` naming its own manifest and `MESA_KK_EXPERIMENTAL`
-    set as the `kosmickrisp-experimental` rule sets it: extensions,
-    features and limits that disappear are a regression to explain before
-    the bundle takes the new driver.
+    `VK_DRIVER_FILES` naming its own manifest and no
+    `MESA_KK_EXPERIMENTAL`: extensions, features and limits that disappear
+    are a regression to explain before the bundle takes the new driver.
   - Push the branch to athei/mesa before building without `MESA_REPO`
     pointing at the local clone; the default builds what the remote has.
 - The Vulkan loader and headers are pinned together, from one Vulkan SDK

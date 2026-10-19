@@ -1001,10 +1001,9 @@ wined3d_no_gl() {
 
 # check_vulkan_runs <env-command>...: build smoke/vulkan.c for x86_64 and
 # i686 and run it in the booted throwaway prefix, and exit unless each finds
-# a Vulkan device that offers VK_EXT_transform_feedback and compatdb.so gave
-# the process the KosmicKrisp variable of its built-in rule. The extension
-# is one KosmicKrisp only advertises when that variable names it, so a flag
-# renamed in Mesa fails here. Headless: the program creates no surface. The
+# a Vulkan device that offers VK_EXT_transform_feedback, one of the features
+# our KosmicKrisp always advertises, with no MESA_KK_EXPERIMENTAL set (the
+# caller's is dropped). Headless: the program creates no surface. The
 # device is found through vulkan-1.dll, winevulkan, the loader win32u.so
 # loads from lib/external and the manifest in share/vulkan/icd.d, which
 # ntdll names in VK_DRIVER_FILES since <env-command> drops the caller's VK_*
@@ -1024,16 +1023,22 @@ check_vulkan_runs() {
         echo "  Running vulkan.exe for $arch..."
         log="$TMP_DIR/vulkan-$arch.log"
         run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
+        # A bundle from before the always-on features, which --compatdb-only
+        # can meet, got them from MESA_KK_EXPERIMENTAL, which compatdb.so no
+        # longer sets.
+        if [ "$RUN_STATUS" -ne 0 ] && grep "does not offer VK_EXT_transform_feedback" "$log" >/dev/null; then
+            echo "  This bundle's KosmicKrisp advertises transform feedback only when"
+            echo "  MESA_KK_EXPERIMENTAL names it, which compatdb.so no longer sets: it predates the"
+            echo "  Mesa fork's always-on features. Bundle the whole build instead of using --compatdb-only."
+        fi
         smoke_check "vulkan.exe for $arch" 120 "$log"
-        for want in "wine-build smoke test: $arch vulkan device " \
-                    "compatdb: .*env = .*MESA_KK_EXPERIMENTAL="; do
-            if ! grep -q "$want" "$log"; then
-                echo "Error: vulkan.exe for $arch did not print '$want'"
-                cat "$log"
-                smoke_stop
-                exit 1
-            fi
-        done
+        want="wine-build smoke test: $arch vulkan device "
+        if ! grep -q "$want" "$log"; then
+            echo "Error: vulkan.exe for $arch did not print '$want'"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
         grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
     done
 }
@@ -1041,17 +1046,15 @@ check_vulkan_runs() {
 # check_vulkan_no_gpu <arch> <exe> <env-command>...: run the vulkan.exe
 # <exe> for <arch> as check_vulkan_runs does, on a Mac without a Metal 4
 # GPU, with the Vulkan loader's errors, warnings and driver search in the
-# log, and exit unless it failed as vulkan_no_gpu describes, had FreeType
-# and got the KosmicKrisp variable from compatdb.so. That still shows that
-# vulkan-1.dll, winevulkan, the loader, the manifest and the driver all
-# load; only the device is missing.
+# log, and exit unless it failed as vulkan_no_gpu describes and had
+# FreeType. That still shows that vulkan-1.dll, winevulkan, the loader, the
+# manifest and the driver all load; only the device is missing.
 check_vulkan_no_gpu() {
-    local arch="$1" exe="$2" log want
+    local arch="$1" exe="$2" log
     shift 2
     echo "  Running vulkan.exe for $arch, which must find the bundled driver and no GPU..."
     log="$TMP_DIR/vulkan-$arch.log"
     run_limited 120 "$log" "$@" VK_LOADER_DEBUG=error,warn,driver "$WINE_DIR/bin/wine" "$exe"
-    want="compatdb: .*env = .*MESA_KK_EXPERIMENTAL="
     if [ "$RUN_STATUS" -eq 142 ]; then
         echo "Error: vulkan.exe for $arch did not exit within 120 seconds"
     elif [ "$RUN_STATUS" -eq 0 ]; then
@@ -1059,8 +1062,6 @@ check_vulkan_no_gpu() {
     elif ! vulkan_no_gpu "$arch" "$RUN_STATUS" "$log"; then
         echo "Error: vulkan.exe for $arch failed (status $RUN_STATUS), but not with vkCreateInstance"
         echo "result -3 after the Vulkan loader read the bundled manifest and found no GPU"
-    elif ! grep "$want" "$log" >/dev/null; then
-        echo "Error: vulkan.exe for $arch did not print '$want'"
     else
         check_freetype "vulkan.exe for $arch" "$log"
         grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
