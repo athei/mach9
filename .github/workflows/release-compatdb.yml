@@ -150,9 +150,11 @@ jobs:
           echo "redist=redist-$redist" >> "$GITHUB_OUTPUT"
 
       # llvm-mingw compiles the smoke test's programs and reads the Direct3D
-      # markers.
-      - name: Cache the pinned downloads
-        uses: actions/cache@v6
+      # markers. Restored only: --compatdb-only never fetches mtld3d, so an
+      # entry saved here would lack it, and release.yml, which restores the
+      # same key, would never save a complete one.
+      - name: Restore the pinned downloads
+        uses: actions/cache/restore@v6
         with:
           path: cache
           key: ${{ steps.keys.outputs.redist }}
