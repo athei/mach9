@@ -148,8 +148,11 @@ graphics_tests() {
         echo "$t"
     done
 }
-# DXMT's checkout and trees, the LLVM libraries it links, and DXMT as
-# build-dxmt.sh stages it for the bundle.
+# DXMT's repository (upstream DXMT plus our commits), which build-dxmt.sh
+# clones into DXMT_BUILD_DIR and checks out dxmt-src.ref in, its trees, the
+# LLVM libraries it links, and DXMT as build-dxmt.sh stages it for the
+# bundle.
+DXMT_REPO="${DXMT_REPO:-https://github.com/athei/dxmt}"
 DXMT_BUILD_DIR="${DXMT_BUILD_DIR:-$BUILD_TOP/dxmt}"
 DXMT_LLVM="${DXMT_LLVM:-$DXMT_BUILD_DIR/llvm15}"
 DXMT_DIST="${DXMT_DIST:-$DXMT_BUILD_DIR/dist}"
