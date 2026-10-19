@@ -45,7 +45,7 @@ The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](bin/lib/profile.sh).
 | `lib/wine/x86_64-windows/` | Full bundle only: the x86_64 link libraries of the [Wine SDK](docs/arm64.md#wine-sdk). Nothing reads the directory at run time |
 | `lib/wine/tests/i386-windows/`, `lib/wine/tests/x86_64-windows/` | Full bundle only: Wine's graphics conformance tests as `<name>_test.exe`, for testing the bundle's Direct3D, OpenGL and Vulkan stack ([graphics tests](docs/arm64.md#graphics-tests)) |
 | `lib/wine/tests/VERSION` | Full bundle only: one line, the `wine --version` string of the Wine the tests were built from, the same as the bundle's own `bin/wine --version` |
-| `lib/external/` | Bundled dylibs, the Vulkan loader and KosmicKrisp |
+| `lib/external/` | Bundled dylibs, the Vulkan loader, KosmicKrisp, and Mesa's EGL with Zink ([OpenGL](docs/arm64.md#opengl)) |
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
 
 An x64 process runs as ARM64EC, and Wine looks up its builtins in
@@ -72,6 +72,7 @@ directory that an x64 process would load but not run natively
 | `VK_DRIVER_FILES` | Unset: ntdll sets it to the bundle's `share/vulkan/icd.d`, so the Vulkan loader uses the bundled KosmicKrisp and no driver installed elsewhere on the Mac. Set: the loader uses the manifests it names instead. ntdll also leaves it unset when the caller sets `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES`; the loader then uses those, and the bundled driver is not added to them ([Vulkan](docs/arm64.md#vulkan)) |
 | `MESA_KK_EXPERIMENTAL` | Which experimental features KosmicKrisp advertises. compatdb's built-in `kosmickrisp-experimental` rule sets it in every process, replacing a value from the environment; a rule changes or removes it ([Vulkan](docs/arm64.md#vulkan)) |
 | `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | vkd3d-proton's settings, as [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) describes them. A compatdb `env` rule sets one for one game ([recipes](docs/compatdb.md#recipes)). compatdb's built-in `vkd3d-proton-min-latency` rule sets `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES` in every process, replacing a value from the environment ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
+| `WINE_MAC_OPENGL` | Which OpenGL the Mac driver uses. Unset or any other value: Mesa's EGL with Zink on KosmicKrisp when a GPU supports the Metal 4 family and EGL's driver is Zink, Apple's OpenGL otherwise, with a `winediag` message saying why. `egl`: Mesa's EGL whatever its driver, and no OpenGL when EGL does not start. `cgl`: Apple's OpenGL ([OpenGL](docs/arm64.md#opengl)) |
 | `WINE_D3D_CONFIG` | wined3d's settings, as in Wine. `renderer=vulkan` puts wined3d on KosmicKrisp. compatdb's `wined3d=vulkan` sets it for one game, keeping the variable's other options; the programs that game starts inherit it unless a rule for them sets `wined3d` ([wined3d on Vulkan](docs/compatdb.md#wined3d-on-vulkan)) |
 
 ### Direct3D backends
@@ -209,8 +210,12 @@ tree from before markers existed, which is adopted when its parent is
 - Every optional dependency is `--without-*` unless re-enabled with
   `--with-*` in [`build-wine.sh`](bin/build-wine.sh), so a missing
   package fails configure instead of silently changing the feature set.
-- Never pass `--with-opengl` on macOS: it triggers an EGL probe that always
-  fails there, and the Mac driver links `-framework OpenGL` on its own.
+- `--with-opengl` makes configure require EGL, the one OpenGL library it
+  looks for without X11. It finds Mesa's, which `build-mesa.sh` builds with
+  Zink, through the `egl.pc` that script stages; the Mac driver links
+  Apple's OpenGL framework on its own. Zink is only used through the Mac
+  driver's EGL driver, which our Wine series adds
+  ([OpenGL](docs/arm64.md#opengl)).
 - Wine's Vulkan is on, on the loader and KosmicKrisp `build-mesa.sh` builds
   ([Vulkan](docs/arm64.md#vulkan)). The bundle does not ship Wine's own
   D3D12 modules; D3D12 is vkd3d-proton's.

@@ -7,6 +7,13 @@ set -e
 #                                    win32u.so loads
 #   lib/libvulkan.dylib              a link to it, what -lvulkan finds
 #   lib/libvulkan_kosmickrisp.dylib  KosmicKrisp, Mesa's Vulkan driver on Metal
+#   lib/libEGL.1.dylib               Mesa's EGL, OpenGL through Zink on
+#                                    KosmicKrisp, which win32u.so loads
+#   lib/libEGL.dylib                 a link to it, what -lEGL finds
+#   lib/libgallium-<version>.dylib   Mesa's gallium library with Zink, which
+#                                    libEGL.1.dylib links; Zink opens the
+#                                    loader next to it
+#   lib/pkgconfig/egl.pc             what Wine's configure finds EGL with
 #   share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json
 #                                    the driver's manifest, which names the
 #                                    driver by a path relative to itself
@@ -16,8 +23,9 @@ set -e
 # Mesa comes from athei/mesa (upstream Mesa plus our topic commits,
 # originally from Hadron's patches; MESA_REPO names another repository) at
 # the ref in mesa-src.ref (a branch, tag or commit). Called by build-wine.sh
-# before Wine's configure, which links against this loader; running it alone
-# rebuilds the Vulkan stack only. bundle-wine.sh installs from MESA_DIST.
+# before Wine's configure, which links against this loader and finds EGL
+# here; running it alone rebuilds the Vulkan and OpenGL stack only.
+# bundle-wine.sh installs from MESA_DIST.
 #
 # The loader is built from the Vulkan-Loader and Vulkan-Headers tags pinned
 # in redist.env, for the floor: Homebrew's vulkan-loader bottle needs a newer
@@ -87,8 +95,11 @@ for tool in git meson ninja cmake pkg-config python3 plutil; do
         exit 1
     fi
 done
-# What the stage 1 tools link (MESA_FORMULAE in profile.sh). The driver
-# itself needs none of them.
+# By path, since stage 2 runs them with Homebrew off PATH.
+MESON=$(command -v meson)
+NINJA=$(command -v ninja)
+# What the stage 1 tools link (MESA_FORMULAE in profile.sh). What stage 2
+# builds needs none of them.
 missing=""
 for f in $MESA_FORMULAE; do
     [ -d "$DEPS_PREFIX/opt/$f" ] || missing="$missing $f"
@@ -101,6 +112,20 @@ fi
 LLVM_CONFIG="$DEPS_PREFIX/opt/llvm/bin/llvm-config"
 if [ ! -x "$LLVM_CONFIG" ]; then
     echo "Error: no llvm-config at $LLVM_CONFIG"
+    exit 1
+fi
+# Mesa's GLSL compiler needs a newer bison than macOS's 2.3; Wine's configure
+# takes the same one (DEPS_FORMULAE).
+BISON="$DEPS_PREFIX/opt/bison/bin/bison"
+if [ ! -x "$BISON" ]; then
+    echo "Error: no bison at $BISON (brew install bison)"
+    exit 1
+fi
+# macOS's own flex is new enough, and Homebrew's is keg-only; it is named in
+# the native file so a flex elsewhere on PATH is not taken.
+FLEX=/usr/bin/flex
+if [ ! -x "$FLEX" ]; then
+    echo "Error: no flex at $FLEX (install the Xcode command line tools)"
     exit 1
 fi
 check_sdk_floor
@@ -230,7 +255,7 @@ mesa_setup() {
     key="$(cat "$native") $* python=$PYTHON_VERSION mesa=$MESA_COMMIT ${SETUP_EXTRA:-}"
     if [ "$(cat "$dir/.setup-key" 2>/dev/null)" != "$key" ]; then
         remove_tree "$dir"
-        meson setup "$dir" "$MESA_SRC" --native-file "$native" "$@" >/dev/null || {
+        "$MESON" setup "$dir" "$MESA_SRC" --native-file "$native" "$@" >/dev/null || {
             echo "Error: meson setup of $dir failed; see $dir/meson-logs/meson-log.txt"
             exit 1
         }
@@ -278,12 +303,32 @@ EOF
 # As with Wine's configure, every optional dependency is denied unless the
 # driver needs it, so a library that happens to be installed cannot change
 # what is built: each Mesa feature option that looks for an optional library
-# is disabled here. The probes that have no option (libudev, lua, libelf)
-# find nothing in the arm64 Homebrew either: pkg-config searches nowhere (an
-# empty PKG_CONFIG_LIBDIR), and the native file names false as cmake, so
-# meson's CMake lookup has no CMake to search with. zlib stays, as Mesa's
-# default, from the SDK.
-echo "==> Building KosmicKrisp..."
+# is disabled here. The probes that have no option (libudev, lua, libelf,
+# glslangValidator) find nothing in the arm64 Homebrew either: pkg-config
+# searches nowhere (an empty PKG_CONFIG_LIBDIR), the native file names false
+# as cmake, so meson's CMake lookup has no CMake to search with, and meson
+# and ninja run with a PATH of the Python environment and the system
+# directories only, so Homebrew's glslangValidator is not found and does not
+# add the shaders it would compile (ASTC decoding) to the driver. A native
+# file entry cannot deny a program: meson takes the entry as found without
+# looking, and Mesa then runs it for its --version. Every other program the
+# build runs is named in the native file. zlib stays, as Mesa's default,
+# from the SDK.
+#
+# The same tree builds OpenGL through Zink on KosmicKrisp: Mesa's EGL
+# (libEGL.1.dylib) and the gallium library with Zink it links
+# (libgallium-<version>.dylib). EGL's surfaceless platform creates window
+# surfaces on a CAMetalLayer, which Wine's Mac driver passes; win32u only
+# binds desktop OpenGL through EGL, so GLES is not built. Zink loads the
+# Vulkan loader by "@rpath/libvulkan.1.dylib", so the gallium library gets
+# the one LC_RPATH the scripts allow, @loader_path, which finds the loader
+# next to it here and in the bundle.
+# Without LLVM, gallium's draw module runs its vertex shaders without LLVM
+# too. GLX and GBM need X11 and DRM, which macOS has neither of; GLVND and
+# VA-API are libraries the build would otherwise look for. The bison and flex
+# versions are part of the key, since meson does not rebuild what they
+# produced when they change.
+echo "==> Building KosmicKrisp and Zink..."
 min="-mmacosx-version-min=$MACOS_FLOOR"
 write_if_changed "$MESA_BUILD_DIR/driver-native.ini" <<EOF
 [binaries]
@@ -294,6 +339,8 @@ objcpp = '/usr/bin/clang++'
 mesa_clc = '$TOOLS_BUILD/src/compiler/clc/mesa_clc'
 vtn_bindgen2 = '$TOOLS_BUILD/src/compiler/spirv/vtn_bindgen2'
 kk_clc = '$TOOLS_BUILD/src/kosmickrisp/clc/kk_clc'
+bison = '$BISON'
+flex = '$FLEX'
 cmake = 'false'
 
 [built-in options]
@@ -306,44 +353,78 @@ objc_link_args = ['$min', '-framework', 'CoreGraphics']
 EOF
 (
     export PKG_CONFIG_LIBDIR=
+    # meson finds ninja through NINJA when it is not on PATH.
+    export NINJA
+    export PATH="$VENV/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     # shellcheck disable=SC2086 # one word per target
     SETUP_EXTRA="tools=$(cd "$TOOLS_BUILD" && shasum -a 256 $TOOLS | cut -d' ' -f1 | tr '\n' ' ')"
+    SETUP_EXTRA+=" bison=$("$BISON" --version | head -n 1) flex=$("$FLEX" --version | head -n 1)"
     mesa_setup "$DRIVER_BUILD" "$MESA_BUILD_DIR/driver-native.ini" \
         --prefix="$DRIVER_PREFIX" \
         --buildtype=release \
-        -Dplatforms=macos -Dvulkan-drivers=kosmickrisp -Dgallium-drivers= \
-        -Dopengl=false \
+        -Dplatforms=macos -Dvulkan-drivers=kosmickrisp -Dgallium-drivers=zink \
+        -Dopengl=true -Degl=enabled -Dgles1=disabled -Dgles2=disabled \
+        -Dglx=disabled -Dgbm=disabled -Ddraw-use-llvm=false \
+        -Dvulkan-loader-rpath=@loader_path \
         -Dmesa-clc=system -Dprecomp-compiler=system \
         -Dllvm=disabled -Dspirv-tools=disabled \
         -Dzstd=disabled -Ddisplay-info=disabled -Dexpat=disabled \
         -Dxmlconfig=disabled -Dvalgrind=disabled -Dlibunwind=disabled \
-        -Dlmsensors=disabled
-    ninja -C "$DRIVER_BUILD"
+        -Dlmsensors=disabled -Dglvnd=disabled -Dgallium-va=disabled
+    "$NINJA" -C "$DRIVER_BUILD"
     remove_tree "$DRIVER_PREFIX"
-    ninja -C "$DRIVER_BUILD" install >/dev/null
+    "$NINJA" -C "$DRIVER_BUILD" install >/dev/null
 )
 
 # ── Stage ───────────────────────────────────────────────────────────────
 # Into MESA_DIST.part, renamed into place once everything is checked, so an
 # interrupted run never leaves a MESA_DIST behind that looks complete.
-echo "==> Staging the Vulkan loader and KosmicKrisp into $MESA_DIST..."
+echo "==> Staging the Vulkan loader, KosmicKrisp and Zink into $MESA_DIST..."
 part="$MESA_DIST.part"
 claim_tree "$part" mesa-dist 1
-mkdir -p "$part/lib" "$part/share/vulkan/icd.d"
+mkdir -p "$part/lib/pkgconfig" "$part/share/vulkan/icd.d"
 cp -L "$LOADER_PREFIX/lib/libvulkan.1.dylib" "$part/lib/"
 ln -s libvulkan.1.dylib "$part/lib/libvulkan.dylib"
 cp -L "$DRIVER_PREFIX/lib/libvulkan_kosmickrisp.dylib" "$part/lib/"
 cp "$DRIVER_PREFIX/share/vulkan/icd.d/$ICD_JSON" "$part/share/vulkan/icd.d/"
+# Mesa names the gallium library after its version, so it is found by
+# pattern, and there has to be exactly one.
+gallium=()
+for lib in "$DRIVER_PREFIX"/lib/libgallium-*.dylib; do
+    [ -f "$lib" ] && gallium+=("$(basename "$lib")")
+done
+if [ ${#gallium[@]} -ne 1 ]; then
+    echo "Error: $DRIVER_PREFIX/lib has ${#gallium[@]} libgallium-*.dylib, not one: ${gallium[*]}"
+    exit 1
+fi
+GALLIUM=${gallium[0]}
+cp -L "$DRIVER_PREFIX/lib/libEGL.1.dylib" "$DRIVER_PREFIX/lib/$GALLIUM" "$part/lib/"
+ln -s libEGL.1.dylib "$part/lib/libEGL.dylib"
 chmod u+w "$part"/lib/*.dylib
 
 # The install names both builds wrote are paths in their install prefixes.
-# They become what bundle-wine.sh gives every bundled dylib, and since that
-# invalidates the linker's signature, which arm64 code needs to load, each
-# is signed again ad hoc, as the bundle step does.
-for lib in libvulkan.1.dylib libvulkan_kosmickrisp.dylib; do
+# They become what bundle-wine.sh gives every bundled dylib, and libEGL's
+# reference to the gallium library becomes one to the copy next to it. Since
+# that invalidates the linker's signature, which arm64 code needs to load,
+# each is signed again ad hoc, as the bundle step does.
+install_name_tool -change "$DRIVER_PREFIX/lib/$GALLIUM" "@loader_path/$GALLIUM" \
+    "$part/lib/libEGL.1.dylib" 2>/dev/null
+for lib in libvulkan.1.dylib libvulkan_kosmickrisp.dylib libEGL.1.dylib "$GALLIUM"; do
     install_name_tool -id "@loader_path/$lib" "$part/lib/$lib" 2>/dev/null
     codesign --force --sign - "$part/lib/$lib" 2>/dev/null
 done
+
+# What Wine's configure finds EGL with: Mesa's egl.pc, with the prefix made
+# relative to the file, so MESA_DIST is usable wherever it is, and without
+# the include directory, which is not staged (Wine declares what it uses of
+# EGL itself).
+# shellcheck disable=SC2016 # ${pcfiledir} is pkg-config's variable
+sed -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' -e 's|^Cflags:.*|Cflags:|' \
+    "$DRIVER_PREFIX/lib/pkgconfig/egl.pc" > "$part/lib/pkgconfig/egl.pc"
+if ! PKG_CONFIG_LIBDIR="$part/lib/pkgconfig" pkg-config --libs egl | grep -F -- "-lEGL" >/dev/null; then
+    echo "Error: the staged egl.pc does not give -lEGL"
+    exit 1
+fi
 
 # Mesa writes the driver's absolute install path into the manifest. The
 # loader reads a relative library_path as relative to the manifest, so the
@@ -356,13 +437,27 @@ if [ "$(plutil -extract ICD.library_path raw -o - "$icd")" != ../../../lib/libvu
     exit 1
 fi
 
-# check_dylib <file> <symbol>...: exit unless <file> is an arm64-only dylib
-# held to the floor, named @loader_path/<its name>, loading system libraries
-# only, without LC_RPATH, binding every import to a library (a flat-namespace
-# import is looked up in whatever the process has loaded, and fails at run
-# time where nothing provides it), and exporting each <symbol>.
+# check_dylib [--loads <name>] [--rpath-loader-path] <file> <symbol>...:
+# exit unless <file> is an arm64-only dylib held to the floor, named
+# @loader_path/<its name>, loading system libraries only, without LC_RPATH,
+# binding every import to a library (a flat-namespace import is looked up in
+# whatever the process has loaded, and fails at run time where nothing
+# provides it), and exporting each <symbol>. Two exceptions are allowed only
+# where the caller names them: --loads <name> lets it load
+# @loader_path/<name>, a library staged next to it and checked on its own
+# (libEGL loads the gallium library so); --rpath-loader-path lets it have
+# exactly one LC_RPATH, @loader_path, which resolves next to it (the gallium
+# library, which loads the Vulkan loader by @rpath).
 check_dylib() {
-    local f="$1" name minos deps flat sym
+    local f name minos deps flat sym rpaths sibling="" rpath_ok=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --loads) sibling="$2"; shift 2 ;;
+            --rpath-loader-path) rpath_ok=1; shift ;;
+            *) break ;;
+        esac
+    done
+    f="$1"
     name=$(basename "$f")
     shift
     if [ "$(lipo -archs "$f")" != arm64 ]; then
@@ -379,13 +474,22 @@ check_dylib() {
         exit 1
     fi
     deps=$(otool -L "$f" | tail -n +3 | awk '{print $1}' | grep -vE '^(/usr/lib/|/System/Library/)' || true)
+    if [ -n "$sibling" ]; then
+        if [ ! -f "$(dirname "$f")/$sibling" ]; then
+            echo "Error: $sibling, which $name may load, is not staged next to it"
+            exit 1
+        fi
+        deps=$(echo "$deps" | grep -vxF "@loader_path/$sibling" || true)
+    fi
     if [ -n "$deps" ]; then
         echo "Error: $name loads libraries outside the system:"
         echo "$deps" | sed 's/^/    /'
         exit 1
     fi
-    if otool -l "$f" | grep LC_RPATH >/dev/null; then
-        echo "Error: $name has an LC_RPATH"
+    rpaths=$(otool -l "$f" | awk '$1 == "cmd" { r = ($2 == "LC_RPATH") } r && $1 == "path" { print $2 }')
+    if [ -n "$rpaths" ] && { [ "$rpath_ok" -eq 0 ] || [ "$rpaths" != "@loader_path" ]; }; then
+        echo "Error: $name has the LC_RPATH entries:"
+        echo "$rpaths" | sed 's/^/    /'
         exit 1
     fi
     flat=$(nm -m -u "$f" | grep 'dynamically looked up' | grep -v 'weak external' || true)
@@ -404,6 +508,17 @@ check_dylib() {
 }
 check_dylib "$part/lib/libvulkan.1.dylib" _vkGetInstanceProcAddr _vkCreateMetalSurfaceEXT
 check_dylib "$part/lib/libvulkan_kosmickrisp.dylib" _vk_icdGetInstanceProcAddr
+check_dylib --loads "$GALLIUM" "$part/lib/libEGL.1.dylib" _eglGetProcAddress _eglCreateWindowSurface
+check_dylib --rpath-loader-path "$part/lib/$GALLIUM" _driCreateNewScreen3 _kopperSwapBuffers
+# Zink opens the Vulkan loader by "@rpath/libvulkan.1.dylib", which the
+# @loader_path LC_RPATH resolves to the copy next to the gallium library.
+if ! grep -aF "@rpath/libvulkan.1.dylib" "$part/lib/$GALLIUM" >/dev/null \
+    || [ "$(otool -l "$part/lib/$GALLIUM" | awk '$1 == "cmd" { r = ($2 == "LC_RPATH") } r && $1 == "path" { print $2 }')" != "@loader_path" ]; then
+    echo "Error: $GALLIUM does not open @rpath/libvulkan.1.dylib with @loader_path as its LC_RPATH,"
+    echo "so Zink would not find the Vulkan loader next to it"
+    exit 1
+fi
+echo "    $GALLIUM opens the Vulkan loader next to it (@rpath, LC_RPATH @loader_path)"
 
 echo "$VULKAN_LOADER_GIT_COMMIT" > "$part/LOADER_COMMIT"
 # Written last, so a staged directory without it is an incomplete one.

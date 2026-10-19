@@ -63,21 +63,22 @@ fi
 # Every optional dependency is switched off unless it is switched back on
 # here, so a package missing from the dependency prefix fails configure
 # instead of silently changing the feature set. The list covers every
-# --with-*/--without-* package of `configure --help`, except: opengl, which
-# stays at configure's default (never --with-opengl: on macOS it starts an
-# EGL probe that always fails, and the Mac driver links -framework OpenGL on
-# its own); pthread, which is required; gettextpo, which is off unless asked
-# for (--without-gettextpo would only skip a header probe and change config.h
-# for nothing); and the options that name a path rather than a package. The
-# X extensions are moot under --without-x and denied anyway, so nothing
-# depends on that. Vulkan runs on the loader and KosmicKrisp build-mesa.sh
-# built.
+# --with-*/--without-* package of `configure --help`, except: pthread, which
+# is required; gettextpo, which is off unless asked for (--without-gettextpo
+# would only skip a header probe and change config.h for nothing); and the
+# options that name a path rather than a package. The X extensions are moot
+# under --without-x and denied anyway, so nothing depends on that. Vulkan
+# runs on the loader and KosmicKrisp build-mesa.sh built. OpenGL is EGL,
+# Mesa's, also built by build-mesa.sh and found through its egl.pc: with
+# --without-x the only library --with-opengl makes configure look for is
+# EGL, and the Mac driver links Apple's OpenGL framework on its own.
 CONFIGURE_ALLOWLIST=(
     --with-coreaudio
     --with-freetype
     --with-gnutls
     --with-mingw
     --with-opencl
+    --with-opengl
     --with-sdl
     --with-vulkan
     --without-alsa
@@ -141,9 +142,9 @@ fi
 # --without-* for; when it does not find one it writes a placeholder define
 # (FALLBACK_SONAMES), which stays as it is. Any other define means configure
 # found a library the allowlist does not account for, and stops the build.
-# The Vulkan loader is one of the patched ones; the bundle step takes it from
-# MESA_DIST.
-BUNDLED_SONAMES="SONAME_LIBFREETYPE SONAME_LIBGNUTLS SONAME_LIBSDL2 SONAME_LIBVULKAN"
+# The Vulkan loader and Mesa's EGL are patched ones; the bundle step takes
+# them from MESA_DIST.
+BUNDLED_SONAMES="SONAME_LIBEGL SONAME_LIBFREETYPE SONAME_LIBGNUTLS SONAME_LIBSDL2 SONAME_LIBVULKAN"
 FALLBACK_SONAMES="SONAME_LIBODBC=libodbc.dylib"
 CONFIG_H="$BUILD_DIR/include/config.h"
 soname_value() { # <define>: its string value in config.h, or nothing

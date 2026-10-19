@@ -72,12 +72,14 @@ MESA_DIST="${MESA_DIST:-$MESA_BUILD_DIR/dist}"
 # built, so configure's -lvulkan test links that one: it succeeds without
 # Homebrew's vulkan-loader and does not link Homebrew's libvulkan.dylib where
 # it is installed. The soname define is the bare file name either way; that
-# the bundle carries this loader is the bundle step's doing.
+# the bundle carries this loader is the bundle step's doing. Mesa's EGL is
+# found the same way, through the egl.pc build-mesa.sh stages in
+# $MESA_DIST/lib/pkgconfig, ahead of Homebrew's search path.
 CONFIGURE_TOOLCHAIN=(CC="clang -arch arm64"
                      --host="$HOST_TRIPLE"
                      --disable-tests
                      BISON="$DEPS_PREFIX/opt/bison/bin/bison"
-                     PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig"
+                     PKG_CONFIG_PATH="$MESA_DIST/lib/pkgconfig:$DEPS_PREFIX/lib/pkgconfig"
                      CPPFLAGS="-I$DEPS_PREFIX/include"
                      LDFLAGS="-L$MESA_DIST/lib -L$DEPS_PREFIX/lib")
 # Path prefixes no bundled Mach-O may still load from. An x86_64 library
