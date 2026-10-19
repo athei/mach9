@@ -197,10 +197,24 @@ commands and the manifest are described in the header of
 ### Other caches
 
 The runner also caches DXMT's LLVM libraries, the downloads `redist.env`
-pins and cargo's registry. A run on a tag writes caches that only later runs
-on the same tag can read, so a failed release that is run again reuses them.
-A manual run on `main` writes caches every run can read; start one after a
-pin changed to keep the tag builds fast.
+pins and cargo's registry. Each key changes only with what its cache was made
+from:
+
+- DXMT's LLVM: the `LLVM15_*` lines of [`redist.env`](../pins/redist.env),
+  the floor, the Xcode version and the runner image. A change to how
+  `build-dxmt.sh` builds LLVM does not change it, just as a local build
+  keeps its LLVM while the pinned commit stays the same.
+- The downloads: the `MTLD3D_*` and `LLVM_MINGW_*` lines of `redist.env`,
+  the downloads the cache holds. `release.yml` and `release-compatdb.yml`
+  compute it the same way, with [`pins-key.sh`](../bin/ci/pins-key.sh), and
+  share the cache. A new download pinned in `redist.env` needs its prefix
+  added to the `pins-key.sh` calls of both workflows.
+- cargo's registry: `compatdb/Cargo.lock`.
+
+A run on a tag writes caches that only later runs on the same tag can read,
+so a failed release that is run again reuses them. A manual run on `main`
+writes caches every run can read; start one after a pin changed to keep the
+tag builds fast.
 
 ### Signing identity
 
