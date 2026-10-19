@@ -12,12 +12,13 @@ set -e
 #
 # The notes name what the bundle was built from: the Wine source, as the ref
 # in pins/wine-src.ref with the commit and `git describe` of WINE_SRC, this
-# repository's commit, the commits FEX and Mesa were built from, whose refs
-# are branches, and the formula and version of every Homebrew library in
-# lib/external, which no pin fixes (brew_kegs). The rest is pinned by this
-# repository's commit. The Wine source and this repository must have no
-# uncommitted changes, and the Wine SDK must be staged from that Wine commit,
-# or the notes would name something the bundle was not built from.
+# repository's commit, the commits FEX, Mesa, DXMT and vkd3d-proton were
+# built from, whose refs are branches, and the formula and version of every
+# Homebrew library in lib/external, which no pin fixes (brew_kegs). The rest
+# is pinned by this repository's commit. The Wine source and this
+# repository must have no uncommitted changes, and the Wine SDK must be
+# staged from that Wine commit, or the notes would name something the bundle
+# was not built from.
 #
 # With --base, the bundle is the release <release> with compatdb.so replaced
 # (bundle-wine.sh --compatdb-only). Only the bundle is packed, since the PE
@@ -27,8 +28,8 @@ set -e
 # notes.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# BUNDLE_DEST, WINE_SRC, WINE_SDK_DIR, FEX_BUILD_DIR, MESA_DIST, the
-# repositories and wine_src_commit.
+# BUNDLE_DEST, WINE_SRC, WINE_SDK_DIR, FEX_BUILD_DIR, MESA_DIST, DXMT_DIST,
+# VKD3D_PROTON_DIST, the repositories and wine_src_commit.
 # shellcheck source=../lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
 
@@ -194,7 +195,8 @@ else
     describe=${describe%-g*}
     wine_ref=$(tr -d '[:space:]' < "$PINS_DIR/wine-src.ref")
     wine_repo=$(github_name "$(git -C "$WINE_SRC" remote get-url origin)")
-    for f in "$FEX_BUILD_DIR/COMMIT" "$MESA_DIST/COMMIT"; do
+    for f in "$FEX_BUILD_DIR/COMMIT" "$MESA_DIST/COMMIT" "$DXMT_DIST/COMMIT" \
+             "$VKD3D_PROTON_DIST/COMMIT"; do
         if [ ! -s "$f" ]; then
             echo "Error: no $f (run build-wine.sh)"
             exit 1
@@ -210,6 +212,8 @@ else
         echo ""
         echo "- FEX: $(github_name "$FEX_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/fex-src.ref") ($(short "$(cat "$FEX_BUILD_DIR/COMMIT")"))"
         echo "- Mesa: $(github_name "$MESA_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref") ($(short "$(cat "$MESA_DIST/COMMIT")"))"
+        echo "- DXMT: $(github_name "$DXMT_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref") ($(short "$(cat "$DXMT_DIST/COMMIT")"))"
+        echo "- vkd3d-proton: $(github_name "$VKD3D_PROTON_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/vkd3d-proton-src.ref") ($(short "$(cat "$VKD3D_PROTON_DIST/COMMIT")"))"
         if [ -n "$brew_libs" ]; then
             echo "- Homebrew libraries:"
             echo "$brew_libs" | LC_ALL=C sort -u | awk '{ print "  - " $0 }'
