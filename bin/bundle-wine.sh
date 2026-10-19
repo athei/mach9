@@ -1324,13 +1324,24 @@ check_wine_sdk() {
 }
 
 # check_dxmt_build: exit unless build-dxmt.sh staged all of DXMT from the
-# pinned commit. The DLLs and winemetal.so share a private call interface, so
-# they must be one build: the COMMIT build-dxmt.sh wrote last, and the
-# DESCRIBE it recorded, which d3d11.dll carries as its version string.
+# commit dxmt-src.ref names now. The DLLs and winemetal.so share a private
+# call interface, so they must be one build: the COMMIT build-dxmt.sh wrote
+# last, and the DESCRIBE it recorded, which d3d11.dll carries as its version
+# string. Needs the network, to resolve a branch or tag.
 check_dxmt_build() {
-    local f describe
-    if [ "$(cat "$DXMT_DIST/COMMIT" 2>/dev/null)" != "$DXMT_GIT_COMMIT" ]; then
-        echo "Error: $DXMT_DIST was not built from $DXMT_GIT_COMMIT (run build-dxmt.sh)"
+    local f describe built want
+    built=$(cat "$DXMT_DIST/COMMIT" 2>/dev/null) || {
+        echo "Error: $DXMT_DIST has no COMMIT; build-dxmt.sh has not staged it (run build-wine.sh)"
+        exit 1
+    }
+    want=$(src_ref_commit dxmt-src.ref "$DXMT_REPO")
+    if [ -z "$want" ]; then
+        echo "Error: cannot resolve dxmt-src.ref ($(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref")) in $DXMT_REPO"
+        exit 1
+    fi
+    if [ "$built" != "$want" ]; then
+        echo "Error: DXMT was built from $built, but dxmt-src.ref now names $want"
+        echo "(run build-dxmt.sh)"
         exit 1
     fi
     for f in "$PE64_DIR/dxgi.dll" "$PE64_DIR/d3d10core.dll" "$PE64_DIR/d3d11.dll" \
@@ -1354,7 +1365,7 @@ check_dxmt_build() {
             exit 1
         fi
     done
-    echo "  DXMT: $describe ($DXMT_GIT_COMMIT)"
+    echo "  DXMT: $describe ($built)"
 }
 
 # ── Loader app ──────────────────────────────────────────────────────────

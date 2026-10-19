@@ -1,9 +1,10 @@
 #!/bin/bash
 set -e
 
-# Builds DXMT for the bundle from the upstream commit pinned in
-# redist.env and stages it in DXMT_DIST, in the layout of a Wine install's
-# lib/wine:
+# Builds DXMT for the bundle from athei/dxmt (upstream DXMT with our commits
+# on top; DXMT_REPO names another repository) at the ref in dxmt-src.ref (a
+# branch, tag or commit) and stages it in DXMT_DIST, in the layout of a Wine
+# install's lib/wine:
 #
 #   aarch64-windows/{dxgi,d3d10core,d3d11,winemetal}.dll   ARM64X
 #   i386-windows/{dxgi,d3d10core,d3d11,winemetal}.dll      i386
@@ -68,12 +69,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# profile.sh names the Wine build tree and SDK to link against,
-# DXMT_BUILD_DIR, DXMT_LLVM, DXMT_DIST and the floor.
+# profile.sh names the Wine build tree and SDK to link against, DXMT_REPO,
+# DXMT_BUILD_DIR, DXMT_LLVM, DXMT_DIST and the floor; redist.env pins LLVM.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
 # shellcheck source=../pins/redist.env
 . "$PINS_DIR/redist.env"
+
+DXMT_REF="$(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref")"
+if [ -z "$DXMT_REF" ]; then
+    echo "Error: $PINS_DIR/dxmt-src.ref is empty"
+    exit 1
+fi
 
 DXMT_SRC="$DXMT_BUILD_DIR/src"
 PE_DLLS="dxgi d3d10core d3d11 winemetal"
@@ -193,35 +200,46 @@ if [ "$(cat "$DXMT_LLVM/COMMIT" 2>/dev/null)" != "$LLVM15_GIT_COMMIT" ]; then
 fi
 
 # ── DXMT source ─────────────────────────────────────────────────────────
-# A full clone, not a shallow one: `git describe` needs the history back to
-# the last tag. An existing clone at another commit (a bumped pin) is
-# replaced; it is this script's own scratch copy.
-echo "==> DXMT source: $DXMT_GIT_URL $DXMT_GIT_COMMIT"
-if [ -e "$DXMT_SRC/.git" ] && [ "$(git -C "$DXMT_SRC" rev-parse HEAD)" != "$DXMT_GIT_COMMIT" ]; then
-    echo "    $DXMT_SRC is at another commit; cloning again"
-    remove_tree "$DXMT_SRC"
-fi
+# DXMT_SRC is this script's own scratch clone, not somebody's work tree, so
+# it is forced to the ref every run instead of being refused when it has
+# changes, as FEX's and Mesa's checkouts are. As in build-fex.sh, the ref is
+# fetched from DXMT_REPO by URL, so a clone made from another repository (a
+# changed DXMT_REPO) still builds what DXMT_REPO has, and git is kept from
+# asking for credentials. A full clone, not a shallow one, with every tag:
+# `git describe` needs the history back to the last tag, and a fetch by URL
+# brings no tags of its own.
+echo "==> DXMT source: $DXMT_REPO $DXMT_REF"
 if [ ! -e "$DXMT_SRC/.git" ]; then
-    git clone --quiet "$DXMT_GIT_URL" "$DXMT_SRC"
-    git -C "$DXMT_SRC" -c advice.detachedHead=false checkout --quiet --detach "$DXMT_GIT_COMMIT"
+    GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout "$DXMT_REPO" "$DXMT_SRC"
 fi
-git -C "$DXMT_SRC" submodule update --quiet --init --recursive
+GIT_TERMINAL_PROMPT=0 git -C "$DXMT_SRC" fetch --quiet --force --tags "$DXMT_REPO"
+GIT_TERMINAL_PROMPT=0 git -C "$DXMT_SRC" fetch --quiet "$DXMT_REPO" "$DXMT_REF"
+git -C "$DXMT_SRC" -c advice.detachedHead=false checkout --quiet --force --detach FETCH_HEAD
+GIT_TERMINAL_PROMPT=0 git -C "$DXMT_SRC" submodule update --quiet --init --recursive --force
+DXMT_COMMIT=$(git -C "$DXMT_SRC" rev-parse HEAD)
 DXMT_DESCRIBE=$(git -C "$DXMT_SRC" describe --always)
-echo "    $DXMT_DESCRIBE"
+echo "    at $DXMT_COMMIT ($DXMT_DESCRIBE)"
 
 # ── Meson trees ─────────────────────────────────────────────────────────
 # dxmt_setup <dir> <cross-file> <option>...: configure a DXMT tree, again
 # from scratch whenever what it links against differs from what it was
 # configured with: the DXMT commit, the Wine commit (the SDK archives and
-# winemac.so and ntdll.so come from it), the LLVM commit, or the options. A
-# fresh tree relinks everything, which ninja would not do on its own for a
-# library that changed outside it. A Wine source with uncommitted changes is
-# one state ("-dirty") however those changes move; rebuild with --clean
-# after changing it.
+# winemac.so and ntdll.so come from it), the LLVM commit, the options, or
+# llvm-mingw's clang, which compiles the PE side. A fresh tree relinks and
+# recompiles everything, which ninja would not do on its own for a library
+# or compiler that changed outside it. A Wine source with uncommitted
+# changes is one state ("-dirty") however those changes move; rebuild with
+# --clean after changing it.
+#
+# DXMT's own d3d12.dll is never built: D3D12 comes from vkd3d-proton, whose
+# DLLs go into the same tree. Its option is off by default too; it is
+# passed so a changed default cannot put a second d3d12.dll into the build.
+CLANG_VERSION=$("$MINGW_DIR/bin/clang" --version | head -n 1)
 dxmt_setup() {
     local dir="$1" cross="$2" key
     shift 2
-    key="$DXMT_GIT_COMMIT wine=$WINE_COMMIT llvm=$(cat "$DXMT_LLVM/COMMIT") $cross $*"
+    set -- -Denable_d3d12=false "$@"
+    key="$DXMT_COMMIT wine=$WINE_COMMIT llvm=$(cat "$DXMT_LLVM/COMMIT") $cross $* clang=$CLANG_VERSION"
     if [ "$(cat "$dir/.setup-key" 2>/dev/null)" != "$key" ]; then
         remove_tree "$dir"
         meson setup "$dir" "$DXMT_SRC" --cross-file "$DXMT_SRC/$cross" \
@@ -292,5 +310,5 @@ fi
 echo "$DXMT_DESCRIBE" > "$DXMT_DIST/DESCRIBE"
 echo "$WINE_COMMIT" > "$DXMT_DIST/WINE_COMMIT"
 # Written last, so a staged directory without it is an incomplete one.
-git -C "$DXMT_SRC" rev-parse HEAD > "$DXMT_DIST/COMMIT"
+echo "$DXMT_COMMIT" > "$DXMT_DIST/COMMIT"
 echo "==> DXMT $DXMT_DESCRIBE staged."
