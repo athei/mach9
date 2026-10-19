@@ -84,13 +84,19 @@ jobs:
       - name: Install the Homebrew formulae
         uses: ./scripts/.github/actions/brew
 
+      # Each key changes with the pins of what its cache holds, not with the
+      # rest of redist.env. release-compatdb.yml computes the redist key the
+      # same way, so both workflows share that cache.
       - name: Compute the cache keys
         id: keys
         run: |
           SCRIPT_DIR=scripts/bin . scripts/bin/lib/profile.sh
           . scripts/pins/redist.env
           xcode=$(xcodebuild -version | awk 'NR == 1 { print $2 }')
-          echo "llvm15=dxmt-llvm15-$LLVM15_GIT_COMMIT-floor$MACOS_FLOOR-xcode$xcode-$ImageOS-${{ hashFiles('scripts/bin/build-dxmt.sh') }}" >> "$GITHUB_OUTPUT"
+          llvm15=$(scripts/bin/ci/pins-key.sh LLVM15_)
+          redist=$(scripts/bin/ci/pins-key.sh MTLD3D_ LLVM_MINGW_)
+          echo "llvm15=dxmt-llvm15-$LLVM15_GIT_COMMIT-floor$MACOS_FLOOR-xcode$xcode-$ImageOS-$llvm15" >> "$GITHUB_OUTPUT"
+          echo "redist=redist-$redist" >> "$GITHUB_OUTPUT"
 
       # The downloads redist.env pins: llvm-mingw here, mtld3d in the bundle
       # step. Each is checked against its SHA-256 whether it was cached or not.
@@ -98,7 +104,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: cache
-          key: redist-${{ hashFiles('scripts/pins/redist.env') }}
+          key: ${{ steps.keys.outputs.redist }}
 
       - name: Install llvm-mingw
         run: |

@@ -141,13 +141,21 @@ jobs:
       - name: Report the runner and select Xcode
         run: scripts/bin/ci/host.sh
 
+      # The same key as release.yml's, from the pins of the downloads the
+      # cache holds, so both workflows share the cache.
+      - name: Compute the cache key
+        id: keys
+        run: |
+          redist=$(scripts/bin/ci/pins-key.sh MTLD3D_ LLVM_MINGW_)
+          echo "redist=redist-$redist" >> "$GITHUB_OUTPUT"
+
       # llvm-mingw compiles the smoke test's programs and reads the Direct3D
       # markers.
       - name: Cache the pinned downloads
         uses: actions/cache@v6
         with:
           path: cache
-          key: redist-${{ hashFiles('scripts/pins/redist.env') }}
+          key: ${{ steps.keys.outputs.redist }}
 
       - name: Install llvm-mingw
         run: |
