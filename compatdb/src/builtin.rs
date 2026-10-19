@@ -81,6 +81,28 @@ pub fn table() -> Table {
             env: vec![("MESA_KK_EXPERIMENTAL".into(), "dgc,xfb,sparse".into())],
             ..Rule::default()
         },
+        // A D3D12 game that waits on its swapchain's frame latency handle,
+        // at the default maximum latency of 1, starts a frame only after the
+        // previous one was presented, so the CPU and the GPU take turns.
+        // Apple GPUs then idle for part of every frame and stay at a low
+        // clock, and the game runs far slower than the GPU could: Hadron
+        // measured Teardown's first screen on an M2 Pro at 36 FPS, and at 69
+        // FPS with a latency of 2. Our vkd3d-proton, the bundle's D3D12,
+        // reads VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES as the least latency that
+        // handle allows, whatever the game asks for, which keeps the GPU busy
+        // at the cost of one frame of input latency. vkd3d-proton reads the
+        // variable in the Windows process when it creates the swapchain, long
+        // after compatdb has set it.
+        //
+        // It matches every process, like the rules above. A rule for one
+        // game with `env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=` removes it,
+        // and one with another value replaces it for that game.
+        Rule {
+            name: "vkd3d-proton-min-latency".into(),
+            exe: ANY_EXE.into(),
+            env: vec![("VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES".into(), "2".into())],
+            ..Rule::default()
+        },
         // Keeps Wine from prompting to install Mono and Gecko, in
         // wineboot and in any process that loads either.
         //
@@ -204,6 +226,10 @@ mod tests {
     /// Vulkan driver.
     const KK_RULE: &str = "kosmickrisp-experimental";
 
+    /// The name of the rule that gives vkd3d-proton's latency handles a
+    /// minimum latency.
+    const VKD3D_RULE: &str = "vkd3d-proton-min-latency";
+
     /// The names of the rules that match every process, in table order.
     fn wildcards() -> Vec<String> {
         [
@@ -211,6 +237,7 @@ mod tests {
             "large-address-aware",
             FEX_RULE,
             KK_RULE,
+            VKD3D_RULE,
             "no-mono-gecko",
         ]
         .map(String::from)
@@ -234,10 +261,34 @@ mod tests {
         )]
     }
 
+    /// The env of the rule for vkd3d-proton, spelled out for the same
+    /// reason: vkd3d-proton matches the name exactly (`swapchain.c` of our
+    /// fork) and ignores a value that is not a number from 1 to 16.
+    fn vkd3d_env() -> Vec<(String, String)> {
+        vec![(
+            "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES".to_string(),
+            "2".to_string(),
+        )]
+    }
+
     /// The wildcard rules that set env, each with its entries, in table
     /// order.
     fn wildcard_env_rules() -> Vec<(&'static str, Vec<(String, String)>)> {
-        vec![(FEX_RULE, fex_env()), (KK_RULE, kk_env())]
+        vec![
+            (FEX_RULE, fex_env()),
+            (KK_RULE, kk_env()),
+            (VKD3D_RULE, vkd3d_env()),
+        ]
+    }
+
+    /// The env every process gets from the built-in rules without the rule
+    /// of the given name.
+    fn wildcard_env_without(name: &str) -> Vec<(String, String)> {
+        wildcard_env_rules()
+            .into_iter()
+            .filter(|(n, _)| *n != name)
+            .flat_map(|(_, env)| env)
+            .collect()
     }
 
     /// The env every process gets from the built-in rules.
@@ -310,15 +361,15 @@ mod tests {
         let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
         assert_eq!(
             String::from_utf16_lossy(&merged),
-            "OTHER=x\0MESA_KK_EXPERIMENTAL=dgc,xfb,sparse\0\0"
+            "OTHER=x\0MESA_KK_EXPERIMENTAL=dgc,xfb,sparse\0VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2\0\0"
         );
         // Another process keeps it.
         let other = table.resolve("other.exe", &VersionInfo::default());
         assert_eq!(other.env, wildcard_env());
-        // For every process: drop the rule. The KosmicKrisp entry stays.
+        // For every process: drop the rule. The other entries stay.
         let table = with_overrides(&format!("name={FEX_RULE};enabled=false"));
         let game = table.resolve("game.exe", &VersionInfo::default());
-        assert_eq!(game.env, kk_env());
+        assert_eq!(game.env, wildcard_env_without(FEX_RULE));
         assert_eq!(game.matched, wildcards_without(FEX_RULE));
         Ok(())
     }
@@ -333,6 +384,7 @@ mod tests {
         let game = table.resolve("game.exe", &VersionInfo::default());
         let mut env = fex_env();
         env.extend(kk_env());
+        env.extend(vkd3d_env());
         assert_eq!(game.env, env);
         Ok(())
     }
@@ -351,16 +403,71 @@ mod tests {
         let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
         assert_eq!(
             String::from_utf16_lossy(&merged),
-            "OTHER=x\0FEX_X87REDUCEDPRECISION=1\0\0"
+            "OTHER=x\0FEX_X87REDUCEDPRECISION=1\0VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2\0\0"
         );
         // Another process keeps it.
         let other = table.resolve("other.exe", &VersionInfo::default());
         assert_eq!(other.env, wildcard_env());
-        // For every process: drop the rule. The FEX entry stays.
+        // For every process: drop the rule. The other entries stay.
         let table = with_overrides(&format!("name={KK_RULE};enabled=false"));
         let game = table.resolve("game.exe", &VersionInfo::default());
-        assert_eq!(game.env, fex_env());
+        assert_eq!(game.env, wildcard_env_without(KK_RULE));
         assert_eq!(game.matched, wildcards_without(KK_RULE));
+        Ok(())
+    }
+
+    #[test]
+    fn the_table_gives_vkd3d_proton_a_minimum_frame_latency() -> TestResult {
+        let table = table();
+        let vkd3d = rule(&table, VKD3D_RULE)?;
+        assert_eq!(vkd3d.exe, ANY_EXE);
+        assert_eq!(vkd3d.env, vkd3d_env());
+        // Every process gets it, after the FEX and KosmicKrisp entries.
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.env, wildcard_env());
+        assert_eq!(game.env.last(), vkd3d_env().last());
+        Ok(())
+    }
+
+    #[test]
+    fn a_game_rule_or_disabling_by_name_changes_the_minimum_frame_latency() -> TestResult {
+        // For one game: an empty value, which removes the variable, folds
+        // after the default.
+        let table = with_overrides("name=old;exe=old.exe;env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=");
+        let old = table.resolve("Old.exe", &VersionInfo::default());
+        let removed = (
+            "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES".to_string(),
+            String::new(),
+        );
+        assert_eq!(old.env, wildcard_env_and(&[removed]));
+        let block: Vec<u16> = "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2\0OTHER=x\0\0"
+            .encode_utf16()
+            .collect();
+        let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
+        assert_eq!(
+            String::from_utf16_lossy(&merged),
+            "OTHER=x\0FEX_X87REDUCEDPRECISION=1\0MESA_KK_EXPERIMENTAL=dgc,xfb,sparse\0\0"
+        );
+        // Another value for one game replaces it there.
+        let table =
+            with_overrides("name=fast;exe=fast.exe;env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=3");
+        let fast = table.resolve("fast.exe", &VersionInfo::default());
+        let block: Vec<u16> = "\0".encode_utf16().collect();
+        let merged = compatdb_table::merge_env(&block, &fast.env).ok_or("unchanged")?;
+        assert!(
+            String::from_utf16_lossy(&merged).contains("VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=3\0")
+        );
+        assert!(
+            !String::from_utf16_lossy(&merged).contains("VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2\0")
+        );
+        // Another process keeps the default.
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.env, wildcard_env());
+        // For every process: drop the rule. The other entries stay.
+        let table = with_overrides(&format!("name={VKD3D_RULE};enabled=false"));
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.env, wildcard_env_without(VKD3D_RULE));
+        assert_eq!(game.matched, wildcards_without(VKD3D_RULE));
         Ok(())
     }
 
@@ -463,9 +570,9 @@ mod tests {
     fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
         // Every rule that matches a launcher or a game must leave the
         // environment alone, or the games started from it would inherit the
-        // entries. The rules for FEX and KosmicKrisp are the exceptions: they
-        // are meant for every process, so a child that inherits them gets
-        // what it would get anyway.
+        // entries. The wildcard env rules (FEX, KosmicKrisp, vkd3d-proton)
+        // are the exceptions: they are meant for every process, so a child
+        // that inherits them gets what it would get anyway.
         let hud_off = vec![("MTL_HUD_ENABLED".to_string(), "0".to_string())];
         let helpers = ["steam-web-helper", "rockstar-social-club-ui"];
         let table = table();

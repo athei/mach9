@@ -1083,7 +1083,10 @@ vulkan_no_gpu() {
 # gets the default dxmt tree from compatdb.so and goes through every step:
 # vkd3d-proton's devices on DXMT's adapter, a swapchain DXMT presents for a
 # visible window, a clear read back, resizes, a frame latency handle, and
-# the swapchains Windows refuses. vkd3d-proton reaches KosmicKrisp through
+# the swapchains Windows refuses. The log must also show the minimum frame
+# latency of compatdb's vkd3d-proton-min-latency rule twice: in compatdb's
+# env line, and in vkd3d-proton's report for the waitable swapchain, which
+# shows the variable reached it. vkd3d-proton reaches KosmicKrisp through
 # winevulkan and the bundled loader, as vulkan.exe does. On a Mac without a
 # Metal 4 GPU (METAL4=0, see metal4_probe) KosmicKrisp has no device, so
 # each run must fail creating its first device instead (check_d3d12_no_gpu).
@@ -1102,7 +1105,9 @@ check_d3d12_runs() {
         run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
         smoke_check "d3d12.exe for $arch" 120 "$log"
         for want in "wine-build smoke test: $arch d3d12 works on " \
-                    "compatdb: .*dxgi = ${DXGI_IMPLS%% *} (from"; do
+                    "compatdb: .*dxgi = ${DXGI_IMPLS%% *} (from" \
+                    "compatdb: .*env = .*VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2" \
+                    "vkd3d-proton:.*Allowing a frame latency of at least 2 frames"; do
             if ! grep -q "$want" "$log"; then
                 echo "Error: d3d12.exe for $arch did not print '$want'"
                 cat "$log"
@@ -1111,6 +1116,7 @@ check_d3d12_runs() {
             fi
         done
         grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+        echo "    vkd3d-proton: $(grep -m 1 -o "Allowing a frame latency of at least 2 frames" "$log")"
     done
 }
 
