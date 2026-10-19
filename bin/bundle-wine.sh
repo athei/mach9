@@ -666,10 +666,11 @@ check_default_trees() {
 # WINE_MAC_OPENGL and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, MESA_*, MTL_*
 # and METAL_* variable are dropped so that the built-in rules and the
 # defaults of Wine, FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp and
-# Metal decide. The checks that need a Vulkan device change on a Mac without
-# a Metal 4 GPU (metal4_probe), and the ones that need an OpenGL context on a
-# Mac without an accelerated OpenGL renderer (gl_probe). Each probe decides
-# only its own checks.
+# Metal decide; only vkd3d-proton's pipeline cache is moved into the prefix.
+# The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
+# (metal4_probe), and the ones that need an OpenGL context on a Mac without
+# an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
+# checks.
 smoke_test() {
     local version log arch cc exe marker markers var dlls
     local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG -u WINE_MAC_OPENGL)
@@ -677,6 +678,11 @@ smoke_test() {
         wine_env+=(-u "$var")
     done
     wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all)
+    # vkd3d-proton writes its pipeline cache into the working directory
+    # unless told otherwise, which would leave a vkd3d-proton.cache in the
+    # caller's directory (or BUILD_DIR, where a full bundle runs this). The
+    # prefix goes away with TMP_DIR. vkd3d-proton maps a unix path to Z:.
+    wine_env+=(VKD3D_SHADER_CACHE_PATH="$TMP_DIR/prefix")
     # Before any Wine process runs, so a failure leaves no wineserver behind.
     check_hybrid_markers
     version=$("$WINE_DIR/bin/wine" --version) || {
