@@ -29,9 +29,11 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
   `fex-x87-reduced-precision` rule asks FEX for faster x87 emulation
   ([defaults](../README.md#defaults-that-differ-from-wine),
   [FEX and KosmicKrisp](compatdb.md#fex-and-kosmickrisp)).
-- DXMT is built from source against this Wine (see [DXMT](#dxmt)); mtld3d
-  comes from its release (see [mtld3d](#mtld3d)). The trees the bundle
-  carries are `DXGI_IMPLS` and `D3D9_IMPLS` in `profile.sh`.
+- DXMT is built from our fork against this Wine (see [DXMT](#dxmt)), and
+  vkd3d-proton, the D3D12 in DXMT's tree, from ours (see
+  [vkd3d-proton](#vkd3d-proton)); mtld3d comes from its release (see
+  [mtld3d](#mtld3d)). The trees the bundle carries are `DXGI_IMPLS` and
+  `D3D9_IMPLS` in `profile.sh`.
 - Wine's Vulkan is on, on KosmicKrisp, Mesa's Vulkan driver on Metal, and
   a Vulkan loader built for the floor (see [Vulkan](#vulkan)).
 - A [Wine SDK](#wine-sdk) is staged for the PE code built outside Wine.
@@ -59,23 +61,28 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
 - In the keychain, a code signing identity of the team that
   [`signing/loader.provisionprofile`](../signing/loader.provisionprofile)
   belongs to, whose certificate the profile lists.
-- Network access for the bundle step, which resolves `fex-src.ref` and
-  `mesa-src.ref` and gets the loader's secure timestamp. `build-fex.sh` and
-  `build-mesa.sh` fetch their ref from `FEX_REPO` and `MESA_REPO` on every
-  run, which needs the network unless the variable names a local clone.
-  `build-mesa.sh` also needs it whenever it builds the Vulkan loader or the
-  Python environment of Mesa's build scripts anew (a first run, or changed
-  pins), to clone the loader and headers and install the Python modules.
+- Network access for the bundle step, which resolves `fex-src.ref`,
+  `mesa-src.ref`, `dxmt-src.ref` and `vkd3d-proton-src.ref` and gets the
+  loader's secure timestamp. `build-fex.sh`, `build-mesa.sh`,
+  `build-dxmt.sh` and `build-vkd3d-proton.sh` fetch their ref from
+  `FEX_REPO`, `MESA_REPO`, `DXMT_REPO` and `VKD3D_PROTON_REPO` on every run,
+  which needs the network unless the variable names a local clone.
+  `build-vkd3d-proton.sh` needs it in any case for the submodules, which
+  come from their upstream repositories. `build-mesa.sh` also needs it
+  whenever it builds the Vulkan loader or the Python environment of Mesa's
+  build scripts anew (a first run, or changed pins), to clone the loader
+  and headers and install the Python modules.
 
 ## Commands
 
 | Script | What it does |
 |--------|--------------|
-| `build-wine.sh` | Runs `build-mesa.sh`, builds Wine against the loader it staged, stages the [Wine SDK](#wine-sdk), then runs `build-fex.sh` and `build-dxmt.sh`; `--clean` is passed on to all three |
+| `build-wine.sh` | Runs `build-mesa.sh`, builds Wine against the loader it staged, stages the [Wine SDK](#wine-sdk), then runs `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; `--clean` is passed on to all four |
 | [`build-mesa.sh`](../bin/build-mesa.sh) | Checks out the ref in [`mesa-src.ref`](../pins/mesa-src.ref) in `MESA_SRC` (refusing a tree with local changes), builds the Vulkan loader from the tags pinned in [`redist.env`](../pins/redist.env) and KosmicKrisp, and stages both with the driver's manifest and their commits in `MESA_DIST` (see [Vulkan](#vulkan)). Runs alone too |
 | [`build-fex.sh`](../bin/build-fex.sh) | Checks out the ref in [`fex-src.ref`](../pins/fex-src.ref) in `FEX_SRC` (refusing a tree with local changes), builds FEX's emulator DLLs and their unix halves, and records the commit. Runs alone too |
-| [`build-dxmt.sh`](../bin/build-dxmt.sh) | Builds DXMT from the commit pinned in [`redist.env`](../pins/redist.env) against the Wine build and SDK, and stages it with its commit and `git describe` in `DXMT_DIST`. Runs alone too, after a Wine build |
-| `bundle-wine.sh` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT, the Vulkan loader and KosmicKrisp, and the mtld3d release, signs the loader and runs the smoke test |
+| [`build-dxmt.sh`](../bin/build-dxmt.sh) | Checks out the ref in [`dxmt-src.ref`](../pins/dxmt-src.ref) in its own clone, builds DXMT against the Wine build and SDK, and stages it with its commit and `git describe` in `DXMT_DIST`. Runs alone too, after a Wine build |
+| [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | Checks out the ref in [`vkd3d-proton-src.ref`](../pins/vkd3d-proton-src.ref) in its own clone, builds vkd3d-proton's D3D12 DLLs, marks them as builtins with the Wine build's and the SDK's `winebuild`, and stages them with their commit and `git describe` in `VKD3D_PROTON_DIST`. Runs alone too, after a Wine build |
+| `bundle-wine.sh` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT, vkd3d-proton, the Vulkan loader and KosmicKrisp, and the mtld3d release, signs the loader and runs the smoke test |
 
 The flags are in the [README](../README.md#commands).
 
@@ -96,9 +103,13 @@ of the same name; the defaults are set in
 | `WINE_SDK_DIR` | The [Wine SDK](#wine-sdk) |
 | `FEX_REPO`, `FEX_SRC` | FEX repository and the local clone `build-fex.sh` checks out |
 | `FEX_BUILD_DIR` | FEX's CMake trees |
+| `DXMT_REPO` | DXMT repository `build-dxmt.sh` fetches the ref from |
 | `DXMT_BUILD_DIR` | DXMT's checkout, its meson trees (ARM64X PE with the arm64 unix half, and i386 PE) and, by default, `DXMT_LLVM` and `DXMT_DIST` |
 | `DXMT_LLVM` | The LLVM static libraries `winemetal.so` links |
 | `DXMT_DIST` | All of DXMT as the bundle installs it, with the commits it was built from |
+| `VKD3D_PROTON_REPO` | vkd3d-proton repository `build-vkd3d-proton.sh` fetches the ref from |
+| `VKD3D_PROTON_BUILD_DIR` | vkd3d-proton's checkout, its meson trees (ARM64X and i386 PE) and, by default, `VKD3D_PROTON_DIST` |
+| `VKD3D_PROTON_DIST` | vkd3d-proton's DLLs as the bundle installs them, with the commits they were built from |
 | `MESA_REPO`, `MESA_SRC` | Mesa repository and the local clone `build-mesa.sh` checks out |
 | `MESA_BUILD_DIR` | The Vulkan loader's and headers' clones and trees, KosmicKrisp's two meson trees, the Python environment and, by default, `MESA_DIST` |
 | `MESA_DIST` | The Vulkan loader, KosmicKrisp and its manifest as the bundle installs them, with the commits they were built from |
@@ -192,10 +203,11 @@ loader) with nothing but the bundle; mtld3d's conformance suite runs the
   the Wine the tests were built from (`wine_build` in the build tree's
   `dlls/ntdll/unix/version.c`), so a copy of `lib/wine/tests` taken alone
   still names its build; mtld3d's conformance runner reads its first line.
-- `d3d12_test.exe` cannot start until a D3D12 implementation is bundled.
-  It imports `d3d12.dll`, which the bundle leaves out ([Vulkan](#vulkan)),
-  so the loader stops it with `c0000135` (a missing DLL) and it exits
-  with 53.
+- `d3d12_test.exe` runs against vkd3d-proton and DXMT's `dxgi.dll` from
+  the `dxmt` tree ([vkd3d-proton](#vkd3d-proton)). It imports `d3d12.dll`,
+  which only that tree has, so on the `wined3d` tree the loader stops it
+  with `c0000135` (a missing DLL) and it exits with 53, as it did before
+  the bundle had D3D12.
 
 To run one against the bundle, in a prefix of its own, give the test's path
 to the bundle's `wine`, with the names of the parts to run (all of them
@@ -214,10 +226,15 @@ exits with the number of failed checks, at most 255.
 
 ## DXMT
 
-- DXMT is built from the upstream commit pinned in
-  [`redist.env`](../pins/redist.env), not taken from a release: the release's
-  Metal shaders do not compile with the Metal toolchain this build uses.
-  The comment there says which fix the pin carries.
+- DXMT is [athei/dxmt](https://github.com/athei/dxmt) at the ref
+  [`dxmt-src.ref`](../pins/dxmt-src.ref) names: upstream DXMT plus our
+  commits, among them the `dxgi.dll` support for vkd3d-proton's swapchains
+  ([vkd3d-proton](#vkd3d-proton)). As with Mesa, the ref is fetched from
+  `DXMT_REPO`, so a commit that is only in a local clone is built only with
+  `DXMT_REPO` set to that clone. `build-dxmt.sh` fetches it into a clone of
+  its own in `DXMT_BUILD_DIR`, which it resets to the ref on every run.
+- DXMT's own `d3d12.dll` is not built (`-Denable_d3d12=false`): D3D12 is
+  vkd3d-proton's.
 - The 64-bit DLLs are ARM64X, built with DXMT's own `build-arm64ec.txt`
   cross file against the Wine build tree, whose `aarch64-windows` archives
   are ARM64X too. An x64 game runs as ARM64EC and loads their ARM64EC half,
@@ -233,14 +250,53 @@ exits with the number of failed checks, at most 255.
 - The DLLs and the `.so` share a private call interface, so they come from
   one checkout. `build-dxmt.sh` records the commit, its `git describe` (which
   DXMT also builds into `d3d11.dll` as its version) and the Wine commit it
-  linked against; the bundle step checks all three against the pin, the
-  DLLs and the Wine source. A meson tree is configured afresh, and so
-  relinked, whenever the DXMT, Wine or LLVM commit or its options change.
+  linked against; the bundle step checks them against what `dxmt-src.ref`
+  names now, the DLLs and the Wine source. A meson tree is configured
+  afresh, and so relinked, whenever the DXMT, Wine or LLVM commit, its
+  options or llvm-mingw's clang change.
 - `winemetal.so` contains DXMT's shader converter (airconv), which links
   LLVM; the PE side only uses its headers. `build-dxmt.sh` builds the LLVM
   static libraries from the tag pinned in
   [`redist.env`](../pins/redist.env) into `DXMT_LLVM`, records the commit
   there, and rebuilds them only when the pin changes; `--clean` keeps them.
+
+## vkd3d-proton
+
+- Direct3D 12 is vkd3d-proton,
+  [athei/vkd3d-proton](https://github.com/athei/vkd3d-proton) at the ref
+  [`vkd3d-proton-src.ref`](../pins/vkd3d-proton-src.ref) names: upstream
+  vkd3d-proton plus our commits. Like DXMT, the ref is fetched from
+  `VKD3D_PROTON_REPO` into a clone of `build-vkd3d-proton.sh`'s own; the
+  submodules come from their upstream repositories at the commits the ref
+  records.
+- It translates D3D12 to Vulkan and runs on KosmicKrisp
+  ([Vulkan](#vulkan)), which it finds through `winevulkan.dll` or
+  `vulkan-1.dll`. The features it needs that KosmicKrisp counts as
+  experimental come from compatdb's built-in `kosmickrisp-experimental`
+  rule ([FEX and KosmicKrisp](compatdb.md#fex-and-kosmickrisp)).
+- `d3d12.dll` and `d3d12core.dll` go into the `dxmt` tree. vkd3d-proton
+  has no DXGI of its own: a game creates its swapchain through DXMT's
+  `dxgi.dll`, which presents vkd3d-proton's Vulkan swapchain into the
+  window, so the two are always loaded together. The `wined3d` tree has no
+  D3D12, and under `dxgi=wined3d` `d3d12.dll` does not load (error 126),
+  which the smoke test checks. Wine's own `d3d12.dll` and
+  `d3d12core.dll`, on vkd3d, are removed in Step 3b of
+  [`bundle-wine.sh`](../bin/bundle-wine.sh).
+- The 64-bit DLLs are ARM64X, built with vkd3d-proton's own
+  `build-arm64x.txt` cross file, and the i386 DLLs x86 code, built with
+  `build-win32.txt`, both with llvm-mingw, as for DXMT. vkd3d-proton links
+  nothing of Wine. Wine only loads a DLL from `lib/wine` that is marked as
+  a builtin, so `build-vkd3d-proton.sh` marks the staged copies with
+  `winebuild --builtin`, the Wine build's for the 64-bit DLLs and the
+  SDK's for the i386 ones, and checks each DLL's machine, mark and exports.
+- It records the commit, its `git describe` and the commit `WINE_SRC` was
+  at; the bundle step checks the commit against what
+  `vkd3d-proton-src.ref` names now. The Wine commit is only a record: the
+  builtin mark does not change with Wine, so a new Wine needs no new
+  vkd3d-proton build. A meson tree is configured afresh whenever the
+  commit, its options, llvm-mingw's clang or glslang change.
+- Its shaders are compiled with glslang from the arm64 Homebrew
+  ([`brew-formulae`](../pins/brew-formulae)).
 
 ## mtld3d
 
@@ -267,7 +323,8 @@ exits with the number of failed checks, at most 255.
 Wine's Vulkan (`vulkan-1.dll`, `winevulkan`) runs on KosmicKrisp, Mesa's
 Vulkan driver on Metal, through the Khronos Vulkan loader. The default
 Direct3D implementations, mtld3d and DXMT, go to Metal directly and do not
-use it; wined3d can, per game (see below).
+use it; D3D12 does, through vkd3d-proton ([vkd3d-proton](#vkd3d-proton)),
+and wined3d can, per game (see below).
 
 - Mesa is [athei/mesa](https://github.com/athei/mesa) at the ref
   [`mesa-src.ref`](../pins/mesa-src.ref) names: upstream Mesa plus our topic
@@ -333,9 +390,10 @@ use it; wined3d can, per game (see below).
   turns it on for one game, for every wined3d user in that process,
   D3D8 and DirectDraw included
   ([wined3d on Vulkan](compatdb.md#wined3d-on-vulkan)).
-- Wine's own `d3d12.dll` and `d3d12core.dll` are left out of the bundle.
-- Not covered yet: Direct3D 12 through vkd3d-proton, DXVK, and OpenGL
-  through Zink on KosmicKrisp. A program that wants Vulkan itself gets it.
+- Wine's own `d3d12.dll` and `d3d12core.dll` are left out of the bundle;
+  D3D12 is vkd3d-proton's.
+- Not covered yet: DXVK, and OpenGL through Zink on KosmicKrisp. A program
+  that wants Vulkan itself gets it.
 
 ## Loader app
 
@@ -406,8 +464,11 @@ bundle, holding every [graphics test](#graphics-tests) and their
 `VERSION`), the FEX build (complete, and built from the commit
 `fex-src.ref` names now, which it asks `FEX_REPO` for with
 `git ls-remote`, so the step needs the network), the
-staged DXMT (complete, from the pinned commit, linked against the current
-Wine source, its DLLs carrying the recorded version), the staged Vulkan
+staged DXMT (complete, built from the commit `dxmt-src.ref` names now,
+asked of `DXMT_REPO` the same way, linked against the current Wine source,
+its DLLs carrying the recorded version), the staged vkd3d-proton
+(complete, built from the commit `vkd3d-proton-src.ref` names now, asked of
+`VKD3D_PROTON_REPO`), the staged Vulkan
 loader and KosmicKrisp (complete, Mesa built from the commit `mesa-src.ref`
 names now, asked of `MESA_REPO` the same way, and the loader from the
 pinned commit), the llvm-mingw compilers and tools the smoke test, the
@@ -463,8 +524,8 @@ After assembly:
   [macOS floors](maintenance.md#macos-floors)). That catches a Wine build
   tree configured before the override, which `minos` does not show.
 - The smoke test, with the caller's `WINE_COMPATDB` and `WINE_D3D_CONFIG`
-  and every `WINEMSYNC*`, `FEX_*`, `VK_*`, `MESA_*`, `MTL_*` and `METAL_*`
-  variable dropped: `wine --version`; a fresh prefix boots
+  and every `WINEMSYNC*`, `FEX_*`, `VK_*`, `VKD3D_*`, `MESA_*`, `MTL_*`
+  and `METAL_*` variable dropped: `wine --version`; a fresh prefix boots
   (`cmd /c exit`), with `compatdb:` lines and the wineserver's
   `msync: up and running.` line and no `msync: error:` line (with
   `--compatdb-only`, a wineserver without msync skips that check);
@@ -482,10 +543,17 @@ After assembly:
   x86_64, i686 and native programs load every module of each Direct3D tree
   in turn, the tree picked with a `WINE_COMPATDB` rule, which shows that
   the prefix placeholders made from the default-dir markers let each tree
-  in. Last,
+  in, and on the `wined3d` dxgi tree `d3d12.dll` must fail to load with
+  error 126. Last,
   [`smoke/vulkan.c`](../smoke/vulkan.c), compiled for x86_64 and i686,
   creates a Vulkan instance without a window and must find a device; its
   compatdb lines must carry `MESA_KK_EXPERIMENTAL`. Then
+  [`smoke/d3d12.c`](../smoke/d3d12.c), compiled for x86_64, i686 and
+  aarch64, must get the `dxmt` tree and go through D3D12 as a game does:
+  devices on DXMT's adapter and without one, a swapchain for a visible
+  window with a clear read back, presents, a resize, a frame latency
+  handle, and the swapchains Windows refuses (its header lists the steps
+  and their exit statuses). Then
   [`smoke/wined3d.c`](../smoke/wined3d.c), compiled for x86_64 and i686,
   must create a device for a hidden window through wined3d twice, with the
   `winediag` channel on: with the default renderer, where wined3d must not
@@ -496,7 +564,8 @@ After assembly:
   the Metal 4 family, and a Mac without one, such as the virtual machine of
   a hosted CI runner, gives it no device. There, `vulkan.exe` has to fail
   creating its instance after the Vulkan loader read the bundled manifest
-  and found no GPU, and the `wined3d=vulkan` runs are left out. The Mac
+  and found no GPU, `d3d12.exe` has to fail creating its first device with
+  `E_FAIL` after the same, and the `wined3d=vulkan` runs are left out. The Mac
   driver only asks for an accelerated OpenGL renderer, and a Mac without
   one, such as the same virtual machine with only Apple's software
   renderer, gives wined3d no OpenGL context. There, the runs with the
@@ -528,7 +597,9 @@ With `--compatdb-only`, the bundle step:
 - removes quarantine from `compatdb.so` only, and only when it is there;
 - checks that the installed file matches the build output, the
   `LEAK_PREFIXES` references and `minos` of `compatdb.so` only (the rest
-  was not built here), and runs the smoke test.
+  was not built here), and runs the smoke test. On a bundle from before
+  vkd3d-proton, which has no `d3d12.dll` in the `dxmt` tree, it leaves out
+  the D3D12 checks and says so.
 
 ## Homebrew libraries and the floor
 
@@ -577,8 +648,8 @@ dependency, search a clean build's log for it.
   from that marker, and the placeholder's machine decides which module Wine
   looks for. The bundle step therefore gives every 64-bit Direct3D name a
   hybrid marker, which both kinds of process accept, and requires every
-  64-bit module of every tree to be ARM64X (DXMT's, mtld3d's and Wine's
-  are), so that it serves both
+  64-bit module of every tree to be ARM64X (DXMT's, vkd3d-proton's,
+  mtld3d's and Wine's are), so that it serves both
   ([Direct3D trees](maintenance.md#direct3d-trees)). A tree changed after
   the bundle step, such as by a development install of mtld3d, has to keep
   to that, or a native ARM64 program cannot load its module. Which tree a
@@ -591,7 +662,8 @@ dependency, search a clean build's log for it.
 |-------|-----------|
 | FEX | [`fex-src.ref`](../pins/fex-src.ref): a branch, tag or commit of `FEX_REPO` |
 | mtld3d | [`redist.env`](../pins/redist.env), URL and SHA-256 of the release tarball |
-| DXMT | [`redist.env`](../pins/redist.env), by commit |
+| DXMT | [`dxmt-src.ref`](../pins/dxmt-src.ref): a branch, tag or commit of `DXMT_REPO` |
+| vkd3d-proton | [`vkd3d-proton-src.ref`](../pins/vkd3d-proton-src.ref): a branch, tag or commit of `VKD3D_PROTON_REPO`; its submodules at the commits that ref records |
 | LLVM for DXMT's `winemetal.so` | [`redist.env`](../pins/redist.env), tag and commit; `build-dxmt.sh` fails when the tag is not at the commit |
 | Mesa (KosmicKrisp) | [`mesa-src.ref`](../pins/mesa-src.ref): a branch, tag or commit of `MESA_REPO` |
 | Vulkan loader and headers | [`redist.env`](../pins/redist.env), tag and commit of each, from one SDK release; `build-mesa.sh` fails when a tag is not at its commit |

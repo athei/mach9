@@ -332,3 +332,36 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
   together; `build-mesa.sh` refuses a tag that is not at its commit.
 - A Wine build tree configured without Vulkan has no `SONAME_LIBVULKAN`;
   `build-wine.sh` stops and asks for `--clean`.
+
+### DXMT and vkd3d-proton
+
+Both are forks: upstream plus our commits, at the refs in
+[`dxmt-src.ref`](../pins/dxmt-src.ref) and
+[`vkd3d-proton-src.ref`](../pins/vkd3d-proton-src.ref)
+([DXMT](arm64.md#dxmt), [vkd3d-proton](arm64.md#vkd3d-proton)). They are
+upgraded together when the swapchain interface between them changes.
+
+- To move either to a newer upstream main (DXMT) or master (vkd3d-proton),
+  rebase our commits onto it with `git rerere` enabled, as for Mesa, and
+  drop the ones upstream has merged in the meantime.
+- DXMT's `dxgi.dll` presents vkd3d-proton's swapchains through the
+  interfaces of vkd3d-proton's `include/vkd3d_swapchain_factory.idl`, of
+  which DXMT carries its own copy. A change to that file upstream has to be
+  made in DXMT's copy too, in the same upgrade; neither build notices a
+  mismatch, which shows as a crash or a failed swapchain at run time.
+- DXMT: check `macdrv_functions` ([upgrade checklist](#upgrade-checklist)),
+  that `enable_d3d12` still exists in its `meson.options`, and that the
+  LLVM version in [`redist.env`](../pins/redist.env) is still the one
+  DXMT's airconv wants.
+- vkd3d-proton: check that `build-arm64x.txt`, `build-win32.txt` and the
+  `enable_tests` option still exist, that the submodules still build with
+  llvm-mingw, and that the DLLs still export what `build-vkd3d-proton.sh`
+  checks. A new tool its build runs belongs in
+  [`brew-formulae`](../pins/brew-formulae).
+- Push the branch to athei/dxmt or athei/vkd3d-proton before building
+  without `DXMT_REPO` or `VKD3D_PROTON_REPO` pointing at the local clone;
+  the default builds what the remote has.
+- Run a full bundle step: its smoke test runs `d3d12.exe` on every arch.
+  Run Wine's `d3d12_test.exe`, `dxgi_test.exe` and `d3d11_test.exe` from
+  the bundle's [graphics tests](arm64.md#graphics-tests) before and after,
+  and explain any new failure before the bundle takes the new build.
