@@ -66,6 +66,13 @@ done
 if [ -z "$DIST_DIR" ]; then
     DIST_DIR="$BUNDLE_DEST"
 fi
+# One spelling of the directory for every path built from it. The host EGL
+# check compares the paths dyld reports for the libraries it loaded, which
+# have symlinks resolved and no doubled slashes, with paths under WINE_DIR,
+# so a --dest of ".../Resources/" (".../Resources//wine") or one through a
+# symlink would fail it. Step 1 also runs make in BUILD_DIR, where a
+# relative --dest would name another directory.
+DIST_DIR=$(absolute_path "$DIST_DIR")
 
 WINE_DIR="$DIST_DIR/wine"
 # The PE files' symbols (Step 4e, with --symbols), next to the bundle and
