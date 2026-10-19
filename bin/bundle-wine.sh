@@ -2503,11 +2503,11 @@ if in_list mtld3d "$D3D9_IMPLS"; then
     # program their ARM64 half, and compatdb.so gives both mtld3d. They have
     # to be ARM64X for that, which check_trees_arm64x checks with every
     # other tree before the markers are stamped. Its x86_64 builds, for an
-    # x86_64 Wine, are not used. The tarball's
-    # prefix-markers/ holds the system32 and syswow64 placeholders for
-    # installs into an existing prefix and is not used either: the prefixes
-    # this bundle creates get their markers from wine.inf's wildcard over
-    # the default dirs (stamped below).
+    # x86_64 Wine, are not used. The tarball's prefix-markers/ holds the
+    # system32, system32-arm64 and syswow64 placeholders for installs into
+    # an existing prefix and is not used either: the prefixes this bundle
+    # creates get their markers from wine.inf's wildcard over the default
+    # dirs (stamped below).
     echo "  Installing mtld3d..."
     mkdir -p "$TMP_DIR/mtld3d"
     tar xf "$MTLD3D_TAR" -C "$TMP_DIR/mtld3d"
