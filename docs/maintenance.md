@@ -200,15 +200,21 @@ The runner also caches DXMT's LLVM libraries, the downloads `redist.env`
 pins and cargo's registry. Each key changes only with what its cache was made
 from:
 
-- DXMT's LLVM: the `LLVM15_*` lines of [`redist.env`](../pins/redist.env),
-  the floor, the Xcode version and the runner image. A change to how
+- DXMT's LLVM: the LLVM pin in [`redist.env`](../pins/redist.env), the
+  floor, the Xcode version and the runner image. A change to how
   `build-dxmt.sh` builds LLVM does not change it, just as a local build
-  keeps its LLVM while the pinned commit stays the same.
-- The downloads: the `MTLD3D_*` and `LLVM_MINGW_*` lines of `redist.env`,
-  the downloads the cache holds. `release.yml` and `release-compatdb.yml`
-  compute it the same way, with [`pins-key.sh`](../bin/ci/pins-key.sh), and
-  share the cache. A new download pinned in `redist.env` needs its prefix
-  added to the `pins-key.sh` calls of both workflows.
+  keeps its LLVM while the pinned commit stays the same. To rebuild LLVM
+  after such a change, delete the `dxmt-llvm15-*` caches
+  (`gh cache list --key dxmt-llvm15-`, then `gh cache delete <id>`) or
+  change the pin.
+- The downloads: the pins of the downloads the cache holds, the ones the
+  `pins-key.sh` calls in `release.yml` and `release-compatdb.yml` name
+  ([`pins-key.sh`](../bin/ci/pins-key.sh) hashes their lines of
+  `redist.env`). Both workflows compute the key the same way and share the
+  cache, but only `release.yml` saves it: `release-compatdb.yml` fetches
+  llvm-mingw only, and an entry it saved would lack mtld3d. A new download
+  pinned in `redist.env` needs its prefix added to the `pins-key.sh` calls
+  of both workflows.
 - cargo's registry: `compatdb/Cargo.lock`.
 
 A run on a tag writes caches that only later runs on the same tag can read,
