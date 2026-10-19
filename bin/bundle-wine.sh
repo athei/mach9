@@ -1154,8 +1154,11 @@ smoke_stop() {
 # dxgi.dll. This is what proves the default-dir placeholders let each tree's
 # modules into a process of that arch, for x86_64 and aarch64 (a native
 # ARM64 program) through the hybrid placeholders of every 64-bit name (Step
-# 4, the markers). <env-command> is the env invocation the runs start with;
-# the rule is appended to it.
+# 4, the markers). While a dxgi tree has d3d12.dll, every dxgi tree gets a
+# second run that must fail to load it (check_no_d3d12): one without D3D12
+# as it is, and one with D3D12 with the rule that hides it from a game.
+# <env-command> is the env invocation the runs start with; the rule is
+# appended to it.
 check_tree_loads() {
     local arch="$1" dir=i386-windows exe log family impl other names f want header
     shift
@@ -1189,8 +1192,47 @@ check_tree_loads() {
                 fi
             done
             echo "    $arch, $family=$impl: loads ${names[*]}"
+            # A dxgi tree without D3D12 of its own (wined3d's) must not reach
+            # vkd3d-proton's in another tree: the default dir has only the
+            # marker of d3d12.dll, which Wine does not load as a module. On a
+            # tree with D3D12, the recipe that hides it from one game
+            # (docs/compatdb.md) must disable it through compatdb's
+            # load-order hook and leave the tree's dxgi.dll alone.
+            [ "$family" = dxgi ] && [ -f "$WINE_DIR/lib/wine/$dir/d3d12.dll" ] || continue
+            if [ -f "$WINE_DIR/lib/wine/$family/$impl/$dir/d3d12.dll" ]; then
+                check_no_d3d12 "$arch" "$exe" "$header" "$family=$impl;dll_overrides=d3d12,d3d12core=" \
+                    "$family=$impl with d3d12 and d3d12core disabled" "$@"
+            else
+                check_no_d3d12 "$arch" "$exe" "$header" "$family=$impl" "$family=$impl" "$@"
+            fi
         done
     done
+}
+
+# check_no_d3d12 <arch> <exe> <header> <settings> <label> <env-command>...:
+# run the hello.exe <exe> for <arch> with a WINE_COMPATDB rule for it made of
+# <settings>, loading dxgi.dll and d3d12.dll, and exit unless dxgi.dll loads
+# and d3d12.dll fails with 126 (ERROR_MOD_NOT_FOUND), which is what both a
+# missing module and a disabled one give.
+check_no_d3d12() {
+    local arch="$1" exe="$2" header="$3" settings="$4" label="$5" log want
+    shift 5
+    time_mark "smoke: $arch without d3d12 ($label)"
+    log="$TMP_DIR/trees-$arch-no-d3d12-${settings%%;*}.log"
+    log="${log//=/-}"
+    run_limited 120 "$log" "$@" \
+        WINE_COMPATDB="$header"$'\n'"name=smoke;exe=$(basename "$exe");$settings" \
+        "$WINE_DIR/bin/wine" "$exe" dxgi.dll d3d12.dll
+    smoke_check "the $arch program loading d3d12.dll ($label)" 120 "$log"
+    want="wine-build smoke test: $arch cannot load d3d12.dll, error 126[^0-9]*\$"
+    if ! grep -q "$want" "$log" || grep -q "cannot load dxgi.dll" "$log"; then
+        echo "Error: the $arch program ($label) did not load dxgi.dll and fail to load"
+        echo "d3d12.dll with error 126"
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
+    echo "    $arch, $label: dxgi.dll loads, d3d12.dll does not (error 126)"
 }
 
 # check_fex_build: exit unless build-fex.sh built all of FEX from the commit
@@ -1366,6 +1408,37 @@ check_dxmt_build() {
         fi
     done
     echo "  DXMT: $describe ($built)"
+}
+
+# check_vkd3d_proton_build: exit unless build-vkd3d-proton.sh staged both of
+# vkd3d-proton's DLLs for both arches from the commit vkd3d-proton-src.ref
+# names now: the COMMIT it wrote last. Its WINE_COMMIT is not compared: the
+# DLLs link nothing of Wine, and the builtin mark winebuild gave them does
+# not change with Wine. Needs the network, to resolve a branch or tag.
+check_vkd3d_proton_build() {
+    local f built want
+    built=$(cat "$VKD3D_PROTON_DIST/COMMIT" 2>/dev/null) || {
+        echo "Error: $VKD3D_PROTON_DIST has no COMMIT; build-vkd3d-proton.sh has not staged it (run build-wine.sh)"
+        exit 1
+    }
+    want=$(src_ref_commit vkd3d-proton-src.ref "$VKD3D_PROTON_REPO")
+    if [ -z "$want" ]; then
+        echo "Error: cannot resolve vkd3d-proton-src.ref ($(tr -d '[:space:]' < "$PINS_DIR/vkd3d-proton-src.ref")) in $VKD3D_PROTON_REPO"
+        exit 1
+    fi
+    if [ "$built" != "$want" ]; then
+        echo "Error: vkd3d-proton was built from $built, but vkd3d-proton-src.ref now names $want"
+        echo "(run build-vkd3d-proton.sh)"
+        exit 1
+    fi
+    for f in "$PE64_DIR/d3d12.dll" "$PE64_DIR/d3d12core.dll" \
+             i386-windows/d3d12.dll i386-windows/d3d12core.dll DESCRIBE; do
+        if [ ! -f "$VKD3D_PROTON_DIST/$f" ]; then
+            echo "Error: no $f in $VKD3D_PROTON_DIST (run build-vkd3d-proton.sh)"
+            exit 1
+        fi
+    done
+    echo "  vkd3d-proton: $(cat "$VKD3D_PROTON_DIST/DESCRIBE") ($built)"
 }
 
 # ── Loader app ──────────────────────────────────────────────────────────
@@ -1725,6 +1798,7 @@ check_deps_formulae
 check_fex_build
 check_wine_sdk
 check_dxmt_build
+check_vkd3d_proton_build
 check_mesa_build
 for arch in $SMOKE_PE_ARCHS x86_64 i686; do
     if [ ! -x "$MINGW_DIR/bin/$arch-w64-mingw32-clang" ]; then
@@ -1986,8 +2060,9 @@ done
 
 # ── Step 3b: Remove Wine's D3D12 ────────────────────────────────────────
 # Wine's own D3D12 (d3d12.dll and d3d12core.dll, on vkd3d) is never shipped.
-# D3D12 is meant to run on vkd3d-proton, which the bundle does not carry yet
-# (docs/arm64.md), so Wine's is left out rather than shipped untried.
+# D3D12 comes from vkd3d-proton instead, whose DLLs Step 4 puts into the
+# dxmt tree, next to DXMT's dxgi.dll, which presents its swapchains. The
+# wined3d tree has no D3D12, so under dxgi=wined3d d3d12.dll does not load.
 # d3d10core stays: the Direct3D trees of Step 4 take it over.
 time_mark "Step 3b: D3D12 removal"
 echo "==> Step 3b: Remove Wine's D3D12"
@@ -2024,11 +2099,13 @@ echo "    share/vulkan/icd.d/$(basename "$ICD") -> $ICD_LIBRARY"
 # ── Step 4: Direct3D backends ───────────────────────────────────────────
 # Direct3D comes from third-party implementations that talk to Metal
 # directly, plus Wine's own wined3d as the fallback for each: DXMT for D3D10
-# and D3D11, and mtld3d for D3D9. The trees are DXGI_IMPLS and D3D9_IMPLS in
-# profile.sh. Every one lives in its own tree under lib/wine/dxgi/<impl> or
-# lib/wine/d3d9/<impl>, with <pe64>-windows, i386-windows and, where it has
-# a unix half, <unix> subdirectories; the default dirs hold only fake-module
-# markers, and compatdb.so (Step 4b) picks one tree per family per process.
+# and D3D11, and mtld3d for D3D9. D3D12 is vkd3d-proton on Vulkan, in the
+# dxmt tree only, with no wined3d fallback. The trees are DXGI_IMPLS and
+# D3D9_IMPLS in profile.sh. Every one lives in its own tree under
+# lib/wine/dxgi/<impl> or lib/wine/d3d9/<impl>, with <pe64>-windows,
+# i386-windows and, where it has a unix half, <unix> subdirectories; the
+# default dirs hold only fake-module markers, and compatdb.so (Step 4b)
+# picks one tree per family per process.
 # D3D8 and DDraw stay on wined3d only. Nothing below rewrites install names,
 # re-signs, or walks the otool closure.
 time_mark "Step 4: Direct3D backends"
@@ -2036,7 +2113,8 @@ echo "==> Step 4: Direct3D backends"
 
 # Every download is fetched (or taken from the cache) before anything is
 # installed, so a bad pin fails the run before the tree is half-modified.
-# DXMT is what build-dxmt.sh staged, as the preflight checked.
+# DXMT and vkd3d-proton are what build-dxmt.sh and build-vkd3d-proton.sh
+# staged, as the preflight checked.
 echo "  Fetching artifacts into $CACHE_DIR..."
 if in_list mtld3d "$D3D9_IMPLS"; then
     MTLD3D_TAR=$(fetch "$MTLD3D_URL" "$MTLD3D_SHA256")
@@ -2099,6 +2177,20 @@ if in_list dxmt "$DXGI_IMPLS"; then
        "$dx32/"
     cp "$BUILD_DIR/dlls/d3d10/i386-windows/d3d10.dll"     "$dx32/"
     cp "$BUILD_DIR/dlls/d3d10_1/i386-windows/d3d10_1.dll" "$dx32/"
+
+    # D3D12 in the same tree: vkd3d-proton's d3d12/d3d12core, ARM64X and
+    # i386 like DXMT's, as build-vkd3d-proton.sh staged them in
+    # VKD3D_PROTON_DIST. A D3D12 game creates its swapchain through this
+    # tree's dxgi.dll, which presents vkd3d-proton's Vulkan swapchain, so the
+    # two only work together and never go into the wined3d tree.
+    echo "  Installing vkd3d-proton..."
+    echo "    $VKD3D_PROTON_DIST"
+    cp "$VKD3D_PROTON_DIST/$PE64_DIR/d3d12.dll" \
+       "$VKD3D_PROTON_DIST/$PE64_DIR/d3d12core.dll" \
+       "$dx64/"
+    cp "$VKD3D_PROTON_DIST"/i386-windows/d3d12.dll \
+       "$VKD3D_PROTON_DIST"/i386-windows/d3d12core.dll \
+       "$dx32/"
 fi
 
 # D3D9, the second family: mtld3d and Wine's own. mtld3d's d3d9.dll bridges
@@ -2376,7 +2468,11 @@ if in_list dxmt "$DXGI_IMPLS"; then
            "lib/wine/dxgi/dxmt/$PE64_DIR/winemetal.dll"
            "lib/wine/dxgi/dxmt/$UNIX_DIR/winemetal.so"
            "lib/wine/dxgi/dxmt/i386-windows/dxgi.dll"
-           "lib/wine/dxgi/dxmt/i386-windows/winemetal.dll")
+           "lib/wine/dxgi/dxmt/i386-windows/winemetal.dll"
+           "lib/wine/dxgi/dxmt/$PE64_DIR/d3d12.dll"
+           "lib/wine/dxgi/dxmt/$PE64_DIR/d3d12core.dll"
+           "lib/wine/dxgi/dxmt/i386-windows/d3d12.dll"
+           "lib/wine/dxgi/dxmt/i386-windows/d3d12core.dll")
 fi
 if in_list wined3d "$DXGI_IMPLS"; then
     WANT+=("lib/wine/dxgi/wined3d/$PE64_DIR/dxgi.dll"
