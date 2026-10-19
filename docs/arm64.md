@@ -78,11 +78,11 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
 | Script | What it does |
 |--------|--------------|
 | `build-wine.sh` | Runs `build-mesa.sh`, builds Wine against the loader it staged, stages the [Wine SDK](#wine-sdk), then runs `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; `--clean` is passed on to all four |
-| [`build-mesa.sh`](../bin/build-mesa.sh) | Checks out the ref in [`mesa-src.ref`](../pins/mesa-src.ref) in `MESA_SRC` (refusing a tree with local changes), builds the Vulkan loader from the tags pinned in [`redist.env`](../pins/redist.env) and KosmicKrisp, and stages both with the driver's manifest and their commits in `MESA_DIST` (see [Vulkan](#vulkan)). Runs alone too |
+| [`build-mesa.sh`](../bin/build-mesa.sh) | Checks out the ref in [`mesa-src.ref`](../pins/mesa-src.ref) in `MESA_SRC` (refusing a tree with local changes), builds the Vulkan loader from the tags pinned in [`redist.env`](../pins/redist.env), KosmicKrisp, and Mesa's EGL with Zink, and stages them with the driver's manifest, an `egl.pc` for Wine's configure and their commits in `MESA_DIST` (see [Vulkan](#vulkan) and [OpenGL](#opengl)). Runs alone too |
 | [`build-fex.sh`](../bin/build-fex.sh) | Checks out the ref in [`fex-src.ref`](../pins/fex-src.ref) in `FEX_SRC` (refusing a tree with local changes), builds FEX's emulator DLLs and their unix halves, and records the commit. Runs alone too |
 | [`build-dxmt.sh`](../bin/build-dxmt.sh) | Checks out the ref in [`dxmt-src.ref`](../pins/dxmt-src.ref) in its own clone, builds DXMT against the Wine build and SDK, and stages it with its commit and `git describe` in `DXMT_DIST`. Runs alone too, after a Wine build |
 | [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | Checks out the ref in [`vkd3d-proton-src.ref`](../pins/vkd3d-proton-src.ref) in its own clone, builds vkd3d-proton's D3D12 DLLs, marks them as builtins with the Wine build's and the SDK's `winebuild`, and stages them with their commit and `git describe` in `VKD3D_PROTON_DIST`. Runs alone too, after a Wine build |
-| `bundle-wine.sh` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT, vkd3d-proton, the Vulkan loader and KosmicKrisp, and the mtld3d release, signs the loader and runs the smoke test |
+| `bundle-wine.sh` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT, vkd3d-proton, the Vulkan loader, KosmicKrisp and EGL, and the mtld3d release, signs the loader and runs the smoke test |
 
 The flags are in the [README](../README.md#commands).
 
@@ -111,8 +111,8 @@ of the same name; the defaults are set in
 | `VKD3D_PROTON_BUILD_DIR` | vkd3d-proton's checkout, its meson trees (ARM64X and i386 PE) and, by default, `VKD3D_PROTON_DIST` |
 | `VKD3D_PROTON_DIST` | vkd3d-proton's DLLs as the bundle installs them, with the commits they were built from |
 | `MESA_REPO`, `MESA_SRC` | Mesa repository and the local clone `build-mesa.sh` checks out |
-| `MESA_BUILD_DIR` | The Vulkan loader's and headers' clones and trees, KosmicKrisp's two meson trees, the Python environment and, by default, `MESA_DIST` |
-| `MESA_DIST` | The Vulkan loader, KosmicKrisp and its manifest as the bundle installs them, with the commits they were built from |
+| `MESA_BUILD_DIR` | The Vulkan loader's and headers' clones and trees, Mesa's two meson trees (the host tools, and KosmicKrisp with EGL and Zink), the Python environment and, by default, `MESA_DIST` |
+| `MESA_DIST` | The Vulkan loader, KosmicKrisp and its manifest, EGL and the gallium library with Zink as the bundle installs them, the `egl.pc` Wine's configure reads, and the commits they were built from |
 | `LOADER_PROFILE` | The provisioning profile the loader is signed for |
 | `MINGW_DIR` | llvm-mingw |
 | `CACHE_DIR` | Downloaded redistributables |
@@ -351,8 +351,10 @@ and wined3d can, per game (see below).
   stage builds just these tools, for the host; the second builds the driver
   for the floor with LLVM off and the tools of the first stage, so the
   driver links system libraries only. As with Wine's configure, the second
-  stage disables every optional library the driver does not need, so what
-  else Homebrew has installed cannot change the build.
+  stage disables every optional library the driver does not need, and runs
+  meson and ninja with Homebrew off `PATH`, so what else Homebrew has
+  installed cannot change the build. The second stage also builds EGL and
+  the gallium library with Zink ([OpenGL](#opengl)).
 - `build-mesa.sh --clean` builds the driver again from scratch. The loader,
   the Python environment and the first stage's tools are kept while what
   they were built from is unchanged, as `build-dxmt.sh` keeps its LLVM.
@@ -390,19 +392,46 @@ and wined3d can, per game (see below).
   driver's source. The recipes to turn them off are in
   [compatdb.md](compatdb.md#recipes).
 - wined3d, Wine's own Direct3D, which serves the `wined3d` trees of both
-  families and D3D8 and DirectDraw, keeps Wine's default OpenGL renderer.
-  Apple's OpenGL is old enough to hold that renderer to a low Direct3D
-  feature level, and wined3d's Vulkan renderer reaches a higher one on
-  KosmicKrisp. It is not the default because wined3d on KosmicKrisp still
-  crashes in many of Wine's conformance tests, and wined3d does not fall
-  back to OpenGL when Vulkan fails. A compatdb rule with `wined3d=vulkan`
-  turns it on for one game, for every wined3d user in that process,
-  D3D8 and DirectDraw included
+  families and D3D8 and DirectDraw, keeps Wine's default OpenGL renderer,
+  which runs on Zink where the Mac driver picks it ([OpenGL](#opengl)) and
+  reaches Direct3D 11 there. Apple's OpenGL holds that renderer to a lower
+  feature level. wined3d's Vulkan renderer runs on KosmicKrisp directly. It
+  is not the default because wined3d on KosmicKrisp still crashes in many
+  of Wine's conformance tests, and wined3d does not fall back to OpenGL
+  when Vulkan fails. A compatdb rule with `wined3d=vulkan` turns it on for
+  one game, for every wined3d user in that process, D3D8 and DirectDraw
+  included
   ([wined3d on Vulkan](compatdb.md#wined3d-on-vulkan)).
 - Wine's own `d3d12.dll` and `d3d12core.dll` are left out of the bundle;
   D3D12 is vkd3d-proton's.
-- Not covered yet: DXVK, and OpenGL through Zink on KosmicKrisp. A program
-  that wants Vulkan itself gets it.
+- Not covered yet: DXVK. A program that wants Vulkan itself gets it.
+
+## OpenGL
+
+OpenGL runs on Zink, Mesa's OpenGL on Vulkan, on KosmicKrisp, through
+Mesa's EGL, wherever KosmicKrisp has a GPU, instead of on Apple's OpenGL,
+which stops at 4.1 core and 2.1 compatibility.
+
+- `build-mesa.sh` builds `libEGL.1.dylib` and the gallium library with Zink
+  that it links, in the same tree and for the same floor as KosmicKrisp,
+  without GLES, GLX and GBM. The bundle step ships both in
+  `lib/external/`.
+- Wine's configure finds this EGL through the `egl.pc` in `MESA_DIST`, and
+  `build-wine.sh` passes `--with-opengl`, so a build without it fails.
+  `SONAME_LIBEGL` is patched to `lib/external/` like the Vulkan loader, and
+  `win32u.so` loads it from there.
+- Zink loads the Vulkan loader by `@rpath`; the gallium library's one
+  `LC_RPATH`, `@loader_path`, resolves it to the bundled loader next to it,
+  and the loader finds KosmicKrisp through `VK_DRIVER_FILES` as Wine's
+  Vulkan does ([Vulkan](#vulkan)).
+- Zink reports OpenGL above 2.1 only with transform feedback, which our
+  KosmicKrisp always advertises ([Vulkan](#vulkan)).
+- The Mac driver's EGL driver, part of our Wine series, makes the choice
+  when a process first uses OpenGL: EGL when a GPU supports the Metal 4
+  family and EGL's driver is Zink, Apple's OpenGL otherwise, with a
+  `winediag` message saying why. `WINE_MAC_OPENGL` overrides it
+  ([environment variables](../README.md#environment-variables)). On a Mac
+  without such a GPU, such as a hosted CI runner, OpenGL stays Apple's.
 
 ## Loader app
 
@@ -472,18 +501,17 @@ formulae, the Wine SDK (staged from the current Wine source and, for a full
 bundle, holding every [graphics test](#graphics-tests) and their
 `VERSION`), the FEX build (complete, and built from the commit
 `fex-src.ref` names now, which it asks `FEX_REPO` for with
-`git ls-remote`, so the step needs the network), the
-staged DXMT (complete, built from the commit `dxmt-src.ref` names now,
-asked of `DXMT_REPO` the same way, linked against the current Wine source,
-its DLLs carrying the recorded version), the staged vkd3d-proton
-(complete, built from the commit `vkd3d-proton-src.ref` names now, asked of
-`VKD3D_PROTON_REPO`), the staged Vulkan
-loader and KosmicKrisp (complete, Mesa built from the commit `mesa-src.ref`
-names now, asked of `MESA_REPO` the same way, and the loader from the
-pinned commit), the llvm-mingw compilers and tools the smoke test, the
-markers of Step 4 and Step 4e use, and the provisioning profile (not
-expired, granting the entitlement, with an identity of its team in the
-keychain).
+`git ls-remote`, so the step needs the network), the staged DXMT
+(complete, built from the commit `dxmt-src.ref` names now, asked of
+`DXMT_REPO` the same way, linked against the current Wine source, its DLLs
+carrying the recorded version), the staged vkd3d-proton (complete, built
+from the commit `vkd3d-proton-src.ref` names now, asked of
+`VKD3D_PROTON_REPO`), the staged Vulkan loader, KosmicKrisp, EGL and one
+gallium library (complete, Mesa built from the commit `mesa-src.ref` names
+now, asked of `MESA_REPO` the same way, and the loader from the pinned
+commit), the llvm-mingw compilers and tools the smoke test, the markers of
+Step 4 and Step 4e use, and the provisioning profile (not expired,
+granting the entitlement, with an identity of its team in the keychain).
 
 After assembly:
 
@@ -519,6 +547,10 @@ After assembly:
   are in place, the manifest's `library_path` resolves from its directory,
   the loader and the driver export their entry points, and `ntdll.so`
   names `VK_DRIVER_FILES`.
+- `win32u.so` opens `lib/external/libEGL.1.dylib`, which exports its entry
+  points and loads the gallium library next to it, and the gallium library
+  loads the Vulkan loader by `@rpath` with `@loader_path` as its only
+  `LC_RPATH` ([OpenGL](#opengl)).
 - `wine.app` verifies with `codesign --verify --strict`, is signed by the
   expected identity and team with the hardened runtime and, unless
   `LOADER_TIMESTAMP=0`, a secure timestamp, and carries exactly the
@@ -532,10 +564,11 @@ After assembly:
   `FLOOR_NEWER_FUNCS` while the floor is below its version (see
   [macOS floors](maintenance.md#macos-floors)). That catches a Wine build
   tree configured before the override, which `minos` does not show.
-- The smoke test, with the caller's `WINE_COMPATDB` and `WINE_D3D_CONFIG`
-  and every `WINEMSYNC*`, `FEX_*`, `VK_*`, `VKD3D_*`, `MESA_*`, `MTL_*`
-  and `METAL_*` variable dropped: `wine --version`; a fresh prefix boots
-  (`cmd /c exit`), with `compatdb:` lines and the wineserver's
+- The smoke test, with the caller's `WINE_COMPATDB`, `WINE_D3D_CONFIG` and
+  `WINE_MAC_OPENGL` and every `WINEMSYNC*`, `FEX_*`, `VK_*`, `VKD3D_*`,
+  `MESA_*`, `MTL_*` and `METAL_*` variable dropped: `wine --version`; a
+  fresh prefix boots (`cmd /c exit`), with `compatdb:` lines and the
+  wineserver's
   `msync: up and running.` line and no `msync: error:` line (with
   `--compatdb-only`, a wineserver without msync skips that check);
   winedbg's crash dialog is turned off in the prefix (`ShowCrashDialog`),
@@ -553,7 +586,15 @@ After assembly:
   in turn, the tree picked with a `WINE_COMPATDB` rule, which shows that
   the prefix placeholders made from the default-dir markers let each tree
   in, and on the `wined3d` dxgi tree `d3d12.dll` must fail to load with
-  error 126. Last,
+  error 126. Before the prefix boots, [`smoke/egl.c`](../smoke/egl.c), a
+  host program, makes an OpenGL context current through the bundle's EGL
+  without Wine, with only `VK_DRIVER_FILES` set, and must get Zink on
+  KosmicKrisp with every EGL, gallium and Vulkan library loaded from
+  `lib/external/`. After the tree loads, [`smoke/wgl.c`](../smoke/wgl.c),
+  compiled for each architecture in `SMOKE_PE_ARCHS`, opens a window,
+  creates a legacy, a 4.x core and a compatibility context, each of which
+  must clear, read back and swap: by default on a Zink renderer, and with
+  `WINE_MAC_OPENGL=cgl` on Apple's. Then
   [`smoke/vulkan.c`](../smoke/vulkan.c), compiled for x86_64 and i686,
   creates a Vulkan instance without a window and must find a device; its
   compatdb lines must carry `MESA_KK_EXPERIMENTAL`. Then
@@ -562,7 +603,7 @@ After assembly:
   devices on DXMT's adapter and without one, a swapchain for a visible
   window with a clear read back, presents, a resize, a frame latency
   handle, and the swapchains Windows refuses (its header lists the steps
-  and their exit statuses). Then
+  and their exit statuses). Last,
   [`smoke/wined3d.c`](../smoke/wined3d.c), compiled for x86_64 and i686,
   must create a device for a hidden window through wined3d twice, with the
   `winediag` channel on: with the default renderer, where wined3d must not
@@ -574,11 +615,13 @@ After assembly:
   a hosted CI runner, gives it no device. There, `vulkan.exe` has to fail
   creating its instance after the Vulkan loader read the bundled manifest
   and found no GPU, `d3d12.exe` has to fail creating its first device with
-  `E_FAIL` after the same, and the `wined3d=vulkan` runs are left out. The Mac
-  driver only asks for an accelerated OpenGL renderer, and a Mac without
-  one, such as the same virtual machine with only Apple's software
-  renderer, gives wined3d no OpenGL context. There, the runs with the
-  default renderer have to fail creating the Direct3D object after the Mac
+  `E_FAIL` after the same, the `wined3d=vulkan` runs and the host EGL
+  check are left out, and the Mac driver picks Apple's OpenGL, so
+  `wgl.exe` runs once, on Apple's renderer, or not at all without an
+  accelerated one. The Mac driver only asks Apple's OpenGL for an
+  accelerated renderer, and a Mac without one or Zink, such as the same
+  virtual machine with only Apple's software renderer, gives wined3d no
+  OpenGL context. There, the runs with the default renderer have to fail creating the Direct3D object after the Mac
   driver's request for a renderer failed and wined3d got no context for
   its adapter, still with the `wined3d` d3d9 tree for the x86_64 one. The
   step decides each case from the hardware alone, with
@@ -608,16 +651,19 @@ With `--compatdb-only`, the bundle step:
   `LEAK_PREFIXES` references and `minos` of `compatdb.so` only (the rest
   was not built here), and runs the smoke test. On a bundle from before
   vkd3d-proton, which has no `d3d12.dll` in the `dxmt` tree, it leaves out
-  the D3D12 checks and says so.
+  the D3D12 checks and says so. On a bundle without EGL, from before
+  OpenGL through Zink, the smoke test skips the host EGL check and expects
+  Apple's OpenGL renderer.
 
 ## Homebrew libraries and the floor
 
-The libraries in `lib/external/` other than the Vulkan loader and
-KosmicKrisp are Homebrew's: the formulae in `DEPS_FORMULAE` and their
-runtime closure, copied from `DEPS_PREFIX`. Homebrew builds each bottle for
-one macOS major version, the bottle tag, with the deployment target at that
-version's `.0` release, and pours the bottle of the host's version. The
-host therefore decides whether those libraries meet the floor:
+The libraries in `lib/external/` other than Mesa's (the Vulkan loader,
+KosmicKrisp, EGL and the gallium library) are Homebrew's: the formulae in
+`DEPS_FORMULAE` and their runtime closure, copied from `DEPS_PREFIX`.
+Homebrew builds each bottle for one macOS major version, the bottle tag,
+with the deployment target at that version's `.0` release, and pours the
+bottle of the host's version. The host therefore decides whether those
+libraries meet the floor:
 
 - On a host of the floor's major version, every bottle's `minos` is below
   the floor. A CI or release build has to run on such a host, takes the
@@ -640,8 +686,10 @@ host therefore decides whether those libraries meet the floor:
 
 Nothing from Homebrew is linked statically into a file the bundle ships.
 Wine's unix modules load the libraries above by soname and link none of
-them. KosmicKrisp's driver is built with pkg-config searching nowhere, and
-`build-mesa.sh` checks that it and the loader load system libraries only.
+them. Mesa's second stage is built with pkg-config searching nowhere and
+Homebrew off `PATH`, and `build-mesa.sh` checks that the driver, EGL, the
+gallium library and the loader load system libraries only, besides EGL
+loading the gallium library next to it.
 The static libraries that `winemetal.so` and the driver do link (DXMT's
 LLVM, and DXMT's and Mesa's own archives) are built here for the floor. A
 linked binary's `minos` does not show an object inside it that needs a

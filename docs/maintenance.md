@@ -318,7 +318,16 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
     dependencies included, must still exist under those names, and the
     driver must still pass the script's checks (system libraries only, no
     flat-namespace imports, `minos` at the floor). A new optional
-    dependency in Mesa's stage 2 meson log gets disabled there too.
+    dependency in Mesa's stage 2 meson log gets disabled there too, and a
+    program found there ("Program ... found: YES") must be one the native
+    file names, the Python environment's or the system's, never Homebrew's.
+  - The same holds for EGL and Zink, built in stage 2 with the gallium,
+    EGL and GL options there: `libEGL.1.dylib` and exactly one
+    `libgallium-*.dylib` must still be installed, and Zink must still load
+    the Vulkan loader by `@rpath` (the script checks the string and the
+    `@loader_path` `LC_RPATH`). Without
+    transform feedback Zink reports OpenGL 2.1, which the bundle's WGL
+    smoke test fails on.
   - Keep a copy of `MESA_DIST`, rebuild with `build-mesa.sh`, and compare
     `vulkaninfo` for the old and the new driver, each with
     `VK_DRIVER_FILES` naming its own manifest and `MESA_KK_EXPERIMENTAL`
@@ -330,7 +339,8 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
 - The Vulkan loader and headers are pinned together, from one Vulkan SDK
   release, in [`redist.env`](../pins/redist.env). Bump both tags and commits
   together; `build-mesa.sh` refuses a tag that is not at its commit.
-- A Wine build tree configured without Vulkan has no `SONAME_LIBVULKAN`;
+- A Wine build tree configured without Vulkan has no `SONAME_LIBVULKAN`,
+  and one configured before EGL was built has no `SONAME_LIBEGL`;
   `build-wine.sh` stops and asks for `--clean`.
 
 ### DXMT and vkd3d-proton

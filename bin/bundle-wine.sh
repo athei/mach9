@@ -655,17 +655,17 @@ check_default_trees() {
 # smoke_test: run the bundled wine through the signed loader and check that
 # native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
-# hang rather than an error. The caller's WINE_COMPATDB and WINE_D3D_CONFIG
-# and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, MESA_*, MTL_* and METAL_*
-# variable are dropped so that the built-in rules and the defaults of Wine,
-# FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp and Metal decide. The
-# checks that need a Vulkan device change on a Mac without a Metal 4 GPU
-# (metal4_probe), and the one that needs an OpenGL context on a Mac without
-# an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
-# checks.
+# hang rather than an error. The caller's WINE_COMPATDB, WINE_D3D_CONFIG and
+# WINE_MAC_OPENGL and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, MESA_*, MTL_*
+# and METAL_* variable are dropped so that the built-in rules and the
+# defaults of Wine, FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp and
+# Metal decide. The checks that need a Vulkan device change on a Mac without
+# a Metal 4 GPU (metal4_probe), and the ones that need an OpenGL context on a
+# Mac without an accelerated OpenGL renderer (gl_probe). Each probe decides
+# only its own checks.
 smoke_test() {
     local version log arch cc exe marker markers var dlls
-    local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG)
+    local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG -u WINE_MAC_OPENGL)
     for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|MESA_|MTL_|METAL_)'); do
         wine_env+=(-u "$var")
     done
@@ -686,13 +686,22 @@ smoke_test() {
         echo "  GPU instead, and wined3d.exe does not run with wined3d on Vulkan."
     fi
     gl_probe
-    if [ "$ACCEL_GL" -eq 1 ]; then
-        echo "  Accelerated OpenGL renderer for winemac.drv: $GL_RENDERERS"
-    else
-        echo "  No accelerated OpenGL renderer ($GL_RENDERERS): skipping the check"
-        echo "  that needs an OpenGL context. wined3d.exe has to find no adapter on wined3d's"
-        echo "  default renderer instead of creating a device there."
+    bundle_egl
+    if [ "$BUNDLE_EGL" -eq 0 ]; then
+        echo "  This bundle has no EGL: OpenGL is Apple's only."
     fi
+    if [ "$ACCEL_GL" -eq 1 ]; then
+        echo "  Accelerated Apple OpenGL renderer for winemac.drv: $GL_RENDERERS"
+    elif [ "$ZINK_GL" -eq 1 ]; then
+        echo "  No accelerated Apple OpenGL renderer ($GL_RENDERERS): OpenGL runs on Zink,"
+        echo "  and wgl.exe does not run with WINE_MAC_OPENGL=cgl."
+    else
+        echo "  No accelerated OpenGL renderer ($GL_RENDERERS) and no Zink: skipping wgl.exe."
+        echo "  wined3d.exe has to find no adapter on wined3d's default renderer instead of"
+        echo "  creating a device there."
+    fi
+    # Outside Wine, so before the prefix boots.
+    check_egl_host
 
     # wineboot creates the prefix here, so the limit is generous. The Mono
     # and Gecko installers are kept out so nothing pops a dialog.
@@ -789,6 +798,9 @@ smoke_test() {
     check_tree_loads aarch64 "${wine_env[@]}"
     # --compatdb-only has already refused a bundle without Vulkan
     # (check_vulkan_present), so every bundle that gets here has it.
+    # OpenGL first: on an older bundle, which --compatdb-only can meet and
+    # whose KosmicKrisp fails vulkan.exe, it still gets checked.
+    check_wgl_runs "${wine_env[@]}"
     check_vulkan_runs "${wine_env[@]}"
     # A bundle from before vkd3d-proton has no D3D12, which --compatdb-only
     # may meet and skips, as it skips msync; a full bundle always has it.
@@ -843,11 +855,12 @@ check_vulkan_present() {
 # on it. wined3d does not fall back to OpenGL when its Vulkan adapter fails,
 # so the second run is what shows the opt-in works. It needs a KosmicKrisp
 # device, so on a Mac without a Metal 4 GPU (metal4_probe) only the first
-# run happens. The first needs an OpenGL context, which winemac.drv only
-# gets from an accelerated renderer, so on a Mac without one (gl_probe) it
-# must fail the way a missing renderer makes it fail instead
-# (check_wined3d_no_gl). The second does not use OpenGL and still happens
-# on a Mac with a Metal 4 GPU.
+# run happens. The first needs an OpenGL context, which winemac.drv gets
+# from Zink with a Metal 4 GPU and a bundle with EGL (ZINK_GL, bundle_egl)
+# and otherwise only from an accelerated Apple renderer, so with neither
+# (gl_probe) it must fail the way a missing renderer makes it fail instead
+# (check_wined3d_no_gl). The second does not use OpenGL and still happens on
+# a Mac with a Metal 4 GPU.
 check_wined3d_device() {
     local arch exe log want header api flags rule tree
     header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$REPO_DIR/compatdb/table/src/lib.rs")
@@ -874,7 +887,7 @@ check_wined3d_device() {
         fi
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 "${flags[@]}" -o "$exe" "$REPO_DIR/smoke/wined3d.c"
         time_mark "smoke: wined3d.exe $arch ($api)"
-        if [ "$ACCEL_GL" -eq 0 ]; then
+        if [ "$ZINK_GL" -eq 0 ] && [ "$ACCEL_GL" -eq 0 ]; then
             check_wined3d_no_gl "$arch" "$api" "$exe" "$header"$'\n'"$rule" "$tree" "$@"
         else
             echo "  Running wined3d.exe for $arch ($api) with the default renderer..."
@@ -1161,6 +1174,134 @@ check_d3d12_no_gpu() {
     exit 1
 }
 
+# bundle_egl: set BUNDLE_EGL to 1 when the bundle has Mesa's EGL in
+# lib/external, and MESA_GALLIUM to the name of the one gallium library next
+# to it, which carries Mesa's version, and BUNDLE_EGL to 0 when it has no
+# EGL, as a bundle from before EGL that --compatdb-only meets. A full bundle
+# always has it (Step 5 checks). ZINK_GL is 1 when the Mac driver's OpenGL
+# runs on Zink by default: the bundle has EGL and a GPU supports the Metal 4
+# family (metal4_probe, which has to run first).
+bundle_egl() {
+    local lib gallium=()
+    BUNDLE_EGL=0
+    ZINK_GL=0
+    [ -f "$EXT_DIR/libEGL.1.dylib" ] || return 0
+    for lib in "$EXT_DIR"/libgallium-*.dylib; do
+        [ -f "$lib" ] && gallium+=("$(basename "$lib")")
+    done
+    if [ ${#gallium[@]} -ne 1 ]; then
+        echo "Error: lib/external has libEGL.1.dylib and ${#gallium[@]} libgallium-*.dylib, not one"
+        exit 1
+    fi
+    MESA_GALLIUM=${gallium[0]}
+    BUNDLE_EGL=1
+    ZINK_GL=$METAL4
+}
+
+# check_egl_host: build smoke/egl.c for the host and run it on the bundle's
+# lib/external/libEGL.1.dylib, outside Wine, with nothing in its environment
+# but VK_DRIVER_FILES naming the bundle's manifest directory, as ntdll sets
+# it. Exit unless it made an OpenGL context current on Zink on KosmicKrisp
+# (the renderer names both) and loaded libEGL, the gallium library, the
+# Vulkan loader and the driver from lib/external, and from nowhere else. This
+# shows the chain resolves inside the bundle before Wine is involved. It
+# needs a KosmicKrisp device, so on a Mac without a Metal 4 GPU
+# (metal4_probe) it is skipped, and so it is for a bundle without EGL
+# (bundle_egl).
+check_egl_host() {
+    local log="$TMP_DIR/egl.log" lib want status=0
+    if [ "$BUNDLE_EGL" -eq 0 ]; then
+        echo "  Skipping the host EGL check: this bundle has no EGL."
+        return 0
+    elif [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host EGL check: Zink needs a KosmicKrisp device."
+        return 0
+    fi
+    xcrun clang -O2 -o "$TMP_DIR/egl" "$REPO_DIR/smoke/egl.c"
+    echo "  Running the host EGL check on lib/external/libEGL.1.dylib..."
+    env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/egl" "$EXT_DIR/libEGL.1.dylib" >"$log" 2>&1 || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "Error: smoke/egl.c failed on the bundle's EGL (status $status)"
+        cat "$log"
+        exit 1
+    fi
+    if ! grep "^egl: GL_RENDERER: zink .*MESA_KOSMICKRISP" "$log" >/dev/null; then
+        echo "Error: the bundle's EGL did not give a context on Zink on KosmicKrisp"
+        cat "$log"
+        exit 1
+    fi
+    for lib in libEGL.1.dylib "$MESA_GALLIUM" libvulkan.1.dylib libvulkan_kosmickrisp.dylib; do
+        want="egl: loaded $EXT_DIR/$lib"
+        if ! grep -xF "$want" "$log" >/dev/null; then
+            echo "Error: smoke/egl.c did not load lib/external/$lib"
+            cat "$log"
+            exit 1
+        fi
+    done
+    if grep "^egl: loaded " "$log" | grep -vF "egl: loaded $EXT_DIR/" >/dev/null; then
+        echo "Error: smoke/egl.c loaded an EGL, gallium or Vulkan library from outside the bundle"
+        cat "$log"
+        exit 1
+    fi
+    grep "^egl: GL_" "$log" | sed 's/^egl: /    /'
+}
+
+# check_wgl_runs <env-command>...: build smoke/wgl.c for each arch of
+# SMOKE_PE_ARCHS and run it in the booted throwaway prefix (run_wgl). It
+# opens a window and creates a legacy, a 4.x core and a compatibility
+# context, each of which must clear, read back and swap, and whose renderer
+# must contain the string it is given. <env-command> drops the caller's
+# WINE_MAC_OPENGL, so winemac.drv picks the OpenGL implementation itself:
+# Mesa's EGL with Zink when the bundle has EGL and a GPU supports the Metal 4
+# family (ZINK_GL, see bundle_egl), Apple's OpenGL otherwise. With Zink each
+# arch therefore runs twice: by default, where the renderer must be Zink, and
+# with WINE_MAC_OPENGL=cgl, where it must be Apple's, when there is an
+# accelerated OpenGL renderer (gl_probe). Without Zink the default run must
+# get Apple's renderer, and with neither, where winemac.drv gets no context
+# at all, wgl.exe is skipped.
+check_wgl_runs() {
+    local arch exe
+    if [ "$ZINK_GL" -eq 0 ] && [ "$ACCEL_GL" -eq 0 ]; then
+        echo "  Skipping wgl.exe: neither Zink nor an accelerated OpenGL renderer."
+        return 0
+    fi
+    for arch in $SMOKE_PE_ARCHS; do
+        exe="$TMP_DIR/wgl-$arch.exe"
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/wgl.c" \
+            -lopengl32 -lgdi32
+        if [ "$ZINK_GL" -eq 1 ]; then
+            run_wgl "$arch" "$exe" zink default "$@"
+            if [ "$ACCEL_GL" -eq 1 ]; then
+                run_wgl "$arch" "$exe" Apple cgl "$@" WINE_MAC_OPENGL=cgl
+            fi
+        else
+            run_wgl "$arch" "$exe" Apple default "$@"
+        fi
+    done
+}
+
+# run_wgl <arch> <exe> <renderer> <name> <env-command>...: run the wgl.exe
+# <exe> for <arch> under <env-command>, as the run <name>, and exit unless
+# it ran cleanly with every context on a renderer containing <renderer>.
+run_wgl() {
+    local arch="$1" exe="$2" want="$3" name="$4" log
+    shift 4
+    time_mark "smoke: wgl.exe $arch ($name)"
+    echo "  Running wgl.exe for $arch ($name), which must get the $want renderer..."
+    log="$TMP_DIR/wgl-$arch-$name.log"
+    run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe" "$want"
+    smoke_check "wgl.exe for $arch ($name)" 120 "$log"
+    if ! grep -q "wine-build smoke test: $arch OpenGL contexts work" "$log"; then
+        echo "Error: wgl.exe for $arch ($name) did not print 'wine-build smoke test: $arch OpenGL contexts work'"
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
+    grep "wine-build smoke test: $arch .*\(GL_RENDERER\|GL_VERSION\|swap interval\)" "$log" \
+        | sed 's/^/    /'
+}
+
 # metal4_probe: set METAL4 to 1 when this Mac has a Metal device that
 # supports MTLGPUFamilyMetal4, the only kind KosmicKrisp uses, and to 0 when
 # it has none, such as a virtual machine's paravirtual GPU. METAL_DEVICES
@@ -1359,11 +1500,14 @@ check_fex_build() {
     echo "  FEX: $built"
 }
 
-# check_mesa_build: exit unless build-mesa.sh staged the Vulkan loader and
-# KosmicKrisp completely, Mesa from the commit mesa-src.ref names now and the
-# loader from the pinned one. Needs the network, to resolve a branch or tag.
+# check_mesa_build: exit unless build-mesa.sh staged the Vulkan loader,
+# KosmicKrisp and EGL with Zink completely, Mesa from the commit mesa-src.ref
+# names now and the loader from the pinned one, and set MESA_GALLIUM to the
+# name of the gallium library libEGL.1.dylib loads, which carries Mesa's
+# version. Needs the network, to resolve a branch or tag.
 check_mesa_build() {
-    local f built want
+    local f built want lib
+    local gallium=()
     built=$(cat "$MESA_DIST/COMMIT" 2>/dev/null) || {
         echo "Error: $MESA_DIST has no COMMIT; build-mesa.sh has not staged it (run build-wine.sh)"
         exit 1
@@ -1382,14 +1526,22 @@ check_mesa_build() {
         echo "Error: the Vulkan loader in $MESA_DIST was not built from $VULKAN_LOADER_GIT_COMMIT (run build-mesa.sh)"
         exit 1
     fi
-    for f in lib/libvulkan.1.dylib lib/libvulkan_kosmickrisp.dylib \
+    for f in lib/libvulkan.1.dylib lib/libvulkan_kosmickrisp.dylib lib/libEGL.1.dylib \
              share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json; do
         if [ ! -f "$MESA_DIST/$f" ]; then
             echo "Error: no $f in $MESA_DIST (run build-mesa.sh)"
             exit 1
         fi
     done
-    echo "  Mesa: $built, Vulkan loader $VULKAN_LOADER_GIT_TAG"
+    for lib in "$MESA_DIST"/lib/libgallium-*.dylib; do
+        [ -f "$lib" ] && gallium+=("$(basename "$lib")")
+    done
+    if [ ${#gallium[@]} -ne 1 ]; then
+        echo "Error: $MESA_DIST/lib has ${#gallium[@]} libgallium-*.dylib, not one (run build-mesa.sh)"
+        exit 1
+    fi
+    MESA_GALLIUM=${gallium[0]}
+    echo "  Mesa: $built, Vulkan loader $VULKAN_LOADER_GIT_TAG, $MESA_GALLIUM"
 }
 
 # check_vulkan: exit unless the bundle's Vulkan hangs together: the driver
@@ -1424,6 +1576,40 @@ check_vulkan() {
         exit 1
     fi
     echo "  The Vulkan manifest names lib/external/$(basename "$lib"), and ntdll sets VK_DRIVER_FILES."
+}
+
+# check_egl: exit unless OpenGL through Zink hangs together in the bundle:
+# win32u.so opens lib/external/libEGL.1.dylib, which exports what win32u
+# loads first and links the gallium library next to it, and the gallium
+# library opens the Vulkan loader next to it: Zink dlopens
+# "@rpath/libvulkan.1.dylib", and the gallium library's one LC_RPATH,
+# @loader_path, which Step 3 keeps as it names lib/external itself,
+# resolves that there.
+check_egl() {
+    local sym rpaths
+    if ! grep -aF "@loader_path/../../external/libEGL.1.dylib" "$unixdir/win32u.so" >/dev/null; then
+        echo "Error: $UNIX_DIR/win32u.so does not open @loader_path/../../external/libEGL.1.dylib"
+        echo "(SONAME_LIBEGL missing from config.h or not patched; run build-wine.sh --clean)"
+        exit 1
+    fi
+    for sym in _eglGetProcAddress _eglCreateWindowSurface; do
+        if ! nm -gU "$EXT_DIR/libEGL.1.dylib" 2>/dev/null | awk '{print $NF}' | grep -xF "$sym" >/dev/null; then
+            echo "Error: lib/external/libEGL.1.dylib does not export $sym"
+            exit 1
+        fi
+    done
+    if ! otool -L "$EXT_DIR/libEGL.1.dylib" | awk '{print $1}' | grep -xF "@loader_path/$MESA_GALLIUM" >/dev/null; then
+        echo "Error: lib/external/libEGL.1.dylib does not load @loader_path/$MESA_GALLIUM"
+        exit 1
+    fi
+    rpaths=$(otool -l "$EXT_DIR/$MESA_GALLIUM" | awk '$1 == "cmd" { r = ($2 == "LC_RPATH") } r && $1 == "path" { print $2 }')
+    if ! grep -aF "@rpath/libvulkan.1.dylib" "$EXT_DIR/$MESA_GALLIUM" >/dev/null \
+        || [ "$rpaths" != "@loader_path" ]; then
+        echo "Error: lib/external/$MESA_GALLIUM does not open @rpath/libvulkan.1.dylib with"
+        echo "@loader_path as its only LC_RPATH (it has: ${rpaths:-none})"
+        exit 1
+    fi
+    echo "  win32u.so opens lib/external/libEGL.1.dylib, which loads $MESA_GALLIUM, which opens the Vulkan loader."
 }
 
 # check_wine_sdk: exit unless the Wine SDK build-wine.sh staged is for the
@@ -1832,6 +2018,10 @@ check_loader_app() {
     echo "  and the cross-architecture entitlement."
 }
 
+# The bundle's dylibs, for both a full bundle and --compatdb-only, whose
+# smoke test reads them too.
+EXT_DIR="$WINE_DIR/lib/external"
+
 # ── compatdb-only: replace compatdb.so in an existing bundle ────────────
 # For a change confined to the compatdb/ crate. Nothing is wiped, nothing is
 # prompted for and nothing is read from $BUILD_DIR except cargo's target dir,
@@ -1969,8 +2159,6 @@ mv "$DIST_DIR$INSTALL_PREFIX" "$WINE_DIR"
 rm -f "$DIST_DIR/$INSTALL_TOP/.DS_Store"
 rmdir "$DIST_DIR/$INSTALL_TOP"
 
-EXT_DIR="$WINE_DIR/lib/external"
-
 # ── Step 2c: x86_64 link libraries ─────────────────────────────────────
 # A full bundle carries Wine's link libraries, so it can serve as the Wine
 # SDK of PE code built against it. `make install` puts those of the build's
@@ -2026,9 +2214,9 @@ mkdir -p "$EXT_DIR"
 # Direct deps: Wine dlopen's these by soname. build-wine.sh patches their
 # sonames in config.h to @loader_path/../../external/<name>, so config.h is
 # the authoritative (version-correct) list; resolve each against
-# $DEPS_PREFIX/lib, except the Vulkan loader, which build-mesa.sh built for
-# the floor into MESA_DIST. Deduplicated, since one library can back several
-# defines.
+# $DEPS_PREFIX/lib, except the Vulkan loader and EGL, which build-mesa.sh
+# built for the floor into MESA_DIST. Deduplicated, since one library can
+# back several defines.
 CONFIG_H="$BUILD_DIR/include/config.h"
 if [ ! -f "$CONFIG_H" ]; then
     echo "Error: $CONFIG_H not found (run build-wine.sh first)"
@@ -2037,7 +2225,7 @@ fi
 LIBS=()
 for name in $(sed -n 's|.*"@loader_path/\.\./\.\./external/\([^"]*\)".*|\1|p' "$CONFIG_H" | sort -u); do
     case "$name" in
-        libvulkan.*) LIBS+=("$MESA_DIST/lib/$name") ;;
+        libvulkan.*|libEGL.*) LIBS+=("$MESA_DIST/lib/$name") ;;
         *) LIBS+=("$DEPS_PREFIX/lib/$name") ;;
     esac
 done
@@ -2054,6 +2242,10 @@ LIBS+=("$DEPS_PREFIX/lib/libSDL3.dylib")
 # for it or the loader, and the install name and signature steps treat both
 # like the rest.
 LIBS+=("$MESA_DIST/lib/libvulkan_kosmickrisp.dylib")
+# Mesa's gallium library with Zink, which libEGL.1.dylib loads by
+# @loader_path, a reference the walk below does not follow. It opens the
+# Vulkan loader next to it, in lib/external.
+LIBS+=("$MESA_DIST/lib/$MESA_GALLIUM")
 
 echo "  Copying direct deps..."
 MISSED=0
@@ -2546,6 +2738,7 @@ WANT=("lib/wine/$UNIX_DIR/compatdb.so"
       "lib/wine/$PE64_DIR/libwow64fex.dll" "lib/wine/$PE64_DIR/libarm64ecfex.dll"
       "lib/wine/$UNIX_DIR/libwow64fex.so" "lib/wine/$UNIX_DIR/libarm64ecfex.so"
       "lib/external/libvulkan.1.dylib" "lib/external/libvulkan_kosmickrisp.dylib"
+      "lib/external/libEGL.1.dylib" "lib/external/$MESA_GALLIUM"
       "share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json"
       "lib/wine/$UNIX_DIR/winevulkan.so"
       "lib/wine/$PE64_DIR/vulkan-1.dll" "lib/wine/$PE64_DIR/winevulkan.dll"
@@ -2736,8 +2929,9 @@ if [ -n "$DANGLING" ]; then
 fi
 echo "  No dangling symlinks."
 
-time_mark "Step 5: Vulkan and loader signature"
+time_mark "Step 5: Vulkan, EGL and loader signature"
 check_vulkan
+check_egl
 check_loader_app
 
 # After everything above is in place, so the copied-in components and
