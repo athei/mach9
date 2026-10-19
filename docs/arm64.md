@@ -561,7 +561,9 @@ After assembly:
   tree configured before the override, which `minos` does not show.
 - The smoke test, with the caller's `WINE_COMPATDB`, `WINE_D3D_CONFIG` and
   `WINE_MAC_OPENGL` and every `WINEMSYNC*`, `FEX_*`, `VK_*`, `VKD3D_*`,
-  `MESA_*`, `MTL_*` and `METAL_*` variable dropped: `wine --version`; a
+  `MESA_*`, `MTL_*` and `METAL_*` variable dropped and vkd3d-proton's
+  pipeline cache in the throwaway prefix, not the working directory
+  (`VKD3D_SHADER_CACHE_PATH`): `wine --version`; a
   fresh prefix boots (`cmd /c exit`), with `compatdb:` lines and the
   wineserver's
   `msync: up and running.` line and no `msync: error:` line (with
