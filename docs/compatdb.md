@@ -17,7 +17,7 @@ and with none, Wine does.
 
 | Key | Values | Effect | Applied |
 |-----|--------|--------|---------|
-| `dxgi` | `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. Unset: `dxmt`, for every arch ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
+| `dxgi` | `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. Unset: `dxmt`, for every arch. Only `dxmt` has D3D12 (vkd3d-proton): under `wined3d`, `d3d12.dll` does not load, so a D3D12 game does not start ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
 | `d3d9` | `mtld3d`, `wined3d` | The D3D9 tree to prepend. Unset: `mtld3d`, for every arch ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
 | `wined3d` | `gl`, `vulkan` | The renderer of wined3d, for the whole process: every wined3d user in it, the `wined3d` trees of both families and D3D8 and DirectDraw, shares one wined3d. Set, it names the renderer in `WINE_D3D_CONFIG` through the `env` path; unset, it sets nothing, so a `WINE_D3D_CONFIG` from elsewhere, or wined3d's default, OpenGL, applies ([wined3d on Vulkan](#wined3d-on-vulkan)) | At load, as `env` |
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
@@ -75,9 +75,10 @@ retired x86_64 Wine still parse
 - The built-in `kosmickrisp-experimental` rule sets `MESA_KK_EXPERIMENTAL`
   for every process, so that KosmicKrisp ([arm64.md](arm64.md#vulkan))
   advertises the experimental features our Mesa topic commits add.
-  compatdb.so sets it when it loads, before any PE code runs and so before
-  win32u loads the Vulkan loader, where the driver reads it. Like the FEX
-  entry, it replaces a value already in the environment.
+  vkd3d-proton, the bundle's D3D12, needs them. compatdb.so sets it when it
+  loads, before any PE code runs and so before win32u loads the Vulkan
+  loader, where the driver reads it. Like the FEX entry, it replaces a
+  value already in the environment.
 - The entries and the reasoning for both are in
   [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). The FEX and
   KosmicKrisp [recipes](#recipes) turn them off or change them.
@@ -168,7 +169,9 @@ executable.
 | Let the registry and the manifest decide DPI awareness | `name=dpi-aware;enabled=false` |
 | Stop forcing 4 GB for one game | `name=my-game;exe=Game.exe;large_address_aware=false` |
 | Stop forcing 4 GB for every process | `name=large-address-aware;enabled=false` |
-| Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` |
+| Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` (not for a D3D12 game: the `wined3d` tree has no D3D12) |
+| Hide D3D12 from one game, keeping DXMT for D3D10 and D3D11 | `name=my-game;exe=Game.exe;dll_overrides=d3d12,d3d12core=` |
+| Change a vkd3d-proton setting for one game | `name=my-game;exe=Game.exe;env=VKD3D_CONFIG=<options>` |
 | Keep no-execute on for one game | `name=my-game;exe=Game.exe;env=WINE_FORCE_NX=1` |
 | Give one game FEX's full x87 precision | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision | `name=fex-x87-reduced-precision;enabled=false` |
@@ -183,6 +186,14 @@ executable.
   are in [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). A game
   rule's `MESA_KK_EXPERIMENTAL` folds after the built-in one and replaces it
   for that game.
+- A game that can use D3D12 and D3D11 usually takes D3D12 when
+  `d3d12.dll` loads, which in the `dxmt` tree means vkd3d-proton. The rule
+  that hides D3D12 disables both of vkd3d-proton's modules through
+  compatdb's load-order overrides, so `d3d12.dll` fails to load (error 126)
+  and such a game falls back to D3D11 on DXMT; the rest of the `dxmt` tree
+  stays. The smoke test checks that this rule disables `d3d12.dll` and
+  leaves `dxgi.dll` loading. A game that only has D3D12 does not start
+  with it, nor with `dxgi=wined3d`.
 - `WINEDLLOVERRIDES=mscoree=b` alone does not work: ntdll parses that
   variable first, and an override compatdb adds replaces the entry for the
   same module. ntdll also consults compatdb's overrides before the registry

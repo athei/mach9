@@ -6,10 +6,11 @@ series, and bundles it into a self-contained, relocatable `wine/` tree. x86
 programs, i386 and x86_64, run under [FEX](https://github.com/FEX-Emu/FEX)
 in the same process. Direct3D goes through per-process selectable
 implementations (DXMT, mtld3d, wined3d), chosen by `compatdb.so`, a library
-built from [`compatdb/`](compatdb).
+built from [`compatdb/`](compatdb). Direct3D 12 is vkd3d-proton on Vulkan.
 
 - [docs/arm64.md](docs/arm64.md): how the build works: the sources, FEX,
-  DXMT, Vulkan, the signed loader app, what the bundle step checks.
+  DXMT, vkd3d-proton, Vulkan, the signed loader app, what the bundle step
+  checks.
 - [docs/compatdb.md](docs/compatdb.md): rules, `WINE_COMPATDB`, recipes,
   logging.
 - [docs/maintenance.md](docs/maintenance.md): internals, floors, pins,
@@ -70,13 +71,14 @@ directory that an x64 process would load but not run natively
 | `FEX_HOSTFEATURES` | FEX's host feature overrides. x86_64 programs, which run as ARM64EC, run without AFP (the Arm floating-point behaviour FEX uses to match x86) by default, because the floating-point mode would have to change on every call between x86 code and native code, which costs more than AFP saves. `enableafp` turns it back on. i386 programs keep AFP |
 | `VK_DRIVER_FILES` | Unset: ntdll sets it to the bundle's `share/vulkan/icd.d`, so the Vulkan loader uses the bundled KosmicKrisp and no driver installed elsewhere on the Mac. Set: the loader uses the manifests it names instead. ntdll also leaves it unset when the caller sets `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES`; the loader then uses those, and the bundled driver is not added to them ([Vulkan](docs/arm64.md#vulkan)) |
 | `MESA_KK_EXPERIMENTAL` | Which experimental features KosmicKrisp advertises. compatdb's built-in `kosmickrisp-experimental` rule sets it in every process, replacing a value from the environment; a rule changes or removes it ([Vulkan](docs/arm64.md#vulkan)) |
+| `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | vkd3d-proton's settings, as [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) describes them. A compatdb `env` rule sets one for one game ([recipes](docs/compatdb.md#recipes)) |
 | `WINE_D3D_CONFIG` | wined3d's settings, as in Wine. `renderer=vulkan` puts wined3d on KosmicKrisp. compatdb's `wined3d=vulkan` sets it for one game, keeping the variable's other options; the programs that game starts inherit it unless a rule for them sets `wined3d` ([wined3d on Vulkan](docs/compatdb.md#wined3d-on-vulkan)) |
 
 ### Direct3D backends
 
 | Family | APIs | Rule value | Tree | Default for |
 |--------|------|------------|------|-------------|
-| `dxgi` | D3D10, D3D11 | `dxmt` ([DXMT](https://github.com/3Shain/dxmt)) | `lib/wine/dxgi/dxmt/` | i386, x86_64, native ARM64 |
+| `dxgi` | D3D10, D3D11, D3D12 | `dxmt` ([DXMT](https://github.com/athei/dxmt), D3D12 from [vkd3d-proton](https://github.com/athei/vkd3d-proton)) | `lib/wine/dxgi/dxmt/` | i386, x86_64, native ARM64 |
 | `dxgi` | D3D10, D3D10.1, D3D11 | `wined3d` | `lib/wine/dxgi/wined3d/` | none |
 | `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | i386, x86_64, native ARM64 |
 | `d3d9` | D3D9 | `wined3d` | `lib/wine/d3d9/wined3d/` | none |
@@ -84,21 +86,31 @@ directory that an x64 process would load but not run natively
 - compatdb.so prepends one tree per family to every process's builtin search
   path, so a process sees one coherent set of modules. To pick a tree per
   game, see [recipes](docs/compatdb.md#recipes).
-- D3D10 and D3D11 form one family because they create their device through
-  one `dxgi.dll` and only work with their own implementation's copy.
-- DXMT's and mtld3d's 64-bit modules are ARM64X: an x64 game loads their
-  ARM64EC half and a native ARM64 program their ARM64 half, so both run
-  natively in either, and only their i386 modules run under FEX with the
-  game ([DXMT](docs/arm64.md#dxmt), [mtld3d](docs/arm64.md#mtld3d)).
+- D3D10, D3D11 and D3D12 form one family because they create their device
+  or swapchain through one `dxgi.dll` and only work with their own
+  implementation's copy.
+- D3D12 is vkd3d-proton, which runs on Vulkan, on KosmicKrisp. Its DLLs sit
+  in the `dxmt` tree, and DXMT's `dxgi.dll` presents its swapchains
+  ([vkd3d-proton](docs/arm64.md#vkd3d-proton)). The `wined3d` tree has no
+  D3D12: a game that a rule gives `dxgi=wined3d` cannot load `d3d12.dll`.
+  Wine's own D3D12 is left out of the bundle.
+- A game that can use both D3D12 and D3D11 and prefers D3D12 gets
+  vkd3d-proton instead of DXMT's D3D11. A rule can hide D3D12 from one
+  game and keep DXMT ([recipes](docs/compatdb.md#recipes)).
+- DXMT's, vkd3d-proton's and mtld3d's 64-bit modules are ARM64X: an x64
+  game loads their ARM64EC half and a native ARM64 program their ARM64
+  half, so they run natively in either, and only their i386 modules run
+  under FEX with the game ([DXMT](docs/arm64.md#dxmt),
+  [vkd3d-proton](docs/arm64.md#vkd3d-proton),
+  [mtld3d](docs/arm64.md#mtld3d)).
 - A native ARM64 program gets the same defaults, DXMT for `dxgi` and
   mtld3d for `d3d9`, and a rule can give it either tree of each family
   ([native ARM64 programs](docs/compatdb.md#native-arm64-programs)). It
   can load a Direct3D name only where its marker is a hybrid one, which
   every name has while every tree is ARM64X
   ([limitations](docs/arm64.md#limitations)).
-- D3D12 is not available: the bundle leaves out Wine's own D3D12. D3D8 and
-  DirectDraw stay on wined3d. Which modules each tree holds is in Step 4 of
-  [`bundle-wine.sh`](bin/bundle-wine.sh).
+- D3D8 and DirectDraw stay on wined3d. Which modules each tree holds is in
+  Step 4 of [`bundle-wine.sh`](bin/bundle-wine.sh).
 - wined3d draws through OpenGL. The compatdb setting `wined3d` can put it
   on Vulkan for one game; it applies to every wined3d user in the process
   ([wined3d on Vulkan](docs/compatdb.md#wined3d-on-vulkan)).
@@ -132,14 +144,14 @@ provisioning profile.
 ### Commands
 
 ```bash
-bin/build-wine.sh    # Mesa and the Vulkan loader, Wine, the SDK, then FEX and DXMT
+bin/build-wine.sh    # Mesa and the Vulkan loader, Wine, the SDK, then FEX, DXMT and vkd3d-proton
 bin/bundle-wine.sh   # assemble the bundle (see Layout)
 ```
 
 | Script | Flag | Effect |
 |--------|------|--------|
 | `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile, and in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk) also when its configure arguments or `WINE_SRC` (the source path) changed |
-| `build-wine.sh` | `--clean` | Wipes the build directories first, and is passed on to `build-mesa.sh`, `build-fex.sh` and `build-dxmt.sh`; the only way to pick up changed configure flags or deployment target, except in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk), which is configured again whenever its flags or `WINE_SRC` change |
+| `build-wine.sh` | `--clean` | Wipes the build directories first, and is passed on to `build-mesa.sh`, `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; the only way to pick up changed configure flags or deployment target, except in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk), which is configured again whenever its flags or `WINE_SRC` change |
 | `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the bundle in the [layout](#layout). Either way it asks before it deletes an existing one, unless `--yes` |
 | `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking, for an unattended run. A directory that is not empty and has no `bin/wine` is still refused |
 | `bundle-wine.sh` | `--runtime-only` | No development files; the flavor to put into an application |
@@ -150,7 +162,8 @@ bin/bundle-wine.sh   # assemble the bundle (see Layout)
 `usage()` and the argument parsing in
 [`build-wine.sh`](bin/build-wine.sh) and
 [`bundle-wine.sh`](bin/bundle-wine.sh) are authoritative.
-`build-mesa.sh`, `build-fex.sh` and `build-dxmt.sh` also run alone
+`build-mesa.sh`, `build-fex.sh`, `build-dxmt.sh` and
+`build-vkd3d-proton.sh` also run alone
 ([commands](docs/arm64.md#commands)).
 
 ### Repository
@@ -177,7 +190,7 @@ Everything lives beside this repository, in the directory that holds it
 | `src-fex/` | The FEX checkout |
 | `src-mesa/` | The Mesa checkout, for the Vulkan driver |
 | `cache/` | Downloaded redistributables |
-| `build/<component>/` | One tree per intermediate: the Wine build, its SDK and the x86 tree for its link libraries and tests, FEX, DXMT and Mesa with the Vulkan loader |
+| `build/<component>/` | One tree per intermediate: the Wine build, its SDK and the x86 tree for its link libraries and tests, FEX, DXMT, vkd3d-proton and Mesa with the Vulkan loader. DXMT's and vkd3d-proton's trees hold their own clones of the source |
 | `dist/wine` | The bundle |
 | `dist/wine-symbols` | With `--symbols`, the bundle's PE files before their symbols were stripped (Step 4e of [`bundle-wine.sh`](bin/bundle-wine.sh)); not part of the bundle |
 
@@ -199,4 +212,4 @@ tree from before markers existed, which is adopted when its parent is
   fails there, and the Mac driver links `-framework OpenGL` on its own.
 - Wine's Vulkan is on, on the loader and KosmicKrisp `build-mesa.sh` builds
   ([Vulkan](docs/arm64.md#vulkan)). The bundle does not ship Wine's own
-  D3D12 modules.
+  D3D12 modules; D3D12 is vkd3d-proton's.
