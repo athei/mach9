@@ -271,9 +271,8 @@ exits with the number of failed checks, at most 255.
   records.
 - It translates D3D12 to Vulkan and runs on KosmicKrisp
   ([Vulkan](#vulkan)), which it finds through `winevulkan.dll` or
-  `vulkan-1.dll`. The features it needs that KosmicKrisp counts as
-  experimental come from compatdb's built-in `kosmickrisp-experimental`
-  rule ([built-in environment rules](compatdb.md#built-in-environment-rules)).
+  `vulkan-1.dll`. The KosmicKrisp features it needs, which upstream Mesa
+  counts as experimental, are always on in our Mesa ([Vulkan](#vulkan)).
 - Our commits add `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES`, the least frame
   latency a swapchain's frame latency handle allows. compatdb's built-in
   `vkd3d-proton-min-latency` rule sets a minimum frame latency for every
@@ -380,17 +379,13 @@ and wined3d can, per game (see below).
   sets one of them chooses the drivers itself: the bundled one is then not
   added, and has to be named there to be used
   ([environment variables](../README.md#environment-variables)).
-- Our topic commits add features KosmicKrisp advertises only when
-  `MESA_KK_EXPERIMENTAL` names them. compatdb's built-in
-  `kosmickrisp-experimental` rule sets the variable in every process, with
-  the flags in [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). As
-  with every `env` rule, compatdb.so sets it when it loads, before any PE
-  code runs, so it is there before win32u loads the Vulkan loader and the
-  driver reads it. Mesa describes the variable in
+- The features our topic commits add, device-generated commands,
+  transform feedback and sparse resources, which Direct3D 12 and OpenGL
+  through Zink need, are always advertised; no environment variable or
+  compatdb rule turns them on or off. `MESA_KK_EXPERIMENTAL` keeps only
+  Mesa's own experimental flags, which Mesa describes in
   [`docs/drivers/kosmickrisp.rst`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/drivers/kosmickrisp.rst);
-  the flags our topic commits add are defined next to Mesa's own in the
-  driver's source. The recipes to turn them off are in
-  [compatdb.md](compatdb.md#recipes).
+  the bundle sets none of them.
 - wined3d, Wine's own Direct3D, which serves the `wined3d` trees of both
   families and D3D8 and DirectDraw, keeps Wine's default OpenGL renderer,
   which runs on Zink where the Mac driver picks it ([OpenGL](#opengl)) and
@@ -596,8 +591,8 @@ After assembly:
   must clear, read back and swap: by default on a Zink renderer, and with
   `WINE_MAC_OPENGL=cgl` on Apple's. Then
   [`smoke/vulkan.c`](../smoke/vulkan.c), compiled for x86_64 and i686,
-  creates a Vulkan instance without a window and must find a device; its
-  compatdb lines must carry `MESA_KK_EXPERIMENTAL`. Then
+  creates a Vulkan instance without a window and must find a device that
+  offers transform feedback, with no `MESA_KK_EXPERIMENTAL`. Then
   [`smoke/d3d12.c`](../smoke/d3d12.c), compiled for x86_64, i686 and
   aarch64, must get the `dxmt` tree and go through D3D12 as a game does:
   devices on DXMT's adapter and without one, a swapchain for a visible
@@ -653,7 +648,11 @@ With `--compatdb-only`, the bundle step:
   vkd3d-proton, which has no `d3d12.dll` in the `dxmt` tree, it leaves out
   the D3D12 checks and says so. On a bundle without EGL, from before
   OpenGL through Zink, the smoke test skips the host EGL check and expects
-  Apple's OpenGL renderer.
+  Apple's OpenGL renderer;
+- needs a bundle whose KosmicKrisp advertises its features without
+  `MESA_KK_EXPERIMENTAL`, since this compatdb.so no longer sets it. On an
+  older bundle `vulkan.exe` finds no transform feedback and the step stops
+  with a hint to bundle the whole build.
 
 ## Homebrew libraries and the floor
 

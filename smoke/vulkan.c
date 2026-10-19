@@ -4,10 +4,11 @@
  * needed, enumerates the physical devices and prints the name of each. That
  * goes through winevulkan and win32u to the host loader, which finds the
  * bundled driver through its manifest. Each device must also offer
- * VK_EXT_transform_feedback, which KosmicKrisp only advertises when
- * MESA_KK_EXPERIMENTAL names it: compatdb's built-in rule sets that, so a
- * missing extension means the rule or the flag name it uses is wrong. It
- * prints one line per step that fails.
+ * VK_EXT_transform_feedback, which upstream KosmicKrisp does not implement:
+ * a commit of our Mesa fork adds it, advertised whatever
+ * MESA_KK_EXPERIMENTAL says (older builds of the fork advertised it only
+ * when that variable named it), so a missing extension means the driver is
+ * not the current fork's. It prints one line per step that fails.
  *
  * The few Vulkan declarations it needs are written out here, since
  * llvm-mingw has no Vulkan headers. Their layout is that of vulkan_core.h;
@@ -178,8 +179,8 @@ int main(void)
         printf("wine-build smoke test: %s vulkan device %.256s\n", ARCH, props.head.deviceName);
         if (!has_extension(enumerate_extensions, devices[i], xfb))
         {
-            printf("wine-build smoke test: %s device %.256s does not offer %s; is "
-                   "MESA_KK_EXPERIMENTAL set, and does it name xfb?\n",
+            printf("wine-build smoke test: %s device %.256s does not offer %s, which "
+                   "the Mesa fork's KosmicKrisp always advertises\n",
                    ARCH, props.head.deviceName, xfb);
             failed = 1;
         }

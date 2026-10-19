@@ -72,13 +72,6 @@ retired x86_64 Wine still parse
   rewritten. Neither a FEX config file nor the variable exported before
   launch overrides it: FEX's environment layer outranks its config files,
   and the rule replaces a value already in the environment.
-- The built-in `kosmickrisp-experimental` rule sets `MESA_KK_EXPERIMENTAL`
-  for every process, so that KosmicKrisp ([arm64.md](arm64.md#vulkan))
-  advertises the experimental features our Mesa topic commits add.
-  vkd3d-proton, the bundle's D3D12, needs them. compatdb.so sets it when it
-  loads, before any PE code runs and so before win32u loads the Vulkan
-  loader, where the driver reads it. Like the FEX entry, it replaces a
-  value already in the environment.
 - The built-in `vkd3d-proton-min-latency` rule sets
   `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES` for every process, a minimum frame
   latency for swapchains with a frame latency handle; the value is in
@@ -90,10 +83,12 @@ retired x86_64 Wine still parse
   reads it in the game's process when it creates such a swapchain, and
   logs `Allowing a frame latency of at least <n> frames.` then. Like the
   FEX entry, it replaces a value already in the environment.
-- The entries and the reasoning for all three are in
-  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). The FEX,
-  KosmicKrisp and vkd3d-proton [recipes](#recipes) turn them off or change
-  them.
+- The entries and the reasoning for both are in
+  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). The FEX and
+  vkd3d-proton [recipes](#recipes) turn them off or change them.
+- KosmicKrisp's features need no rule: our Mesa fork advertises the ones
+  Direct3D 12 and OpenGL through Zink need without `MESA_KK_EXPERIMENTAL`
+  ([arm64.md](arm64.md#vulkan)).
 
 ## WINE_COMPATDB
 
@@ -189,17 +184,8 @@ executable.
 | Keep no-execute on for one game | `name=my-game;exe=Game.exe;env=WINE_FORCE_NX=1` |
 | Give one game FEX's full x87 precision | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision | `name=fex-x87-reduced-precision;enabled=false` |
-| Turn KosmicKrisp's experimental features off for one game | `name=my-game;exe=Game.exe;env=MESA_KK_EXPERIMENTAL=` |
-| Advertise only some of them to one game | `name=my-game;exe=Game.exe;env=MESA_KK_EXPERIMENTAL=<flags>`, with the flags comma-separated |
-| Turn KosmicKrisp's experimental features off for every process | `name=kosmickrisp-experimental;enabled=false` |
 | Put wined3d on Vulkan for one game | `name=my-game;exe=Game.exe;wined3d=vulkan` |
 
-- The KosmicKrisp flags are described in Mesa's
-  [`docs/drivers/kosmickrisp.rst`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/docs/drivers/kosmickrisp.rst),
-  except those our Mesa topic commits add; the ones the built-in rule sets
-  are in [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). A game
-  rule's `MESA_KK_EXPERIMENTAL` folds after the built-in one and replaces it
-  for that game.
 - A game that can use D3D12 and D3D11 usually takes D3D12 when
   `d3d12.dll` loads, which in the `dxmt` tree means vkd3d-proton. The rule
   that hides D3D12 disables both of vkd3d-proton's modules through
