@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # The settings build-wine.sh, bundle-wine.sh, build-fex.sh, build-mesa.sh,
-# build-dxmt.sh and the CI scripts in ci/ share, and the helpers they use.
+# build-dxmt.sh, build-vkd3d-proton.sh and the CI scripts in ci/ share, and
+# the helpers they use.
 # Source it with SCRIPT_DIR set to bin/ of this repository; it sets
 # everything as it is sourced. REPO_DIR is the repository itself, PINS_DIR
 # its pins/ (redist.env and the *-src.ref files).
@@ -156,6 +157,13 @@ DXMT_REPO="${DXMT_REPO:-https://github.com/athei/dxmt}"
 DXMT_BUILD_DIR="${DXMT_BUILD_DIR:-$BUILD_TOP/dxmt}"
 DXMT_LLVM="${DXMT_LLVM:-$DXMT_BUILD_DIR/llvm15}"
 DXMT_DIST="${DXMT_DIST:-$DXMT_BUILD_DIR/dist}"
+# vkd3d-proton's repository (upstream vkd3d-proton plus our commits), which
+# build-vkd3d-proton.sh clones into VKD3D_PROTON_BUILD_DIR and checks out
+# vkd3d-proton-src.ref in, its trees, and its D3D12 DLLs as
+# build-vkd3d-proton.sh stages them for the bundle.
+VKD3D_PROTON_REPO="${VKD3D_PROTON_REPO:-https://github.com/athei/vkd3d-proton}"
+VKD3D_PROTON_BUILD_DIR="${VKD3D_PROTON_BUILD_DIR:-$BUILD_TOP/vkd3d-proton}"
+VKD3D_PROTON_DIST="${VKD3D_PROTON_DIST:-$VKD3D_PROTON_BUILD_DIR/dist}"
 # FEX's repository, the local clone build-fex.sh checks out fex-src.ref in,
 # and its build trees.
 FEX_REPO="${FEX_REPO:-https://github.com/athei/FEX}"
