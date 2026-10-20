@@ -77,16 +77,20 @@ directory that an x64 process would load but not run natively
 
 ### Direct3D backends
 
-| Family | APIs | Rule value | Tree | Default for |
-|--------|------|------------|------|-------------|
-| `dxgi` | D3D10, D3D11, D3D12 | `dxmt` ([DXMT](https://github.com/athei/dxmt), D3D12 from [vkd3d-proton](https://github.com/athei/vkd3d-proton)) | `lib/wine/dxgi/dxmt/` | i386, x86_64, native ARM64 |
-| `dxgi` | D3D10, D3D10.1, D3D11 | `wined3d` | `lib/wine/dxgi/wined3d/` | none |
-| `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | i386, x86_64, native ARM64 |
-| `d3d9` | D3D9 | `wined3d` | `lib/wine/d3d9/wined3d/` | none |
+| Family | APIs | Rule value | Tree | Chosen by |
+|--------|------|------------|------|-----------|
+| `dxgi` | D3D10, D3D11, D3D12 | `dxmt` ([DXMT](https://github.com/athei/dxmt), D3D12 from [vkd3d-proton](https://github.com/athei/vkd3d-proton)) | `lib/wine/dxgi/dxmt/` | The built-in rule `dxmt`, for every process |
+| `dxgi` | D3D10, D3D10.1, D3D11 | `wined3d` | `lib/wine/dxgi/wined3d/` | A rule that asks for it, or no rule at all, as in upstream Wine |
+| `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | The built-in rule `mtld3d`, for every process |
+| `d3d9` | D3D9 | `wined3d` | `lib/wine/d3d9/wined3d/` | A rule that asks for it, or no rule at all, as in upstream Wine |
 
 - compatdb.so prepends one tree per family to every process's builtin search
   path, so a process sees one coherent set of modules. To pick a tree per
   game, see [recipes](docs/compatdb.md#recipes).
+- The default directories hold only fake-module markers for the Direct3D
+  DLLs, so a process gets Direct3D only through the tree compatdb.so
+  prepends. The bundle always ships `compatdb.so`; a process without it has
+  no Direct3D.
 - D3D10, D3D11 and D3D12 form one family because they create their device
   or swapchain through one `dxgi.dll` and only work with their own
   implementation's copy.
@@ -104,8 +108,8 @@ directory that an x64 process would load but not run natively
   under FEX with the game ([DXMT](docs/arm64.md#dxmt),
   [vkd3d-proton](docs/arm64.md#vkd3d-proton),
   [mtld3d](docs/arm64.md#mtld3d)).
-- A native ARM64 program gets the same defaults, DXMT for `dxgi` and
-  mtld3d for `d3d9`, and a rule can give it either tree of each family
+- A native ARM64 program gets the same trees, DXMT for `dxgi` and mtld3d
+  for `d3d9`, and a rule can give it either tree of each family
   ([native ARM64 programs](docs/compatdb.md#native-arm64-programs)). It
   can load a Direct3D name only where its marker is a hybrid one, which
   every name has while every tree is ARM64X
@@ -124,6 +128,8 @@ by the patched Wine.
 
 | Behavior | Default in this bundle | Decided by |
 |----------|------------------------|------------|
+| D3D10, D3D11 and D3D12 | DXMT, and vkd3d-proton for D3D12, instead of wined3d, which has no D3D12 here | Rule `dxmt` ([Direct3D backends](#direct3d-backends)) |
+| D3D9 | mtld3d instead of wined3d | Rule `mtld3d` ([Direct3D backends](#direct3d-backends)) |
 | DPI awareness | Every process is system-aware | Rule `dpi-aware` ([recipes](docs/compatdb.md#recipes)) |
 | Address space | Every 32-bit process gets 4 GB, even without the large-address-aware flag | Rule `large-address-aware` ([recipes](docs/compatdb.md#recipes)) |
 | Raw mouse input | Raw input and DirectInput take mouse movement from GameController, in the device's own counts, instead of from the cursor, which macOS accelerates and scales for retina: mouselook is linear | Rule `gcmouse` ([GameController mice](docs/compatdb.md#gamecontroller-mice)) |

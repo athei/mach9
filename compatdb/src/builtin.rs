@@ -6,16 +6,54 @@
 //!
 //! Every rule that names an executable also carries a version fingerprint, so
 //! none of them can catch an unrelated program that happens to share a file
-//! name. The exceptions are `dpi-aware`, `large-address-aware`, `gcmouse`,
-//! `fex-x87-reduced-precision`, `vkd3d-proton-min-latency` and
-//! `no-mono-gecko`, which match every process on purpose: each is a default
-//! that a more specific rule can override and that can be dropped by name.
+//! name. The exceptions are `dxmt`, `mtld3d`, `dpi-aware`,
+//! `large-address-aware`, `gcmouse`, `fex-x87-reduced-precision`,
+//! `vkd3d-proton-min-latency` and `no-mono-gecko`, which match every process
+//! on purpose: each is a default that a more specific rule can override and
+//! that can be dropped by name.
 
-use compatdb_table::{ANY_EXE, Dxgi, Rule, Table};
+use compatdb_table::{ANY_EXE, D3d9, Dxgi, Rule, Table};
 
-/// The rules the bundle ships with.
+/// The rules the bundle ships with: the [`defaults`] for every process, then
+/// the rules for one program each.
 pub fn table() -> Table {
-    let rules = vec![
+    Table {
+        rules: defaults()
+            .into_iter()
+            .chain(programs())
+            .map(with_env_defaults)
+            .collect(),
+    }
+}
+
+/// The rules that match every process, each turning on one behaviour that
+/// differs from upstream Wine.
+fn defaults() -> Vec<Rule> {
+    vec![
+        // D3D10, D3D11 and D3D12 go through DXMT, which translates them to
+        // Metal directly, instead of through wined3d, upstream Wine's
+        // implementation, which draws through OpenGL or Vulkan and reaches a
+        // lower feature level and frame rate on a Mac. D3D12 is vkd3d-proton
+        // in the same tree, which presents through DXMT's dxgi.dll; the
+        // wined3d tree has no D3D12 at all. A rule for one program with
+        // `dxgi = wined3d` gives it wined3d, as the Rockstar launcher's does,
+        // and dropping this rule gives every process wined3d.
+        Rule {
+            name: "dxmt".into(),
+            exe: ANY_EXE.into(),
+            dxgi: Some(Dxgi::Dxmt),
+            ..Rule::default()
+        },
+        // D3D9 goes through mtld3d, which translates it to Metal directly,
+        // instead of through wined3d, for the same reason. A rule for one
+        // program with `d3d9 = wined3d` gives it wined3d, and dropping this
+        // rule gives every process wined3d.
+        Rule {
+            name: "mtld3d".into(),
+            exe: ANY_EXE.into(),
+            d3d9: Some(D3d9::Mtld3d),
+            ..Rule::default()
+        },
         // Programs under this Wine are treated as DPI-aware unless a rule
         // says otherwise. An unaware program on a scaled desktop gets its
         // window and mouse coordinates scaled while display modes are
@@ -119,6 +157,12 @@ pub fn table() -> Table {
             dll_overrides: vec!["mscoree,mshtml=".into()],
             ..Rule::default()
         },
+    ]
+}
+
+/// The rules for one program each, which beat the [`defaults`] for it.
+fn programs() -> Vec<Rule> {
+    vec![
         // The Rockstar Games Launcher needs a real D3D10.1 device, which
         // DXMT, the default, does not provide; wined3d does. Matched by its
         // version resource, not its path, so it works wherever it is
@@ -197,27 +241,24 @@ pub fn table() -> Table {
             dpi_aware: Some(false),
             ..Rule::default()
         },
-    ];
-    // The env entries of the rules for every process are defaults, which a
-    // variable the process already has wins over: whoever starts the
-    // process can export the variable to choose for itself, as for any
-    // other program. A rule for one program, or any rule from WINE_COMPATDB,
-    // replaces the value as before.
-    let rules = rules
-        .into_iter()
-        .map(|rule| {
-            let env_defaults = if rule.specificity() == 0 {
-                rule.env.len()
-            } else {
-                0
-            };
-            Rule {
-                env_defaults,
-                ..rule
-            }
-        })
-        .collect();
-    Table { rules }
+    ]
+}
+
+/// `rule` with its env entries marked as defaults when it matches every
+/// process. A variable the process already has wins over such an entry:
+/// whoever starts the process can export the variable to choose for itself.
+/// A rule for one program, or any rule from `WINE_COMPATDB`, replaces the
+/// value.
+fn with_env_defaults(rule: Rule) -> Rule {
+    let env_defaults = if rule.specificity() == 0 {
+        rule.env.len()
+    } else {
+        0
+    };
+    Rule {
+        env_defaults,
+        ..rule
+    }
 }
 
 #[cfg(test)]
@@ -324,6 +365,8 @@ mod tests {
     /// The names of the rules that match every process, in table order.
     fn wildcards() -> Vec<String> {
         [
+            "dxmt",
+            "mtld3d",
             "dpi-aware",
             "large-address-aware",
             "gcmouse",
@@ -665,6 +708,61 @@ mod tests {
         assert_eq!(resolution.large_address_aware, Some(true));
         assert_eq!(resolution.gcmouse, Some(true));
         assert_eq!(resolution.env, wildcard_env());
+        assert_eq!(resolution.dxgi, Some(Dxgi::Dxmt));
+        assert_eq!(resolution.set_by("dxgi"), Some("dxmt"));
+        assert_eq!(resolution.d3d9, Some(D3d9::Mtld3d));
+        assert_eq!(resolution.set_by("d3d9"), Some("mtld3d"));
+    }
+
+    #[test]
+    fn the_pins_for_one_program_beat_the_direct3d_rules() -> TestResult {
+        // Every built-in rule for one program that names a tree keeps it
+        // over the `*` rules.
+        let table = table();
+        let pins: Vec<&Rule> = table
+            .rules
+            .iter()
+            .filter(|r| r.exe != ANY_EXE && (r.dxgi.is_some() || r.d3d9.is_some()))
+            .collect();
+        assert_ne!(pins.len(), 0);
+        for pin in pins {
+            let version = VersionInfo {
+                company: pin.company.clone().unwrap_or_default(),
+                product: pin.product.clone().unwrap_or_default(),
+                original_filename: pin.original_filename.clone().unwrap_or_default(),
+            };
+            let resolution = table.resolve(&pin.exe, &version);
+            if let Some(dxgi) = pin.dxgi {
+                assert_eq!(resolution.dxgi, Some(dxgi), "{}", pin.name);
+                assert_eq!(resolution.set_by("dxgi"), Some(pin.name.as_str()));
+            }
+            if let Some(d3d9) = pin.d3d9 {
+                assert_eq!(resolution.d3d9, Some(d3d9), "{}", pin.name);
+                assert_eq!(resolution.set_by("d3d9"), Some(pin.name.as_str()));
+            }
+        }
+        assert_eq!(rule(&table, "rockstar-launcher")?.dxgi, Some(Dxgi::Wined3d));
+        Ok(())
+    }
+
+    #[test]
+    fn dropping_a_direct3d_rule_gives_every_process_wined3d() {
+        // No opinion is upstream Wine's wined3d, for each family on its own.
+        let table = with_overrides("name=dxmt;enabled=false");
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.dxgi, None);
+        assert_eq!(game.d3d9, Some(D3d9::Mtld3d));
+        let table = with_overrides("name=mtld3d;enabled=false");
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.dxgi, Some(Dxgi::Dxmt));
+        assert_eq!(game.d3d9, None);
+        // A rule for one game gives it wined3d and leaves the others alone.
+        let table = with_overrides("name=my-game;exe=game.exe;dxgi=wined3d;d3d9=wined3d");
+        let game = table.resolve("Game.exe", &VersionInfo::default());
+        assert_eq!(game.dxgi, Some(Dxgi::Wined3d));
+        assert_eq!(game.d3d9, Some(D3d9::Wined3d));
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.dxgi, Some(Dxgi::Dxmt));
     }
 
     #[test]

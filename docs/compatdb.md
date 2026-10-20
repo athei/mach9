@@ -17,8 +17,8 @@ and with none, Wine does.
 
 | Key | Values | Effect | Applied |
 |-----|--------|--------|---------|
-| `dxgi` | `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. Unset: `dxmt`, for every arch. Only `dxmt` has D3D12 (vkd3d-proton): under `wined3d`, `d3d12.dll` does not load, so a D3D12 game does not start ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
-| `d3d9` | `mtld3d`, `wined3d` | The D3D9 tree to prepend. Unset: `mtld3d`, for every arch ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
+| `dxgi` | `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. The built-in `dxmt` rule sets `dxmt` for every process; unset, `wined3d`, as in upstream Wine. Only `dxmt` has D3D12 (vkd3d-proton): under `wined3d`, `d3d12.dll` does not load, so a D3D12 game does not start ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
+| `d3d9` | `mtld3d`, `wined3d` | The D3D9 tree to prepend. The built-in `mtld3d` rule sets `mtld3d` for every process; unset, `wined3d`, as in upstream Wine ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
 | `wined3d` | `gl`, `vulkan` | The renderer of wined3d, for the whole process: every wined3d user in it, the `wined3d` trees of both families and D3D8 and DirectDraw, shares one wined3d. Set, it names the renderer in `WINE_D3D_CONFIG` through the `env` path; unset, it sets nothing, so a `WINE_D3D_CONFIG` from elsewhere, or wined3d's default, OpenGL, applies ([wined3d on Vulkan](#wined3d-on-vulkan)) | At load, as `env` |
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
@@ -194,6 +194,8 @@ executable.
 | Stop forcing 4 GB for every process | `name=large-address-aware;enabled=false` |
 | Give one game the cursor's mouse movement instead of GameController's | `name=my-game;exe=Game.exe;gcmouse=false` |
 | Give every process the cursor's mouse movement | `name=gcmouse;enabled=false` |
+| Give every process wined3d for D3D10 and D3D11, and no D3D12 | `name=dxmt;enabled=false` |
+| Give every process wined3d for D3D9 | `name=mtld3d;enabled=false` |
 | Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` (not for a D3D12 game: the `wined3d` tree has no D3D12) |
 | Hide D3D12 from one game, keeping DXMT for D3D10 and D3D11 | `name=my-game;exe=Game.exe;dll_overrides=d3d12,d3d12core=` |
 | Change a vkd3d-proton setting for one game | `name=my-game;exe=Game.exe;env=VKD3D_CONFIG=<options>` |
@@ -282,16 +284,17 @@ executable.
 
 ## Native ARM64 programs
 
-- A native ARM64 program gets the same defaults as every program, `dxmt`
-  for `dxgi` and `mtld3d` for `d3d9`: the 64-bit modules of every tree of
-  both families are ARM64X, and the program loads their ARM64 half. A rule
-  may give it either tree of each family, `wined3d` included.
+- A native ARM64 program gets the same trees as every program: the built-in
+  `dxmt` and `mtld3d` rules give it `dxmt` for `dxgi` and `mtld3d` for
+  `d3d9`, and without them it gets `wined3d` for both. The 64-bit modules
+  of every tree of both families are ARM64X, and the program loads their
+  ARM64 half. A rule may give it either tree of each family.
 - Whether the program can load a Direct3D name at all depends on its
   marker, which is hybrid while every tree of its family holds an ARM64X
   build ([arm64.md](arm64.md#limitations)).
 - `default_for` and `effective` of `Dxgi` and `D3d9` in
-  [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs) hold the
-  table.
+  [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs) decide the
+  tree when no rule names one.
 - A 64-bit process loads the Direct3D trees from `aarch64-windows`, as Wine
   on an arm64 host loads its builtins from there. An i386 process uses
   `i386-windows`.
