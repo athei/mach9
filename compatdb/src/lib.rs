@@ -9,7 +9,8 @@
 //! It holds the built-in rules, overlays the ones passed in
 //! [`ENV_VAR`](compatdb_table::ENV_VAR), resolves the rules that match this
 //! process and applies them: the D3D9 and DXGI trees, the wined3d renderer,
-//! DLL load-order overrides, the DPI awareness, large address awareness, and
+//! DLL load-order overrides, the DPI awareness, large address awareness,
+//! whether the Mac driver reads raw mouse input from `GameController`, and
 //! command-line/environment rewrites. All the decision logic lives in
 //! [`compatdb_table`]; this crate only moves bytes in and out of the running
 //! process, so its `unsafe` is confined to a thin ntdll shell.
@@ -126,6 +127,9 @@ extern "C" fn run() {
     }
     if let Some(laa) = resolution.large_address_aware {
         apply::large_address_aware(&nt, laa);
+    }
+    if let Some(gcmouse) = resolution.gcmouse {
+        apply::gcmouse(&nt, gcmouse);
     }
     if !resolution.arguments.is_empty() {
         log::line(&format!("  arguments = {}", resolution.arguments.join(" ")));

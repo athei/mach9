@@ -23,6 +23,7 @@ and with none, Wine does.
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` only stops forcing it: the executable's flag, `WINE_LARGE_ADDRESS_AWARE` and the `AppDefaults` registry value decide. No effect on 64-bit | At load; ntdll applies it after the library returns |
+| `gcmouse` | `true`, `false` | `true`: the Mac driver takes the mouse movement of raw input (`WM_INPUT`) and DirectInput from GameController's `GCMouse`, in the device's own counts, so mouselook is linear. `false`: that movement is the cursor's, which macOS accelerates and scales for retina. Unset: the same as `false`, as in upstream Wine ([GameController mice](#gamecontroller-mice)) | At load, read by winemac.drv |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it | At load |
 
@@ -55,6 +56,11 @@ retired x86_64 Wine still parse
   comment giving the reason it exists.
 - The rules that match every process (`exe` is `*`) set the defaults listed
   in [the README](../README.md#defaults-that-differ-from-wine).
+- A behaviour of this Wine that differs from upstream Wine and that a rule
+  can switch is off in the code by default, and a built-in `*` rule turns it
+  on. So the compatdb log of a process shows its complete resolved
+  configuration, and dropping such a rule by name restores upstream Wine's
+  behaviour.
 - Every other rule names an executable and pins its version resource, so it
   cannot catch an unrelated program of the same name; a test enforces this.
 - The CEF helper rules add `--in-process-gpu` because a CEF GPU process
@@ -180,6 +186,8 @@ executable.
 | Let the registry and the manifest decide DPI awareness | `name=dpi-aware;enabled=false` |
 | Stop forcing 4 GB for one game | `name=my-game;exe=Game.exe;large_address_aware=false` |
 | Stop forcing 4 GB for every process | `name=large-address-aware;enabled=false` |
+| Give one game the cursor's mouse movement instead of GameController's | `name=my-game;exe=Game.exe;gcmouse=false` |
+| Give every process the cursor's mouse movement | `name=gcmouse;enabled=false` |
 | Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` (not for a D3D12 game: the `wined3d` tree has no D3D12) |
 | Hide D3D12 from one game, keeping DXMT for D3D10 and D3D11 | `name=my-game;exe=Game.exe;dll_overrides=d3d12,d3d12core=` |
 | Change a vkd3d-proton setting for one game | `name=my-game;exe=Game.exe;env=VKD3D_CONFIG=<options>` |
@@ -240,6 +248,26 @@ executable.
   for it sets `wined3d` itself. The log line names the renderer such an
   inherited value asks for.
 
+## GameController mice
+
+- The built-in `gcmouse` rule has the Mac driver read mouse movement for raw
+  input (`WM_INPUT`) and DirectInput from GameController's `GCMouse`, which
+  reports the device's own counts. Without it that movement is the
+  cursor's, which macOS has already accelerated and, on a retina display,
+  scaled, so mouselook in such a game turns further the faster the hand
+  moves.
+- A rule for one game with `gcmouse=false` gives it the cursor's movement
+  again ([recipes](#recipes)): for a game whose sensitivity was tuned to
+  that movement, a mouse that GameController reports twice, or any
+  regression.
+- compatdb.so hands the value to ntdll through `set_compat_gcmouse`, and
+  winemac.drv reads it when it reads its settings
+  ([Wine-side contract](maintenance.md#wine-side-contract)). Without a
+  value from compatdb the Mac driver keeps upstream Wine's behaviour, the
+  cursor's movement, so dropping the rule by name
+  (`name=gcmouse;enabled=false`) turns GameController mice off for every
+  process, as `gcmouse=false` in a `*` rule does.
+
 ## Native ARM64 programs
 
 - A native ARM64 program gets the same defaults as every program, `dxmt`
@@ -273,8 +301,8 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
   - the wined3d renderer (`wined3d = <renderer> (...)`): set by a rule,
     asked for by a `WINE_D3D_CONFIG` the process has, or `default (not
     set)`, where wined3d's registry settings or its default decide;
-  - the overrides, DPI and large address awareness it set, the arguments
-    and the env.
+  - the overrides, DPI and large address awareness and `gcmouse` it set,
+    the arguments and the env.
 - To confirm a tree took effect, look at the running process's mapped files,
   for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
   `lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.

@@ -126,6 +126,7 @@ by the patched Wine.
 |----------|------------------------|------------|
 | DPI awareness | Every process is system-aware | Rule `dpi-aware` ([recipes](docs/compatdb.md#recipes)) |
 | Address space | Every 32-bit process gets 4 GB, even without the large-address-aware flag | Rule `large-address-aware` ([recipes](docs/compatdb.md#recipes)) |
+| Raw mouse input | Raw input and DirectInput take mouse movement from GameController, in the device's own counts, instead of from the cursor, which macOS accelerates and scales for retina: mouselook is linear | Rule `gcmouse` ([GameController mice](docs/compatdb.md#gamecontroller-mice)) |
 | x87 precision under FEX | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
 | Synchronization | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | wineserver; `WINEMSYNC=0` where the session starts turns it off ([runtime](docs/arm64.md#runtime)) |
 | D3D12 frame latency handles | A game that waits on one runs extra frames ahead, so an Apple GPU keeps its clock up; more input latency | Rule `vkd3d-proton-min-latency` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |

@@ -6,7 +6,7 @@
 //!
 //! Every rule that names an executable also carries a version fingerprint, so
 //! none of them can catch an unrelated program that happens to share a file
-//! name. The exceptions are `dpi-aware`, `large-address-aware`,
+//! name. The exceptions are `dpi-aware`, `large-address-aware`, `gcmouse`,
 //! `fex-x87-reduced-precision`, `vkd3d-proton-min-latency` and
 //! `no-mono-gecko`, which match every process on purpose: each is a default
 //! that a more specific rule can override and that can be dropped by name.
@@ -38,6 +38,26 @@ pub fn table() -> Table {
             name: "large-address-aware".into(),
             exe: ANY_EXE.into(),
             large_address_aware: Some(true),
+            ..Rule::default()
+        },
+        // The Mac driver takes the mouse movement of raw input (WM_INPUT)
+        // and DirectInput from GameController's GCMouse, which reports the
+        // device's own counts. Otherwise that movement is the cursor's,
+        // which macOS has already accelerated and, on a retina display,
+        // scaled, so mouselook in a game that reads raw input or DirectInput
+        // turns further the faster the hand moves. winemac.drv reads the
+        // value through ntdll when it reads its settings, and without one
+        // keeps upstream Wine's behaviour, the cursor's movement.
+        //
+        // It matches every process, like the rules above. A rule for one
+        // game with `gcmouse = false` gives it the cursor's movement again:
+        // for a game whose sensitivity was tuned to that, a mouse that
+        // GameController reports twice, or a regression. Dropping the rule
+        // by name does the same for every process.
+        Rule {
+            name: "gcmouse".into(),
+            exe: ANY_EXE.into(),
+            gcmouse: Some(true),
             ..Rule::default()
         },
         // x86 code runs under FEX, which by default emulates x87
@@ -210,6 +230,7 @@ mod tests {
         [
             "dpi-aware",
             "large-address-aware",
+            "gcmouse",
             FEX_RULE,
             VKD3D_RULE,
             "no-mono-gecko",
@@ -562,7 +583,46 @@ mod tests {
         assert_eq!(resolution.dll_overrides, wildcard_overrides());
         assert_eq!(resolution.dpi_aware, Some(true));
         assert_eq!(resolution.large_address_aware, Some(true));
+        assert_eq!(resolution.gcmouse, Some(true));
         assert_eq!(resolution.env, wildcard_env());
+    }
+
+    #[test]
+    fn a_game_rule_turns_gcmouse_off() {
+        let table = with_overrides("name=my-game;exe=Game.exe;gcmouse=false");
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.gcmouse, Some(false));
+        assert_eq!(game.matched, wildcards_and("my-game"));
+        // Nothing else changes for that game.
+        let mut expected = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(expected.gcmouse, Some(true));
+        expected.gcmouse = Some(false);
+        expected.matched.push("my-game".to_string());
+        assert_eq!(game, expected);
+    }
+
+    #[test]
+    fn a_launch_wide_rule_turns_gcmouse_off_and_a_game_rule_back_on() {
+        let table = with_overrides(
+            "name=global;exe=*;gcmouse=false\nname=my-game;exe=Game.exe;gcmouse=true",
+        );
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.gcmouse, Some(false));
+        assert_eq!(other.matched, wildcards_and("global"));
+        let game = table.resolve("Game.exe", &VersionInfo::default());
+        assert_eq!(game.gcmouse, Some(true));
+    }
+
+    #[test]
+    fn disabling_the_gcmouse_rule_turns_it_off() {
+        // ntdll then hands winemac.drv no value from compatdb, and the Mac
+        // driver keeps upstream Wine's behaviour: no GameController mice.
+        let table = with_overrides("name=gcmouse;enabled=false");
+        let resolution = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(resolution.gcmouse, None);
+        assert_eq!(resolution.matched, wildcards_without("gcmouse"));
+        assert_eq!(resolution.large_address_aware, Some(true));
+        assert_eq!(resolution.dpi_aware, Some(true));
     }
 
     #[test]

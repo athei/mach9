@@ -267,6 +267,10 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
     awareness.
   - `set_compat_large_address_aware`; ntdll raises a 32-bit process's
     address limit after the library returns.
+  - `set_compat_gcmouse`, which only stores the value; winemac reads it
+    through `ntdll_get_compat_gcmouse` when it reads its settings, to decide
+    whether raw mouse input comes from GameController
+    ([GameController mice](compatdb.md#gamecontroller-mice)).
   - On an ntdll without one of them, compatdb.so logs that and skips the
     setting.
 - winemac exports `macdrv_functions`, the window, Metal and monitor helpers
