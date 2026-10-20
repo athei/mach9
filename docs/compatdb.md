@@ -25,7 +25,7 @@ and with none, Wine does.
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` only stops forcing it: the executable's flag, `WINE_LARGE_ADDRESS_AWARE` and the `AppDefaults` registry value decide. No effect on 64-bit | At load; ntdll applies it after the library returns |
 | `gcmouse` | `true`, `false` | `true`: the Mac driver takes the mouse movement of raw input (`WM_INPUT`) and DirectInput from GameController's `GCMouse`, in the device's own counts, so mouselook is linear. `false`: that movement is the cursor's, which macOS accelerates and scales for retina. Unset: the same as `false`, as in upstream Wine ([GameController mice](#gamecontroller-mice)) | At load, read by winemac.drv |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
-| `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it | At load |
+| `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it. An entry of a built-in `*` rule is a default and leaves a variable the process already has alone; every other entry replaces it ([environment defaults](#environment-defaults)) | At load |
 
 The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
 `d3d9` and `wined3d` values are case-insensitive.
@@ -73,9 +73,9 @@ The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
   every process that has FEX emulate x87 code with reduced precision, which
   is much faster and slightly less accurate. FEX reads it from the
   process's environment block when it starts, which compatdb.so has already
-  rewritten. Neither a FEX config file nor the variable exported before
-  launch overrides it: FEX's environment layer outranks its config files,
-  and the rule replaces a value already in the environment.
+  rewritten. A FEX config file does not override it, since FEX's
+  environment layer outranks its config files, but the variable exported
+  where the process starts does ([environment defaults](#environment-defaults)).
 - The built-in `vkd3d-proton-min-latency` rule sets
   `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES` for every process, a minimum frame
   latency for swapchains with a frame latency handle; the value is in
@@ -86,13 +86,35 @@ The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
   of input latency ([vkd3d-proton](arm64.md#vkd3d-proton)). vkd3d-proton
   reads it in the game's process when it creates such a swapchain, and
   logs `Allowing a frame latency of at least <n> frames.` then. Like the
-  FEX entry, it replaces a value already in the environment.
+  FEX entry, it leaves a value the caller exported alone.
 - The entries and the reasoning for both are in
   [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). The FEX and
   vkd3d-proton [recipes](#recipes) turn them off or change them.
 - KosmicKrisp's features need no rule: our Mesa fork advertises the ones
   Direct3D 12 and OpenGL through Zink need without `MESA_KK_EXPERIMENTAL`
   ([arm64.md](arm64.md#vulkan)).
+
+### Environment defaults
+
+- An `env` entry of a built-in `*` rule is a default: it sets its variable
+  only where the process has none, in its environment block or its unix
+  environment, so a value whoever starts the process exported wins. That
+  keeps the variables these rules set usable the way their own
+  documentation describes, for example to try a value for one launch.
+- A variable exported with an empty value counts as set, so such a default
+  leaves it alone too.
+- Every other entry replaces the variable: one of a built-in rule for one
+  program, and one of any rule from `WINE_COMPATDB`, a `*` rule or an
+  override of a built-in rule by name included. Whoever wrote such a rule
+  chose the value for that process.
+- A program inherits the environment of the process that started it, the
+  values compatdb.so set there included, so a default left alone in a child
+  usually holds the value the parent's rules gave it. A value a rule for one
+  program sets for a variable that has a `*` default therefore carries into
+  the programs it starts: their default finds the variable set and leaves
+  it alone ([recipes](#recipes)).
+- The log names each entry with its rule, and an entry left alone with the
+  value the process kept ([logging](#logging-and-verification)).
 
 ## WINE_COMPATDB
 
@@ -202,6 +224,12 @@ executable.
   `WINE_FORCE_NX` keeps no-execute on in them too. An empty value in a rule
   removes the variable instead of setting it empty, so
   `env=WINE_FORCE_NX=` does not keep no-execute on.
+- The same holds for a variable a built-in `*` rule sets by default, such
+  as `FEX_X87REDUCEDPRECISION`: a value a rule for one game sets carries
+  into the programs that game starts, since their default leaves a
+  variable they inherit alone. A value removed for one game does not carry
+  over: the variable is unset in its children, and the default sets it
+  again ([environment defaults](#environment-defaults)).
 
 ## wined3d on Vulkan
 
@@ -286,7 +314,8 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
     asked for by a `WINE_D3D_CONFIG` the process has, or `default (not
     set)`, where wined3d's registry settings or its default decide;
   - the overrides, DPI and large address awareness and `gcmouse` it set,
-    the arguments and the env.
+    the arguments, the env it set, and each default entry it left alone
+    because the process had the variable.
 - To confirm a tree took effect, look at the running process's mapped files,
   for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
   `lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.

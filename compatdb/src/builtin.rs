@@ -73,7 +73,8 @@ pub fn table() -> Table {
         // It matches every process, native ARM64 ones included. FEX is not
         // loaded in those, so the variable does nothing there, but a child
         // they start inherits it, and that child may be x86. A rule for one
-        // game with `env=FEX_X87REDUCEDPRECISION=` removes it again.
+        // game with `env=FEX_X87REDUCEDPRECISION=` removes it again, and the
+        // variable exported where the process starts wins over it.
         Rule {
             name: "fex-x87-reduced-precision".into(),
             exe: ANY_EXE.into(),
@@ -95,7 +96,8 @@ pub fn table() -> Table {
         //
         // It matches every process, like the rules above. A rule for one
         // game with `env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=` removes it,
-        // and one with another value replaces it for that game.
+        // and one with another value replaces it for that game. The variable
+        // exported where the process starts wins over it.
         Rule {
             name: "vkd3d-proton-min-latency".into(),
             exe: ANY_EXE.into(),
@@ -196,18 +198,112 @@ pub fn table() -> Table {
             ..Rule::default()
         },
     ];
+    // The env entries of the rules for every process are defaults, which a
+    // variable the process already has wins over: whoever starts the
+    // process can export the variable to choose for itself, as for any
+    // other program. A rule for one program, or any rule from WINE_COMPATDB,
+    // replaces the value as before.
+    let rules = rules
+        .into_iter()
+        .map(|rule| {
+            let env_defaults = if rule.specificity() == 0 {
+                rule.env.len()
+            } else {
+                0
+            };
+            Rule {
+                env_defaults,
+                ..rule
+            }
+        })
+        .collect();
     Table { rules }
 }
 
 #[cfg(test)]
 mod tests {
-    use compatdb_table::{VersionInfo, Wined3d};
+    use compatdb_table::{Resolution, VersionInfo, Wined3d};
 
     use super::*;
 
     /// What a test returns, so a missing value fails it through `?` rather
     /// than a panic in the test body.
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// Record in `resolution` that `rule` set `key`, as resolving a more
+    /// specific rule does.
+    fn set_by(resolution: &mut Resolution, key: &'static str, rule: &str) {
+        resolution.set_by.retain(|(k, _)| *k != key);
+        resolution.set_by.push((key, rule.to_string()));
+    }
+
+    /// The env entries a process gets applied when it already has the
+    /// variables in `has`, as `NAME=value`, and the names of those left
+    /// alone.
+    fn applied(resolution: &Resolution, has: &[&str]) -> (Vec<String>, Vec<String>) {
+        let steps = resolution.env_steps(|name| has.contains(&name));
+        let (set, kept): (Vec<_>, Vec<_>) = steps.into_iter().partition(|s| s.applied);
+        (
+            set.into_iter()
+                .map(|s| format!("{}={}", s.name, s.value))
+                .collect(),
+            kept.into_iter().map(|s| s.name).collect(),
+        )
+    }
+
+    #[test]
+    fn a_variable_the_caller_set_wins_over_a_builtin_default() {
+        let table = table();
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        // Unset, the defaults apply.
+        let (set, kept) = applied(&game, &[]);
+        assert_eq!(
+            set,
+            [
+                "FEX_X87REDUCEDPRECISION=1",
+                "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2"
+            ]
+        );
+        assert_eq!(kept, [] as [String; 0]);
+        // Exported by the caller, the default leaves it alone.
+        let (set, kept) = applied(&game, &["FEX_X87REDUCEDPRECISION"]);
+        assert_eq!(set, ["VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2"]);
+        assert_eq!(kept, ["FEX_X87REDUCEDPRECISION"]);
+        // The steps name the rule of each entry.
+        let steps = game.env_steps(|_| false);
+        assert_eq!(
+            steps.first().map(|s| s.rule.as_str()),
+            Some("fex-x87-reduced-precision")
+        );
+    }
+
+    #[test]
+    fn a_rule_for_one_game_or_from_the_launcher_replaces_what_the_caller_set() {
+        // A rule for one game, a launcher's own `*` rule and an override of
+        // the built-in rule by name all replace the caller's value, since
+        // whoever wrote them chose it for that process.
+        for text in [
+            "name=my-game;exe=game.exe;env=FEX_X87REDUCEDPRECISION=0",
+            "name=global;exe=*;env=FEX_X87REDUCEDPRECISION=0",
+            "name=fex-x87-reduced-precision;env=FEX_X87REDUCEDPRECISION=0",
+        ] {
+            let table = with_overrides(text);
+            let game = table.resolve("game.exe", &VersionInfo::default());
+            let (set, kept) = applied(&game, &["FEX_X87REDUCEDPRECISION"]);
+            assert_eq!(kept, ["FEX_X87REDUCEDPRECISION"], "{text}");
+            assert!(
+                set.contains(&"FEX_X87REDUCEDPRECISION=0".to_string()),
+                "{text}: {set:?}"
+            );
+        }
+        // Only the `*` rules' own entries are defaults.
+        assert!(
+            table()
+                .rules
+                .iter()
+                .all(|r| r.env_defaults == if r.exe == ANY_EXE { r.env.len() } else { 0 })
+        );
+    }
 
     /// The rule of `table` named `name`.
     fn rule<'a>(table: &'a Table, name: &str) -> Result<&'a Rule, String> {
@@ -466,9 +562,15 @@ mod tests {
         // The D3D9 quirks are mtld3d's, not ours.
         assert_eq!(gta.env, []);
 
+        // Which env entries are defaults does not travel; everything else
+        // does.
         let (parsed, diagnostics) = Table::parse(&table.to_env_value());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed, table);
+        let mut sent = table;
+        for rule in &mut sent.rules {
+            rule.env_defaults = 0;
+        }
+        assert_eq!(parsed, sent);
         Ok(())
     }
 
@@ -575,6 +677,7 @@ mod tests {
         let mut expected = table.resolve("other.exe", &VersionInfo::default());
         assert_eq!(expected.gcmouse, Some(true));
         expected.gcmouse = Some(false);
+        set_by(&mut expected, "gcmouse", "my-game");
         expected.matched.push("my-game".to_string());
         assert_eq!(game, expected);
     }
@@ -758,6 +861,7 @@ mod tests {
         let table = table();
         let mut expected = table.resolve("game.exe", &VersionInfo::default());
         expected.dpi_aware = Some(false);
+        set_by(&mut expected, "dpi_aware", "nostale");
         expected.matched.push("nostale".to_string());
         assert_eq!(table.resolve("NostaleClientX.exe", &nostale), expected);
         assert_eq!(expected.matched, wildcards_and("nostale"));

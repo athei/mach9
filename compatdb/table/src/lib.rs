@@ -447,6 +447,13 @@ pub struct Rule {
     /// sets them in the process's environment block and unix environment
     /// when it loads, before any PE code runs.
     pub env: Vec<(String, String)>,
+    /// How many of the first [`Rule::env`] entries are defaults: such an
+    /// entry sets its variable only where the process does not have it, so a
+    /// value the caller exported wins. The built-in `*` rules mark their own
+    /// entries so; entries an override adds by name come after them and
+    /// replace like any other. Never serialized, so a rule from [`ENV_VAR`]
+    /// has none.
+    pub env_defaults: usize,
     /// `WINEDEBUG` channels for this process. Applied by the launcher through
     /// wine's own `WINEDEBUG=<exe>:` prefix, not by the library, because the
     /// channels are parsed before it loads; never serialized.
@@ -473,6 +480,7 @@ impl Default for Rule {
             dll_overrides: Vec::new(),
             arguments: Vec::new(),
             env: Vec::new(),
+            env_defaults: 0,
             debug_channels: Vec::new(),
             enabled: true,
         }
@@ -533,7 +541,8 @@ impl Rule {
 
     /// Lay an override on top of this rule: a set scalar field wins, lists are
     /// appended (this rule's own entries first), env entries are appended (a
-    /// later duplicate name wins when the block is merged).
+    /// later duplicate name wins when the block is merged). The override's
+    /// env entries come after this rule's defaults, so they are none.
     fn overlay(&mut self, over: Self) {
         if over.company.is_some() {
             self.company = over.company;
@@ -595,8 +604,37 @@ pub struct Resolution {
     pub dll_overrides: Vec<String>,
     pub arguments: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// Where each entry of [`Resolution::env`] came from, at the same index.
+    pub env_from: Vec<EnvFrom>,
+    /// The rule that set each scalar setting, by its key (`dxgi`, `d3d9`,
+    /// `wined3d`, `dpi_aware`, `large_address_aware`, `gcmouse`): the most
+    /// specific one that set it. A key no rule set is missing.
+    pub set_by: Vec<(&'static str, String)>,
     /// Names of the rules that matched, in the order they were folded.
     pub matched: Vec<String>,
+}
+
+/// Where an env entry of a [`Resolution`] came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnvFrom {
+    /// The rule that set it.
+    pub rule: String,
+    /// Whether it is a default (see [`Rule::env_defaults`]), which leaves a
+    /// variable the process already has alone.
+    pub default: bool,
+}
+
+/// What one env entry of a [`Resolution`] does in a process.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnvStep {
+    pub name: String,
+    /// The value it sets; empty removes the variable.
+    pub value: String,
+    /// The rule that set it.
+    pub rule: String,
+    /// False for a default whose variable the process already had, which it
+    /// leaves alone.
+    pub applied: bool,
 }
 
 impl Resolution {
@@ -639,7 +677,51 @@ impl Resolution {
         let wined3d = self.wined3d?;
         let value = wined3d.config(self.d3d_config().filter(|value| !value.is_empty()));
         self.env.push((Wined3d::CONFIG_VAR.to_string(), value));
+        self.env_from.push(EnvFrom {
+            rule: self.set_by("wined3d").unwrap_or_default().to_string(),
+            default: false,
+        });
         Some(wined3d)
+    }
+
+    /// The rule that set the scalar setting `key`, or `None` when no rule
+    /// did.
+    #[must_use]
+    pub fn set_by(&self, key: &str) -> Option<&str> {
+        self.set_by
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, rule)| rule.as_str())
+    }
+
+    /// Record that `rule` set the scalar setting `key`, replacing a less
+    /// specific rule that set it before.
+    fn record(&mut self, key: &'static str, rule: &str) {
+        self.set_by.retain(|(k, _)| *k != key);
+        self.set_by.push((key, rule.to_string()));
+    }
+
+    /// The env entries in order, each with the rule that set it and whether
+    /// it applies in a process where `has` says which variables the process
+    /// already has. A default leaves such a variable alone, so a value the
+    /// caller exported wins over a built-in `*` rule; every other entry
+    /// applies, replacing the value or, when empty, removing the variable.
+    #[must_use]
+    pub fn env_steps(&self, has: impl Fn(&str) -> bool) -> Vec<EnvStep> {
+        self.env
+            .iter()
+            .enumerate()
+            .map(|(i, (name, value))| {
+                let from = self.env_from.get(i);
+                let default = from.is_some_and(|from| from.default);
+                EnvStep {
+                    name: name.clone(),
+                    value: value.clone(),
+                    rule: from.map(|from| from.rule.clone()).unwrap_or_default(),
+                    applied: !(default && has(name)),
+                }
+            })
+            .collect()
     }
 }
 
@@ -674,25 +756,35 @@ impl Table {
         for rule in matching {
             if let Some(dxgi) = rule.dxgi {
                 r.dxgi = Some(dxgi);
+                r.record("dxgi", &rule.name);
             }
             if let Some(d3d9) = rule.d3d9 {
                 r.d3d9 = Some(d3d9);
+                r.record("d3d9", &rule.name);
             }
             if let Some(wined3d) = rule.wined3d {
                 r.wined3d = Some(wined3d);
+                r.record("wined3d", &rule.name);
             }
             if let Some(aware) = rule.dpi_aware {
                 r.dpi_aware = Some(aware);
+                r.record("dpi_aware", &rule.name);
             }
             if let Some(laa) = rule.large_address_aware {
                 r.large_address_aware = Some(laa);
+                r.record("large_address_aware", &rule.name);
             }
             if let Some(gcmouse) = rule.gcmouse {
                 r.gcmouse = Some(gcmouse);
+                r.record("gcmouse", &rule.name);
             }
             r.dll_overrides.extend(rule.dll_overrides.iter().cloned());
             r.arguments.extend(rule.arguments.iter().cloned());
             r.env.extend(rule.env.iter().cloned());
+            r.env_from.extend((0..rule.env.len()).map(|i| EnvFrom {
+                rule: rule.name.clone(),
+                default: i < rule.env_defaults,
+            }));
             r.matched.push(rule.name.clone());
         }
         r
