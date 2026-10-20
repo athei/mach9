@@ -1011,11 +1011,6 @@ fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
         "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
         "large_address_aware" => rule.large_address_aware = Some(parse_bool(key, value)?),
         "gcmouse" => rule.gcmouse = Some(parse_bool(key, value)?),
-        // The x86_64 Wine's switch for the x87sidecar, which ran under
-        // Rosetta. A launcher written for that Wine may still send it, so
-        // the key is accepted, whatever its value, and ignored without a
-        // diagnostic.
-        "x87_sidecar" => {}
         "dll_overrides" => rule.dll_overrides.push(decode(value)),
         "arguments" => rule.arguments.push(decode(value)),
         "env" => {
@@ -1843,27 +1838,20 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_x87_sidecar_field_is_accepted_and_ignored() {
-        // What a launcher written for the x86_64 Wine still sends. The record
-        // is kept with everything else it says, whatever the value, and
-        // nothing of it is written back.
-        let bare = Table::parse(
-            "name=old;exe=old.exe;large_address_aware=false\nname=x87-sidecar;enabled=false",
+    fn the_x86_64_wines_x87_sidecar_key_is_an_unknown_key() {
+        // A launcher written for that Wine may still send it. Like any key
+        // the library does not know, it costs only its own field, with a
+        // warning, and the rest of the record still applies.
+        let (table, diagnostics) =
+            Table::parse("name=old;exe=old.exe;x87_sidecar=false;large_address_aware=false");
+        assert_eq!(
+            table.rules.first().map(|r| r.large_address_aware),
+            Some(Some(false))
         );
-        for value in ["true", "false", "TRUE", "1", ""] {
-            let with = Table::parse(&format!(
-                "name=old;exe=old.exe;x87_sidecar={value};large_address_aware=false\n\
-                 name=x87-sidecar;enabled=false;x87_sidecar={value}"
-            ));
-            assert_eq!(with, bare, "x87_sidecar={value:?}");
-        }
-        let (table, diagnostics) = bare;
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert!(!table.to_env_value().contains("x87_sidecar"));
-        // Without its '=' it is a field like any other that cannot be read.
-        let (table, diagnostics) = Table::parse("name=old;exe=old.exe;x87_sidecar");
-        assert_eq!(table.rules.len(), 1);
-        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics,
+            ["rule \"old\": ignoring unknown key \"x87_sidecar\"".to_string()]
+        );
     }
 
     #[test]

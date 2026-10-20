@@ -141,12 +141,9 @@ Wine understood. The library keeps such a record instead of dropping it:
 
 - `dxgi=gptk` reads as `dxmt`, which is what this Wine always loaded in its
   place.
-- `x87_sidecar` is accepted, with any value, and ignored. There is no
-  x87sidecar; FEX emulates x87 code
-  ([built-in environment rules](#built-in-environment-rules)).
 - A rule that names a built-in rule only that Wine had, such as
-  `name=no-vulkan;enabled=false` or `name=x87-sidecar;enabled=false`, names
-  no rule here and is logged as `override names no rule`.
+  `name=no-vulkan;enabled=false`, names no rule here and is logged as
+  `override names no rule`.
 
 ### Errors
 

@@ -458,22 +458,6 @@ mod tests {
     }
 
     #[test]
-    fn the_table_accepts_an_x87_sidecar_override() {
-        // A launcher written for the x86_64 Wine may still send it. The key
-        // is accepted and ignored, so the rest of the record still applies.
-        let table = with_overrides("name=old;exe=old.exe;dpi_aware=false;x87_sidecar=false");
-        let old = table.resolve("Old.exe", &VersionInfo::default());
-        assert_eq!(old.dpi_aware, Some(false));
-        assert_eq!(old.matched, wildcards_and("old"));
-        // Disabling the x86_64 Wine's rule by name finds nothing to drop,
-        // which the library reports as an override that names no rule.
-        let mut table = super::table();
-        let (over, _) = Table::parse("name=x87-sidecar;enabled=false");
-        assert_eq!(table.overlay(over), ["x87-sidecar".to_string()]);
-        assert_eq!(table, super::table());
-    }
-
-    #[test]
     fn the_builtin_table_pins_the_launcher_and_round_trips() -> TestResult {
         let table = table();
         let launcher = rule(&table, "rockstar-launcher")?;
