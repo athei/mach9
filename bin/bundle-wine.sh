@@ -641,6 +641,19 @@ check_hybrid_markers() {
     fi
 }
 
+# check_rules_read <label> <log>: exit unless compatdb.so read the
+# WINE_COMPATDB rules of the run <label> logged in <log> without a warning.
+# It ignores a field it cannot read and applies the rest of the record, so a
+# smoke rule with a key or value it does not know would otherwise still run.
+check_rules_read() {
+    if grep -q "compatdb: .*warning:" "$2"; then
+        echo "Error: compatdb.so could not read every WINE_COMPATDB rule of $1"
+        grep "compatdb: .*warning:" "$2"
+        smoke_stop
+        exit 1
+    fi
+}
+
 # check_default_trees <log>: exit unless compatdb.so reported the default
 # tree of each family in <log>, the first in its list in profile.sh, which is
 # the same for every arch. The "(from ...)" lines only appear once it found
@@ -875,14 +888,7 @@ check_vulkan_present() {
 # (check_wined3d_no_gl). The second does not use OpenGL and still happens on
 # a Mac with a Metal 4 GPU.
 check_wined3d_device() {
-    local arch exe log want header api flags rule tree
-    header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$REPO_DIR/compatdb/table/src/lib.rs")
-    if [ -z "$header" ]; then
-        echo "Error: no HEADER found in $REPO_DIR/compatdb/table/src/lib.rs; the"
-        echo "WINE_COMPATDB rules of the wined3d runs need it"
-        smoke_stop
-        exit 1
-    fi
+    local arch exe log want api flags rule tree
     for arch in x86_64 i686; do
         exe="$TMP_DIR/wined3d-$arch.exe"
         rule="name=smoke;exe=$(basename "$exe")"
@@ -901,13 +907,14 @@ check_wined3d_device() {
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 "${flags[@]}" -o "$exe" "$REPO_DIR/smoke/wined3d.c"
         time_mark "smoke: wined3d.exe $arch ($api)"
         if [ "$ZINK_GL" -eq 0 ] && [ "$ACCEL_GL" -eq 0 ]; then
-            check_wined3d_no_gl "$arch" "$api" "$exe" "$header"$'\n'"$rule" "$tree" "$@"
+            check_wined3d_no_gl "$arch" "$api" "$exe" "$rule" "$tree" "$@"
         else
             echo "  Running wined3d.exe for $arch ($api) with the default renderer..."
             log="$TMP_DIR/wined3d-$arch.log"
             run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag \
-                WINE_COMPATDB="$header"$'\n'"$rule" "$WINE_DIR/bin/wine" "$exe"
+                WINE_COMPATDB="$rule" "$WINE_DIR/bin/wine" "$exe"
             smoke_check "wined3d.exe for $arch ($api)" 120 "$log"
+            check_rules_read "wined3d.exe for $arch ($api)" "$log"
             if ! grep -q "wine-build smoke test: $arch $api device on " "$log" \
                 || grep -q "err:winediag:.*Using the Vulkan renderer\." "$log"; then
                 echo "Error: wined3d.exe for $arch did not create a $api device on wined3d's default renderer"
@@ -930,8 +937,9 @@ check_wined3d_device() {
         echo "  Running wined3d.exe for $arch ($api) with wined3d on Vulkan..."
         log="$TMP_DIR/wined3d-vulkan-$arch.log"
         run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag \
-            WINE_COMPATDB="$header"$'\n'"$rule;wined3d=vulkan" "$WINE_DIR/bin/wine" "$exe"
+            WINE_COMPATDB="$rule;wined3d=vulkan" "$WINE_DIR/bin/wine" "$exe"
         smoke_check "wined3d.exe for $arch ($api) with wined3d on Vulkan" 120 "$log"
+        check_rules_read "wined3d.exe for $arch ($api) with wined3d on Vulkan" "$log"
         for want in "wine-build smoke test: $arch $api device on " \
                     "err:winediag:.*Using the Vulkan renderer\." ${tree:+"$tree"}; do
             if ! grep -q "$want" "$log"; then
@@ -981,6 +989,7 @@ check_wined3d_no_gl() {
         echo "its rule asks for (no '$tree' line), so the run proves nothing about wined3d"
     else
         check_freetype "wined3d.exe for $arch ($api)" "$log"
+        check_rules_read "wined3d.exe for $arch ($api)" "$log"
         grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
         echo "    winemac.drv found no accelerated OpenGL renderer, and wined3d no adapter."
         return 0
@@ -1406,11 +1415,9 @@ smoke_stop() {
 # <env-command> is the env invocation the runs start with; the rule is
 # appended to it.
 check_tree_loads() {
-    local arch="$1" dir=i386-windows exe log family impl other names f want header
+    local arch="$1" dir=i386-windows exe log family impl other names f want
     shift
     [ "$arch" = i686 ] || dir="$PE64_DIR"
-    # The table format header WINE_COMPATDB starts with, from its source.
-    header=$(sed -n 's/^pub const HEADER: &str = "\(.*\)";$/\1/p' "$REPO_DIR/compatdb/table/src/lib.rs")
     exe="$TMP_DIR/trees-$arch.exe"
     "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/hello.c"
     for family in dxgi d3d9; do
@@ -1425,9 +1432,10 @@ check_tree_loads() {
             time_mark "smoke: $arch on $family/$impl"
             log="$TMP_DIR/trees-$arch-$family-$impl.log"
             run_limited 120 "$log" "$@" \
-                WINE_COMPATDB="$header"$'\n'"name=smoke;exe=$(basename "$exe");$family=$impl" \
+                WINE_COMPATDB="name=smoke;exe=$(basename "$exe");$family=$impl" \
                 "$WINE_DIR/bin/wine" "$exe" "${names[@]}"
             smoke_check "the $arch program on the $family/$impl tree" 120 "$log"
+            check_rules_read "the $arch program on the $family/$impl tree" "$log"
             for want in "compatdb: .*$family = $impl (from" \
                         "wine-build smoke test: $arch loads ${names[*]}"; do
                 if ! grep -q "$want" "$log"; then
@@ -1446,30 +1454,31 @@ check_tree_loads() {
             # load-order hook and leave the tree's dxgi.dll alone.
             [ "$family" = dxgi ] && [ -f "$WINE_DIR/lib/wine/$dir/d3d12.dll" ] || continue
             if [ -f "$WINE_DIR/lib/wine/$family/$impl/$dir/d3d12.dll" ]; then
-                check_no_d3d12 "$arch" "$exe" "$header" "$family=$impl;dll_overrides=d3d12,d3d12core=" \
+                check_no_d3d12 "$arch" "$exe" "$family=$impl;dll_overrides=d3d12,d3d12core=" \
                     "$family=$impl with d3d12 and d3d12core disabled" "$@"
             else
-                check_no_d3d12 "$arch" "$exe" "$header" "$family=$impl" "$family=$impl" "$@"
+                check_no_d3d12 "$arch" "$exe" "$family=$impl" "$family=$impl" "$@"
             fi
         done
     done
 }
 
-# check_no_d3d12 <arch> <exe> <header> <settings> <label> <env-command>...:
+# check_no_d3d12 <arch> <exe> <settings> <label> <env-command>...:
 # run the hello.exe <exe> for <arch> with a WINE_COMPATDB rule for it made of
 # <settings>, loading dxgi.dll and d3d12.dll, and exit unless dxgi.dll loads
 # and d3d12.dll fails with 126 (ERROR_MOD_NOT_FOUND), which is what both a
 # missing module and a disabled one give.
 check_no_d3d12() {
-    local arch="$1" exe="$2" header="$3" settings="$4" label="$5" log want
-    shift 5
+    local arch="$1" exe="$2" settings="$3" label="$4" log want
+    shift 4
     time_mark "smoke: $arch without d3d12 ($label)"
     log="$TMP_DIR/trees-$arch-no-d3d12-${settings%%;*}.log"
     log="${log//=/-}"
     run_limited 120 "$log" "$@" \
-        WINE_COMPATDB="$header"$'\n'"name=smoke;exe=$(basename "$exe");$settings" \
+        WINE_COMPATDB="name=smoke;exe=$(basename "$exe");$settings" \
         "$WINE_DIR/bin/wine" "$exe" dxgi.dll d3d12.dll
     smoke_check "the $arch program loading d3d12.dll ($label)" 120 "$log"
+    check_rules_read "the $arch program loading d3d12.dll ($label)" "$log"
     want="wine-build smoke test: $arch cannot load d3d12.dll, error 126[^0-9]*\$"
     if ! grep -q "$want" "$log" || grep -q "cannot load dxgi.dll" "$log"; then
         echo "Error: the $arch program ($label) did not load dxgi.dll and fail to load"

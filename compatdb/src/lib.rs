@@ -70,10 +70,8 @@ extern "C" fn run() {
         return;
     };
     let (table, messages) = load_table();
-    for m in &messages {
-        log::line(m);
-    }
     let Some(process) = Process::current(&nt) else {
+        log_warnings(&messages);
         return;
     };
     let mut resolution = table.resolve(&process.exe, &process.version);
@@ -83,6 +81,9 @@ extern "C" fn run() {
         process.exe,
         fingerprint(&process.version)
     ));
+    // What could not be read from WINE_COMPATDB goes in the block of the
+    // process, next to the configuration it leaves.
+    log_warnings(&messages);
     if resolution.matched.is_empty() {
         // Diagnose a miss by the fingerprint on the line above: an empty one
         // means the image carries no version resource for a rule to pin.
@@ -143,6 +144,14 @@ extern "C" fn run() {
     // KosmicKrisp).
     apply::rewrite_params(&nt, &process, &resolution);
     apply::unix_env(&resolution.env);
+}
+
+/// Log each message about the overrides from [`ENV_VAR`] as a warning: a
+/// field or record that was ignored, or an override that names no rule.
+fn log_warnings(messages: &[String]) {
+    for m in messages {
+        log::line(&format!("  warning: {m}"));
+    }
 }
 
 /// The arch of a process as the log prints it. An `x86_64` program runs in an

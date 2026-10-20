@@ -583,7 +583,8 @@ After assembly:
   in turn, the tree picked with a `WINE_COMPATDB` rule, which shows that
   the prefix placeholders made from the default-dir markers let each tree
   in, and on the `wined3d` dxgi tree `d3d12.dll` must fail to load with
-  error 126. Before the prefix boots, [`smoke/egl.c`](../smoke/egl.c), a
+  error 126. No run with a `WINE_COMPATDB` rule may log a compatdb
+  warning, which would mean compatdb.so ignored part of the rule. Before the prefix boots, [`smoke/egl.c`](../smoke/egl.c), a
   host program, makes an OpenGL context current through the bundle's EGL
   without Wine, with only `VK_DRIVER_FILES` set, and must get Zink on
   KosmicKrisp with every EGL, gallium and Vulkan library loaded from

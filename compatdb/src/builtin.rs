@@ -181,7 +181,7 @@ pub fn table() -> Table {
 
 #[cfg(test)]
 mod tests {
-    use compatdb_table::{HEADER, VersionInfo, Wined3d};
+    use compatdb_table::{VersionInfo, Wined3d};
 
     use super::*;
 
@@ -284,11 +284,11 @@ mod tests {
         names
     }
 
-    /// The built-in table with the rules in `text` (after the header) laid
-    /// on top, which must parse cleanly and all find a home.
+    /// The built-in table with the rules in `text` laid on top, which must
+    /// parse cleanly and all find a home.
     fn with_overrides(text: &str) -> Table {
         let mut table = table();
-        let (over, diagnostics) = Table::parse(&format!("{HEADER}\n{text}"));
+        let (over, diagnostics) = Table::parse(text);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(table.overlay(over), [] as [String; 0]);
         table
@@ -431,7 +431,7 @@ mod tests {
         let game = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(game.dll_overrides, wildcard_overrides());
         let mut table = super::table();
-        let (over, _) = Table::parse(&format!("{HEADER}\nname=no-vulkan;enabled=false"));
+        let (over, _) = Table::parse("name=no-vulkan;enabled=false");
         assert_eq!(table.overlay(over), ["no-vulkan".to_string()]);
         assert_eq!(table, super::table());
     }
@@ -447,7 +447,7 @@ mod tests {
         // Disabling the x86_64 Wine's rule by name finds nothing to drop,
         // which the library reports as an override that names no rule.
         let mut table = super::table();
-        let (over, _) = Table::parse(&format!("{HEADER}\nname=x87-sidecar;enabled=false"));
+        let (over, _) = Table::parse("name=x87-sidecar;enabled=false");
         assert_eq!(table.overlay(over), ["x87-sidecar".to_string()]);
         assert_eq!(table, super::table());
     }

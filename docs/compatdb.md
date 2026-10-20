@@ -96,7 +96,6 @@ Whatever starts the process tree can add or change rules through this
 environment variable.
 
 ```
-v=<N>
 name=my-game;exe=Game.exe;company=Some Vendor;d3d9=wined3d;dpi_aware=false;env=MTL_HUD_ENABLED=1
 name=old-game;exe=OldGame.exe;large_address_aware=false
 name=dpi-aware;enabled=false
@@ -104,16 +103,13 @@ name=dpi-aware;enabled=false
 
 ### Format
 
-- The first line is the format header: the value of `HEADER` in
-  [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs), or of
-  `PREVIOUS_HEADER` there, which the library still accepts. `v=<N>` above is
-  a placeholder for it.
-- `Table::to_env_value` there, which a launcher can use to write the value,
-  writes `PREVIOUS_HEADER` unless a rule sets `wined3d`, the only key added
-  since. So the `compatdb.so` of an older bundle, which knows only the
-  previous format, still reads every table it can understand.
-- Then one rule per line, as `key=value` fields joined by `;`. Blank lines
-  are ignored.
+- One rule per line, as `key=value` fields joined by `;`. Blank lines are
+  ignored. `Table::to_env_value` in
+  [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs) writes the
+  value this way, for a launcher that uses the crate.
+- There is no version header. A first line of `v=` and digits, the header
+  launchers wrote for an older format, is ignored, so their tables still
+  apply.
 - Keys: `name` (required), the matching keys (`exe`, `company`, `product`,
   `original_filename`), the [settings](#settings), and `enabled`. The parser,
   `record_to_rule` in
@@ -150,20 +146,28 @@ Wine understood. The library keeps such a record instead of dropping it:
 
 Errors never abort a process.
 
-- An unknown key, an unknown `dxgi`, `d3d9` or `wined3d` value, a boolean
-  other than `true` or `false` (so `TRUE` or `1` too), a missing `name` or a
-  field without `=` drops that line with a diagnostic. The other lines still
-  apply.
-- A header other than `HEADER` or `PREVIOUS_HEADER` makes the library
-  ignore the whole value with one diagnostic. A library older than a format
-  change therefore drops a table written with the new header rather than
-  half understand it, so a launcher that writes a new `HEADER` needs a
-  `compatdb.so` that knows it. The library reads the previous format too,
-  so a launcher can move to a new `HEADER` after the library does.
+- A field with an unknown key, an unknown `dxgi`, `d3d9` or `wined3d`
+  value, a boolean other than `true` or `false` (so `TRUE` or `1` too), or
+  no `=` is ignored with a warning naming the rule and the field. The rest
+  of its rule still applies. An `enabled` with another value is ignored the
+  same way, so the rule stays enabled.
+- So, from the library that reads tables without a header on, a key that a
+  newer launcher sends and the library does not know costs only that field.
+  The `compatdb.so` of a bundle from before, which requires the version
+  header, ignores such a table as a whole, so a launcher on a crate without
+  the header needs a bundle with this library.
+- The matcher keys (`exe`, `company`, `product`, `original_filename`) are a
+  closed set; a key added later is only ever a setting. A misspelt matcher
+  is ignored with a warning like any unknown key, and the rule then
+  matches more processes than it names.
+- A line without `name` is skipped with a warning, since it cannot say
+  which rule it is for. The other lines still apply.
+- The warnings appear in the process's log block
+  ([logging](#logging-and-verification)).
 
 ## Recipes
 
-Each line goes after the header line. `Game.exe` stands for the game's
+Each line is one line of `WINE_COMPATDB`. `Game.exe` stands for the game's
 executable.
 
 | Goal | Rule |
@@ -262,6 +266,8 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
 - Once in every process at load it writes a block starting
   `compatdb: <exe> [<arch>]`, with the image name, arch and version
   fingerprint, then:
+  - a `warning: ...` line for each field or line of `WINE_COMPATDB` it
+    ignored ([errors](#errors)) and each override that names no rule;
   - `rules = ...` or `no rule matched`;
   - the trees it prepended (`dxgi = <impl> (from <path>)`, `d3d9 = ...`);
   - the wined3d renderer (`wined3d = <renderer> (...)`): set by a rule,
@@ -269,8 +275,6 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
     set)`, where wined3d's registry settings or its default decide;
   - the overrides, DPI and large address awareness it set, the arguments
     and the env.
-- Parse diagnostics and `override names no rule` lines come just before the
-  block.
 - To confirm a tree took effect, look at the running process's mapped files,
   for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
   `lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.
