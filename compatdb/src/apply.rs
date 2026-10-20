@@ -1,8 +1,8 @@
 //! Applying a [`Resolution`] to the current process: prepending the Direct3D
-//! trees, adding load-order overrides, setting the DPI awareness and large
-//! address awareness, rewriting the command line and environment in both PEB
-//! copies, and setting the environment entries in the process's unix
-//! environment.
+//! trees, adding load-order overrides, setting the DPI awareness, large
+//! address awareness and the `GameController` mouse setting, rewriting the
+//! command line and environment in both PEB copies, and setting the
+//! environment entries in the process's unix environment.
 
 use std::{
     ffi::{CString, OsStr},
@@ -92,6 +92,21 @@ pub fn large_address_aware(nt: &Ntdll, laa: bool) {
     }
     nt.set_compat_large_address_aware(i32::from(laa));
     log::line(&format!("  large_address_aware = {laa}"));
+}
+
+/// Tell ntdll whether the Mac driver takes the mouse movement of raw input
+/// and `DirectInput` from `GameController`'s `GCMouse`, in the device's counts,
+/// instead of from the cursor's movement. winemac.drv reads the value when it
+/// reads its settings.
+///
+/// Logs the value only when it was handed over, like [`dpi_awareness`].
+pub fn gcmouse(nt: &Ntdll, on: bool) {
+    if !nt.has_set_compat_gcmouse() {
+        log::line("ntdll lacks set_compat_gcmouse, ignoring gcmouse");
+        return;
+    }
+    nt.set_compat_gcmouse(i32::from(on));
+    log::line(&format!("  gcmouse = {on}"));
 }
 
 /// Rewrite `CommandLine` and `Environment` in the 64-bit params and, for a

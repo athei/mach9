@@ -189,6 +189,7 @@ type FnPrependDllPath = unsafe extern "C" fn(*const c_char);
 type FnAddLoadOrderOverride = unsafe extern "C" fn(*const u16);
 type FnSetCompatDpiAwareness = unsafe extern "C" fn(c_int);
 type FnSetCompatLargeAddressAware = unsafe extern "C" fn(c_int);
+type FnSetCompatGcmouse = unsafe extern "C" fn(c_int);
 
 /// The resolved ntdll functions. The first three are required; the hooks are
 /// optional and their features are skipped (with a log line) when absent.
@@ -200,6 +201,7 @@ pub struct Ntdll {
     add_load_order_override: Option<FnAddLoadOrderOverride>,
     set_compat_dpi_awareness: Option<FnSetCompatDpiAwareness>,
     set_compat_large_address_aware: Option<FnSetCompatLargeAddressAware>,
+    set_compat_gcmouse: Option<FnSetCompatGcmouse>,
 }
 
 /// Look one symbol up in the default (global) namespace.
@@ -231,6 +233,7 @@ impl Ntdll {
             let add_override = sym(b"add_load_order_override\0");
             let set_dpi = sym(b"set_compat_dpi_awareness\0");
             let set_laa = sym(b"set_compat_large_address_aware\0");
+            let set_gcmouse = sym(b"set_compat_gcmouse\0");
             Some(Self {
                 current_teb: std::mem::transmute::<*mut c_void, FnCurrentTeb>(teb),
                 query_information_process: std::mem::transmute::<
@@ -250,6 +253,8 @@ impl Ntdll {
                 set_compat_large_address_aware: (!set_laa.is_null()).then(|| {
                     std::mem::transmute::<*mut c_void, FnSetCompatLargeAddressAware>(set_laa)
                 }),
+                set_compat_gcmouse: (!set_gcmouse.is_null())
+                    .then(|| std::mem::transmute::<*mut c_void, FnSetCompatGcmouse>(set_gcmouse)),
             })
         }
     }
@@ -351,6 +356,20 @@ impl Ntdll {
     /// to the executable's own flag.
     pub fn set_compat_large_address_aware(&self, value: c_int) {
         if let Some(f) = self.set_compat_large_address_aware {
+            // SAFETY: the hook takes a plain int and only stores it.
+            unsafe { f(value) }
+        }
+    }
+
+    pub const fn has_set_compat_gcmouse(&self) -> bool {
+        self.set_compat_gcmouse.is_some()
+    }
+
+    /// Tell ntdll whether the Mac driver takes raw mouse input from
+    /// `GameController`: 1 for on, 0 for off. winemac.drv reads the value back
+    /// through `ntdll_get_compat_gcmouse` when it reads its settings.
+    pub fn set_compat_gcmouse(&self, value: c_int) {
+        if let Some(f) = self.set_compat_gcmouse {
             // SAFETY: the hook takes a plain int and only stores it.
             unsafe { f(value) }
         }

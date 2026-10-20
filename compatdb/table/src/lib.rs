@@ -3,8 +3,8 @@
 //! A [`Rule`] says which processes it matches and which settings it applies to
 //! them: the Direct3D implementations to load (one for D3D9, one for the DXGI
 //! family) and the renderer of wined3d, DLL load-order overrides, the DPI
-//! awareness, large address awareness, command-line switches and environment
-//! entries.
+//! awareness, large address awareness, whether the Mac driver reads raw mouse
+//! input from `GameController`, command-line switches and environment entries.
 //!
 //! Shared by `compatdb.so`, the unix library wine's ntdll loads into every
 //! process (it holds the built-in rules, parses [`ENV_VAR`], overlays the
@@ -432,6 +432,13 @@ pub struct Rule {
     /// not take the space away from an executable that has the flag; it only
     /// stops forcing it. Has no effect on a 64-bit process.
     pub large_address_aware: Option<bool>,
+    /// Whether the Mac driver takes the mouse movement of raw input
+    /// (`WM_INPUT`) and `DirectInput` from `GameController`'s `GCMouse`, in the
+    /// device's own counts, instead of from the cursor's movement, which macOS
+    /// accelerates and scales for retina. Unset leaves the decision to a less
+    /// specific rule; with none, the Mac driver keeps upstream Wine's
+    /// behaviour, the cursor's movement.
+    pub gcmouse: Option<bool>,
     /// `WINEDLLOVERRIDES` elements (each a `names=order` string).
     pub dll_overrides: Vec<String>,
     /// Text appended to the command line, unless already present.
@@ -462,6 +469,7 @@ impl Default for Rule {
             wined3d: None,
             dpi_aware: None,
             large_address_aware: None,
+            gcmouse: None,
             dll_overrides: Vec::new(),
             arguments: Vec::new(),
             env: Vec::new(),
@@ -551,6 +559,9 @@ impl Rule {
         if over.large_address_aware.is_some() {
             self.large_address_aware = over.large_address_aware;
         }
+        if over.gcmouse.is_some() {
+            self.gcmouse = over.gcmouse;
+        }
         if !over.exe.is_empty() {
             self.exe = over.exe;
         }
@@ -580,6 +591,7 @@ pub struct Resolution {
     pub wined3d: Option<Wined3d>,
     pub dpi_aware: Option<bool>,
     pub large_address_aware: Option<bool>,
+    pub gcmouse: Option<bool>,
     pub dll_overrides: Vec<String>,
     pub arguments: Vec<String>,
     pub env: Vec<(String, String)>,
@@ -596,6 +608,7 @@ impl Resolution {
             && self.wined3d.is_none()
             && self.dpi_aware.is_none()
             && self.large_address_aware.is_none()
+            && self.gcmouse.is_none()
             && self.dll_overrides.is_empty()
             && self.arguments.is_empty()
             && self.env.is_empty()
@@ -673,6 +686,9 @@ impl Table {
             }
             if let Some(laa) = rule.large_address_aware {
                 r.large_address_aware = Some(laa);
+            }
+            if let Some(gcmouse) = rule.gcmouse {
+                r.gcmouse = Some(gcmouse);
             }
             r.dll_overrides.extend(rule.dll_overrides.iter().cloned());
             r.arguments.extend(rule.arguments.iter().cloned());
@@ -923,6 +939,7 @@ fn rule_to_record(rule: &Rule) -> String {
     for (key, value) in [
         ("dpi_aware", rule.dpi_aware),
         ("large_address_aware", rule.large_address_aware),
+        ("gcmouse", rule.gcmouse),
     ] {
         if let Some(value) = value {
             fields.push(field(key, if value { "true" } else { "false" }));
@@ -993,6 +1010,7 @@ fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
         "wined3d" => rule.wined3d = Some(parse_value(key, value, Wined3d::parse)?),
         "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
         "large_address_aware" => rule.large_address_aware = Some(parse_bool(key, value)?),
+        "gcmouse" => rule.gcmouse = Some(parse_bool(key, value)?),
         // The x86_64 Wine's switch for the x87sidecar, which ran under
         // Rosetta. A launcher written for that Wine may still send it, so
         // the key is accepted, whatever its value, and ignored without a
@@ -1323,7 +1341,7 @@ mod tests {
                 // A disabled rule carries nothing but its name.
                 Rule {
                     name: "dropped".into(),
-                    wined3d: Some(Wined3d::Vulkan),
+                    gcmouse: Some(false),
                     enabled: false,
                     ..Rule::default()
                 },
@@ -1687,6 +1705,140 @@ mod tests {
         assert_eq!(base.overlay(over), [] as [String; 0]);
         let rule = base.rules.first().ok_or("no rule")?;
         assert_eq!(rule.large_address_aware, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn gcmouse_round_trips_and_is_absent_when_unset() {
+        let table = Table {
+            rules: vec![
+                Rule {
+                    name: "defaults".into(),
+                    exe: ANY_EXE.into(),
+                    gcmouse: Some(true),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "old".into(),
+                    exe: "old.exe".into(),
+                    large_address_aware: Some(false),
+                    gcmouse: Some(false),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "unset".into(),
+                    exe: "other.exe".into(),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let text = table.to_env_value();
+        assert_eq!(
+            text,
+            "name=defaults;exe=*;gcmouse=true\n\
+             name=old;exe=old.exe;large_address_aware=false;gcmouse=false\n\
+             name=unset;exe=other.exe"
+        );
+        let (parsed, diagnostics) = Table::parse(&text);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(parsed, table);
+    }
+
+    #[test]
+    fn a_bad_gcmouse_value_is_ignored() {
+        let key = "gcmouse";
+        for bad in ["yes", "1", "False", ""] {
+            let (table, diagnostics) = Table::parse(&format!(
+                "name=x;exe=x.exe;dpi_aware=false;{key}={bad}\nname=ok;exe=ok.exe"
+            ));
+            assert_eq!(table.rules.len(), 2, "{key}={bad:?}");
+            let x = table.rules.first();
+            assert_eq!(x.map(|r| r.gcmouse), Some(None));
+            assert_eq!(x.map(|r| r.dpi_aware), Some(Some(false)));
+            assert_eq!(diagnostics.len(), 1, "{key}={bad:?}");
+            assert!(
+                diagnostics.first().is_some_and(|d| d.contains(key)),
+                "{diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gcmouse_resolves_to_the_most_specific_rule() {
+        let table = Table {
+            rules: vec![
+                Rule {
+                    name: "pinned".into(),
+                    exe: "game.exe".into(),
+                    company: Some("Acme".into()),
+                    dpi_aware: Some(false),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "named".into(),
+                    exe: "game.exe".into(),
+                    gcmouse: Some(false),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "defaults".into(),
+                    exe: ANY_EXE.into(),
+                    gcmouse: Some(true),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let acme = VersionInfo {
+            company: "Acme".into(),
+            ..VersionInfo::default()
+        };
+        // Only the wildcard matches.
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.gcmouse, Some(true));
+        // The basename rule beats the wildcard.
+        let named = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(named.gcmouse, Some(false));
+        // A fingerprinted rule that leaves it unset inherits it from the next
+        // most specific rule.
+        let pinned = table.resolve("game.exe", &acme);
+        assert_eq!(pinned.dpi_aware, Some(false));
+        assert_eq!(pinned.gcmouse, Some(false));
+        // With no rule setting it, there is no opinion.
+        let none = Table::default().resolve("x.exe", &acme);
+        assert_eq!(none.gcmouse, None);
+        assert!(none.is_empty());
+        // It alone makes a resolution non-empty.
+        let table = Table {
+            rules: vec![Rule {
+                name: "gcmouse".into(),
+                exe: ANY_EXE.into(),
+                gcmouse: Some(false),
+                ..Rule::default()
+            }],
+        };
+        assert!(!table.resolve("x.exe", &acme).is_empty());
+    }
+
+    #[test]
+    fn overlay_by_name_replaces_gcmouse_only_when_set() -> TestResult {
+        let mut base = Table {
+            rules: vec![Rule {
+                name: "defaults".into(),
+                exe: ANY_EXE.into(),
+                gcmouse: Some(true),
+                ..Rule::default()
+            }],
+        };
+        let (over, diagnostics) = Table::parse("name=defaults;dll_overrides=a=");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(base.overlay(over), [] as [String; 0]);
+        let rule = base.rules.first().ok_or("no rule")?;
+        assert_eq!(rule.gcmouse, Some(true));
+        let (over, diagnostics) = Table::parse("name=defaults;gcmouse=false");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(base.overlay(over), [] as [String; 0]);
+        let rule = base.rules.first().ok_or("no rule")?;
+        assert_eq!(rule.gcmouse, Some(false));
         Ok(())
     }
 
