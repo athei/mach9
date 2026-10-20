@@ -758,6 +758,20 @@ mod tests {
     }
 
     #[test]
+    fn the_crate_exports_the_names_of_this_table() {
+        // A launcher tells built-in names apart through the table crate's
+        // list, so it has to be this table's, in order.
+        let names: Vec<String> = table().rules.into_iter().map(|r| r.name).collect();
+        assert_eq!(names, compatdb_table::BUILTIN_RULE_NAMES);
+        for name in &names {
+            assert!(compatdb_table::is_builtin_rule_name(
+                &name.to_ascii_uppercase()
+            ));
+        }
+        assert!(!compatdb_table::is_builtin_rule_name("my-game"));
+    }
+
+    #[test]
     fn every_builtin_rule_has_a_unique_name_and_none_matches_a_bare_basename() {
         // A rule naming an executable must also pin its version resource, or
         // it would catch every program of that name. The `*` rules are a

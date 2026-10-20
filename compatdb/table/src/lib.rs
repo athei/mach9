@@ -11,6 +11,11 @@
 //! result onto them and applies whatever matches the process), and by any
 //! launcher that wants to feed it extra rules through that variable.
 //!
+//! The built-in rules themselves live in `compatdb.so`, not here, but their
+//! names are [`BUILTIN_RULE_NAMES`], so a launcher can tell when a rule it
+//! sends names a built-in one: such a rule is merged into the built-in rule,
+//! and its matchers are ignored (see [`Table::overlay`]).
+//!
 //! Everything here is pure: it works on `&str`, `&[u16]` (UTF-16 as wine hands
 //! it over) and owned values, with no unsafe and no I/O, so the library's
 //! decision logic is all unit-tested on the host and the `.so` itself only has
@@ -30,6 +35,39 @@ use std::fmt::Write as _;
 /// never looks at it; it is only the channel from whatever started the process
 /// tree to the library.
 pub const ENV_VAR: &str = "WINE_COMPATDB";
+
+/// The names of the built-in rules of `compatdb.so`, in table order.
+///
+/// A rule from [`ENV_VAR`] with one of these names (matched
+/// case-insensitively) is merged into that built-in rule, which keeps its own
+/// matchers. A test in `compatdb.so` checks that this list is its built-in
+/// table's, so it matches the `compatdb.so` of a bundle only when the
+/// launcher's revision of this crate and the bundle are updated together.
+pub const BUILTIN_RULE_NAMES: &[&str] = &[
+    "dxmt",
+    "mtld3d",
+    "dpi-aware",
+    "large-address-aware",
+    "gcmouse",
+    "fex-x87-reduced-precision",
+    "vkd3d-proton-min-latency",
+    "opengl-egl",
+    "no-mono-gecko",
+    "rockstar-launcher",
+    "rockstar-social-club-ui",
+    "steam-web-helper",
+    "gta-iv",
+    "nostale",
+];
+
+/// Whether `name` is the name of a built-in rule (see
+/// [`BUILTIN_RULE_NAMES`]), compared case-insensitively as the overlay does.
+#[must_use]
+pub fn is_builtin_rule_name(name: &str) -> bool {
+    BUILTIN_RULE_NAMES
+        .iter()
+        .any(|builtin| builtin.eq_ignore_ascii_case(name))
+}
 
 /// Whether `line` is a version header of the old format, `v=` and nothing
 /// but ASCII digits, which launchers wrote as the first line of a table.
