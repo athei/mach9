@@ -123,8 +123,13 @@ directory that an x64 process would load but not run natively
 ### Defaults that differ from Wine
 
 Each row decided by a rule is a built-in compatdb rule that matches every
-process and can be changed per game or globally. Synchronization is decided
-by the patched Wine.
+process and can be changed per game or globally. The other rows are not
+compatdb rules, on purpose: msync is the wineserver's, which starts before
+compatdb.so loads in any process; FEX's memory ordering and AFP are
+emulator settings, not compatibility settings; KosmicKrisp's features are
+what Direct3D 12 and OpenGL through Zink need, so nothing turns them off;
+and the Vulkan driver choice keeps the bundle self-contained, so it is
+ntdll's, before any rule.
 
 | Behavior | Default in this bundle | Decided by |
 |----------|------------------------|------------|
@@ -134,7 +139,11 @@ by the patched Wine.
 | Address space | Every 32-bit process gets 4 GB, even without the large-address-aware flag | Rule `large-address-aware` ([recipes](docs/compatdb.md#recipes)) |
 | Raw mouse input | Raw input and DirectInput take mouse movement from GameController, in the device's own counts, instead of from the cursor, which macOS accelerates and scales for retina: mouselook is linear | Rule `gcmouse` ([GameController mice](docs/compatdb.md#gamecontroller-mice)) |
 | x87 precision under FEX | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
-| Synchronization | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | wineserver; `WINEMSYNC=0` where the session starts turns it off ([runtime](docs/arm64.md#runtime)) |
+| Synchronization | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | The wineserver of [our Wine](https://github.com/athei/wine) at [`wine-src.ref`](pins/wine-src.ref); `WINEMSYNC=0` where the session starts turns it off ([runtime](docs/arm64.md#runtime)) |
+| x86 memory ordering | FEX runs a thread's x86 code with the hardware x86 memory ordering (TSO), switching per thread | [Our FEX](https://github.com/athei/FEX) at [`fex-src.ref`](pins/fex-src.ref); `FEX_HARDWARE_TSO` ([environment variables](#environment-variables)) |
+| AFP in x86_64 programs | FEX runs x86_64 programs, which run as ARM64EC, without AFP | [Our FEX](https://github.com/athei/FEX) at [`fex-src.ref`](pins/fex-src.ref); `FEX_HOSTFEATURES` ([environment variables](#environment-variables)) |
+| KosmicKrisp's experimental features | Advertised whatever `MESA_KK_EXPERIMENTAL` says | [Our Mesa](https://github.com/athei/mesa) at [`mesa-src.ref`](pins/mesa-src.ref) ([Vulkan](docs/arm64.md#vulkan)) |
+| Vulkan driver | Only the bundled KosmicKrisp: ntdll points `VK_DRIVER_FILES` at the bundle's manifest unless the caller sets `VK_DRIVER_FILES`, `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES` | ntdll of [our Wine](https://github.com/athei/wine) at [`wine-src.ref`](pins/wine-src.ref) ([environment variables](#environment-variables), [Vulkan](docs/arm64.md#vulkan)) |
 | OpenGL | Mesa's EGL with Zink on KosmicKrisp instead of Apple's OpenGL; no OpenGL on a Mac without a Metal 4 GPU unless `WINE_MAC_OPENGL=cgl` is exported | Rule `opengl-egl` ([OpenGL](docs/arm64.md#opengl)) |
 | D3D12 frame latency handles | A game that waits on one runs extra frames ahead, so an Apple GPU keeps its clock up; more input latency | Rule `vkd3d-proton-min-latency` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
 | Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | Rule `no-mono-gecko` ([recipes](docs/compatdb.md#recipes)) |
