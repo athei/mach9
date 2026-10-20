@@ -716,15 +716,43 @@ smoke_test() {
     if [ "$BUNDLE_EGL" -eq 0 ]; then
         echo "  This bundle has no EGL: OpenGL is Apple's only."
     fi
+    # compatdb's built-in opengl-egl rule asks winemac.drv for Mesa's EGL,
+    # which gives no OpenGL without Zink. There, the runs that need OpenGL
+    # export WINE_MAC_OPENGL=cgl, which wins over the rule, and expect
+    # Apple's renderer (gl_env, passed to check_wined3d_device; check_wgl_runs
+    # chooses for itself).
+    #
+    # A bundle from before the EGL driver, which --compatdb-only meets (the
+    # release-compatdb.yml base can be one), has a winemac.drv that gives
+    # Apple's OpenGL whatever WINE_MAC_OPENGL says and never prints the
+    # message check_wgl_no_egl looks for, so CHECK_NO_EGL leaves that check
+    # out there. Its cgl runs and the wined3d runs still hold, since they
+    # expect Apple's renderer anyway.
+    local gl_env=()
+    CHECK_NO_EGL=0
+    if [ "$ZINK_GL" -eq 1 ]; then
+        echo "  OpenGL runs on Zink, through compatdb's WINE_MAC_OPENGL=egl."
+    else
+        gl_env=(WINE_MAC_OPENGL=cgl)
+        if grep -qaF "; OpenGL is disabled" "$WINE_DIR/lib/wine/$UNIX_DIR/winemac.so"; then
+            CHECK_NO_EGL=1
+            echo "  No Zink: with compatdb's WINE_MAC_OPENGL=egl wgl.exe must get no OpenGL, and the"
+            echo "  runs that need OpenGL export WINE_MAC_OPENGL=cgl for Apple's."
+        else
+            echo "  No Zink, and this bundle's winemac.drv predates WINE_MAC_OPENGL=egl without a"
+            echo "  fallback: skipping the check that EGL gives no OpenGL. The runs that need"
+            echo "  OpenGL export WINE_MAC_OPENGL=cgl for Apple's."
+        fi
+    fi
     if [ "$ACCEL_GL" -eq 1 ]; then
         echo "  Accelerated Apple OpenGL renderer for winemac.drv: $GL_RENDERERS"
-    elif [ "$ZINK_GL" -eq 1 ]; then
-        echo "  No accelerated Apple OpenGL renderer ($GL_RENDERERS): OpenGL runs on Zink,"
-        echo "  and wgl.exe does not run with WINE_MAC_OPENGL=cgl."
     else
-        echo "  No accelerated OpenGL renderer ($GL_RENDERERS) and no Zink: skipping wgl.exe."
-        echo "  wined3d.exe has to find no adapter on wined3d's default renderer instead of"
-        echo "  creating a device there."
+        echo "  No accelerated Apple OpenGL renderer ($GL_RENDERERS): wgl.exe does not run"
+        echo "  with WINE_MAC_OPENGL=cgl."
+        if [ "$ZINK_GL" -eq 0 ]; then
+            echo "  wined3d.exe has to find no adapter on wined3d's default renderer instead of"
+            echo "  creating a device there."
+        fi
     fi
     # Outside Wine, so before the prefix boots.
     check_egl_host
@@ -835,7 +863,7 @@ smoke_test() {
     else
         check_d3d12_runs "${wine_env[@]}"
     fi
-    check_wined3d_device "${wine_env[@]}"
+    check_wined3d_device "${wine_env[@]}" "${gl_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
 }
@@ -882,11 +910,12 @@ check_vulkan_present() {
 # so the second run is what shows the opt-in works. It needs a KosmicKrisp
 # device, so on a Mac without a Metal 4 GPU (metal4_probe) only the first
 # run happens. The first needs an OpenGL context, which winemac.drv gets
-# from Zink with a Metal 4 GPU and a bundle with EGL (ZINK_GL, bundle_egl)
-# and otherwise only from an accelerated Apple renderer, so with neither
-# (gl_probe) it must fail the way a missing renderer makes it fail instead
-# (check_wined3d_no_gl). The second does not use OpenGL and still happens on
-# a Mac with a Metal 4 GPU.
+# from Zink with a Metal 4 GPU and a bundle with EGL (ZINK_GL, bundle_egl),
+# through compatdb's WINE_MAC_OPENGL=egl, and otherwise only from an
+# accelerated Apple renderer, for which smoke_test adds WINE_MAC_OPENGL=cgl
+# to <env-command>. With neither (gl_probe) it must fail the way a missing
+# renderer makes it fail instead (check_wined3d_no_gl). The second does not
+# use OpenGL and still happens on a Mac with a Metal 4 GPU.
 check_wined3d_device() {
     local arch exe log want api flags rule tree
     for arch in x86_64 i686; do
@@ -1202,8 +1231,8 @@ check_d3d12_no_gpu() {
 # to it, which carries Mesa's version, and BUNDLE_EGL to 0 when it has no
 # EGL, as a bundle from before EGL that --compatdb-only meets. A full bundle
 # always has it (Step 5 checks). ZINK_GL is 1 when the Mac driver's OpenGL
-# runs on Zink by default: the bundle has EGL and a GPU supports the Metal 4
-# family (metal4_probe, which has to run first).
+# runs on Zink with compatdb's WINE_MAC_OPENGL=egl: the bundle has EGL and a
+# GPU supports the Metal 4 family (metal4_probe, which has to run first).
 bundle_egl() {
     local lib gallium=()
     BUNDLE_EGL=0
@@ -1275,46 +1304,98 @@ check_egl_host() {
 # opens a window and creates a legacy, a 4.x core and a compatibility
 # context, each of which must clear, read back and swap, and whose renderer
 # must contain the string it is given. <env-command> drops the caller's
-# WINE_MAC_OPENGL, so winemac.drv picks the OpenGL implementation itself:
-# Mesa's EGL with Zink when the bundle has EGL and a GPU supports the Metal 4
-# family (ZINK_GL, see bundle_egl), Apple's OpenGL otherwise. With Zink each
-# arch therefore runs twice: by default, where the renderer must be Zink, and
-# with WINE_MAC_OPENGL=cgl, where it must be Apple's, when there is an
-# accelerated OpenGL renderer (gl_probe). Without Zink the default run must
-# get Apple's renderer, and with neither, where winemac.drv gets no context
-# at all, wgl.exe is skipped.
+# WINE_MAC_OPENGL, so compatdb's built-in opengl-egl rule decides: it asks
+# winemac.drv for Mesa's EGL, which runs on Zink when the bundle has EGL and
+# a GPU supports the Metal 4 family (ZINK_GL, see bundle_egl), and gives no
+# OpenGL at all otherwise, since winemac.drv does not fall back from EGL.
+# With Zink each arch runs by default, where the renderer must be Zink and
+# the compatdb log must show the rule's WINE_MAC_OPENGL=egl. Without Zink it
+# runs by default once to show that EGL is still the default there and gets
+# no context (check_wgl_no_egl), unless smoke_test found the bundle's
+# winemac.drv too old for that check (CHECK_NO_EGL). Then, with an
+# accelerated OpenGL renderer
+# (gl_probe), each arch runs with WINE_MAC_OPENGL=cgl exported, which wins
+# over the rule, where the renderer must be Apple's.
 check_wgl_runs() {
     local arch exe
-    if [ "$ZINK_GL" -eq 0 ] && [ "$ACCEL_GL" -eq 0 ]; then
-        echo "  Skipping wgl.exe: neither Zink nor an accelerated OpenGL renderer."
-        return 0
-    fi
     for arch in $SMOKE_PE_ARCHS; do
         exe="$TMP_DIR/wgl-$arch.exe"
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/wgl.c" \
             -lopengl32 -lgdi32
         if [ "$ZINK_GL" -eq 1 ]; then
             run_wgl "$arch" "$exe" zink default "$@"
-            if [ "$ACCEL_GL" -eq 1 ]; then
-                run_wgl "$arch" "$exe" Apple cgl "$@" WINE_MAC_OPENGL=cgl
-            fi
-        else
-            run_wgl "$arch" "$exe" Apple default "$@"
+        elif [ "$CHECK_NO_EGL" -eq 1 ]; then
+            check_wgl_no_egl "$arch" "$exe" "$@"
+        fi
+        if [ "$ACCEL_GL" -eq 1 ]; then
+            run_wgl "$arch" "$exe" Apple cgl "$@" WINE_MAC_OPENGL=cgl
         fi
     done
+    if [ "$ACCEL_GL" -eq 0 ]; then
+        echo "  No wgl.exe run on Apple's OpenGL: no accelerated OpenGL renderer."
+    fi
+}
+
+# check_wgl_no_egl <arch> <exe> <env-command>...: on a Mac without Zink, run
+# the wgl.exe <exe> for <arch> under <env-command> with nothing chosen, and
+# exit unless compatdb's built-in opengl-egl rule set WINE_MAC_OPENGL=egl in
+# it, winemac.drv said that EGL did not start and OpenGL is disabled, and
+# wgl.exe found no pixel format (exit status 2, FAIL_PIXEL_FORMAT in
+# smoke/wgl.c) after its window came up. Any other failure, the window
+# included, fails the step. That shows EGL is the default there too, and
+# that the cgl runs get Apple's renderer only because the caller exported
+# it.
+check_wgl_no_egl() {
+    local arch="$1" exe="$2" log
+    shift 2
+    time_mark "smoke: wgl.exe $arch (egl without Zink)"
+    echo "  Running wgl.exe for $arch with nothing chosen, which must get no OpenGL without Zink..."
+    log="$TMP_DIR/wgl-$arch-egl.log"
+    run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag "$WINE_DIR/bin/wine" "$exe"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: wgl.exe for $arch with nothing chosen did not exit within 120 seconds"
+    elif ! grep -q "compatdb: .*env = .*WINE_MAC_OPENGL=egl" "$log"; then
+        echo "Error: compatdb.so did not set WINE_MAC_OPENGL=egl in wgl.exe for $arch"
+    elif ! grep -q "err:winediag:.*WINE_MAC_OPENGL=egl, but .*; OpenGL is disabled" "$log"; then
+        echo "Error: winemac.drv did not say that Mesa's EGL failed and OpenGL is disabled in"
+        echo "wgl.exe for $arch with WINE_MAC_OPENGL=egl"
+    elif [ "$RUN_STATUS" -ne 2 ] || ! grep -q "wine-build smoke test: $arch no pixel format" "$log"; then
+        echo "Error: wgl.exe for $arch with WINE_MAC_OPENGL=egl and no OpenGL did not stop at its"
+        echo "pixel format (status $RUN_STATUS, not 2)"
+    else
+        check_freetype "wgl.exe for $arch with nothing chosen" "$log"
+        check_rules_read "wgl.exe for $arch with nothing chosen" "$log"
+        echo "    WINE_MAC_OPENGL=egl from compatdb, and no OpenGL (status $RUN_STATUS)."
+        return 0
+    fi
+    cat "$log"
+    smoke_stop
+    exit 1
 }
 
 # run_wgl <arch> <exe> <renderer> <name> <env-command>...: run the wgl.exe
 # <exe> for <arch> under <env-command>, as the run <name>, and exit unless
-# it ran cleanly with every context on a renderer containing <renderer>.
+# it ran cleanly with every context on a renderer containing <renderer>. The
+# default run must also show compatdb's WINE_MAC_OPENGL=egl, and the cgl run
+# that compatdb left the exported value alone.
 run_wgl() {
-    local arch="$1" exe="$2" want="$3" name="$4" log
+    local arch="$1" exe="$2" want="$3" name="$4" log line
     shift 4
     time_mark "smoke: wgl.exe $arch ($name)"
     echo "  Running wgl.exe for $arch ($name), which must get the $want renderer..."
     log="$TMP_DIR/wgl-$arch-$name.log"
     run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe" "$want"
     smoke_check "wgl.exe for $arch ($name)" 120 "$log"
+    case "$name" in
+        default) line="compatdb: .*env = .*WINE_MAC_OPENGL=egl" ;;
+        cgl) line="compatdb: .*WINE_MAC_OPENGL=egl.*left alone" ;;
+    esac
+    if ! grep -q "$line" "$log"; then
+        echo "Error: wgl.exe for $arch ($name) has no compatdb line '$line'"
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
     if ! grep -q "wine-build smoke test: $arch OpenGL contexts work" "$log"; then
         echo "Error: wgl.exe for $arch ($name) did not print 'wine-build smoke test: $arch OpenGL contexts work'"
         cat "$log"

@@ -388,7 +388,7 @@ and wined3d can, per game (see below).
   the bundle sets none of them.
 - wined3d, Wine's own Direct3D, which serves the `wined3d` trees of both
   families and D3D8 and DirectDraw, keeps Wine's default OpenGL renderer,
-  which runs on Zink where the Mac driver picks it ([OpenGL](#opengl)) and
+  which runs on Zink where the Mac driver uses EGL ([OpenGL](#opengl)) and
   reaches Direct3D 11 there. Apple's OpenGL holds that renderer to a lower
   feature level. wined3d's Vulkan renderer runs on KosmicKrisp directly. It
   is not the default because wined3d on KosmicKrisp still crashes in many
@@ -421,12 +421,19 @@ which stops at 4.1 core and 2.1 compatibility.
   Vulkan does ([Vulkan](#vulkan)).
 - Zink reports OpenGL above 2.1 only with transform feedback, which our
   KosmicKrisp always advertises ([Vulkan](#vulkan)).
-- The Mac driver's EGL driver, part of our Wine series, makes the choice
-  when a process first uses OpenGL: EGL when a GPU supports the Metal 4
-  family and EGL's driver is Zink, Apple's OpenGL otherwise, with a
-  `winediag` message saying why. `WINE_MAC_OPENGL` overrides it
-  ([environment variables](../README.md#environment-variables)). On a Mac
-  without such a GPU, such as a hosted CI runner, OpenGL stays Apple's.
+- The Mac driver's EGL driver, part of our Wine series, takes the choice
+  from `WINE_MAC_OPENGL` when a process first uses OpenGL: `egl` for EGL,
+  and Apple's OpenGL unset, as in upstream Wine
+  ([environment variables](../README.md#environment-variables)).
+  compatdb's built-in `opengl-egl` rule sets `egl` in every process that
+  does not have the variable, so a value exported where the process starts
+  wins ([environment defaults](compatdb.md#environment-defaults)).
+- With `egl` the Mac driver does not fall back: where EGL does not start,
+  as on a Mac without a GPU of the Metal 4 family, where KosmicKrisp has no
+  device, it logs a `winediag` message saying why and the process gets no
+  OpenGL. There, `WINE_MAC_OPENGL=cgl` gives it Apple's OpenGL. A hosted CI
+  runner is such a Mac, and the smoke test exports it there
+  ([what the bundle step checks](#what-the-bundle-step-checks)).
 
 ## Loader app
 
@@ -584,15 +591,18 @@ After assembly:
   the prefix placeholders made from the default-dir markers let each tree
   in, and on the `wined3d` dxgi tree `d3d12.dll` must fail to load with
   error 126. No run with a `WINE_COMPATDB` rule may log a compatdb
-  warning, which would mean compatdb.so ignored part of the rule. Before the prefix boots, [`smoke/egl.c`](../smoke/egl.c), a
+  warning, which would mean compatdb.so ignored part of the rule. Before
+  the prefix boots, [`smoke/egl.c`](../smoke/egl.c), a
   host program, makes an OpenGL context current through the bundle's EGL
   without Wine, with only `VK_DRIVER_FILES` set, and must get Zink on
   KosmicKrisp with every EGL, gallium and Vulkan library loaded from
   `lib/external/`. After the tree loads, [`smoke/wgl.c`](../smoke/wgl.c),
   compiled for each architecture in `SMOKE_PE_ARCHS`, opens a window,
   creates a legacy, a 4.x core and a compatibility context, each of which
-  must clear, read back and swap: by default on a Zink renderer, and with
-  `WINE_MAC_OPENGL=cgl` on Apple's. Then
+  must clear, read back and swap: by default, where compatdb's
+  `opengl-egl` rule must have set `WINE_MAC_OPENGL=egl`, on a Zink
+  renderer, and with `WINE_MAC_OPENGL=cgl` exported, which the rule must
+  have left alone, on Apple's. Then
   [`smoke/vulkan.c`](../smoke/vulkan.c), compiled for x86_64 and i686,
   creates a Vulkan instance without a window and must find a device that
   offers transform feedback, with no `MESA_KK_EXPERIMENTAL`. Then
@@ -614,12 +624,16 @@ After assembly:
   creating its instance after the Vulkan loader read the bundled manifest
   and found no GPU, `d3d12.exe` has to fail creating its first device with
   `E_FAIL` after the same, the `wined3d=vulkan` runs and the host EGL
-  check are left out, and the Mac driver picks Apple's OpenGL, so
-  `wgl.exe` runs once, on Apple's renderer, or not at all without an
-  accelerated one. The Mac driver only asks Apple's OpenGL for an
-  accelerated renderer, and a Mac without one or Zink, such as the same
-  virtual machine with only Apple's software renderer, gives wined3d no
-  OpenGL context. There, the runs with the default renderer have to fail creating the Direct3D object after the Mac
+  check are left out, and Mesa's EGL, which the `opengl-egl` rule asks
+  for, gives no OpenGL. So `wgl.exe` runs by default once per arch, where
+  the rule must have set `WINE_MAC_OPENGL=egl` and the program must get no
+  context, and the runs that need OpenGL, `wgl.exe` and the wined3d runs
+  with the default renderer, export `WINE_MAC_OPENGL=cgl` for Apple's. The
+  Mac driver only asks Apple's OpenGL for an accelerated renderer, and a
+  Mac without one, such as the same virtual machine with only Apple's
+  software renderer, gives wined3d no OpenGL context. There, `wgl.exe`
+  does not run on Apple's OpenGL, and the wined3d runs with the default
+  renderer have to fail creating the Direct3D object after the Mac
   driver's request for a renderer failed and wined3d got no context for
   its adapter, still with the `wined3d` d3d9 tree for the x86_64 one. The
   step decides each case from the hardware alone, with
@@ -650,12 +664,20 @@ With `--compatdb-only`, the bundle step:
   was not built here), and runs the smoke test. On a bundle from before
   vkd3d-proton, which has no `d3d12.dll` in the `dxmt` tree, it leaves out
   the D3D12 checks and says so. On a bundle without EGL, from before
-  OpenGL through Zink, the smoke test skips the host EGL check and expects
-  Apple's OpenGL renderer;
+  OpenGL through Zink, the smoke test skips the host EGL check and treats
+  the bundle as a Mac without Zink: the cgl runs of `wgl.exe` and the
+  wined3d runs expect Apple's renderer. Such a bundle's winemac.drv has no
+  EGL driver and gives Apple's OpenGL whatever `WINE_MAC_OPENGL` says, so
+  the check that compatdb's `egl` gives no OpenGL without Zink runs only
+  when the bundle's winemac.drv carries the message it looks for, and the
+  step says when it leaves it out;
 - needs a bundle whose KosmicKrisp advertises its features without
   `MESA_KK_EXPERIMENTAL`, since this compatdb.so no longer sets it. On an
-  older bundle `vulkan.exe` finds no transform feedback and the step stops
-  with a hint to bundle the whole build.
+  older bundle `vulkan.exe` finds no transform feedback on a Mac with a
+  Metal 4 GPU and the step stops with a hint to bundle the whole build. On
+  a Mac without one, such as a hosted CI runner, `vulkan.exe` has to find
+  no device anyway, so the transform feedback check does not apply there
+  and an older bundle passes with only the checks above left out.
 
 ## Homebrew libraries and the floor
 
