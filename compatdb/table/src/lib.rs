@@ -31,25 +31,15 @@ use std::fmt::Write as _;
 /// tree to the library.
 pub const ENV_VAR: &str = "WINE_COMPATDB";
 
-/// The current serialized-table header. [`Table::to_env_value`] writes it
-/// for a table that needs it, one with a rule that sets `wined3d`, and
-/// [`PREVIOUS_HEADER`] otherwise.
+/// Whether `line` is a version header of the old format, `v=` and nothing
+/// but ASCII digits, which launchers wrote as the first line of a table.
 ///
-/// A table carrying a version the parser does not know is ignored wholesale,
-/// which is what makes a format change safe: a library older than the change
-/// drops a table written with the new header rather than half understanding
-/// it.
-pub const HEADER: &str = "v=6";
-
-/// The header before [`HEADER`], which [`Table::parse`] still accepts.
-///
-/// The format only gained a key since (`wined3d`), so a table with this
-/// header means the same in the current format, and a launcher that still
-/// writes it keeps working with this library. It is also what
-/// [`Table::to_env_value`] writes when no rule sets `wined3d`, so a library
-/// that knows only this header, such as the `compatdb.so` of an older
-/// bundle, still reads such a table.
-pub const PREVIOUS_HEADER: &str = "v=5";
+/// [`Table::parse`] skips such a first line. It can never be a rule: a rule
+/// needs a `name` field, and this line has only `v`.
+fn is_legacy_header(line: &str) -> bool {
+    line.strip_prefix("v=")
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
 
 /// The parts of a PE version resource the database can match on. Vendor-set at
 /// link time, so stable across install location and patches.
@@ -751,60 +741,45 @@ impl Table {
         pairs
     }
 
-    /// Serialize the table into the value of [`ENV_VAR`]: a header line
-    /// followed by one record per rule.
-    ///
-    /// The header is the oldest one that can carry the table: [`HEADER`]
-    /// when a rule sets `wined3d`, the only key added since, and
-    /// [`PREVIOUS_HEADER`] otherwise. A library that knows only the previous
-    /// format then reads every table it can understand, and still drops one
-    /// it cannot. A disabled rule travels as its name alone, so its
-    /// `wined3d` does not count.
+    /// Serialize the table into the value of [`ENV_VAR`]: one record per
+    /// rule, one per line.
     #[must_use]
     pub fn to_env_value(&self) -> String {
-        let header = if self
-            .rules
+        self.rules
             .iter()
-            .any(|rule| rule.enabled && rule.wined3d.is_some())
-        {
-            HEADER
-        } else {
-            PREVIOUS_HEADER
-        };
-        let mut out = String::from(header);
-        for rule in &self.rules {
-            out.push('\n');
-            out.push_str(&rule_to_record(rule));
-        }
-        out
+            .map(rule_to_record)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
-    /// Parse the value of [`ENV_VAR`]. Lenient: a malformed record is skipped
-    /// with a diagnostic rather than failing the whole table, since the `.so`
-    /// must never abort a process. A header line other than [`HEADER`] or
-    /// [`PREVIOUS_HEADER`] yields an empty table and a single diagnostic.
-    /// Returns the table and the diagnostics (empty when clean).
+    /// Parse the value of [`ENV_VAR`]. Lenient, since the `.so` must never
+    /// abort a process: a field with an unknown key or a value its key does
+    /// not take is ignored with a diagnostic naming the rule and the field,
+    /// and the rest of its record still applies. Only a record without a
+    /// `name` is skipped, since an override cannot say which rule it is for
+    /// without one. A first line that is a version header of the old format
+    /// (`v=<digits>`) is skipped too, so a launcher that still writes one
+    /// keeps working. Returns the table and the diagnostics (empty when
+    /// clean).
     #[must_use]
     pub fn parse(text: &str) -> (Self, Vec<String>) {
-        let mut lines = text.lines();
+        let mut lines = text.lines().peekable();
+        lines.next_if(|line| is_legacy_header(line));
         let mut diagnostics = Vec::new();
-        match lines.next() {
-            Some(HEADER | PREVIOUS_HEADER) => {}
-            other => {
-                diagnostics.push(format!(
-                    "unrecognized header {:?}, ignoring the whole table",
-                    other.unwrap_or("")
-                ));
-                return (Self::default(), diagnostics);
-            }
-        }
         let mut rules = Vec::new();
         for line in lines {
             if line.trim().is_empty() {
                 continue;
             }
             match record_to_rule(line) {
-                Ok(rule) => rules.push(rule),
+                Ok((rule, ignored)) => {
+                    diagnostics.extend(
+                        ignored
+                            .into_iter()
+                            .map(|field| format!("rule {:?}: ignoring {field}", rule.name)),
+                    );
+                    rules.push(rule);
+                }
                 Err(reason) => diagnostics.push(format!("skipping record {line:?}: {reason}")),
             }
         }
@@ -912,10 +887,12 @@ pub fn merge_env(block: &[u16], entries: &[(String, String)]) -> Option<Vec<u16>
 /// starts wine applies those through `WINEDEBUG`, and the library would see
 /// them too late.
 ///
-/// Every key here except `wined3d` is in the [`PREVIOUS_HEADER`] format. A
-/// key added after it must also make [`Table::to_env_value`] write
-/// [`HEADER`] when a rule uses it, or a library that knows only the
-/// previous format would drop that record instead of the whole table.
+/// A library that does not know a key added later ignores that field with
+/// a diagnostic and applies the rest of the record. That is safe only for a
+/// setting, so the matcher keys (`exe`, `company`, `product`,
+/// `original_filename`) are a closed set and a new key is only ever a
+/// setting: a library that ignored an unknown matcher would apply the rule
+/// to more processes than it names.
 fn rule_to_record(rule: &Rule) -> String {
     let mut fields: Vec<String> = vec![field("name", &rule.name)];
     if !rule.enabled {
@@ -963,61 +940,32 @@ fn rule_to_record(rule: &Rule) -> String {
     fields.join(";")
 }
 
-fn record_to_rule(record: &str) -> Result<Rule, String> {
+/// Read one record into a rule. A field that cannot be read (an unknown key,
+/// a value its key does not take, no `=`) is left out, and what was wrong
+/// with it is returned next to the rule for the caller to report; the other
+/// fields still apply. Only a record without a `name` fails as a whole.
+///
+/// The matcher keys are a closed set (see [`rule_to_record`]), so an unknown
+/// key is a setting this library does not know, or a typo. A misspelt
+/// matcher is ignored like any other unknown key, with the warning, and the
+/// rule then matches more processes than it meant to.
+fn record_to_rule(record: &str) -> Result<(Rule, Vec<String>), String> {
     let mut rule = Rule::default();
     let mut have_name = false;
+    let mut ignored = Vec::new();
     for raw in record.split(';') {
         if raw.is_empty() {
             continue;
         }
         let Some((key, value)) = raw.split_once('=') else {
-            return Err(format!("field {raw:?} has no '='"));
+            ignored.push(format!("field {raw:?} without '='"));
+            continue;
         };
-        match key {
-            "name" => {
-                rule.name = decode(value);
-                have_name = true;
-            }
-            "exe" => rule.exe = decode(value),
-            "company" => rule.company = Some(decode(value)),
-            "product" => rule.product = Some(decode(value)),
-            "original_filename" => rule.original_filename = Some(decode(value)),
-            "enabled" => rule.enabled = decode(value) != "false",
-            "dxgi" => {
-                let decoded = decode(value);
-                match wire_dxgi(&decoded) {
-                    Some(dxgi) => rule.dxgi = Some(dxgi),
-                    None => return Err(format!("unknown dxgi value {decoded:?}")),
-                }
-            }
-            "d3d9" => {
-                let decoded = decode(value);
-                match D3d9::parse(&decoded) {
-                    Some(d3d9) => rule.d3d9 = Some(d3d9),
-                    None => return Err(format!("unknown d3d9 value {decoded:?}")),
-                }
-            }
-            "wined3d" => {
-                let decoded = decode(value);
-                match Wined3d::parse(&decoded) {
-                    Some(wined3d) => rule.wined3d = Some(wined3d),
-                    None => return Err(format!("unknown wined3d value {decoded:?}")),
-                }
-            }
-            "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
-            "large_address_aware" => rule.large_address_aware = Some(parse_bool(key, value)?),
-            // The x86_64 Wine's switch for the x87sidecar, which ran under
-            // Rosetta. A launcher written for that Wine may still send it, so
-            // the key is accepted, whatever its value, and ignored rather
-            // than dropping the record it is in.
-            "x87_sidecar" => {}
-            "dll_overrides" => rule.dll_overrides.push(decode(value)),
-            "arguments" => rule.arguments.push(decode(value)),
-            "env" => {
-                let (name, val) = value.split_once('=').unwrap_or((value, ""));
-                rule.env.push((decode(name), decode(val)));
-            }
-            other => return Err(format!("unknown key {other:?}")),
+        if key == "name" {
+            rule.name = decode(value);
+            have_name = true;
+        } else if let Err(reason) = set_field(&mut rule, key, value) {
+            ignored.push(reason);
         }
     }
     if !have_name {
@@ -1026,7 +974,45 @@ fn record_to_rule(record: &str) -> Result<Rule, String> {
     // `exe` may legitimately be absent: an override that extends or drops a
     // rule declared elsewhere carries only the fields it changes. A rule that
     // ends up with no exe at all matches nothing, which `overlay` reports.
-    Ok(rule)
+    Ok((rule, ignored))
+}
+
+/// Set the field `key` of `rule` from its wire `value`, or say why it
+/// cannot be set, leaving the rule as it was.
+fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
+    match key {
+        "exe" => rule.exe = decode(value),
+        "company" => rule.company = Some(decode(value)),
+        "product" => rule.product = Some(decode(value)),
+        "original_filename" => rule.original_filename = Some(decode(value)),
+        // A value other than `true` or `false` is ignored like any bad
+        // boolean, so the rule stays enabled: a typo never drops a rule.
+        "enabled" => rule.enabled = parse_bool(key, value)?,
+        "dxgi" => rule.dxgi = Some(parse_value(key, value, wire_dxgi)?),
+        "d3d9" => rule.d3d9 = Some(parse_value(key, value, D3d9::parse)?),
+        "wined3d" => rule.wined3d = Some(parse_value(key, value, Wined3d::parse)?),
+        "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
+        "large_address_aware" => rule.large_address_aware = Some(parse_bool(key, value)?),
+        // The x86_64 Wine's switch for the x87sidecar, which ran under
+        // Rosetta. A launcher written for that Wine may still send it, so
+        // the key is accepted, whatever its value, and ignored without a
+        // diagnostic.
+        "x87_sidecar" => {}
+        "dll_overrides" => rule.dll_overrides.push(decode(value)),
+        "arguments" => rule.arguments.push(decode(value)),
+        "env" => {
+            let (name, val) = value.split_once('=').unwrap_or((value, ""));
+            rule.env.push((decode(name), decode(val)));
+        }
+        other => return Err(format!("unknown key {other:?}")),
+    }
+    Ok(())
+}
+
+/// A field's value read by `parse`, which knows the values its key takes.
+fn parse_value<T>(key: &str, value: &str, parse: fn(&str) -> Option<T>) -> Result<T, String> {
+    let decoded = decode(value);
+    parse(&decoded).ok_or_else(|| format!("unknown {key} value {decoded:?}"))
 }
 
 /// A `dxgi` value on the wire, case-insensitively. `gptk`, Apple's `D3DMetal`,
@@ -1043,7 +1029,7 @@ fn wire_dxgi(value: &str) -> Option<Dxgi> {
 }
 
 /// A boolean field's value: exactly `true` or `false`, case-sensitive, so a
-/// typo drops the record instead of quietly meaning one or the other.
+/// typo leaves the field out instead of quietly meaning one or the other.
 fn parse_bool(key: &str, value: &str) -> Result<bool, String> {
     let decoded = decode(value);
     match decoded.as_str() {
@@ -1274,50 +1260,63 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_a_foreign_header() {
-        let (table, diagnostics) = Table::parse("v=2\nname=x;exe=x.exe");
-        assert_eq!(table.rules, []);
-        assert_eq!(diagnostics.len(), 1);
-    }
-
-    #[test]
-    fn parse_rejects_an_older_header_than_the_previous_one() {
-        // A table older than the previous format must be dropped whole
-        // rather than half understood.
-        let (table, diagnostics) = Table::parse("v=4\nname=x;exe=x.exe");
-        assert_eq!(table.rules, []);
-        assert_eq!(diagnostics.len(), 1);
-        let (table, diagnostics) = Table::parse(&format!("{HEADER}\nname=x;exe=x.exe"));
-        assert_eq!(table.rules.len(), 1);
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    }
-
-    #[test]
-    fn a_table_with_the_previous_header_parses_as_with_the_current_one() {
-        // What a launcher that still writes the previous header sends: the
-        // same records mean the same under either header.
+    fn a_legacy_header_on_the_first_line_is_skipped() {
+        // What a launcher written for the versioned format sends: the same
+        // records mean the same with any version header in front, or none.
         let records = "name=rockstar-launcher;dxgi=dxmt\n\
-                       name=wow;exe=WoW.exe;company=Blizzard;d3d9=wined3d;env=A=1\n\
+                       name=wow;exe=WoW.exe;company=Blizzard;d3d9=wined3d;wined3d=vulkan;env=A=1\n\
                        name=dpi-aware;enabled=false";
-        let (previous, d1) = Table::parse(&format!("{PREVIOUS_HEADER}\n{records}"));
-        let (current, d2) = Table::parse(&format!("{HEADER}\n{records}"));
-        assert!(d1.is_empty(), "{d1:?}");
-        assert!(d2.is_empty(), "{d2:?}");
-        assert_eq!(previous.rules.len(), 3);
-        assert_eq!(previous, current);
-        assert_ne!(PREVIOUS_HEADER, HEADER);
+        let (bare, diagnostics) = Table::parse(records);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(bare.rules.len(), 3);
+        for header in ["v=5", "v=6", "v=7", "v=10"] {
+            let (table, diagnostics) = Table::parse(&format!("{header}\n{records}"));
+            assert!(diagnostics.is_empty(), "{header}: {diagnostics:?}");
+            assert_eq!(table, bare, "{header}");
+        }
     }
 
     #[test]
-    fn the_previous_header_is_written_unless_a_rule_sets_wined3d() {
-        // Without wined3d the table means the same in the previous format,
-        // so a library that knows only that one reads it.
-        let mut table = Table {
+    fn only_a_first_line_of_v_and_digits_is_a_legacy_header() {
+        for header in ["v=6", "v=0", "v=123"] {
+            assert!(is_legacy_header(header), "{header}");
+        }
+        for other in [
+            "v=",
+            "v=6a",
+            "v=-1",
+            "V=6",
+            " v=6",
+            "v=6;name=x",
+            "name=x;v=6",
+        ] {
+            assert!(!is_legacy_header(other), "{other}");
+        }
+        // Anything else on the first line is a record: one with a name is a
+        // rule, and one without, a legacy header that looks almost right
+        // included, is skipped with a diagnostic.
+        let (table, diagnostics) = Table::parse("name=x;exe=x.exe\nname=y;exe=y.exe");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(table.rules.len(), 2);
+        let (table, diagnostics) = Table::parse("v=6a\nname=x;exe=x.exe");
+        assert_eq!(table.rules.len(), 1);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        // Only the first line can be one; a later one is a record without a
+        // name.
+        let (table, diagnostics) = Table::parse("name=x;exe=x.exe\nv=6");
+        assert_eq!(table.rules.len(), 1);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn the_env_value_is_the_records_alone() {
+        let table = Table {
             rules: vec![
                 Rule {
                     name: "game".into(),
                     exe: "game.exe".into(),
                     dxgi: Some(Dxgi::Wined3d),
+                    wined3d: Some(Wined3d::Vulkan),
                     env: vec![("A".into(), "1".into())],
                     ..Rule::default()
                 },
@@ -1333,36 +1332,20 @@ mod tests {
         let value = table.to_env_value();
         assert_eq!(
             value,
-            format!(
-                "{PREVIOUS_HEADER}\n\
-                 name=game;exe=game.exe;dxgi=wined3d;env=A=1\n\
-                 name=dropped;enabled=false"
-            )
+            "name=game;exe=game.exe;dxgi=wined3d;wined3d=vulkan;env=A=1\n\
+             name=dropped;enabled=false"
         );
         let (parsed, diagnostics) = Table::parse(&value);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(parsed.rules.first(), table.rules.first());
         assert_eq!(parsed.to_env_value(), value);
-        assert_eq!(Table::default().to_env_value(), PREVIOUS_HEADER);
-        // A rule that sets it, to either renderer, needs the current header,
-        // which a library that knows only the previous one refuses as a
-        // whole rather than half understand.
-        for wined3d in [Wined3d::Gl, Wined3d::Vulkan] {
-            if let Some(game) = table.rules.first_mut() {
-                game.wined3d = Some(wined3d);
-            }
-            let value = table.to_env_value();
-            assert!(value.starts_with(&format!("{HEADER}\n")), "{value}");
-            let (parsed, diagnostics) = Table::parse(&value);
-            assert!(diagnostics.is_empty(), "{diagnostics:?}");
-            assert_eq!(parsed.rules.first(), table.rules.first());
-        }
+        assert_eq!(Table::default().to_env_value(), "");
+        assert_eq!(Table::parse(""), (Table::default(), Vec::new()));
     }
 
     #[test]
     fn parse_skips_a_record_without_a_name_but_keeps_the_rest() {
-        let (table, diagnostics) =
-            Table::parse(&format!("{HEADER}\nexe=no-name.exe\nname=ok;exe=ok.exe"));
+        let (table, diagnostics) = Table::parse("exe=no-name.exe\nname=ok;exe=ok.exe");
         assert_eq!(table.rules.len(), 1);
         assert_eq!(table.rules.first().map(|r| r.exe.as_str()), Some("ok.exe"));
         assert_eq!(diagnostics.len(), 1);
@@ -1372,8 +1355,7 @@ mod tests {
     fn an_override_carrying_only_the_changed_fields_needs_no_exe() {
         // What a game file writes to extend a built-in rule: the name it is
         // addressing plus the one field it changes.
-        let (over, diagnostics) =
-            Table::parse(&format!("{HEADER}\nname=rockstar-launcher;dxgi=dxmt"));
+        let (over, diagnostics) = Table::parse("name=rockstar-launcher;dxgi=dxmt");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(over.rules.len(), 1);
         assert_eq!(over.rules.first().map(|r| r.exe.as_str()), Some(""));
@@ -1396,13 +1378,41 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_unknown_keys_and_implementation_values() {
-        let (_, d1) = Table::parse(&format!("{HEADER}\nname=x;exe=x.exe;bogus=1"));
-        assert_eq!(d1.len(), 1);
-        let (_, d2) = Table::parse(&format!("{HEADER}\nname=x;exe=x.exe;dxgi=vulkan"));
-        assert_eq!(d2.len(), 1);
-        let (_, d3) = Table::parse(&format!("{HEADER}\nname=x;exe=x.exe;d3d9=gptk"));
-        assert_eq!(d3.len(), 1);
+    fn a_field_that_cannot_be_read_is_ignored_and_the_rest_applies() -> TestResult {
+        // An unknown key, a value its key does not take and a field without
+        // '=' each cost only that field, with one diagnostic naming the rule
+        // and the field. The record before and after it still applies.
+        let want = Rule {
+            name: "x".into(),
+            exe: "x.exe".into(),
+            d3d9: Some(D3d9::Wined3d),
+            env: vec![("A".into(), "1".into())],
+            ..Rule::default()
+        };
+        for (field, said) in [
+            ("bogus=1", "unknown key \"bogus\""),
+            ("dxgi=vulkan", "unknown dxgi value \"vulkan\""),
+            ("d3d9=gptk", "unknown d3d9 value \"gptk\""),
+            ("wined3d=opengl", "unknown wined3d value \"opengl\""),
+            ("dpi_aware=yes", "unknown dpi_aware value \"yes\""),
+            // A bad `enabled` leaves the rule enabled.
+            ("enabled=False", "unknown enabled value \"False\""),
+            ("enabled=no", "unknown enabled value \"no\""),
+            ("bogus", "field \"bogus\" without '='"),
+        ] {
+            let text = format!("name=x;{field};exe=x.exe;d3d9=wined3d;env=A=1\nname=ok;exe=ok.exe");
+            let (table, diagnostics) = Table::parse(&text);
+            assert_eq!(table.rules.first(), Some(&want), "{field}");
+            assert_eq!(
+                table.rules.get(1).map(|r| r.name.as_str()),
+                Some("ok"),
+                "{field}"
+            );
+            let diagnostic = diagnostics.first().ok_or("no diagnostic")?;
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert_eq!(diagnostic, &format!("rule \"x\": ignoring {said}"));
+        }
+        Ok(())
     }
 
     #[test]
@@ -1433,12 +1443,9 @@ mod tests {
         let text = table.to_env_value();
         assert_eq!(
             text,
-            format!(
-                "{PREVIOUS_HEADER}\n\
-                 name=aware;exe=*;dpi_aware=true\n\
-                 name=unaware;exe=old.exe;d3d9=wined3d;dpi_aware=false;dll_overrides=a=\n\
-                 name=unset;exe=other.exe"
-            )
+            "name=aware;exe=*;dpi_aware=true\n\
+             name=unaware;exe=old.exe;d3d9=wined3d;dpi_aware=false;dll_overrides=a=\n\
+             name=unset;exe=other.exe"
         );
         let (parsed, diagnostics) = Table::parse(&text);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -1446,13 +1453,13 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_dpi_aware_value_drops_the_record() {
+    fn a_bad_dpi_aware_value_is_ignored() {
         for bad in ["yes", "1", "TRUE", ""] {
             let (table, diagnostics) = Table::parse(&format!(
-                "{HEADER}\nname=x;exe=x.exe;dpi_aware={bad}\nname=ok;exe=ok.exe"
+                "name=x;exe=x.exe;dpi_aware={bad}\nname=ok;exe=ok.exe"
             ));
-            assert_eq!(table.rules.len(), 1, "dpi_aware={bad:?}");
-            assert_eq!(table.rules.first().map(|r| r.name.as_str()), Some("ok"));
+            assert_eq!(table.rules.len(), 2, "dpi_aware={bad:?}");
+            assert_eq!(table.rules.first().map(|r| r.dpi_aware), Some(None));
             assert_eq!(diagnostics.len(), 1, "dpi_aware={bad:?}");
         }
     }
@@ -1534,13 +1541,12 @@ mod tests {
             }],
         };
         // An override that does not mention it leaves the value alone.
-        let (over, diagnostics) =
-            Table::parse(&format!("{HEADER}\nname=defaults;dll_overrides=a="));
+        let (over, diagnostics) = Table::parse("name=defaults;dll_overrides=a=");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(base.overlay(over), [] as [String; 0]);
         assert_eq!(base.rules.first().map(|r| r.dpi_aware), Some(Some(true)));
         // One that sets it replaces it.
-        let (over, diagnostics) = Table::parse(&format!("{HEADER}\nname=defaults;dpi_aware=false"));
+        let (over, diagnostics) = Table::parse("name=defaults;dpi_aware=false");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(base.overlay(over), [] as [String; 0]);
         assert_eq!(base.rules.first().map(|r| r.dpi_aware), Some(Some(false)));
@@ -1577,12 +1583,9 @@ mod tests {
         let text = table.to_env_value();
         assert_eq!(
             text,
-            format!(
-                "{PREVIOUS_HEADER}\n\
-                 name=defaults;exe=*;large_address_aware=true\n\
-                 name=old;exe=old.exe;dpi_aware=false;large_address_aware=false\n\
-                 name=unset;exe=other.exe"
-            )
+            "name=defaults;exe=*;large_address_aware=true\n\
+             name=old;exe=old.exe;dpi_aware=false;large_address_aware=false\n\
+             name=unset;exe=other.exe"
         );
         let (parsed, diagnostics) = Table::parse(&text);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -1590,14 +1593,16 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_large_address_aware_value_drops_the_record() {
+    fn a_bad_large_address_aware_value_is_ignored() {
         let key = "large_address_aware";
         for bad in ["yes", "1", "False", ""] {
             let (table, diagnostics) = Table::parse(&format!(
-                "{HEADER}\nname=x;exe=x.exe;{key}={bad}\nname=ok;exe=ok.exe"
+                "name=x;exe=x.exe;dpi_aware=false;{key}={bad}\nname=ok;exe=ok.exe"
             ));
-            assert_eq!(table.rules.len(), 1, "{key}={bad:?}");
-            assert_eq!(table.rules.first().map(|r| r.name.as_str()), Some("ok"));
+            assert_eq!(table.rules.len(), 2, "{key}={bad:?}");
+            let x = table.rules.first();
+            assert_eq!(x.map(|r| r.large_address_aware), Some(None));
+            assert_eq!(x.map(|r| r.dpi_aware), Some(Some(false)));
             assert_eq!(diagnostics.len(), 1, "{key}={bad:?}");
             assert!(
                 diagnostics.first().is_some_and(|d| d.contains(key)),
@@ -1672,15 +1677,12 @@ mod tests {
                 ..Rule::default()
             }],
         };
-        let (over, diagnostics) =
-            Table::parse(&format!("{HEADER}\nname=defaults;dll_overrides=a="));
+        let (over, diagnostics) = Table::parse("name=defaults;dll_overrides=a=");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(base.overlay(over), [] as [String; 0]);
         let rule = base.rules.first().ok_or("no rule")?;
         assert_eq!(rule.large_address_aware, Some(true));
-        let (over, diagnostics) = Table::parse(&format!(
-            "{HEADER}\nname=defaults;large_address_aware=false"
-        ));
+        let (over, diagnostics) = Table::parse("name=defaults;large_address_aware=false");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(base.overlay(over), [] as [String; 0]);
         let rule = base.rules.first().ok_or("no rule")?;
@@ -1693,12 +1695,12 @@ mod tests {
         // What a launcher written for the x86_64 Wine still sends. The record
         // is kept with everything else it says, whatever the value, and
         // nothing of it is written back.
-        let bare = Table::parse(&format!(
-            "{HEADER}\nname=old;exe=old.exe;large_address_aware=false\nname=x87-sidecar;enabled=false"
-        ));
+        let bare = Table::parse(
+            "name=old;exe=old.exe;large_address_aware=false\nname=x87-sidecar;enabled=false",
+        );
         for value in ["true", "false", "TRUE", "1", ""] {
             let with = Table::parse(&format!(
-                "{HEADER}\nname=old;exe=old.exe;x87_sidecar={value};large_address_aware=false\n\
+                "name=old;exe=old.exe;x87_sidecar={value};large_address_aware=false\n\
                  name=x87-sidecar;enabled=false;x87_sidecar={value}"
             ));
             assert_eq!(with, bare, "x87_sidecar={value:?}");
@@ -1706,10 +1708,9 @@ mod tests {
         let (table, diagnostics) = bare;
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert!(!table.to_env_value().contains("x87_sidecar"));
-        // The key still needs its '=' like any other field.
-        let (table, diagnostics) =
-            Table::parse(&format!("{HEADER}\nname=old;exe=old.exe;x87_sidecar"));
-        assert_eq!(table.rules, []);
+        // Without its '=' it is a field like any other that cannot be read.
+        let (table, diagnostics) = Table::parse("name=old;exe=old.exe;x87_sidecar");
+        assert_eq!(table.rules.len(), 1);
         assert_eq!(diagnostics.len(), 1);
     }
 
@@ -2502,9 +2503,8 @@ mod tests {
         // A table that still carries it, from a launcher written for both
         // Wines, keeps its record, with the implementation the arm64 Wine
         // always loaded in its place.
-        let (table, diagnostics) = Table::parse(&format!(
-            "{HEADER}\nname=a;exe=a.exe;dxgi=gptk\nname=b;exe=b.exe;dxgi=GPTK"
-        ));
+        let (table, diagnostics) =
+            Table::parse("name=a;exe=a.exe;dxgi=gptk\nname=b;exe=b.exe;dxgi=GPTK");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(table.rules.len(), 2);
         for rule in &table.rules {
@@ -2650,10 +2650,10 @@ mod tests {
         let (parsed, diagnostics) = Table::parse(&value);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(parsed, table);
-        let (bad, diagnostics) = Table::parse(&format!(
-            "{HEADER}\nname=x;exe=x.exe;wined3d=opengl\nname=ok;exe=ok.exe"
-        ));
-        assert_eq!(bad.rules.len(), 1);
+        let (bad, diagnostics) =
+            Table::parse("name=x;exe=x.exe;wined3d=opengl\nname=ok;exe=ok.exe");
+        assert_eq!(bad.rules.len(), 2);
+        assert_eq!(bad.rules.first().map(|r| r.wined3d), Some(None));
         assert_eq!(diagnostics.len(), 1);
     }
 
@@ -2682,7 +2682,7 @@ mod tests {
             Some(Wined3d::Vulkan)
         );
         // An override by name changes the setting and keeps the rest.
-        let (over, diagnostics) = Table::parse(&format!("{HEADER}\nname=game;wined3d=vulkan"));
+        let (over, diagnostics) = Table::parse("name=game;wined3d=vulkan");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(table.overlay(over), [] as [String; 0]);
         assert_eq!(
@@ -2690,7 +2690,7 @@ mod tests {
             Some(Wined3d::Vulkan)
         );
         // Dropping the wildcard leaves other processes with no opinion.
-        let (over, _) = Table::parse(&format!("{HEADER}\nname=global;enabled=false"));
+        let (over, _) = Table::parse("name=global;enabled=false");
         assert_eq!(table.overlay(over), [] as [String; 0]);
         assert_eq!(table.resolve("other.exe", &none).wined3d, None);
         assert_eq!(
