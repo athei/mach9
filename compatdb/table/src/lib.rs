@@ -1012,29 +1012,48 @@ impl Table {
     /// An override that names no rule here may only add a new one, so it has to
     /// bring an `exe` of its own. One that does not (an `enabled = false` for a
     /// rule that is gone, or a rule whose only home was a misspelled name) can
-    /// never match a process, so it is dropped and its name returned for the
-    /// caller to warn about.
+    /// never match a process, so it is dropped with a warning.
+    ///
+    /// An override merged into a rule this table had before the overlay, a
+    /// built-in rule for `compatdb.so`, cannot change which processes it
+    /// matches: its `exe`, `company`, `product` and `original_filename` are
+    /// ignored with a warning each, so a built-in `*` rule stays global and a
+    /// built-in rule for one program keeps its pin. A rule an earlier
+    /// override in the same set added takes them like any other field.
+    ///
+    /// Returns the warnings, for the caller to log.
     pub fn overlay(&mut self, overrides: Self) -> Vec<String> {
-        let mut unmatched = Vec::new();
-        for over in overrides.rules {
+        let mut before: Vec<String> = self
+            .rules
+            .iter()
+            .map(|rule| rule.name.to_ascii_lowercase())
+            .collect();
+        let mut warnings = Vec::new();
+        for mut over in overrides.rules {
             let pos = self
                 .rules
                 .iter()
                 .position(|rule| rule.name.eq_ignore_ascii_case(&over.name));
             match pos {
                 Some(i) if !over.enabled => {
-                    self.rules.remove(i);
+                    // A rule added again under this name later is a new one,
+                    // not the built-in rule, and takes matchers.
+                    let gone = self.rules.remove(i);
+                    before.retain(|name| !name.eq_ignore_ascii_case(&gone.name));
                 }
                 Some(i) => {
                     if let Some(existing) = self.rules.get_mut(i) {
+                        if before.contains(&existing.name.to_ascii_lowercase()) {
+                            warnings.extend(keep_matchers(&existing.name, &mut over));
+                        }
                         existing.overlay(over);
                     }
                 }
                 None if over.enabled && !over.exe.is_empty() => self.rules.push(over),
-                None => unmatched.push(over.name),
+                None => warnings.push(format!("override names no rule: {}", over.name)),
             }
         }
-        unmatched
+        warnings
     }
 
     /// Every pair of rules that matches exactly the same processes, by name.
@@ -1103,6 +1122,33 @@ impl Table {
         }
         (Self { rules }, diagnostics)
     }
+}
+
+/// Clear the matchers of `over`, an override of the rule `name` the table
+/// already had, and say for each it set that it is ignored.
+fn keep_matchers(name: &str, over: &mut Rule) -> Vec<String> {
+    let mut ignored = Vec::new();
+    if !over.exe.is_empty() {
+        ignored.push(format!("exe={}", std::mem::take(&mut over.exe)));
+    }
+    for (key, value) in [
+        ("company", over.company.take()),
+        ("product", over.product.take()),
+        ("original_filename", over.original_filename.take()),
+    ] {
+        if let Some(value) = value {
+            ignored.push(format!("{key}={value}"));
+        }
+    }
+    ignored
+        .into_iter()
+        .map(|field| {
+            format!(
+                "rule {name:?}: ignoring {field}; an override cannot change the processes a \
+                 built-in rule matches"
+            )
+        })
+        .collect()
 }
 
 /// The basename of a DOS image path (`...\Foo\Bar.exe` -> `Bar.exe`), decoded
@@ -1683,7 +1729,7 @@ mod tests {
                 ..Rule::default()
             }],
         });
-        assert_eq!(unmatched, vec!["typo".to_string()]);
+        assert_eq!(unmatched, vec!["override names no rule: typo".to_string()]);
         assert_eq!(base.rules, []);
     }
 
@@ -2872,8 +2918,72 @@ mod tests {
                 ..Rule::default()
             }],
         });
-        assert_eq!(unmatched, vec!["gone".to_string()]);
+        assert_eq!(unmatched, vec!["override names no rule: gone".to_string()]);
         assert_eq!(base.rules, []);
+    }
+
+    #[test]
+    fn an_override_by_name_keeps_the_matchers_of_a_rule_the_table_had() -> TestResult {
+        let mut base = Table {
+            rules: vec![Rule {
+                name: "defaults".into(),
+                exe: ANY_EXE.into(),
+                dpi_aware: Some(true),
+                env: vec![("A".into(), "1".into())],
+                env_defaults: 1,
+                ..Rule::default()
+            }],
+        };
+        let (over, diagnostics) = Table::parse(
+            "name=defaults;exe=game.exe;company=Acme;dpi_aware=false;env=A=2\n\
+             name=mine;exe=mine.exe\n\
+             name=mine;company=Me",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let warnings = base.overlay(over);
+        assert_eq!(
+            warnings,
+            [
+                "rule \"defaults\": ignoring exe=game.exe; an override cannot change the \
+                 processes a built-in rule matches",
+                "rule \"defaults\": ignoring company=Acme; an override cannot change the \
+                 processes a built-in rule matches",
+            ]
+        );
+        // The built-in rule stays global, takes the setting, and keeps its
+        // own entry a default with the override's after it.
+        let defaults = base.rules.first().ok_or("no defaults")?;
+        assert_eq!(defaults.exe, ANY_EXE);
+        assert_eq!(defaults.company, None);
+        assert_eq!(defaults.dpi_aware, Some(false));
+        assert_eq!(defaults.env_defaults, 1);
+        let other = base.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.dpi_aware, Some(false));
+        let steps = other.env_steps(|_| true);
+        assert_eq!(
+            steps.iter().map(|s| s.applied).collect::<Vec<_>>(),
+            [false, true]
+        );
+        // A rule an earlier override added takes a matcher like any field.
+        let mine = base.rules.get(1).ok_or("no mine")?;
+        assert_eq!(mine.company.as_deref(), Some("Me"));
+        // So does one added again under the name of a rule the table had,
+        // after an earlier override dropped that rule.
+        let (over, diagnostics) = Table::parse(
+            "name=defaults;enabled=false\n\
+             name=defaults;exe=game.exe\n\
+             name=defaults;company=Acme",
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(base.overlay(over), [] as [String; 0]);
+        let again = base
+            .rules
+            .iter()
+            .find(|r| r.name == "defaults")
+            .ok_or("no defaults")?;
+        assert_eq!(again.exe, "game.exe");
+        assert_eq!(again.company.as_deref(), Some("Acme"));
+        Ok(())
     }
 
     #[test]

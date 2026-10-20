@@ -45,8 +45,9 @@ use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TE
 static INIT: extern "C" fn() = run;
 
 /// The built-in rules with the overrides from [`ENV_VAR`] laid on top, plus
-/// the lines worth logging about the overrides: parse diagnostics and
-/// overrides that name no rule.
+/// the lines worth logging about the overrides: parse diagnostics,
+/// overrides that name no rule, and matchers an override of a built-in rule
+/// cannot change.
 fn load_table() -> (Table, Vec<String>) {
     // The built-in rules are compiled in; only overrides travel in the
     // environment (absent unless something set it). Overlay them.
@@ -55,9 +56,7 @@ fn load_table() -> (Table, Vec<String>) {
     if let Some(text) = read_env() {
         let (overrides, diagnostics) = Table::parse(&text);
         messages.extend(diagnostics);
-        for name in table.overlay(overrides) {
-            messages.push(format!("override names no rule: {name}"));
-        }
+        messages.extend(table.overlay(overrides));
     }
     (table, messages)
 }

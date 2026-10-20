@@ -155,6 +155,13 @@ name=dpi-aware;enabled=false
 - A rule whose `name` matches a built-in rule (case-insensitively) is merged
   into it: a set scalar replaces the built-in value, lists append. It needs
   only the fields it changes.
+- Such a rule cannot change which processes the built-in rule matches: its
+  `exe`, `company`, `product` and `original_filename` are ignored with a
+  warning each, so a built-in `*` rule stays global and a built-in rule for
+  one program keeps its pin. To apply a setting to other processes, write
+  a rule with a new name. Its `env` entries replace the variable, while the
+  built-in rule's own entries stay defaults
+  ([environment defaults](#environment-defaults)).
 - `enabled=false` drops the rule of that name.
 - A rule with a new name needs an `exe`. One without is dropped and logged
   as `override names no rule`.
