@@ -134,20 +134,36 @@ extern "C" fn run() {
     if !resolution.arguments.is_empty() {
         log::line(&format!("  arguments = {}", resolution.arguments.join(" ")));
     }
-    if !resolution.env.is_empty() {
-        let env: Vec<String> = resolution
-            .env
+    // A default env entry leaves a variable the process already has alone,
+    // whether it is in the environment block or only in the unix
+    // environment.
+    let steps = resolution.env_steps(|name| {
+        compatdb_table::env_value(&process.env, name).is_some() || std::env::var_os(name).is_some()
+    });
+    let env: Vec<(String, String)> = steps
+        .iter()
+        .filter(|step| step.applied)
+        .map(|step| (step.name.clone(), step.value.clone()))
+        .collect();
+    if !env.is_empty() {
+        let list: Vec<String> = env
             .iter()
             .map(|(name, value)| format!("{name}={value}"))
             .collect();
-        log::line(&format!("  env = {}", env.join(", ")));
+        log::line(&format!("  env = {}", list.join(", ")));
+    }
+    for step in steps.iter().filter(|step| !step.applied) {
+        log::line(&format!(
+            "  env {}={} (rule {}) left alone: the process has {}",
+            step.name, step.value, step.rule, step.name
+        ));
     }
     // The env goes into both the environment block, for the PE side and
     // what reads it at process init (FEX, wined3d), and the unix
     // environment, for unix-side readers (winemetal, mtld3d, Metal,
     // KosmicKrisp).
-    apply::rewrite_params(&nt, &process, &resolution);
-    apply::unix_env(&resolution.env);
+    apply::rewrite_params(&nt, &process, &resolution.arguments, &env);
+    apply::unix_env(&env);
 }
 
 /// Log each message about the overrides from [`ENV_VAR`] as a warning: a

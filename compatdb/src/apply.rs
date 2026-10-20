@@ -11,7 +11,7 @@ use std::{
     ptr,
 };
 
-use compatdb_table::{Resolution, append_cmdline, merge_env};
+use compatdb_table::{append_cmdline, merge_env};
 
 use crate::{Process, log, ntdll::Ntdll};
 
@@ -110,16 +110,22 @@ pub fn gcmouse(nt: &Ntdll, on: bool) {
 }
 
 /// Rewrite `CommandLine` and `Environment` in the 64-bit params and, for a
-/// wow64 process, in the 32-bit copy too. Nothing is touched when neither the
+/// wow64 process, in the 32-bit copy too, with `arguments` appended and the
+/// `env` entries that apply merged in. Nothing is touched when neither the
 /// command line nor the environment actually changes.
-pub fn rewrite_params(nt: &Ntdll, process: &Process, resolution: &Resolution) {
+pub fn rewrite_params(
+    nt: &Ntdll,
+    process: &Process,
+    arguments: &[String],
+    env: &[(String, String)],
+) {
     // Touch only what actually changes. Rewriting the (often large, inherited)
     // environment when only the command line changed is unnecessary and risky,
     // so the two are handled independently, each in its own allocation.
-    if let Some(cmd) = append_cmdline(&process.cmdline, &resolution.arguments) {
+    if let Some(cmd) = append_cmdline(&process.cmdline, arguments) {
         rewrite_command_line(nt, process, &cmd);
     }
-    if let Some(env) = merge_env(&process.env, &resolution.env) {
+    if let Some(env) = merge_env(&process.env, env) {
         rewrite_environment(nt, process, &env);
     }
 }
