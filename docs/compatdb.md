@@ -22,7 +22,7 @@ and with none, Wine does.
 | `wined3d` | `gl`, `vulkan` | The renderer of wined3d, for the whole process: every wined3d user in it, the `wined3d` trees of both families and D3D8 and DirectDraw, shares one wined3d. Set, it names the renderer in `WINE_D3D_CONFIG` through the `env` path; unset, it sets nothing, so a `WINE_D3D_CONFIG` from elsewhere, or wined3d's default, OpenGL, applies ([wined3d on Vulkan](#wined3d-on-vulkan)) | At load, as `env` |
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
-| `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` only stops forcing it: the executable's flag, `WINE_LARGE_ADDRESS_AWARE` and the `AppDefaults` registry value decide. No effect on 64-bit | At load; ntdll applies it after the library returns |
+| `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` is the same as unset: the executable's large-address-aware flag decides, as in upstream Wine. No effect on 64-bit | At load; ntdll applies it after the library returns |
 | `gcmouse` | `true`, `false` | `true`: the Mac driver takes the mouse movement of raw input (`WM_INPUT`) and DirectInput from GameController's `GCMouse`, in the device's own counts, so mouselook is linear. `false`: that movement is the cursor's, which macOS accelerates and scales for retina. Unset: the same as `false`, as in upstream Wine ([GameController mice](#gamecontroller-mice)) | At load, read by winemac.drv |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it. An entry of a built-in `*` rule is a default and leaves a variable the process already has alone; every other entry replaces it ([environment defaults](#environment-defaults)) | At load |
@@ -315,17 +315,35 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
 
 - Once in every process at load it writes a block starting
   `compatdb: <exe> [<arch>]`, with the image name, arch and version
-  fingerprint, then:
+  fingerprint. The block is the whole configuration of the process: every
+  setting gets a line, with the rule that set it (`rule <name>`, followed
+  by `changed by WINE_COMPATDB` when an override merged into that rule by
+  name set the value) or, where no rule did, `unset (upstream: ...)` with
+  what upstream Wine does instead. Those descriptions are `UPSTREAM` in
+  [`compatdb/table/src/lib.rs`](../compatdb/table/src/lib.rs). After the
+  first line come:
   - a `warning: ...` line for each field or line of `WINE_COMPATDB` it
     ignored ([errors](#errors)) and each override that names no rule;
   - `rules = ...` or `no rule matched`;
-  - the trees it prepended (`dxgi = <impl> (from <path>)`, `d3d9 = ...`);
-  - the wined3d renderer (`wined3d = <renderer> (...)`): set by a rule,
-    asked for by a `WINE_D3D_CONFIG` the process has, or `default (not
-    set)`, where wined3d's registry settings or its default decide;
-  - the overrides, DPI and large address awareness and `gcmouse` it set,
-    the arguments, the env it set, and each default entry it left alone
-    because the process had the variable.
+  - the trees it prepended (`dxgi = <impl> (from <path>), <source>`,
+    `d3d9 = ...`); a family no rule chose gets `wined3d`;
+  - the wined3d renderer: set by a rule, asked for by a `WINE_D3D_CONFIG`
+    the process has, which the line says came from a rule's `env` or was
+    inherited, or unset, where wined3d's registry settings or its default
+    decide;
+  - `dll_overrides` and `arguments`, each entry with its rule, and for an
+    argument whether it was appended or already present;
+  - `dpi_aware`, `large_address_aware` (noting that it has no effect in a
+    64-bit process) and `gcmouse`;
+  - one `env NAME=value, rule <name>: ...` line per entry, saying whether
+    it was set, removed (naming the earlier entry whose value it undoes, or
+    saying the variable was not set, so there was nothing to remove), left
+    alone because the process had the variable, with the value it kept
+    ([environment defaults](#environment-defaults)), or replaced by a
+    later entry for the same variable, whose rule it names, so the last
+    entry that applies is the value the process ends up with.
+- A line also says when ntdll lacks the hook a setting needs, and the
+  setting is ignored.
 - To confirm a tree took effect, look at the running process's mapped files,
   for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
   `lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.

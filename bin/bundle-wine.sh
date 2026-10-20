@@ -1171,7 +1171,7 @@ check_d3d12_runs() {
         smoke_check "d3d12.exe for $arch" 120 "$log"
         for want in "wine-build smoke test: $arch d3d12 works on " \
                     "compatdb: .*dxgi = ${DXGI_IMPLS%% *} (from" \
-                    "compatdb: .*env = .*VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2" \
+                    "compatdb: .*env VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2, rule [^:]*: set" \
                     "vkd3d-proton:.*Allowing a frame latency of at least 2 frames"; do
             if ! grep -q "$want" "$log"; then
                 echo "Error: d3d12.exe for $arch did not print '$want'"
@@ -1354,7 +1354,7 @@ check_wgl_no_egl() {
     run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag "$WINE_DIR/bin/wine" "$exe"
     if [ "$RUN_STATUS" -eq 142 ]; then
         echo "Error: wgl.exe for $arch with nothing chosen did not exit within 120 seconds"
-    elif ! grep -q "compatdb: .*env = .*WINE_MAC_OPENGL=egl" "$log"; then
+    elif ! grep -q "compatdb: .*env WINE_MAC_OPENGL=egl, rule [^:]*: set" "$log"; then
         echo "Error: compatdb.so did not set WINE_MAC_OPENGL=egl in wgl.exe for $arch"
     elif ! grep -q "err:winediag:.*WINE_MAC_OPENGL=egl, but .*; OpenGL is disabled" "$log"; then
         echo "Error: winemac.drv did not say that Mesa's EGL failed and OpenGL is disabled in"
@@ -1387,7 +1387,7 @@ run_wgl() {
     run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe" "$want"
     smoke_check "wgl.exe for $arch ($name)" 120 "$log"
     case "$name" in
-        default) line="compatdb: .*env = .*WINE_MAC_OPENGL=egl" ;;
+        default) line="compatdb: .*env WINE_MAC_OPENGL=egl, rule [^:]*: set" ;;
         cgl) line="compatdb: .*WINE_MAC_OPENGL=egl.*left alone" ;;
     esac
     if ! grep -q "$line" "$log"; then

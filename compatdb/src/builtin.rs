@@ -283,7 +283,7 @@ fn with_env_defaults(rule: Rule) -> Rule {
 
 #[cfg(test)]
 mod tests {
-    use compatdb_table::{Resolution, VersionInfo, Wined3d};
+    use compatdb_table::{Origin, Resolution, VersionInfo, Wined3d};
 
     use super::*;
 
@@ -295,7 +295,13 @@ mod tests {
     /// specific rule does.
     fn set_by(resolution: &mut Resolution, key: &'static str, rule: &str) {
         resolution.set_by.retain(|(k, _)| *k != key);
-        resolution.set_by.push((key, rule.to_string()));
+        resolution.set_by.push((
+            key,
+            Origin {
+                rule: rule.to_string(),
+                changed: false,
+            },
+        ));
     }
 
     /// The env entries a process gets applied when it already has the
@@ -340,7 +346,7 @@ mod tests {
         // The steps name the rule of each entry.
         let steps = game.env_steps(|_| false);
         assert_eq!(
-            steps.first().map(|s| s.rule.as_str()),
+            steps.first().map(|s| s.origin.rule.as_str()),
             Some("fex-x87-reduced-precision")
         );
     }

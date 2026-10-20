@@ -456,6 +456,9 @@ pub struct Rule {
     /// replace like any other. Never serialized, so a rule from [`ENV_VAR`]
     /// has none.
     pub env_defaults: usize,
+    /// What overrides merged in by name changed, for the log. Never
+    /// serialized.
+    pub changed: Changed,
     /// `WINEDEBUG` channels for this process. Applied by the launcher through
     /// wine's own `WINEDEBUG=<exe>:` prefix, not by the library, because the
     /// channels are parsed before it loads; never serialized.
@@ -463,6 +466,79 @@ pub struct Rule {
     /// False marks an override that drops the rule of this name. Default true;
     /// only travels on the wire when false.
     pub enabled: bool,
+}
+
+/// What upstream Wine does for each setting of a [`Rule`] when no rule sets
+/// it, as the log of `compatdb.so` prints it.
+///
+/// One entry per setting key, in the order of the fields. A test checks that
+/// every setting a record can carry has one.
+pub const UPSTREAM: &[(&str, &str)] = &[
+    ("dxgi", "wined3d"),
+    ("d3d9", "wined3d"),
+    (
+        "wined3d",
+        "the OpenGL renderer, unless WINE_D3D_CONFIG or wined3d's registry settings name another",
+    ),
+    (
+        "dpi_aware",
+        "the AppCompatFlags layer, then the manifest, otherwise unaware",
+    ),
+    (
+        "large_address_aware",
+        "the executable's large-address-aware flag",
+    ),
+    ("gcmouse", "off, the cursor's movement"),
+    (
+        "dll_overrides",
+        "WINEDLLOVERRIDES and the registry's DllOverrides decide",
+    ),
+    ("arguments", "the command line the process was started with"),
+    ("env", "the environment the process was started with"),
+];
+
+/// What upstream Wine does for the setting `key` when no rule sets it (see
+/// [`UPSTREAM`]).
+#[must_use]
+pub fn upstream(key: &str) -> &'static str {
+    UPSTREAM
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map_or("unknown", |(_, what)| what)
+}
+
+/// What the overrides an [`Table::overlay`] merged into a rule by name
+/// changed in it: the scalar settings they set, and where in each list their
+/// entries start.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Changed {
+    pub keys: Vec<&'static str>,
+    pub dll_overrides: Option<usize>,
+    pub arguments: Option<usize>,
+    pub env: Option<usize>,
+}
+
+impl Changed {
+    /// Note that an override set the scalar `key`.
+    fn key(&mut self, key: &'static str) {
+        if !self.keys.contains(&key) {
+            self.keys.push(key);
+        }
+    }
+
+    /// Whether an override set the scalar `key`.
+    #[must_use]
+    pub fn has(&self, key: &str) -> bool {
+        self.keys.contains(&key)
+    }
+}
+
+/// Note where an override's entries start in a list `len` long, when it
+/// brings `adds` of them and none came before.
+const fn mark_start(start: &mut Option<usize>, len: usize, adds: usize) {
+    if adds > 0 && start.is_none() {
+        *start = Some(len);
+    }
 }
 
 impl Default for Rule {
@@ -483,6 +559,7 @@ impl Default for Rule {
             arguments: Vec::new(),
             env: Vec::new(),
             env_defaults: 0,
+            changed: Changed::default(),
             debug_channels: Vec::new(),
             enabled: true,
         }
@@ -557,29 +634,52 @@ impl Rule {
         }
         if over.dxgi.is_some() {
             self.dxgi = over.dxgi;
+            self.changed.key("dxgi");
         }
         if over.d3d9.is_some() {
             self.d3d9 = over.d3d9;
+            self.changed.key("d3d9");
         }
         if over.wined3d.is_some() {
             self.wined3d = over.wined3d;
+            self.changed.key("wined3d");
         }
         if over.dpi_aware.is_some() {
             self.dpi_aware = over.dpi_aware;
+            self.changed.key("dpi_aware");
         }
         if over.large_address_aware.is_some() {
             self.large_address_aware = over.large_address_aware;
+            self.changed.key("large_address_aware");
         }
         if over.gcmouse.is_some() {
             self.gcmouse = over.gcmouse;
+            self.changed.key("gcmouse");
         }
         if !over.exe.is_empty() {
             self.exe = over.exe;
         }
+        mark_start(
+            &mut self.changed.dll_overrides,
+            self.dll_overrides.len(),
+            over.dll_overrides.len(),
+        );
+        mark_start(
+            &mut self.changed.arguments,
+            self.arguments.len(),
+            over.arguments.len(),
+        );
+        mark_start(&mut self.changed.env, self.env.len(), over.env.len());
         self.dll_overrides.extend(over.dll_overrides);
         self.arguments.extend(over.arguments);
         self.env.extend(over.env);
         self.debug_channels.extend(over.debug_channels);
+    }
+
+    /// Whether the entry at `index` of the list whose overrides start at
+    /// `start` came from an override merged in by name.
+    fn is_changed(start: Option<usize>, index: usize) -> bool {
+        start.is_some_and(|start| index >= start)
     }
 }
 
@@ -604,23 +704,50 @@ pub struct Resolution {
     pub large_address_aware: Option<bool>,
     pub gcmouse: Option<bool>,
     pub dll_overrides: Vec<String>,
+    /// Where each entry of [`Resolution::dll_overrides`] came from, at the
+    /// same index.
+    pub dll_overrides_from: Vec<Origin>,
     pub arguments: Vec<String>,
+    /// Where each entry of [`Resolution::arguments`] came from, at the same
+    /// index.
+    pub arguments_from: Vec<Origin>,
     pub env: Vec<(String, String)>,
     /// Where each entry of [`Resolution::env`] came from, at the same index.
     pub env_from: Vec<EnvFrom>,
-    /// The rule that set each scalar setting, by its key (`dxgi`, `d3d9`,
+    /// Where each scalar setting came from, by its key (`dxgi`, `d3d9`,
     /// `wined3d`, `dpi_aware`, `large_address_aware`, `gcmouse`): the most
-    /// specific one that set it. A key no rule set is missing.
-    pub set_by: Vec<(&'static str, String)>,
+    /// specific rule that set it. A key no rule set is missing.
+    pub set_by: Vec<(&'static str, Origin)>,
     /// Names of the rules that matched, in the order they were folded.
     pub matched: Vec<String>,
+}
+
+/// Where a value of a [`Resolution`] came from: its rule, and whether an
+/// override merged into that rule by name set it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Origin {
+    pub rule: String,
+    pub changed: bool,
+}
+
+impl Origin {
+    /// How the log names it: `rule <name>`, and `changed by WINE_COMPATDB`
+    /// when an override set the value.
+    #[must_use]
+    pub fn label(&self) -> String {
+        if self.changed {
+            format!("rule {}, changed by {ENV_VAR}", self.rule)
+        } else {
+            format!("rule {}", self.rule)
+        }
+    }
 }
 
 /// Where an env entry of a [`Resolution`] came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvFrom {
-    /// The rule that set it.
-    pub rule: String,
+    /// The rule that set it, and whether an override merged into it did.
+    pub origin: Origin,
     /// Whether it is a default (see [`Rule::env_defaults`]), which leaves a
     /// variable the process already has alone.
     pub default: bool,
@@ -632,11 +759,18 @@ pub struct EnvStep {
     pub name: String,
     /// The value it sets; empty removes the variable.
     pub value: String,
-    /// The rule that set it.
-    pub rule: String,
+    /// The rule that set it, and whether an override merged into it did.
+    pub origin: Origin,
     /// False for a default whose variable the process already had, which it
     /// leaves alone.
     pub applied: bool,
+    /// The origin of a later entry for the same variable that applies, which
+    /// replaces what this one did: the variable ends up with that entry's
+    /// value.
+    pub replaced_by: Option<Origin>,
+    /// For an entry that removes the variable, the origin of the earlier
+    /// entry for it that applied and set a value, which the removal undoes.
+    pub removes: Option<Origin>,
 }
 
 impl Resolution {
@@ -679,8 +813,12 @@ impl Resolution {
         let wined3d = self.wined3d?;
         let value = wined3d.config(self.d3d_config().filter(|value| !value.is_empty()));
         self.env.push((Wined3d::CONFIG_VAR.to_string(), value));
+        let origin = self.origin("wined3d").cloned().unwrap_or(Origin {
+            rule: String::new(),
+            changed: false,
+        });
         self.env_from.push(EnvFrom {
-            rule: self.set_by("wined3d").unwrap_or_default().to_string(),
+            origin,
             default: false,
         });
         Some(wined3d)
@@ -690,17 +828,41 @@ impl Resolution {
     /// did.
     #[must_use]
     pub fn set_by(&self, key: &str) -> Option<&str> {
+        self.origin(key).map(|origin| origin.rule.as_str())
+    }
+
+    /// Where the scalar setting `key` came from, or `None` when no rule set
+    /// it.
+    #[must_use]
+    pub fn origin(&self, key: &str) -> Option<&Origin> {
         self.set_by
             .iter()
             .find(|(k, _)| *k == key)
-            .map(|(_, rule)| rule.as_str())
+            .map(|(_, origin)| origin)
+    }
+
+    /// Where the env entry that leaves `WINE_D3D_CONFIG` at
+    /// [`Resolution::d3d_config`] came from, or `None` when no rule sets it.
+    #[must_use]
+    pub fn d3d_config_origin(&self) -> Option<&Origin> {
+        let i = self
+            .env
+            .iter()
+            .rposition(|(name, _)| name.eq_ignore_ascii_case(Wined3d::CONFIG_VAR))?;
+        self.env_from.get(i).map(|from| &from.origin)
     }
 
     /// Record that `rule` set the scalar setting `key`, replacing a less
     /// specific rule that set it before.
-    fn record(&mut self, key: &'static str, rule: &str) {
+    fn record(&mut self, key: &'static str, rule: &Rule) {
         self.set_by.retain(|(k, _)| *k != key);
-        self.set_by.push((key, rule.to_string()));
+        self.set_by.push((
+            key,
+            Origin {
+                rule: rule.name.clone(),
+                changed: rule.changed.has(key),
+            },
+        ));
     }
 
     /// The env entries in order, each with the rule that set it and whether
@@ -708,9 +870,12 @@ impl Resolution {
     /// already has. A default leaves such a variable alone, so a value the
     /// caller exported wins over a built-in `*` rule; every other entry
     /// applies, replacing the value or, when empty, removing the variable.
+    /// An entry that a later applied entry for the same variable replaces
+    /// names that entry's rule.
     #[must_use]
     pub fn env_steps(&self, has: impl Fn(&str) -> bool) -> Vec<EnvStep> {
-        self.env
+        let mut steps: Vec<EnvStep> = self
+            .env
             .iter()
             .enumerate()
             .map(|(i, (name, value))| {
@@ -719,11 +884,45 @@ impl Resolution {
                 EnvStep {
                     name: name.clone(),
                     value: value.clone(),
-                    rule: from.map(|from| from.rule.clone()).unwrap_or_default(),
+                    origin: from.map_or(
+                        Origin {
+                            rule: String::new(),
+                            changed: false,
+                        },
+                        |from| from.origin.clone(),
+                    ),
                     applied: !(default && has(name)),
+                    replaced_by: None,
+                    removes: None,
                 }
             })
-            .collect()
+            .collect();
+        let same = |a: &EnvStep, b: &EnvStep| a.applied && a.name.eq_ignore_ascii_case(&b.name);
+        let links: Vec<(Option<Origin>, Option<Origin>)> = steps
+            .iter()
+            .enumerate()
+            .map(|(i, step)| {
+                let replaced_by = steps
+                    .iter()
+                    .skip(i.saturating_add(1))
+                    .rev()
+                    .find(|later| same(later, step))
+                    .map(|later| later.origin.clone());
+                let removes = steps
+                    .iter()
+                    .take(i)
+                    .rev()
+                    .find(|earlier| same(earlier, step))
+                    .filter(|earlier| step.value.is_empty() && !earlier.value.is_empty())
+                    .map(|earlier| earlier.origin.clone());
+                (replaced_by, removes)
+            })
+            .collect();
+        for (step, (replaced_by, removes)) in steps.iter_mut().zip(links) {
+            step.replaced_by = replaced_by;
+            step.removes = removes;
+        }
+        steps
     }
 }
 
@@ -758,33 +957,42 @@ impl Table {
         for rule in matching {
             if let Some(dxgi) = rule.dxgi {
                 r.dxgi = Some(dxgi);
-                r.record("dxgi", &rule.name);
+                r.record("dxgi", rule);
             }
             if let Some(d3d9) = rule.d3d9 {
                 r.d3d9 = Some(d3d9);
-                r.record("d3d9", &rule.name);
+                r.record("d3d9", rule);
             }
             if let Some(wined3d) = rule.wined3d {
                 r.wined3d = Some(wined3d);
-                r.record("wined3d", &rule.name);
+                r.record("wined3d", rule);
             }
             if let Some(aware) = rule.dpi_aware {
                 r.dpi_aware = Some(aware);
-                r.record("dpi_aware", &rule.name);
+                r.record("dpi_aware", rule);
             }
             if let Some(laa) = rule.large_address_aware {
                 r.large_address_aware = Some(laa);
-                r.record("large_address_aware", &rule.name);
+                r.record("large_address_aware", rule);
             }
             if let Some(gcmouse) = rule.gcmouse {
                 r.gcmouse = Some(gcmouse);
-                r.record("gcmouse", &rule.name);
+                r.record("gcmouse", rule);
             }
+            let origin = |start: Option<usize>, i: usize| Origin {
+                rule: rule.name.clone(),
+                changed: Rule::is_changed(start, i),
+            };
             r.dll_overrides.extend(rule.dll_overrides.iter().cloned());
+            r.dll_overrides_from.extend(
+                (0..rule.dll_overrides.len()).map(|i| origin(rule.changed.dll_overrides, i)),
+            );
             r.arguments.extend(rule.arguments.iter().cloned());
+            r.arguments_from
+                .extend((0..rule.arguments.len()).map(|i| origin(rule.changed.arguments, i)));
             r.env.extend(rule.env.iter().cloned());
             r.env_from.extend((0..rule.env.len()).map(|i| EnvFrom {
-                rule: rule.name.clone(),
+                origin: origin(rule.changed.env, i),
                 default: i < rule.env_defaults,
             }));
             r.matched.push(rule.name.clone());
@@ -915,17 +1123,25 @@ pub fn basename_of(image_path: &[u16]) -> String {
 /// Returns `None` when nothing changed.
 #[must_use]
 pub fn append_cmdline(cmdline: &[u16], appends: &[String]) -> Option<Vec<u16>> {
+    append_cmdline_each(cmdline, appends).0
+}
+
+/// [`append_cmdline`], also saying for each text whether it was appended:
+/// false for one that was already present, or empty.
+#[must_use]
+pub fn append_cmdline_each(cmdline: &[u16], appends: &[String]) -> (Option<Vec<u16>>, Vec<bool>) {
     let mut cur = cmdline.to_vec();
-    let mut changed = false;
+    let mut appended = Vec::with_capacity(appends.len());
     for text in appends {
         if text.is_empty() || contains_cs(&cur, text) {
+            appended.push(false);
             continue;
         }
         cur.push(u16::from(b' '));
         cur.extend(text.encode_utf16());
-        changed = true;
+        appended.push(true);
     }
-    changed.then_some(cur)
+    (appended.contains(&true).then_some(cur), appended)
 }
 
 /// The value of the variable `name` in a `NAME=value\0...\0\0` block, the
@@ -2326,7 +2542,205 @@ mod tests {
         let appends = vec!["--foo".to_string(), "--bar".to_string()];
         let out = append_cmdline(&base, &appends).ok_or("should append --bar")?;
         assert_eq!(String::from_utf16_lossy(&out), "app.exe --foo --bar");
+        // Each text says whether it went in, for the log.
+        let (out, appended) = append_cmdline_each(&base, &appends);
+        assert_eq!(appended, [false, true]);
+        assert!(out.is_some());
+        let (out, appended) = append_cmdline_each(&base, &["--foo".to_string()]);
+        assert_eq!((out, appended), (None, vec![false]));
         Ok(())
+    }
+
+    #[test]
+    fn the_resolution_names_the_rule_behind_every_setting() {
+        let table = Table {
+            rules: vec![
+                Rule {
+                    name: "pinned".into(),
+                    exe: "game.exe".into(),
+                    company: Some("Acme".into()),
+                    dpi_aware: Some(false),
+                    arguments: vec!["-b".into()],
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "defaults".into(),
+                    exe: ANY_EXE.into(),
+                    dxgi: Some(Dxgi::Dxmt),
+                    dpi_aware: Some(true),
+                    dll_overrides: vec!["a=".into()],
+                    arguments: vec!["-a".into()],
+                    env: vec![("A".into(), "1".into()), ("B".into(), "2".into())],
+                    env_defaults: 1,
+                    ..Rule::default()
+                },
+            ],
+        };
+        let acme = VersionInfo {
+            company: "Acme".into(),
+            ..VersionInfo::default()
+        };
+        let r = table.resolve("game.exe", &acme);
+        // A scalar names the most specific rule that set it.
+        assert_eq!(r.set_by("dxgi"), Some("defaults"));
+        assert_eq!(r.set_by("dpi_aware"), Some("pinned"));
+        assert_eq!(r.set_by("d3d9"), None);
+        // Lists name the rule of each entry.
+        let rules = |from: &[Origin]| from.iter().map(|o| o.rule.clone()).collect::<Vec<_>>();
+        assert_eq!(rules(&r.dll_overrides_from), ["defaults"]);
+        assert_eq!(r.arguments, ["-a", "-b"]);
+        assert_eq!(rules(&r.arguments_from), ["defaults", "pinned"]);
+        // Only the first env entry of the rule is a default.
+        let steps = r.env_steps(|_| true);
+        assert_eq!(
+            steps
+                .iter()
+                .map(|s| (s.name.as_str(), s.origin.rule.as_str(), s.applied))
+                .collect::<Vec<_>>(),
+            [("A", "defaults", false), ("B", "defaults", true)]
+        );
+        // Nothing came from an override merged in by name.
+        assert!(r.set_by.iter().all(|(_, origin)| !origin.changed));
+        assert_eq!(
+            r.origin("dxgi").map(Origin::label).as_deref(),
+            Some("rule defaults")
+        );
+    }
+
+    #[test]
+    fn a_value_an_override_merged_in_by_name_says_so() -> TestResult {
+        let mut table = Table {
+            rules: vec![Rule {
+                name: "defaults".into(),
+                exe: ANY_EXE.into(),
+                dpi_aware: Some(true),
+                gcmouse: Some(true),
+                dll_overrides: vec!["a=".into()],
+                env: vec![("A".into(), "1".into())],
+                env_defaults: 1,
+                ..Rule::default()
+            }],
+        };
+        let (over, diagnostics) =
+            Table::parse("name=defaults;dpi_aware=false;dll_overrides=b=;env=A=2");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(table.overlay(over), [] as [String; 0]);
+        let r = table.resolve("x.exe", &VersionInfo::default());
+        // The scalar the override set says so; the one it left does not.
+        let dpi = r.origin("dpi_aware").ok_or("no dpi_aware")?;
+        assert_eq!(dpi.label(), "rule defaults, changed by WINE_COMPATDB");
+        assert!(!r.origin("gcmouse").ok_or("no gcmouse")?.changed);
+        // Of the lists, only the entries the override added do.
+        let changed = |from: &[Origin]| from.iter().map(|o| o.changed).collect::<Vec<_>>();
+        assert_eq!(changed(&r.dll_overrides_from), [false, true]);
+        // The override's env entry replaces, and the built-in's own entry,
+        // still a default, names the rule that replaced it.
+        let steps = r.env_steps(|_| false);
+        assert_eq!(
+            steps
+                .iter()
+                .map(|s| {
+                    (
+                        s.value.as_str(),
+                        s.origin.changed,
+                        s.replaced_by.as_ref().map(Origin::label),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "1",
+                    false,
+                    Some("rule defaults, changed by WINE_COMPATDB".to_string())
+                ),
+                ("2", true, None)
+            ]
+        );
+        // Left alone, the default is replaced all the same.
+        let steps = r.env_steps(|_| true);
+        assert_eq!(
+            steps.iter().map(|s| s.applied).collect::<Vec<_>>(),
+            [false, true]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_removal_names_the_value_it_undoes() {
+        let table = Table {
+            rules: vec![
+                Rule {
+                    name: "game".into(),
+                    exe: "game.exe".into(),
+                    env: vec![("A".into(), String::new()), ("B".into(), String::new())],
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "defaults".into(),
+                    exe: ANY_EXE.into(),
+                    env: vec![("A".into(), "1".into())],
+                    env_defaults: 1,
+                    ..Rule::default()
+                },
+            ],
+        };
+        let r = table.resolve("game.exe", &VersionInfo::default());
+        let steps = r.env_steps(|_| false);
+        let removes = |name: &str| {
+            steps
+                .iter()
+                .find(|s| s.name == name && s.value.is_empty())
+                .and_then(|s| s.removes.as_ref().map(|o| o.rule.clone()))
+        };
+        // A removes what the default set; B had no earlier entry.
+        assert_eq!(removes("A"), Some("defaults".to_string()));
+        assert_eq!(removes("B"), None);
+        // Left alone, the default set nothing for the removal to undo.
+        let steps = r.env_steps(|name| name == "A");
+        assert_eq!(
+            steps
+                .iter()
+                .find(|s| s.name == "A" && s.value.is_empty())
+                .and_then(|s| s.removes.clone()),
+            None
+        );
+    }
+
+    #[test]
+    fn every_setting_a_record_can_carry_says_what_upstream_wine_does() {
+        // The literal names every field, so a new one does not compile until
+        // it is added here, and with it its entry in UPSTREAM.
+        let rule = Rule {
+            name: "all".into(),
+            exe: "all.exe".into(),
+            company: Some("c".into()),
+            product: Some("p".into()),
+            original_filename: Some("o".into()),
+            dxgi: Some(Dxgi::Dxmt),
+            d3d9: Some(D3d9::Mtld3d),
+            wined3d: Some(Wined3d::Gl),
+            dpi_aware: Some(true),
+            large_address_aware: Some(true),
+            gcmouse: Some(true),
+            dll_overrides: vec!["a=".into()],
+            arguments: vec!["-a".into()],
+            env: vec![("A".into(), "1".into())],
+            env_defaults: 0,
+            changed: Changed::default(),
+            debug_channels: Vec::new(),
+            enabled: true,
+        };
+        let matchers = ["name", "exe", "company", "product", "original_filename"];
+        let record = rule_to_record(&rule);
+        let keys: Vec<&str> = record
+            .split(';')
+            .filter_map(|field| field.split_once('=').map(|(key, _)| key))
+            .filter(|key| !matchers.contains(key))
+            .collect();
+        for key in &keys {
+            assert_ne!(upstream(key), "unknown", "{key} has no UPSTREAM entry");
+        }
+        assert_eq!(keys.len(), UPSTREAM.len());
     }
 
     #[test]

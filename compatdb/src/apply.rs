@@ -11,7 +11,7 @@ use std::{
     ptr,
 };
 
-use compatdb_table::{append_cmdline, merge_env};
+use compatdb_table::merge_env;
 
 use crate::{Process, log, ntdll::Ntdll};
 
@@ -23,23 +23,28 @@ use crate::{Process, log, ntdll::Ntdll};
 /// Every process gets one tree per family. The default dirs hold only
 /// fake-module markers for these DLLs, so this is purely additive and nothing
 /// is ever disabled. If the tree is missing the process falls back to whatever
-/// the default dir holds, which is a load failure for that API.
-pub fn tree(nt: &Ntdll, pe_dir: &str, family: &str, name: &str) {
+/// the default dir holds, which is a load failure for that API. `source`
+/// says in the log where the choice came from.
+pub fn tree(nt: &Ntdll, pe_dir: &str, family: &str, name: &str, source: &str) {
     let Some(lib_wine) = lib_wine_dir() else {
-        log::line(&format!("  {family}: cannot locate lib/wine"));
+        log::line(&format!(
+            "  {family} = {name}, {source}: cannot locate lib/wine"
+        ));
         return;
     };
     let side = lib_wine.join(family).join(name);
     let side_pe = side.join(pe_dir);
     if !side_pe.is_dir() {
         log::line(&format!(
-            "  {family} = {name}: {} missing, using the default dir",
+            "  {family} = {name}, {source}: {} missing, using the default dir",
             side_pe.display()
         ));
         return;
     }
     if !nt.has_prepend_dll_path() {
-        log::line(&format!("  {family}: ntdll lacks prepend_dll_path"));
+        log::line(&format!(
+            "  {family} = {name}, {source}: ntdll lacks prepend_dll_path"
+        ));
         return;
     }
     let Ok(c_side) = CString::new(side.as_os_str().as_bytes()) else {
@@ -47,7 +52,10 @@ pub fn tree(nt: &Ntdll, pe_dir: &str, family: &str, name: &str) {
     };
     // ntdll keeps the pointer without copying, so it must outlive the process.
     nt.prepend_dll_path(c_side.into_raw());
-    log::line(&format!("  {family} = {name} (from {})", side.display()));
+    log::line(&format!(
+        "  {family} = {name} (from {}), {source}",
+        side.display()
+    ));
 }
 
 /// Add each `names=order` load-order override.
@@ -56,7 +64,7 @@ pub fn dll_overrides(nt: &Ntdll, overrides: &[String]) {
         return;
     }
     if !nt.has_add_load_order_override() {
-        log::line("ntdll lacks add_load_order_override, ignoring dll_overrides");
+        log::line("  ntdll lacks add_load_order_override, ignoring dll_overrides");
         return;
     }
     for entry in overrides {
@@ -68,30 +76,42 @@ pub fn dll_overrides(nt: &Ntdll, overrides: &[String]) {
 /// otherwise. win32u applies the value before the registry and the manifest,
 /// so it wins over both.
 ///
-/// Logs the value only when it was handed over, so an ntdll without the hook
-/// shows the one line saying so rather than a value that did not apply.
-pub fn dpi_awareness(nt: &Ntdll, aware: bool) {
+/// Logs the value with `source`, where it came from, only when it was handed
+/// over, so an ntdll without the hook shows the one line saying so rather
+/// than a value that did not apply.
+pub fn dpi_awareness(nt: &Ntdll, aware: bool, source: &str) {
     if !nt.has_set_compat_dpi_awareness() {
-        log::line("ntdll lacks set_compat_dpi_awareness, ignoring dpi_aware");
+        log::line(&format!(
+            "  dpi_aware = {aware}, {source}: ntdll lacks set_compat_dpi_awareness, ignored"
+        ));
         return;
     }
     nt.set_compat_dpi_awareness(i32::from(aware));
-    log::line(&format!("  dpi_aware = {aware}"));
+    log::line(&format!("  dpi_aware = {aware}, {source}"));
 }
 
 /// Tell ntdll whether to force large address awareness. `true` gives a 32-bit
-/// process the 4 GB address space even when its executable lacks the flag;
-/// `false` only stops forcing it, so an executable with the flag keeps it.
-/// ntdll ignores the value for a 64-bit process.
+/// process the 4 GB address space even when its executable lacks the flag.
+/// ntdll acts only on `true`, so `false` is the same as no value: the
+/// executable's own flag decides, and the log says so. ntdll ignores the
+/// value for a 64-bit process, which `wow64` false says this one is, and the
+/// log says that too.
 ///
 /// Logs the value only when it was handed over, like [`dpi_awareness`].
-pub fn large_address_aware(nt: &Ntdll, laa: bool) {
+pub fn large_address_aware(nt: &Ntdll, laa: bool, source: &str, wow64: bool) {
+    let note = match (laa, wow64) {
+        (_, false) => "; no effect in a 64-bit process",
+        (false, true) => " (same as unset: the executable's flag decides)",
+        (true, true) => "",
+    };
     if !nt.has_set_compat_large_address_aware() {
-        log::line("ntdll lacks set_compat_large_address_aware, ignoring large_address_aware");
+        log::line(&format!(
+            "  large_address_aware = {laa}, {source}: ntdll lacks set_compat_large_address_aware, ignored"
+        ));
         return;
     }
     nt.set_compat_large_address_aware(i32::from(laa));
-    log::line(&format!("  large_address_aware = {laa}"));
+    log::line(&format!("  large_address_aware = {laa}, {source}{note}"));
 }
 
 /// Tell ntdll whether the Mac driver takes the mouse movement of raw input
@@ -100,30 +120,32 @@ pub fn large_address_aware(nt: &Ntdll, laa: bool) {
 /// reads its settings.
 ///
 /// Logs the value only when it was handed over, like [`dpi_awareness`].
-pub fn gcmouse(nt: &Ntdll, on: bool) {
+pub fn gcmouse(nt: &Ntdll, on: bool, source: &str) {
     if !nt.has_set_compat_gcmouse() {
-        log::line("ntdll lacks set_compat_gcmouse, ignoring gcmouse");
+        log::line(&format!(
+            "  gcmouse = {on}, {source}: ntdll lacks set_compat_gcmouse, ignored"
+        ));
         return;
     }
     nt.set_compat_gcmouse(i32::from(on));
-    log::line(&format!("  gcmouse = {on}"));
+    log::line(&format!("  gcmouse = {on}, {source}"));
 }
 
 /// Rewrite `CommandLine` and `Environment` in the 64-bit params and, for a
-/// wow64 process, in the 32-bit copy too, with `arguments` appended and the
-/// `env` entries that apply merged in. Nothing is touched when neither the
-/// command line nor the environment actually changes.
+/// wow64 process, in the 32-bit copy too: the command line to `cmd`, when
+/// there is one, and the environment with the `env` entries that apply
+/// merged in. Nothing is touched when neither actually changes.
 pub fn rewrite_params(
     nt: &Ntdll,
     process: &Process,
-    arguments: &[String],
+    cmd: Option<&[u16]>,
     env: &[(String, String)],
 ) {
     // Touch only what actually changes. Rewriting the (often large, inherited)
     // environment when only the command line changed is unnecessary and risky,
     // so the two are handled independently, each in its own allocation.
-    if let Some(cmd) = append_cmdline(&process.cmdline, arguments) {
-        rewrite_command_line(nt, process, &cmd);
+    if let Some(cmd) = cmd {
+        rewrite_command_line(nt, process, cmd);
     }
     if let Some(env) = merge_env(&process.env, env) {
         rewrite_environment(nt, process, &env);
