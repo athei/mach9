@@ -314,7 +314,7 @@ exits with the number of failed checks, at most 255.
   [`bundle-wine.sh`](../bin/bundle-wine.sh) takes `d3d9.dll` and
   `mtld3d.dll` from its `i386-windows` and `aarch64-windows` and
   `mtld3d.so` from its `aarch64-unix`. Its `x86_64-windows` and
-  `x86_64-unix` builds are for an x86_64 Wine and are not used.
+  `x86_64-unix` builds are not used.
 - The `aarch64-windows` DLLs are ARM64X builtins. An x64 game runs as
   ARM64EC and loads their ARM64EC half, so mtld3d's PE code runs natively
   and only the game's x86 code goes through FEX; a native ARM64 program

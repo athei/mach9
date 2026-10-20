@@ -28,9 +28,7 @@ and with none, Wine does.
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it | At load |
 
 The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
-`d3d9` and `wined3d` values are case-insensitive. Some values from the
-retired x86_64 Wine still parse
-([values from the x86_64 Wine](#values-from-the-x86_64-wine)).
+`d3d9` and `wined3d` values are case-insensitive.
 
 ## Matching
 
@@ -133,17 +131,6 @@ name=dpi-aware;enabled=false
 - `enabled=false` drops the rule of that name.
 - A rule with a new name needs an `exe`. One without is dropped and logged
   as `override names no rule`.
-
-### Values from the x86_64 Wine
-
-A launcher written for the retired x86_64 Wine may still send what that
-Wine understood. The library keeps such a record instead of dropping it:
-
-- `dxgi=gptk` reads as `dxmt`, which is what this Wine always loaded in its
-  place.
-- A rule that names a built-in rule only that Wine had, such as
-  `name=no-vulkan;enabled=false`, names no rule here and is logged as
-  `override names no rule`.
 
 ### Errors
 

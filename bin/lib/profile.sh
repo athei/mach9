@@ -216,10 +216,8 @@ absolute_path() {
 # claim_tree <dir> <name> [<wipe>]: make <dir> the tree <name>, emptied first
 # when <wipe> is 1, and mark it. Every tree a script fills or deletes goes
 # through here first, since an override can point one anywhere. Exit unless
-# <dir> is missing, empty, or marked as that same tree. A marker that says
-# "arm64 <name>" is that same tree too: it was written while these scripts
-# also built an x86_64 Wine and named the profile. A directory with no marker
-# is also taken when its parent is BUILD_TOP or another tree: the default
+# <dir> is missing, empty, or marked as that same tree. A directory with no
+# marker is also taken when its parent is BUILD_TOP or another tree: the default
 # places of trees made before there were markers. A git checkout never is.
 claim_tree() {
     local dir="$1" mark="$2" found parent
@@ -228,7 +226,7 @@ claim_tree() {
         exit 1
     elif [ -f "$dir/$TREE_MARKER" ]; then
         found=$(cat "$dir/$TREE_MARKER")
-        if [ "$found" != "$mark" ] && [ "$found" != "arm64 $mark" ]; then
+        if [ "$found" != "$mark" ]; then
             echo "Error: $dir is the tree '$found', not '$mark'"
             exit 1
         fi
