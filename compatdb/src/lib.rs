@@ -94,8 +94,9 @@ extern "C" fn run() {
     }
 
     // Every process gets one tree of each family prepended: a rule's choice,
-    // or the arch default. Every tree serves every arch. Purely additive: the
-    // default dirs hold nothing that could conflict, so nothing is ever
+    // which for most is a built-in `*` rule's, or wined3d, upstream Wine's,
+    // when no rule names one. Every tree serves every arch. Purely additive:
+    // the default dirs hold nothing that could conflict, so nothing is ever
     // disabled.
     let pe_dir = process.arch.pe_dir();
     let dxgi = Dxgi::effective(resolution.dxgi, process.arch);
@@ -363,9 +364,13 @@ mod tests {
     #[test]
     fn a_native_arm64_program_gets_dxmt_and_mtld3d_and_either_tree_a_rule_asks_for() {
         let native = Arch::Aarch64;
-        // The defaults are dxmt and mtld3d, as for an x86 program.
-        assert_eq!(Dxgi::effective(None, native), Dxgi::Dxmt);
-        assert_eq!(D3d9::effective(None, native), D3d9::Mtld3d);
+        // The built-in rules give it dxmt and mtld3d, as an x86 program.
+        let game = builtin::table().resolve("game.exe", &VersionInfo::default());
+        assert_eq!(Dxgi::effective(game.dxgi, native), Dxgi::Dxmt);
+        assert_eq!(D3d9::effective(game.d3d9, native), D3d9::Mtld3d);
+        // Without a rule, wined3d, as in upstream Wine.
+        assert_eq!(Dxgi::effective(None, native), Dxgi::Wined3d);
+        assert_eq!(D3d9::effective(None, native), D3d9::Wined3d);
         // Either tree of each family is what it gets when a rule asks for it.
         for requested in [Dxgi::Dxmt, Dxgi::Wined3d] {
             assert_eq!(Dxgi::effective(Some(requested), native), requested);

@@ -654,10 +654,10 @@ check_rules_read() {
     fi
 }
 
-# check_default_trees <log>: exit unless compatdb.so reported the default
-# tree of each family in <log>, the first in its list in profile.sh, which is
-# the same for every arch. The "(from ...)" lines only appear once it found
-# and prepended them.
+# check_default_trees <log>: exit unless compatdb.so reported in <log> the
+# tree the built-in dxmt and mtld3d rules give every process, the first of
+# each family's list in profile.sh, which is the same for every arch. The
+# "(from ...)" lines only appear once it found and prepended them.
 check_default_trees() {
     local want dxgi_want d3d9_want
     dxgi_want="dxgi = ${DXGI_IMPLS%% *} (from"
@@ -784,8 +784,8 @@ smoke_test() {
     # the test does not depend on what the prefix happens to contain. Each
     # prints a marker naming the architecture it was compiled for, then loads
     # the DLLs it is given and says whether all of them loaded. Its compatdb
-    # lines say which trees it got: the defaults, the same for every arch
-    # (Dxgi::default_for and D3d9::default_for in compatdb/table). An x86
+    # lines say which trees it got: the ones the built-in dxmt and mtld3d
+    # rules give every arch (compatdb/src/builtin.rs). An x86
     # program loads dxgi.dll and d3d9.dll. A native ARM64 program also loads
     # winemetal.dll and mtld3d.dll, which only the dxmt and mtld3d trees
     # have, so the loads show that the ARM64 halves of DXMT's and mtld3d's

@@ -174,9 +174,10 @@ fn string_value(blob: &[u16], key: &str) -> String {
 /// work with its own.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dxgi {
-    /// DXMT, the default for every program.
+    /// DXMT, which the built-in `dxmt` rule gives every program.
     Dxmt,
-    /// Wine's own wined3d.
+    /// Wine's own wined3d, what upstream Wine loads, and so what a process
+    /// gets when no rule names an implementation.
     Wined3d,
 }
 
@@ -200,15 +201,15 @@ impl Dxgi {
         }
     }
 
-    /// What a process gets when no rule names an implementation: DXMT, for
-    /// every arch, a native ARM64 program included. Either tree serves every
-    /// arch: the 64-bit modules of both are ARM64X, so a native ARM64 program
-    /// loads their ARM64 half and an x64 program, which runs as ARM64EC,
-    /// their ARM64EC half; an i386 program gets their i386 builds under
-    /// emulation.
+    /// What a process gets when no rule names an implementation: wined3d,
+    /// as in upstream Wine, for every arch. Its tree has no D3D12. Either
+    /// tree serves every arch: the 64-bit modules of both are ARM64X, so a
+    /// native ARM64 program loads their ARM64 half and an x64 program, which
+    /// runs as ARM64EC, their ARM64EC half; an i386 program gets their i386
+    /// builds under emulation.
     #[must_use]
     pub const fn default_for(_arch: Arch) -> Self {
-        Self::Dxmt
+        Self::Wined3d
     }
 
     /// The implementation a process loads: the requested one, or the default
@@ -226,9 +227,10 @@ impl Dxgi {
 /// implementation's `d3d9.dll` touches `dxgi.dll`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum D3d9 {
-    /// mtld3d, the default for every program.
+    /// mtld3d, which the built-in `mtld3d` rule gives every program.
     Mtld3d,
-    /// Wine's own wined3d.
+    /// Wine's own wined3d, what upstream Wine loads, and so what a process
+    /// gets when no rule names an implementation.
     Wined3d,
 }
 
@@ -252,15 +254,15 @@ impl D3d9 {
         }
     }
 
-    /// What a process gets when no rule names an implementation: mtld3d, for
-    /// every arch, a native ARM64 program included. Either tree serves every
-    /// arch: the 64-bit modules of both, mtld3d's release build and Wine's
-    /// own `d3d9.dll`, are ARM64X, so a native ARM64 program loads their
-    /// ARM64 half and an x64 program, which runs as ARM64EC, their ARM64EC
-    /// half; an i386 program gets their i386 builds under emulation.
+    /// What a process gets when no rule names an implementation: wined3d,
+    /// as in upstream Wine, for every arch. Either tree serves every arch:
+    /// the 64-bit modules of both, mtld3d's release build and Wine's own
+    /// `d3d9.dll`, are ARM64X, so a native ARM64 program loads their ARM64
+    /// half and an x64 program, which runs as ARM64EC, their ARM64EC half;
+    /// an i386 program gets their i386 builds under emulation.
     #[must_use]
     pub const fn default_for(_arch: Arch) -> Self {
-        Self::Mtld3d
+        Self::Wined3d
     }
 
     /// The implementation a process loads: the requested one, or the default
@@ -2700,41 +2702,28 @@ mod tests {
         );
     }
 
-    /// The arches of an x86 program, which every implementation serves.
-    const X86_ARCHES: [Arch; 2] = [Arch::X86_64, Arch::I386];
+    /// Every arch a program can have, which every implementation serves.
+    const ARCHES: [Arch; 3] = [Arch::X86_64, Arch::I386, Arch::Aarch64];
 
     #[test]
-    fn an_x86_program_defaults_to_dxmt_and_gets_what_it_asks_for() {
-        for arch in X86_ARCHES {
-            assert_eq!(Dxgi::default_for(arch), Dxgi::Dxmt, "{arch:?}");
+    fn without_a_rule_every_arch_gets_wined3d_and_otherwise_what_it_asks_for() {
+        // No opinion means upstream Wine's implementation of both families;
+        // the built-in rules of compatdb.so ask for DXMT and mtld3d.
+        for arch in ARCHES {
+            assert_eq!(Dxgi::default_for(arch), Dxgi::Wined3d, "{arch:?}");
+            assert_eq!(Dxgi::effective(None, arch), Dxgi::Wined3d, "{arch:?}");
             for dxgi in [Dxgi::Dxmt, Dxgi::Wined3d] {
                 assert_eq!(Dxgi::effective(Some(dxgi), arch), dxgi);
             }
-            assert_eq!(Dxgi::effective(None, arch), Dxgi::Dxmt);
+            assert_eq!(D3d9::default_for(arch), D3d9::Wined3d, "{arch:?}");
+            assert_eq!(D3d9::effective(None, arch), D3d9::Wined3d, "{arch:?}");
+            for d3d9 in [D3d9::Mtld3d, D3d9::Wined3d] {
+                assert_eq!(D3d9::effective(Some(d3d9), arch), d3d9);
+            }
         }
         assert_eq!(Dxgi::Wined3d.as_str(), "wined3d");
         assert_eq!(Dxgi::parse("DXMT"), Some(Dxgi::Dxmt));
         assert_eq!(Dxgi::parse("default"), None);
-    }
-
-    #[test]
-    fn a_native_arm64_program_defaults_to_dxmt_and_gets_what_it_asks_for() {
-        let native = Arch::Aarch64;
-        assert_eq!(Dxgi::default_for(native), Dxgi::Dxmt);
-        assert_eq!(Dxgi::effective(None, native), Dxgi::Dxmt);
-        for dxgi in [Dxgi::Dxmt, Dxgi::Wined3d] {
-            assert_eq!(Dxgi::effective(Some(dxgi), native), dxgi);
-        }
-    }
-
-    #[test]
-    fn a_native_arm64_program_defaults_to_mtld3d_and_gets_what_it_asks_for() {
-        let native = Arch::Aarch64;
-        assert_eq!(D3d9::default_for(native), D3d9::Mtld3d);
-        assert_eq!(D3d9::effective(None, native), D3d9::Mtld3d);
-        for d3d9 in [D3d9::Mtld3d, D3d9::Wined3d] {
-            assert_eq!(D3d9::effective(Some(d3d9), native), d3d9);
-        }
     }
 
     #[test]
@@ -2762,15 +2751,9 @@ mod tests {
     }
 
     #[test]
-    fn d3d9_defaults_to_mtld3d_for_every_x86_program() {
-        for arch in X86_ARCHES {
-            assert_eq!(D3d9::default_for(arch), D3d9::Mtld3d);
-            for requested in [None, Some(D3d9::Mtld3d)] {
-                assert_eq!(D3d9::effective(requested, arch), D3d9::Mtld3d);
-            }
-            assert_eq!(D3d9::effective(Some(D3d9::Wined3d), arch), D3d9::Wined3d);
-        }
+    fn d3d9_values_parse_and_print() {
         assert_eq!(D3d9::parse("wined3d"), Some(D3d9::Wined3d));
+        assert_eq!(D3d9::parse("MTLD3D"), Some(D3d9::Mtld3d));
         assert_eq!(D3d9::parse("gptk"), None);
         assert_eq!(D3d9::Mtld3d.as_str(), "mtld3d");
     }

@@ -573,8 +573,8 @@ After assembly:
   waiting for the time limit; the i386 `cmd.exe` runs; and
   [`smoke/hello.c`](../smoke/hello.c), compiled for each architecture in
   `SMOKE_PE_ARCHS`, prints its marker and must load its DLLs. Each one's
-  compatdb lines must name the default trees, `dxmt` and `mtld3d`, which
-  are the same for every arch. The x86 programs load `dxgi.dll` and
+  compatdb lines must name the trees the built-in `dxmt` and `mtld3d` rules
+  give every arch. The x86 programs load `dxgi.dll` and
   `d3d9.dll`; the native one also loads `winemetal.dll` and `mtld3d.dll`,
   which only the `dxmt` and `mtld3d` trees have. Before any of this runs,
   every 64-bit marker of a Direct3D name must be a hybrid one, which a
