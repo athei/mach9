@@ -438,23 +438,17 @@ mod tests {
     #[test]
     fn the_table_leaves_vulkan_1_alone() {
         // The bundle ships Wine's Vulkan, so no built-in rule disables the
-        // loader, and naming the x86_64 Wine's `no-vulkan` rule finds
-        // nothing, which the library reports as an override that names no
-        // rule.
+        // loader. --compatdb-only relies on this when it refuses a bundle
+        // without Vulkan, where a game's own vulkan-1.dll would load.
         let table = table();
         assert!(
             !table
                 .rules
                 .iter()
-                .any(|r| r.name == "no-vulkan"
-                    || r.dll_overrides.iter().any(|o| o.contains("vulkan")))
+                .any(|r| r.dll_overrides.iter().any(|o| o.contains("vulkan")))
         );
         let game = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(game.dll_overrides, wildcard_overrides());
-        let mut table = super::table();
-        let (over, _) = Table::parse("name=no-vulkan;enabled=false");
-        assert_eq!(table.overlay(over), ["no-vulkan".to_string()]);
-        assert_eq!(table, super::table());
     }
 
     #[test]

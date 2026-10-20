@@ -1005,7 +1005,7 @@ fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
         // A value other than `true` or `false` is ignored like any bad
         // boolean, so the rule stays enabled: a typo never drops a rule.
         "enabled" => rule.enabled = parse_bool(key, value)?,
-        "dxgi" => rule.dxgi = Some(parse_value(key, value, wire_dxgi)?),
+        "dxgi" => rule.dxgi = Some(parse_value(key, value, Dxgi::parse)?),
         "d3d9" => rule.d3d9 = Some(parse_value(key, value, D3d9::parse)?),
         "wined3d" => rule.wined3d = Some(parse_value(key, value, Wined3d::parse)?),
         "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
@@ -1026,19 +1026,6 @@ fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
 fn parse_value<T>(key: &str, value: &str, parse: fn(&str) -> Option<T>) -> Result<T, String> {
     let decoded = decode(value);
     parse(&decoded).ok_or_else(|| format!("unknown {key} value {decoded:?}"))
-}
-
-/// A `dxgi` value on the wire, case-insensitively. `gptk`, Apple's `D3DMetal`,
-/// which only the `x86_64` Wine shipped, reads as `dxmt`: that is what the
-/// arm64 library has always loaded in its place, so a table written for
-/// both Wines keeps its meaning. [`Dxgi::effective`] still gives a native
-/// ARM64 program wined3d.
-fn wire_dxgi(value: &str) -> Option<Dxgi> {
-    if value.eq_ignore_ascii_case("gptk") {
-        Some(Dxgi::Dxmt)
-    } else {
-        Dxgi::parse(value)
-    }
 }
 
 /// A boolean field's value: exactly `true` or `false`, case-sensitive, so a
@@ -1405,6 +1392,8 @@ mod tests {
         for (field, said) in [
             ("bogus=1", "unknown key \"bogus\""),
             ("dxgi=vulkan", "unknown dxgi value \"vulkan\""),
+            // The x86_64 Wine's D3DMetal is a value like any other unknown one.
+            ("dxgi=gptk", "unknown dxgi value \"gptk\""),
             ("d3d9=gptk", "unknown d3d9 value \"gptk\""),
             ("wined3d=opengl", "unknown wined3d value \"opengl\""),
             ("dpi_aware=yes", "unknown dpi_aware value \"yes\""),
@@ -2634,31 +2623,6 @@ mod tests {
         assert_eq!(Dxgi::Wined3d.as_str(), "wined3d");
         assert_eq!(Dxgi::parse("DXMT"), Some(Dxgi::Dxmt));
         assert_eq!(Dxgi::parse("default"), None);
-    }
-
-    #[test]
-    fn gptk_is_no_value_of_the_config_but_reads_as_dxmt_on_the_wire() -> TestResult {
-        // A launcher's own config must not offer it any more.
-        assert_eq!(Dxgi::parse("gptk"), None);
-        // A table that still carries it, from a launcher written for both
-        // Wines, keeps its record, with the implementation the arm64 Wine
-        // always loaded in its place.
-        let (table, diagnostics) =
-            Table::parse("name=a;exe=a.exe;dxgi=gptk\nname=b;exe=b.exe;dxgi=GPTK");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(table.rules.len(), 2);
-        for rule in &table.rules {
-            assert_eq!(rule.dxgi, Some(Dxgi::Dxmt), "{}", rule.name);
-        }
-        // Written back, it is dxmt.
-        let first = table.rules.first().ok_or("no rule")?;
-        assert_eq!(rule_to_record(first), "name=a;exe=a.exe;dxgi=dxmt");
-        // Every arch, a native ARM64 one included, gets DXMT for it.
-        let resolved = table.resolve("a.exe", &VersionInfo::default());
-        for arch in [Arch::Aarch64, Arch::X86_64, Arch::I386] {
-            assert_eq!(Dxgi::effective(resolved.dxgi, arch), Dxgi::Dxmt, "{arch:?}");
-        }
-        Ok(())
     }
 
     #[test]
