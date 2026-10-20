@@ -87,9 +87,14 @@ The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
   reads it in the game's process when it creates such a swapchain, and
   logs `Allowing a frame latency of at least <n> frames.` then. Like the
   FEX entry, it leaves a value the caller exported alone.
-- The entries and the reasoning for both are in
-  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). The FEX and
-  vkd3d-proton [recipes](#recipes) turn them off or change them.
+- The built-in `opengl-egl` rule sets `WINE_MAC_OPENGL=egl` for every
+  process, so the Mac driver gives OpenGL through Mesa's EGL with Zink
+  instead of Apple's OpenGL, which upstream Wine uses. Without a GPU of the
+  Metal 4 family the process then gets no OpenGL, and an exported
+  `WINE_MAC_OPENGL=cgl` gives it Apple's ([OpenGL](arm64.md#opengl)).
+- The entries and the reasoning for these rules are in
+  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). Their
+  [recipes](#recipes) turn them off or change them.
 - KosmicKrisp's features need no rule: our Mesa fork advertises the ones
   Direct3D 12 and OpenGL through Zink need without `MESA_KK_EXPERIMENTAL`
   ([arm64.md](arm64.md#vulkan)).
@@ -204,6 +209,8 @@ executable.
 | Keep no-execute on for one game | `name=my-game;exe=Game.exe;env=WINE_FORCE_NX=1` |
 | Give one game FEX's full x87 precision | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision | `name=fex-x87-reduced-precision;enabled=false` |
+| Give one game Apple's OpenGL | `name=my-game;exe=Game.exe;env=WINE_MAC_OPENGL=cgl` |
+| Give every process Apple's OpenGL | `name=opengl-egl;enabled=false` |
 | Put wined3d on Vulkan for one game | `name=my-game;exe=Game.exe;wined3d=vulkan` |
 
 - A game that can use D3D12 and D3D11 usually takes D3D12 when
