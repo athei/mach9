@@ -24,6 +24,7 @@ and with none, Wine does.
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` is the same as unset: the executable's large-address-aware flag decides, as in upstream Wine. No effect on 64-bit | At load; ntdll applies it after the library returns |
 | `gcmouse` | `true`, `false` | `true`: the Mac driver takes the mouse movement of raw input (`WM_INPUT`) and DirectInput from GameController's `GCMouse`, in the device's own counts, so mouselook is linear. `false`: that movement is the cursor's, which macOS accelerates and scales for retina. Unset: the same as `false`, as in upstream Wine ([GameController mice](#gamecontroller-mice)) | At load, read by winemac.drv |
+| `force_nx` | `true`, `false` | `true`: no-execute stays permanently on in a 32-bit process, even when its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine turns it off, and the process cannot turn it off. `false` is the same as unset: Wine's behaviour. No effect on 64-bit, which always has no-execute on. The value is the process's own; the programs it starts get their own rules' value ([no-execute](#no-execute)) | At load, read by ntdll |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it. An entry of a built-in `*` rule is a default and leaves a variable the process already has alone; every other entry replaces it ([environment defaults](#environment-defaults)) | At load |
 
@@ -213,7 +214,8 @@ executable.
 | Change a vkd3d-proton setting for one game | `name=my-game;exe=Game.exe;env=VKD3D_CONFIG=<options>` |
 | Give one game the frame latency it asks for | `name=my-game;exe=Game.exe;env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=` |
 | Give every game the frame latency it asks for | `name=vkd3d-proton-min-latency;enabled=false` |
-| Keep no-execute on for one game | `name=my-game;exe=Game.exe;env=WINE_FORCE_NX=1` |
+| Give one game Wine's no-execute behaviour | `name=my-game;exe=Game.exe;force_nx=false` |
+| Give every process Wine's no-execute behaviour | `name=force-nx;enabled=false` |
 | Give one game FEX's full x87 precision | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision | `name=fex-x87-reduced-precision;enabled=false` |
 | Give one game Apple's OpenGL | `name=my-game;exe=Game.exe;env=WINE_MAC_OPENGL=cgl` |
@@ -236,16 +238,17 @@ executable.
   the last entry for a module. A rule for one executable folds later by
   specificity; a new `*` rule folds later by table order, since rules from
   `WINE_COMPATDB` come after the built-in ones.
-- The processes a game starts inherit the variables of its `env` rule, so
-  `WINE_FORCE_NX` keeps no-execute on in them too. An empty value in a rule
-  removes the variable instead of setting it empty, so
-  `env=WINE_FORCE_NX=` does not keep no-execute on.
-- The same holds for a variable a built-in `*` rule sets by default, such
-  as `FEX_X87REDUCEDPRECISION`: a value a rule for one game sets carries
-  into the programs that game starts, since their default leaves a
-  variable they inherit alone. A value removed for one game does not carry
-  over: the variable is unset in its children, and the default sets it
-  again ([environment defaults](#environment-defaults)).
+- The processes a game starts inherit the variables of its `env` rule. For
+  a variable a built-in `*` rule sets by default, such as
+  `FEX_X87REDUCEDPRECISION`, a value a rule for one game sets carries into
+  the programs that game starts, since their default leaves a variable
+  they inherit alone. An empty value in a rule removes the variable
+  instead of setting it empty, and a value removed for one game does not
+  carry over: the variable is unset in its children, and the default sets
+  it again ([environment defaults](#environment-defaults)).
+- The settings ntdll stores for the process, `dpi_aware`,
+  `large_address_aware`, `gcmouse` and `force_nx`, are its own: the
+  programs a game starts get the value of their own rules.
 
 ## wined3d on Vulkan
 
@@ -296,6 +299,31 @@ executable.
   (`name=gcmouse;enabled=false`) turns GameController mice off for every
   process, as `gcmouse=false` in a `*` rule does.
 
+## No-execute
+
+- The built-in `force-nx` rule sets `force_nx` for every process, so
+  no-execute stays permanently on in a 32-bit process even when its
+  executable or a DLL lacks the `NX_COMPAT` flag, for which Wine would turn
+  it off. With no-execute off, FEX has to treat all writable memory as
+  possible code and translates code again whenever that memory changes
+  ([arm64.md](arm64.md)).
+- compatdb.so hands the value to ntdll through `set_compat_force_nx`, and
+  ntdll reads it the first time the process asks for or changes its
+  execute flags ([Wine-side contract](maintenance.md#wine-side-contract)).
+  Without a value from compatdb ntdll keeps Wine's behaviour, so dropping
+  the rule by name (`name=force-nx;enabled=false`) gives every process
+  Wine's behaviour.
+- A program that runs code from memory it did not make executable crashes
+  with it, and a rule for that program with `force_nx=false` gives it
+  Wine's behaviour again ([recipes](#recipes)). Programs built with the ATL
+  of Visual Studio 2003, such as some game configurators and launchers,
+  are a known case: their window thunks live on the heap, which Windows
+  emulates and neither Wine nor FEX does in a 32-bit process here, so they
+  fault on their first window message.
+- The value is the process's own, not an environment variable: a program
+  that a game with `force_nx=false` starts gets the value of its own
+  rules, the `force-nx` default unless a rule for it says otherwise.
+
 ## Native ARM64 programs
 
 - A native ARM64 program gets the same trees as every program: the built-in
@@ -340,8 +368,9 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
     decide;
   - `dll_overrides` and `arguments`, each entry with its rule, and for an
     argument whether it was appended or already present;
-  - `dpi_aware`, `large_address_aware` (noting that it has no effect in a
-    64-bit process) and `gcmouse`;
+  - `dpi_aware`, `large_address_aware`, `gcmouse` and `force_nx` (the
+    second and the last noting that they have no effect in a 64-bit
+    process);
   - one `env NAME=value, rule <name>: ...` line per entry, saying whether
     it was set, removed (naming the earlier entry whose value it undoes, or
     saying the variable was not set, so there was nothing to remove), left

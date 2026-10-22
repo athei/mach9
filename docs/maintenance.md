@@ -271,6 +271,10 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
     through `ntdll_get_compat_gcmouse` when it reads its settings, to decide
     whether raw mouse input comes from GameController
     ([GameController mice](compatdb.md#gamecontroller-mice)).
+  - `set_compat_force_nx`, which only stores the value; ntdll reads it when
+    the process asks for or changes its execute flags and, for 1, keeps
+    no-execute permanently on ([no-execute](compatdb.md#no-execute)). The
+    bundle step checks that `ntdll.so` exports it.
   - On an ntdll without one of them, compatdb.so logs that and skips the
     setting.
 - winemac exports `macdrv_functions`, the window, Metal and monitor helpers
@@ -282,8 +286,6 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
   bundle step checks that `ntdll.so` names the variable.
 - The wineserver runs CrossOver's msync and prints the lines the smoke test
   looks for ([runtime](arm64.md#runtime)).
-- ntdll keeps Wine's no-execute behavior unless `WINE_FORCE_NX` keeps
-  no-execute permanently on.
 - The loader checks for its entitlement and re-execs itself with 4K pages
   ([loader app](arm64.md#loader-app)).
 

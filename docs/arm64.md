@@ -14,14 +14,14 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
   [macOS floors](maintenance.md#macos-floors)).
 - `WINE_ARCHS` in `profile.sh` names the PE architectures: aarch64 with
   arm64ec, so that x64 code runs as ARM64EC, and i386 for WoW64.
-- No-execute follows upstream Wine by default. With no-execute off, every
+- Upstream Wine turns no-execute off for a 32-bit process whose executable
+  or one of its DLLs lacks the `NX_COMPAT` flag. With no-execute off, every
   readable page is executable, so FEX has to treat all writable memory as
-  possible code and translates it again whenever it changes. `WINE_FORCE_NX`
-  set to anything but `0` keeps no-execute permanently on, so the process
-  cannot turn it off
-  ([environment variables](../README.md#environment-variables)). For a
-  program whose executable lacks the `NX_COMPAT` flag and that runs slowly
-  for that reason, a compatdb rule sets the variable
+  possible code and translates it again whenever it changes. compatdb's
+  `force_nx` setting keeps no-execute permanently on, so the process cannot
+  turn it off, and its built-in `force-nx` rule sets it for every process
+  ([no-execute](compatdb.md#no-execute)). For a game that needs no-execute
+  off, a compatdb rule gives it Wine's behaviour again
   ([recipes](compatdb.md#recipes)).
 - FEX is upstream FEX with our own commits on top, from
   [athei/FEX](https://github.com/athei/FEX) at the ref
@@ -549,6 +549,8 @@ After assembly:
   are in place, the manifest's `library_path` resolves from its directory,
   the loader and the driver export their entry points, and `ntdll.so`
   names `VK_DRIVER_FILES`.
+- `ntdll.so` exports `set_compat_force_nx`, the hook through which
+  compatdb.so hands over `force_nx`.
 - `win32u.so` opens `lib/external/libEGL.1.dylib`, which exports its entry
   points and loads the gallium library next to it, and the gallium library
   loads the Vulkan loader by `@rpath` with `@loader_path` as its only

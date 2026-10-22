@@ -4,7 +4,8 @@
 //! them: the Direct3D implementations to load (one for D3D9, one for the DXGI
 //! family) and the renderer of wined3d, DLL load-order overrides, the DPI
 //! awareness, large address awareness, whether the Mac driver reads raw mouse
-//! input from `GameController`, command-line switches and environment entries.
+//! input from `GameController`, whether no-execute stays permanently on,
+//! command-line switches and environment entries.
 //!
 //! Shared by `compatdb.so`, the unix library wine's ntdll loads into every
 //! process (it holds the built-in rules, parses [`ENV_VAR`], overlays the
@@ -52,6 +53,7 @@ pub const BUILTIN_RULE_NAMES: &[&str] = &[
     "fex-x87-reduced-precision",
     "vkd3d-proton-min-latency",
     "opengl-egl",
+    "force-nx",
     "no-mono-gecko",
     "rockstar-launcher",
     "rockstar-social-club-ui",
@@ -480,6 +482,13 @@ pub struct Rule {
     /// specific rule; with none, the Mac driver keeps upstream Wine's
     /// behaviour, the cursor's movement.
     pub gcmouse: Option<bool>,
+    /// Whether no-execute stays permanently on in a 32-bit process, even when
+    /// its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine
+    /// turns it off. `false` is the same as unset: Wine's behaviour. Has no
+    /// effect on a 64-bit process, which always has no-execute on. Unlike an
+    /// `env` entry, the value is the process's own: the processes it starts
+    /// get their own rules' value.
+    pub force_nx: Option<bool>,
     /// `WINEDLLOVERRIDES` elements (each a `names=order` string).
     pub dll_overrides: Vec<String>,
     /// Text appended to the command line, unless already present.
@@ -528,6 +537,10 @@ pub const UPSTREAM: &[(&str, &str)] = &[
         "the executable's large-address-aware flag",
     ),
     ("gcmouse", "off, the cursor's movement"),
+    (
+        "force_nx",
+        "no-execute off when the executable or a DLL lacks the NX_COMPAT flag",
+    ),
     (
         "dll_overrides",
         "WINEDLLOVERRIDES and the registry's DllOverrides decide",
@@ -594,6 +607,7 @@ impl Default for Rule {
             dpi_aware: None,
             large_address_aware: None,
             gcmouse: None,
+            force_nx: None,
             dll_overrides: Vec::new(),
             arguments: Vec::new(),
             env: Vec::new(),
@@ -695,6 +709,10 @@ impl Rule {
             self.gcmouse = over.gcmouse;
             self.changed.key("gcmouse");
         }
+        if over.force_nx.is_some() {
+            self.force_nx = over.force_nx;
+            self.changed.key("force_nx");
+        }
         if !over.exe.is_empty() {
             self.exe = over.exe;
         }
@@ -742,6 +760,7 @@ pub struct Resolution {
     pub dpi_aware: Option<bool>,
     pub large_address_aware: Option<bool>,
     pub gcmouse: Option<bool>,
+    pub force_nx: Option<bool>,
     pub dll_overrides: Vec<String>,
     /// Where each entry of [`Resolution::dll_overrides`] came from, at the
     /// same index.
@@ -754,8 +773,9 @@ pub struct Resolution {
     /// Where each entry of [`Resolution::env`] came from, at the same index.
     pub env_from: Vec<EnvFrom>,
     /// Where each scalar setting came from, by its key (`dxgi`, `d3d9`,
-    /// `wined3d`, `dpi_aware`, `large_address_aware`, `gcmouse`): the most
-    /// specific rule that set it. A key no rule set is missing.
+    /// `wined3d`, `dpi_aware`, `large_address_aware`, `gcmouse`,
+    /// `force_nx`): the most specific rule that set it. A key no rule set is
+    /// missing.
     pub set_by: Vec<(&'static str, Origin)>,
     /// Names of the rules that matched, in the order they were folded.
     pub matched: Vec<String>,
@@ -822,6 +842,7 @@ impl Resolution {
             && self.dpi_aware.is_none()
             && self.large_address_aware.is_none()
             && self.gcmouse.is_none()
+            && self.force_nx.is_none()
             && self.dll_overrides.is_empty()
             && self.arguments.is_empty()
             && self.env.is_empty()
@@ -1017,6 +1038,10 @@ impl Table {
             if let Some(gcmouse) = rule.gcmouse {
                 r.gcmouse = Some(gcmouse);
                 r.record("gcmouse", rule);
+            }
+            if let Some(force_nx) = rule.force_nx {
+                r.force_nx = Some(force_nx);
+                r.record("force_nx", rule);
             }
             let origin = |start: Option<usize>, i: usize| Origin {
                 rule: rule.name.clone(),
@@ -1335,6 +1360,7 @@ fn rule_to_record(rule: &Rule) -> String {
         ("dpi_aware", rule.dpi_aware),
         ("large_address_aware", rule.large_address_aware),
         ("gcmouse", rule.gcmouse),
+        ("force_nx", rule.force_nx),
     ] {
         if let Some(value) = value {
             fields.push(field(key, if value { "true" } else { "false" }));
@@ -1406,6 +1432,7 @@ fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
         "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
         "large_address_aware" => rule.large_address_aware = Some(parse_bool(key, value)?),
         "gcmouse" => rule.gcmouse = Some(parse_bool(key, value)?),
+        "force_nx" => rule.force_nx = Some(parse_bool(key, value)?),
         "dll_overrides" => rule.dll_overrides.push(decode(value)),
         "arguments" => rule.arguments.push(decode(value)),
         "env" => {
@@ -2222,6 +2249,103 @@ mod tests {
     }
 
     #[test]
+    fn force_nx_round_trips_and_is_absent_when_unset() {
+        let table = Table {
+            rules: vec![
+                Rule {
+                    name: "defaults".into(),
+                    exe: ANY_EXE.into(),
+                    force_nx: Some(true),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "old".into(),
+                    exe: "old.exe".into(),
+                    gcmouse: Some(false),
+                    force_nx: Some(false),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "unset".into(),
+                    exe: "other.exe".into(),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let text = table.to_env_value();
+        assert_eq!(
+            text,
+            "name=defaults;exe=*;force_nx=true\n\
+             name=old;exe=old.exe;gcmouse=false;force_nx=false\n\
+             name=unset;exe=other.exe"
+        );
+        let (parsed, diagnostics) = Table::parse(&text);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(parsed, table);
+    }
+
+    #[test]
+    fn a_bad_force_nx_value_is_ignored() {
+        let key = "force_nx";
+        for bad in ["yes", "1", "False", ""] {
+            let (table, diagnostics) = Table::parse(&format!(
+                "name=x;exe=x.exe;dpi_aware=false;{key}={bad}\nname=ok;exe=ok.exe"
+            ));
+            assert_eq!(table.rules.len(), 2, "{key}={bad:?}");
+            let x = table.rules.first();
+            assert_eq!(x.map(|r| r.force_nx), Some(None));
+            assert_eq!(x.map(|r| r.dpi_aware), Some(Some(false)));
+            assert_eq!(diagnostics.len(), 1, "{key}={bad:?}");
+            assert!(
+                diagnostics.first().is_some_and(|d| d.contains(key)),
+                "{diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn force_nx_resolves_to_the_most_specific_rule_and_overlays_by_name() -> TestResult {
+        let mut table = Table {
+            rules: vec![
+                Rule {
+                    name: "named".into(),
+                    exe: "game.exe".into(),
+                    force_nx: Some(false),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "defaults".into(),
+                    exe: ANY_EXE.into(),
+                    force_nx: Some(true),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.force_nx, Some(true));
+        assert_eq!(other.set_by("force_nx"), Some("defaults"));
+        let named = table.resolve("Game.exe", &VersionInfo::default());
+        assert_eq!(named.force_nx, Some(false));
+        assert_eq!(named.set_by("force_nx"), Some("named"));
+        let none = Table::default().resolve("x.exe", &VersionInfo::default());
+        assert_eq!(none.force_nx, None);
+        assert!(none.is_empty());
+        // An override by name replaces it only when it sets it.
+        let (over, diagnostics) = Table::parse("name=defaults;dll_overrides=a=");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(table.overlay(over), [] as [String; 0]);
+        let rule = table.rules.get(1).ok_or("no rule")?;
+        assert_eq!(rule.force_nx, Some(true));
+        let (over, diagnostics) = Table::parse("name=defaults;force_nx=false");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(table.overlay(over), [] as [String; 0]);
+        let resolution = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(resolution.force_nx, Some(false));
+        assert!(resolution.origin("force_nx").ok_or("no origin")?.changed);
+        Ok(())
+    }
+
+    #[test]
     fn the_x86_64_wines_x87_sidecar_key_is_an_unknown_key() {
         // A launcher written for that Wine may still send it. Like any key
         // the library does not know, it costs only its own field, with a
@@ -2807,6 +2931,7 @@ mod tests {
             dpi_aware: Some(true),
             large_address_aware: Some(true),
             gcmouse: Some(true),
+            force_nx: Some(true),
             dll_overrides: vec!["a=".into()],
             arguments: vec!["-a".into()],
             env: vec![("A".into(), "1".into())],

@@ -179,8 +179,8 @@ extern "C" fn run() {
 }
 
 /// Hand the settings ntdll stores for Wine to read later to their hooks, each
-/// with its log line: the DPI awareness, large address awareness and the
-/// `GameController` mouse setting.
+/// with its log line: the DPI awareness, large address awareness, the
+/// `GameController` mouse setting and whether no-execute stays on.
 fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &compatdb_table::Resolution) {
     match resolution.dpi_aware {
         Some(aware) => apply::dpi_awareness(
@@ -205,6 +205,15 @@ fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &compatdb_table::Resol
     match resolution.gcmouse {
         Some(on) => apply::gcmouse(nt, on, &source("gcmouse", resolution.origin("gcmouse"))),
         None => log::line(&unset_line("gcmouse")),
+    }
+    match resolution.force_nx {
+        Some(on) => apply::force_nx(
+            nt,
+            on,
+            &source("force_nx", resolution.origin("force_nx")),
+            process.params32.is_some(),
+        ),
+        None => log::line(&unset_line("force_nx")),
     }
 }
 
@@ -613,6 +622,11 @@ mod tests {
         assert_eq!(
             unset_line("gcmouse"),
             "  gcmouse = unset (upstream: off, the cursor's movement)"
+        );
+        assert_eq!(
+            unset_line("force_nx"),
+            "  force_nx = unset (upstream: no-execute off when the executable or a DLL lacks the \
+             NX_COMPAT flag)"
         );
         assert_eq!(source("dxgi", None), "unset (upstream: wined3d)");
         assert_eq!(source("dxgi", Some(&origin("dxmt", false))), "rule dxmt");

@@ -8,10 +8,9 @@
 //! none of them can catch an unrelated program that happens to share a file
 //! name. The exceptions are `dxmt`, `mtld3d`, `dpi-aware`,
 //! `large-address-aware`, `gcmouse`, `fex-x87-reduced-precision`,
-//! `vkd3d-proton-min-latency`, `opengl-egl` and `no-mono-gecko`, which match
-//! every process
-//! on purpose: each is a default that a more specific rule can override and
-//! that can be dropped by name.
+//! `vkd3d-proton-min-latency`, `opengl-egl`, `force-nx` and `no-mono-gecko`,
+//! which match every process on purpose: each is a default that a more
+//! specific rule can override and that can be dropped by name.
 
 use compatdb_table::{ANY_EXE, D3d9, Dxgi, Rule, Table};
 
@@ -160,6 +159,33 @@ fn defaults() -> Vec<Rule> {
             name: "opengl-egl".into(),
             exe: ANY_EXE.into(),
             env: vec![("WINE_MAC_OPENGL".into(), "egl".into())],
+            ..Rule::default()
+        },
+        // i386 code runs under FEX. Wine turns no-execute off for a 32-bit
+        // process when its executable or a DLL it loads lacks the NX_COMPAT
+        // flag, as many older games do, and FEX then has to retranslate code
+        // whenever writable memory changes. With `force_nx`, our ntdll keeps
+        // no-execute permanently on instead; it reads the value the first
+        // time the process asks for or changes its execute flags, long after
+        // compatdb has handed it over. A 64-bit process always has
+        // no-execute on, so the setting does nothing there.
+        //
+        // A program that runs code from memory it did not make executable
+        // crashes with it. That includes programs built with the ATL of
+        // Visual Studio 2003, such as game configurators and launchers,
+        // whose window thunks live on the heap: Windows emulates such
+        // thunks, but in a WoW64 process under FEX neither Wine nor FEX
+        // does, so the first window message faults.
+        //
+        // It matches every process, like the rules above. A rule for one
+        // program with `force_nx = false` gives that program Wine's
+        // behaviour again, and only that program: the value is the
+        // process's own, so the programs it starts keep this default.
+        // Dropping the rule does that for every process.
+        Rule {
+            name: "force-nx".into(),
+            exe: ANY_EXE.into(),
+            force_nx: Some(true),
             ..Rule::default()
         },
         // Keeps Wine from prompting to install Mono and Gecko, in
@@ -416,6 +442,9 @@ mod tests {
     /// The name of the rule that asks the Mac driver for Mesa's EGL.
     const GL_RULE: &str = "opengl-egl";
 
+    /// The name of the rule that keeps no-execute permanently on.
+    const NX_RULE: &str = "force-nx";
+
     /// The names of the rules that match every process, in table order.
     fn wildcards() -> Vec<String> {
         [
@@ -427,6 +456,7 @@ mod tests {
             FEX_RULE,
             VKD3D_RULE,
             GL_RULE,
+            NX_RULE,
             "no-mono-gecko",
         ]
         .map(String::from)
@@ -608,6 +638,39 @@ mod tests {
     }
 
     #[test]
+    fn the_table_keeps_no_execute_on_unless_a_game_opts_out() -> TestResult {
+        let table = table();
+        let nx = rule(&table, NX_RULE)?;
+        assert_eq!(nx.exe, ANY_EXE);
+        assert_eq!(nx.force_nx, Some(true));
+        // It is a setting, not an env entry, so nothing a process starts
+        // inherits it.
+        assert_eq!(nx.env, []);
+        // Any process gets it, whatever its name or version resource.
+        let game = table.resolve("Some Game.exe", &VersionInfo::default());
+        assert_eq!(game.force_nx, Some(true));
+        assert_eq!(game.set_by("force_nx"), Some(NX_RULE));
+        assert_eq!(game.env, wildcard_env());
+        // A rule for one game opts that game out and nothing else changes for
+        // it; another process keeps the default.
+        let table = with_overrides("name=my-game;exe=game.exe;force_nx=false");
+        let game = table.resolve("Game.exe", &VersionInfo::default());
+        let mut expected = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(expected.force_nx, Some(true));
+        expected.force_nx = Some(false);
+        set_by(&mut expected, "force_nx", "my-game");
+        expected.matched.push("my-game".to_string());
+        assert_eq!(game, expected);
+        // Dropping the rule leaves it unset: Wine's behaviour everywhere.
+        let table = with_overrides(&format!("name={NX_RULE};enabled=false"));
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        assert_eq!(game.force_nx, None);
+        assert_eq!(game.matched, wildcards_without(NX_RULE));
+        assert_eq!(game.env, wildcard_env());
+        Ok(())
+    }
+
+    #[test]
     fn a_game_rule_or_disabling_by_name_changes_the_minimum_frame_latency() -> TestResult {
         // For one game: an empty value, which removes the variable, folds
         // after the default.
@@ -732,7 +795,7 @@ mod tests {
     fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
         // Every rule that matches a launcher or a game must leave the
         // environment alone, or the games started from it would inherit the
-        // entries. The wildcard env rules (FEX, vkd3d-proton) are the
+        // entries. The wildcard env rules (`wildcard_env_rules`) are the
         // exceptions: they are meant for every process, so a child that
         // inherits them gets what it would get anyway.
         let hud_off = vec![("MTL_HUD_ENABLED".to_string(), "0".to_string())];
@@ -821,6 +884,7 @@ mod tests {
         assert_eq!(resolution.dpi_aware, Some(true));
         assert_eq!(resolution.large_address_aware, Some(true));
         assert_eq!(resolution.gcmouse, Some(true));
+        assert_eq!(resolution.force_nx, Some(true));
         assert_eq!(resolution.env, wildcard_env());
         assert_eq!(resolution.dxgi, Some(Dxgi::Dxmt));
         assert_eq!(resolution.set_by("dxgi"), Some("dxmt"));

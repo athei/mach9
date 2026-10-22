@@ -63,7 +63,6 @@ directory that an x64 process would load but not run natively
 | Variable | Effect |
 |----------|--------|
 | `WINE_COMPATDB` | Extra or changed compatdb rules for the whole process tree. Format: [docs/compatdb.md](docs/compatdb.md#wine_compatdb) |
-| `WINE_FORCE_NX` | Unset or `0`: Wine's no-execute behavior. Any other value: no-execute is permanently on, and the process cannot turn it off |
 | `WINEDLLOVERRIDES` | Works as in Wine, but cannot undo an override compatdb adds; use a rule ([recipes](docs/compatdb.md#recipes)) |
 | `WINEMSYNC` | Unset or a non-zero number: msync is on. Any other value (`0`, empty, not a number): off, and Wine synchronizes through wineserver requests as upstream Wine does. Only the wineserver reads it ([runtime](docs/arm64.md#runtime)) |
 | `WINENCPU` | Limits the number of processors Wine reports to programs, for those that misbehave with many. A value of 0, one that is not a number, or one above the real count is ignored ([runtime](docs/arm64.md#runtime)) |
@@ -139,6 +138,7 @@ ntdll's, before any rule.
 | Address space | Every 32-bit process gets 4 GB, even without the large-address-aware flag | Rule `large-address-aware` ([recipes](docs/compatdb.md#recipes)) |
 | Raw mouse input | Raw input and DirectInput take mouse movement from GameController, in the device's own counts, instead of from the cursor, which macOS accelerates and scales for retina: mouselook is linear | Rule `gcmouse` ([GameController mice](docs/compatdb.md#gamecontroller-mice)) |
 | x87 precision under FEX | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
+| No-execute | Permanently on in every 32-bit process, even when its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine would turn it off | Rule `force-nx` ([no-execute](docs/compatdb.md#no-execute)) |
 | Synchronization | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | The wineserver of [our Wine](https://github.com/athei/wine) at [`wine-src.ref`](pins/wine-src.ref); `WINEMSYNC=0` where the session starts turns it off ([runtime](docs/arm64.md#runtime)) |
 | x86 memory ordering | FEX runs a thread's x86 code with the hardware x86 memory ordering (TSO), switching per thread | [Our FEX](https://github.com/athei/FEX) at [`fex-src.ref`](pins/fex-src.ref); `FEX_HARDWARE_TSO` ([environment variables](#environment-variables)) |
 | AFP in x86_64 programs | FEX runs x86_64 programs, which run as ARM64EC, without AFP | [Our FEX](https://github.com/athei/FEX) at [`fex-src.ref`](pins/fex-src.ref); `FEX_HOSTFEATURES` ([environment variables](#environment-variables)) |
