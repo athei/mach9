@@ -8,7 +8,11 @@ name: Release compatdb
 # manual run can name one. Drafts and pre-releases are never used as a base,
 # and neither is whatever release GitHub marks as the latest, which can be a
 # compatdb-* one. The loader is the base's, signed already, so no signing
-# identity is needed.
+# identity is needed. The base's ntdll.so must export the hooks this
+# compatdb.so hands its settings over with, and bundle-wine.sh
+# --compatdb-only refuses a base without them. When compatdb starts to need
+# a new hook, as it does for force_nx and opengl, an arm64-* release whose
+# Wine has it has to be cut before the next compatdb-* tag.
 
 on:
   push:

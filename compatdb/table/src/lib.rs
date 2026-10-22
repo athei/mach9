@@ -2,10 +2,11 @@
 //!
 //! A [`Rule`] says which processes it matches and which settings it applies to
 //! them: the Direct3D implementations to load (one for D3D9, one for the DXGI
-//! family) and the renderer of wined3d, DLL load-order overrides, the DPI
-//! awareness, large address awareness, whether the Mac driver reads raw mouse
-//! input from `GameController`, whether no-execute stays permanently on,
-//! command-line switches and environment entries.
+//! family) and the renderer of wined3d, which OpenGL the Mac driver gives,
+//! DLL load-order overrides, the DPI awareness, large address awareness,
+//! whether the Mac driver reads raw mouse input from `GameController`,
+//! whether no-execute stays permanently on, command-line switches and
+//! environment entries.
 //!
 //! Shared by `compatdb.so`, the unix library wine's ntdll loads into every
 //! process (it holds the built-in rules, parses [`ENV_VAR`], overlays the
@@ -386,6 +387,51 @@ impl Wined3d {
     }
 }
 
+/// Which OpenGL the Mac driver gives a process.
+///
+/// The value is the process's own: ntdll stores it for winemac.drv, which
+/// reads it when OpenGL is first initialized, so a program does not take the
+/// choice of the program that started it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OpenGl {
+    /// Mesa's EGL, with Zink on `KosmicKrisp`. Without a GPU `KosmicKrisp`
+    /// can use, the process gets no OpenGL.
+    Egl,
+    /// Apple's OpenGL, upstream Wine's.
+    Cgl,
+}
+
+impl OpenGl {
+    /// Parse a wire/TOML value, case-insensitively.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "egl" => Some(Self::Egl),
+            "cgl" => Some(Self::Cgl),
+            _ => None,
+        }
+    }
+
+    /// The wire/TOML spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Egl => "egl",
+            Self::Cgl => "cgl",
+        }
+    }
+
+    /// The value ntdll's `set_compat_opengl` takes: 1 for Mesa's EGL, 0 for
+    /// Apple's OpenGL.
+    #[must_use]
+    pub const fn hook_value(self) -> i32 {
+        match self {
+            Self::Egl => 1,
+            Self::Cgl => 0,
+        }
+    }
+}
+
 /// The architecture of the program a process runs, which is that of its main
 /// executable.
 ///
@@ -466,6 +512,10 @@ pub struct Rule {
     pub d3d9: Option<D3d9>,
     /// The renderer of wined3d, for every wined3d user in the process.
     pub wined3d: Option<Wined3d>,
+    /// Which OpenGL the Mac driver gives the process. Unset leaves the
+    /// decision to a less specific rule; with none, the Mac driver gives
+    /// Apple's OpenGL, as upstream Wine does.
+    pub opengl: Option<OpenGl>,
     /// Whether the process is DPI-aware (system-aware) or unaware. Unset
     /// leaves the decision to a less specific rule, and with none to wine
     /// (the registry and the manifest).
@@ -528,6 +578,7 @@ pub const UPSTREAM: &[(&str, &str)] = &[
         "wined3d",
         "the OpenGL renderer, unless WINE_D3D_CONFIG or wined3d's registry settings name another",
     ),
+    ("opengl", "Apple's OpenGL"),
     (
         "dpi_aware",
         "the AppCompatFlags layer, then the manifest, otherwise unaware",
@@ -604,6 +655,7 @@ impl Default for Rule {
             dxgi: None,
             d3d9: None,
             wined3d: None,
+            opengl: None,
             dpi_aware: None,
             large_address_aware: None,
             gcmouse: None,
@@ -697,6 +749,10 @@ impl Rule {
             self.wined3d = over.wined3d;
             self.changed.key("wined3d");
         }
+        if over.opengl.is_some() {
+            self.opengl = over.opengl;
+            self.changed.key("opengl");
+        }
         if over.dpi_aware.is_some() {
             self.dpi_aware = over.dpi_aware;
             self.changed.key("dpi_aware");
@@ -757,6 +813,7 @@ pub struct Resolution {
     pub dxgi: Option<Dxgi>,
     pub d3d9: Option<D3d9>,
     pub wined3d: Option<Wined3d>,
+    pub opengl: Option<OpenGl>,
     pub dpi_aware: Option<bool>,
     pub large_address_aware: Option<bool>,
     pub gcmouse: Option<bool>,
@@ -773,7 +830,7 @@ pub struct Resolution {
     /// Where each entry of [`Resolution::env`] came from, at the same index.
     pub env_from: Vec<EnvFrom>,
     /// Where each scalar setting came from, by its key (`dxgi`, `d3d9`,
-    /// `wined3d`, `dpi_aware`, `large_address_aware`, `gcmouse`,
+    /// `wined3d`, `opengl`, `dpi_aware`, `large_address_aware`, `gcmouse`,
     /// `force_nx`): the most specific rule that set it. A key no rule set is
     /// missing.
     pub set_by: Vec<(&'static str, Origin)>,
@@ -839,6 +896,7 @@ impl Resolution {
         self.dxgi.is_none()
             && self.d3d9.is_none()
             && self.wined3d.is_none()
+            && self.opengl.is_none()
             && self.dpi_aware.is_none()
             && self.large_address_aware.is_none()
             && self.gcmouse.is_none()
@@ -1026,6 +1084,10 @@ impl Table {
             if let Some(wined3d) = rule.wined3d {
                 r.wined3d = Some(wined3d);
                 r.record("wined3d", rule);
+            }
+            if let Some(opengl) = rule.opengl {
+                r.opengl = Some(opengl);
+                r.record("opengl", rule);
             }
             if let Some(aware) = rule.dpi_aware {
                 r.dpi_aware = Some(aware);
@@ -1356,6 +1418,9 @@ fn rule_to_record(rule: &Rule) -> String {
     if let Some(wined3d) = rule.wined3d {
         fields.push(field("wined3d", wined3d.as_str()));
     }
+    if let Some(opengl) = rule.opengl {
+        fields.push(field("opengl", opengl.as_str()));
+    }
     for (key, value) in [
         ("dpi_aware", rule.dpi_aware),
         ("large_address_aware", rule.large_address_aware),
@@ -1429,6 +1494,7 @@ fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
         "dxgi" => rule.dxgi = Some(parse_value(key, value, Dxgi::parse)?),
         "d3d9" => rule.d3d9 = Some(parse_value(key, value, D3d9::parse)?),
         "wined3d" => rule.wined3d = Some(parse_value(key, value, Wined3d::parse)?),
+        "opengl" => rule.opengl = Some(parse_value(key, value, OpenGl::parse)?),
         "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
         "large_address_aware" => rule.large_address_aware = Some(parse_bool(key, value)?),
         "gcmouse" => rule.gcmouse = Some(parse_bool(key, value)?),
@@ -2928,6 +2994,7 @@ mod tests {
             dxgi: Some(Dxgi::Dxmt),
             d3d9: Some(D3d9::Mtld3d),
             wined3d: Some(Wined3d::Gl),
+            opengl: Some(OpenGl::Egl),
             dpi_aware: Some(true),
             large_address_aware: Some(true),
             gcmouse: Some(true),
@@ -3564,6 +3631,97 @@ mod tests {
             table.resolve("game.exe", &none).wined3d,
             Some(Wined3d::Vulkan)
         );
+    }
+
+    #[test]
+    fn opengl_parses_round_trips_and_rejects_other_values() {
+        assert_eq!(OpenGl::parse("EGL"), Some(OpenGl::Egl));
+        assert_eq!(OpenGl::parse("Cgl"), Some(OpenGl::Cgl));
+        assert_eq!(OpenGl::parse("gl"), None);
+        assert_eq!(OpenGl::parse(""), None);
+        assert_eq!(OpenGl::Egl.as_str(), "egl");
+        assert_eq!(OpenGl::Egl.hook_value(), 1);
+        assert_eq!(OpenGl::Cgl.hook_value(), 0);
+        let table = Table {
+            rules: vec![
+                Rule {
+                    name: "defaults".into(),
+                    exe: ANY_EXE.into(),
+                    opengl: Some(OpenGl::Egl),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "apple".into(),
+                    exe: "apple.exe".into(),
+                    opengl: Some(OpenGl::Cgl),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "unset".into(),
+                    exe: "unset.exe".into(),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let value = table.to_env_value();
+        assert_eq!(
+            value,
+            "name=defaults;exe=*;opengl=egl\n\
+             name=apple;exe=apple.exe;opengl=cgl\n\
+             name=unset;exe=unset.exe"
+        );
+        let (parsed, diagnostics) = Table::parse(&value);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(parsed, table);
+        let (bad, diagnostics) = Table::parse("name=x;exe=x.exe;opengl=gl\nname=ok;exe=ok.exe");
+        assert_eq!(bad.rules.len(), 2);
+        assert_eq!(bad.rules.first().map(|r| r.opengl), Some(None));
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics.first().is_some_and(|d| d.contains("opengl")),
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn opengl_resolves_to_the_most_specific_rule_and_overlays_by_name() -> TestResult {
+        let mut table = Table {
+            rules: vec![
+                Rule {
+                    name: "apple".into(),
+                    exe: "apple.exe".into(),
+                    opengl: Some(OpenGl::Cgl),
+                    ..Rule::default()
+                },
+                Rule {
+                    name: "defaults".into(),
+                    exe: ANY_EXE.into(),
+                    opengl: Some(OpenGl::Egl),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let none = VersionInfo::default();
+        let apple = table.resolve("Apple.exe", &none);
+        assert_eq!(apple.opengl, Some(OpenGl::Cgl));
+        assert_eq!(apple.set_by("opengl"), Some("apple"));
+        // It is a setting of the process, not an env entry.
+        assert_eq!(apple.env, []);
+        let other = table.resolve("other.exe", &none);
+        assert_eq!(other.opengl, Some(OpenGl::Egl));
+        assert!(Table::default().resolve("x.exe", &none).opengl.is_none());
+        // An override by name replaces it only when it sets it.
+        let (over, diagnostics) = Table::parse("name=defaults;opengl=cgl");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(table.overlay(over), [] as [String; 0]);
+        let other = table.resolve("other.exe", &none);
+        assert_eq!(other.opengl, Some(OpenGl::Cgl));
+        assert!(other.origin("opengl").ok_or("no origin")?.changed);
+        // Dropping the wildcard leaves other processes with no opinion.
+        let (over, _) = Table::parse("name=defaults;enabled=false");
+        assert_eq!(table.overlay(over), [] as [String; 0]);
+        assert_eq!(table.resolve("other.exe", &none).opengl, None);
+        Ok(())
     }
 
     #[test]

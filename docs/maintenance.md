@@ -273,10 +273,16 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
     ([GameController mice](compatdb.md#gamecontroller-mice)).
   - `set_compat_force_nx`, which only stores the value; ntdll reads it when
     the process asks for or changes its execute flags and, for 1, keeps
-    no-execute permanently on ([no-execute](compatdb.md#no-execute)). The
-    bundle step checks that `ntdll.so` exports it.
+    no-execute permanently on ([no-execute](compatdb.md#no-execute)).
+  - `set_compat_opengl`, which only stores the value; winemac reads it
+    through `ntdll_get_compat_opengl` when the process first uses OpenGL,
+    and uses Mesa's EGL for 1 and Apple's OpenGL otherwise
+    ([OpenGL](compatdb.md#opengl)).
   - On an ntdll without one of them, compatdb.so logs that and skips the
-    setting.
+    setting. The bundle step checks that `ntdll.so` exports
+    `set_compat_force_nx` and `set_compat_opengl`, and `--compatdb-only`
+    refuses a bundle without them
+    ([what the bundle step checks](arm64.md#what-the-bundle-step-checks)).
 - winemac exports `macdrv_functions`, the window, Metal and monitor helpers
   DXMT's `winemetal.so` uses. It gets the window's client view through its
   `get_win_data(hwnd)` entry, which only finds windows the calling process
