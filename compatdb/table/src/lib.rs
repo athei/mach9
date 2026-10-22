@@ -58,6 +58,7 @@ pub const BUILTIN_RULE_NAMES: &[&str] = &[
     "steam-web-helper",
     "gta-iv",
     "nostale",
+    "aoe2-hd",
 ];
 
 /// Whether `name` is the name of a built-in rule (see
