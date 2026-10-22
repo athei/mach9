@@ -11,7 +11,7 @@ use std::{
     ptr,
 };
 
-use compatdb_table::merge_env;
+use compatdb_table::{OpenGl, merge_env};
 
 use crate::{Process, log, ntdll::Ntdll};
 
@@ -152,6 +152,23 @@ pub fn force_nx(nt: &Ntdll, on: bool, source: &str, wow64: bool) {
     }
     nt.set_compat_force_nx(i32::from(on));
     log::line(&format!("  force_nx = {on}, {source}{note}"));
+}
+
+/// Tell ntdll which OpenGL the Mac driver gives the process: Mesa's EGL or
+/// Apple's OpenGL. winemac.drv reads the value when OpenGL is first
+/// initialized.
+///
+/// Logs the value only when it was handed over, like [`dpi_awareness`].
+pub fn opengl(nt: &Ntdll, opengl: OpenGl, source: &str) {
+    let name = opengl.as_str();
+    if !nt.has_set_compat_opengl() {
+        log::line(&format!(
+            "  opengl = {name}, {source}: ntdll lacks set_compat_opengl, ignored"
+        ));
+        return;
+    }
+    nt.set_compat_opengl(opengl.hook_value());
+    log::line(&format!("  opengl = {name}, {source}"));
 }
 
 /// Rewrite `CommandLine` and `Environment` in the 64-bit params and, for a

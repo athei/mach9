@@ -12,7 +12,7 @@
 //! which match every process on purpose: each is a default that a more
 //! specific rule can override and that can be dropped by name.
 
-use compatdb_table::{ANY_EXE, D3d9, Dxgi, Rule, Table};
+use compatdb_table::{ANY_EXE, D3d9, Dxgi, OpenGl, Rule, Table};
 
 /// The rules the bundle ships with: the [`defaults`] for every process, then
 /// the rules for one program each.
@@ -145,20 +145,21 @@ fn defaults() -> Vec<Rule> {
         // OpenGL goes through Mesa's EGL with Zink on KosmicKrisp, which
         // reaches OpenGL 4.6 and the compatibility profile, instead of
         // Apple's OpenGL, upstream Wine's, which stops at 4.1 core and 2.1
-        // compatibility. winemac.drv takes the choice from WINE_MAC_OPENGL
-        // when a process first uses OpenGL, long after compatdb has set it;
-        // unset, it uses Apple's OpenGL. With egl it does not fall back:
-        // where Zink has no GPU, as on a Mac without a Metal 4 GPU, the
-        // process gets no OpenGL, and WINE_MAC_OPENGL=cgl gives it Apple's.
+        // compatibility. winemac.drv reads the `opengl` setting through ntdll
+        // when a process first uses OpenGL, long after compatdb has handed it
+        // over; unset, it uses Apple's OpenGL. With egl it does not fall
+        // back: where Zink has no GPU, as on a Mac without a Metal 4 GPU, the
+        // process gets no OpenGL, and `opengl = cgl` gives it Apple's.
         //
         // It matches every process, like the rules above. A rule for one
-        // game with `env=WINE_MAC_OPENGL=cgl` gives that game Apple's
-        // OpenGL, dropping the rule gives every process Apple's, and the
-        // variable exported where the process starts wins over it.
+        // program with `opengl = cgl` gives that program Apple's OpenGL, and
+        // only that program: the value is the process's own, so the programs
+        // it starts keep this default. Dropping the rule gives every process
+        // Apple's.
         Rule {
             name: "opengl-egl".into(),
             exe: ANY_EXE.into(),
-            env: vec![("WINE_MAC_OPENGL".into(), "egl".into())],
+            opengl: Some(OpenGl::Egl),
             ..Rule::default()
         },
         // i386 code runs under FEX. Wine turns no-execute off for a 32-bit
@@ -372,20 +373,13 @@ mod tests {
             set,
             [
                 "FEX_X87REDUCEDPRECISION=1",
-                "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2",
-                "WINE_MAC_OPENGL=egl"
+                "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2"
             ]
         );
         assert_eq!(kept, [] as [String; 0]);
         // Exported by the caller, the default leaves it alone.
         let (set, kept) = applied(&game, &["FEX_X87REDUCEDPRECISION"]);
-        assert_eq!(
-            set,
-            [
-                "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2",
-                "WINE_MAC_OPENGL=egl"
-            ]
-        );
+        assert_eq!(set, ["VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2"]);
         assert_eq!(kept, ["FEX_X87REDUCEDPRECISION"]);
         // The steps name the rule of each entry.
         let steps = game.env_steps(|_| false);
@@ -480,21 +474,10 @@ mod tests {
         )]
     }
 
-    /// The env of the OpenGL rule, spelled out for the same reason:
-    /// winemac.drv compares the value exactly and gives Apple's OpenGL for
-    /// anything but `egl`.
-    fn gl_env() -> Vec<(String, String)> {
-        vec![("WINE_MAC_OPENGL".to_string(), "egl".to_string())]
-    }
-
     /// The wildcard rules that set env, each with its entries, in table
     /// order.
     fn wildcard_env_rules() -> Vec<(&'static str, Vec<(String, String)>)> {
-        vec![
-            (FEX_RULE, fex_env()),
-            (VKD3D_RULE, vkd3d_env()),
-            (GL_RULE, gl_env()),
-        ]
+        vec![(FEX_RULE, fex_env()), (VKD3D_RULE, vkd3d_env())]
     }
 
     /// The env every process gets from the built-in rules without the rule
@@ -577,7 +560,7 @@ mod tests {
         let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
         assert_eq!(
             String::from_utf16_lossy(&merged),
-            "OTHER=x\0VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2\0WINE_MAC_OPENGL=egl\0\0"
+            "OTHER=x\0VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2\0\0"
         );
         // Another process keeps it.
         let other = table.resolve("other.exe", &VersionInfo::default());
@@ -604,36 +587,33 @@ mod tests {
     }
 
     #[test]
-    fn the_table_asks_the_mac_driver_for_mesas_egl_unless_the_caller_chose() -> TestResult {
+    fn the_table_asks_the_mac_driver_for_mesas_egl_unless_a_game_opts_out() -> TestResult {
         let table = table();
         let gl = rule(&table, GL_RULE)?;
         assert_eq!(gl.exe, ANY_EXE);
-        assert_eq!(gl.env, gl_env());
+        assert_eq!(gl.opengl, Some(OpenGl::Egl));
+        // It is a setting, not an env entry, so nothing a process starts
+        // inherits it.
+        assert_eq!(gl.env, []);
         let game = table.resolve("game.exe", &VersionInfo::default());
-        let (set, kept) = applied(&game, &[]);
-        assert!(set.contains(&"WINE_MAC_OPENGL=egl".to_string()), "{set:?}");
-        assert_eq!(kept, [] as [String; 0]);
-        // An exported WINE_MAC_OPENGL=cgl, as the smoke test's, wins.
-        let (set, kept) = applied(&game, &["WINE_MAC_OPENGL"]);
-        assert!(
-            !set.iter().any(|e| e.starts_with("WINE_MAC_OPENGL=")),
-            "{set:?}"
-        );
-        assert_eq!(kept, ["WINE_MAC_OPENGL"]);
-        // A rule for one game gives it Apple's OpenGL, whatever the caller
-        // exported, and dropping the rule gives every process Apple's.
-        let table = with_overrides("name=my-game;exe=game.exe;env=WINE_MAC_OPENGL=cgl");
-        let game = table.resolve("game.exe", &VersionInfo::default());
-        let (set, _) = applied(&game, &["WINE_MAC_OPENGL"]);
-        assert_eq!(
-            set.iter()
-                .filter(|e| e.starts_with("WINE_MAC_OPENGL="))
-                .collect::<Vec<_>>(),
-            ["WINE_MAC_OPENGL=cgl"]
-        );
+        assert_eq!(game.opengl, Some(OpenGl::Egl));
+        assert_eq!(game.set_by("opengl"), Some(GL_RULE));
+        // A rule for one game gives it Apple's OpenGL and changes nothing else
+        // for it; another process keeps the default.
+        let table = with_overrides("name=my-game;exe=game.exe;opengl=cgl");
+        let game = table.resolve("Game.exe", &VersionInfo::default());
+        let mut expected = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(expected.opengl, Some(OpenGl::Egl));
+        expected.opengl = Some(OpenGl::Cgl);
+        set_by(&mut expected, "opengl", "my-game");
+        expected.matched.push("my-game".to_string());
+        assert_eq!(game, expected);
+        // Dropping the rule leaves it unset: Apple's OpenGL everywhere.
         let table = with_overrides(&format!("name={GL_RULE};enabled=false"));
         let game = table.resolve("game.exe", &VersionInfo::default());
-        assert_eq!(game.env, wildcard_env_without(GL_RULE));
+        assert_eq!(game.opengl, None);
+        assert_eq!(game.matched, wildcards_without(GL_RULE));
+        assert_eq!(game.env, wildcard_env());
         Ok(())
     }
 
@@ -687,7 +667,7 @@ mod tests {
         let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
         assert_eq!(
             String::from_utf16_lossy(&merged),
-            "OTHER=x\0FEX_X87REDUCEDPRECISION=1\0WINE_MAC_OPENGL=egl\0\0"
+            "OTHER=x\0FEX_X87REDUCEDPRECISION=1\0\0"
         );
         // Another value for one game replaces it there.
         let table =
@@ -885,6 +865,7 @@ mod tests {
         assert_eq!(resolution.large_address_aware, Some(true));
         assert_eq!(resolution.gcmouse, Some(true));
         assert_eq!(resolution.force_nx, Some(true));
+        assert_eq!(resolution.opengl, Some(OpenGl::Egl));
         assert_eq!(resolution.env, wildcard_env());
         assert_eq!(resolution.dxgi, Some(Dxgi::Dxmt));
         assert_eq!(resolution.set_by("dxgi"), Some("dxmt"));

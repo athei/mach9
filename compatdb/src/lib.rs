@@ -180,7 +180,8 @@ extern "C" fn run() {
 
 /// Hand the settings ntdll stores for Wine to read later to their hooks, each
 /// with its log line: the DPI awareness, large address awareness, the
-/// `GameController` mouse setting and whether no-execute stays on.
+/// `GameController` mouse setting, whether no-execute stays on and which
+/// OpenGL the Mac driver gives.
 fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &compatdb_table::Resolution) {
     match resolution.dpi_aware {
         Some(aware) => apply::dpi_awareness(
@@ -214,6 +215,10 @@ fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &compatdb_table::Resol
             process.params32.is_some(),
         ),
         None => log::line(&unset_line("force_nx")),
+    }
+    match resolution.opengl {
+        Some(opengl) => apply::opengl(nt, opengl, &source("opengl", resolution.origin("opengl"))),
+        None => log::line(&unset_line("opengl")),
     }
 }
 
@@ -567,24 +572,24 @@ mod tests {
             "  dll_overrides = --in-process-gpu (rule steam-web-helper)"
         );
         let step = |value: &str, applied, replaced_by: Option<&str>| EnvStep {
-            name: "WINE_MAC_OPENGL".into(),
+            name: "FEX_X87REDUCEDPRECISION".into(),
             value: value.into(),
-            origin: origin("opengl-egl", false),
+            origin: origin("fex-x87", false),
             applied,
             replaced_by: replaced_by.map(|rule| origin(rule, false)),
             removes: None,
         };
         assert_eq!(
-            env_line(&step("egl", true, None), None),
-            "  env WINE_MAC_OPENGL=egl, rule opengl-egl: set"
+            env_line(&step("1", true, None), None),
+            "  env FEX_X87REDUCEDPRECISION=1, rule fex-x87: set"
         );
         assert_eq!(
-            env_line(&step("", true, None), Some("cgl")),
-            "  env WINE_MAC_OPENGL=, rule opengl-egl: removed"
+            env_line(&step("", true, None), Some("0")),
+            "  env FEX_X87REDUCEDPRECISION=, rule fex-x87: removed"
         );
         assert_eq!(
             env_line(&step("", true, None), None),
-            "  env WINE_MAC_OPENGL=, rule opengl-egl: not set, nothing to remove"
+            "  env FEX_X87REDUCEDPRECISION=, rule fex-x87: not set, nothing to remove"
         );
         // A removal after an earlier entry set the variable undoes that one,
         // whether or not the process had it.
@@ -594,25 +599,25 @@ mod tests {
         };
         assert_eq!(
             env_line(&undo, None),
-            "  env WINE_MAC_OPENGL=, rule opengl-egl: removes the value of rule game, changed \
-             by WINE_COMPATDB"
+            "  env FEX_X87REDUCEDPRECISION=, rule fex-x87: removes the value of rule game, \
+             changed by WINE_COMPATDB"
         );
         assert_eq!(
-            env_line(&step("egl", false, None), Some("cgl")),
-            "  env WINE_MAC_OPENGL=egl, rule opengl-egl: left alone, the process has \
-             WINE_MAC_OPENGL=cgl"
+            env_line(&step("1", false, None), Some("0")),
+            "  env FEX_X87REDUCEDPRECISION=1, rule fex-x87: left alone, the process has \
+             FEX_X87REDUCEDPRECISION=0"
         );
         assert_eq!(
-            env_line(&step("egl", true, Some("my-game")), None),
-            "  env WINE_MAC_OPENGL=egl, rule opengl-egl: replaced by rule my-game"
+            env_line(&step("1", true, Some("my-game")), None),
+            "  env FEX_X87REDUCEDPRECISION=1, rule fex-x87: replaced by rule my-game"
         );
         let by_override = EnvStep {
-            replaced_by: Some(origin("opengl-egl", true)),
-            ..step("egl", true, None)
+            replaced_by: Some(origin("fex-x87", true)),
+            ..step("1", true, None)
         };
         assert_eq!(
             env_line(&by_override, None),
-            "  env WINE_MAC_OPENGL=egl, rule opengl-egl: replaced by rule opengl-egl, changed by \
+            "  env FEX_X87REDUCEDPRECISION=1, rule fex-x87: replaced by rule fex-x87, changed by \
              WINE_COMPATDB"
         );
     }
@@ -627,6 +632,10 @@ mod tests {
             unset_line("force_nx"),
             "  force_nx = unset (upstream: no-execute off when the executable or a DLL lacks the \
              NX_COMPAT flag)"
+        );
+        assert_eq!(
+            unset_line("opengl"),
+            "  opengl = unset (upstream: Apple's OpenGL)"
         );
         assert_eq!(source("dxgi", None), "unset (upstream: wined3d)");
         assert_eq!(source("dxgi", Some(&origin("dxmt", false))), "rule dxmt");

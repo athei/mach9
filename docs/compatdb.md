@@ -20,6 +20,7 @@ and with none, Wine does.
 | `dxgi` | `dxmt`, `wined3d` | The D3D10 to D3D12 tree to prepend. The built-in `dxmt` rule sets `dxmt` for every process; unset, `wined3d`, as in upstream Wine. Only `dxmt` has D3D12 (vkd3d-proton): under `wined3d`, `d3d12.dll` does not load, so a D3D12 game does not start ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
 | `d3d9` | `mtld3d`, `wined3d` | The D3D9 tree to prepend. The built-in `mtld3d` rule sets `mtld3d` for every process; unset, `wined3d`, as in upstream Wine ([Direct3D backends](../README.md#direct3d-backends), [native ARM64 programs](#native-arm64-programs)) | At load |
 | `wined3d` | `gl`, `vulkan` | The renderer of wined3d, for the whole process: every wined3d user in it, the `wined3d` trees of both families and D3D8 and DirectDraw, shares one wined3d. Set, it names the renderer in `WINE_D3D_CONFIG` through the `env` path; unset, it sets nothing, so a `WINE_D3D_CONFIG` from elsewhere, or wined3d's default, OpenGL, applies ([wined3d on Vulkan](#wined3d-on-vulkan)) | At load, as `env` |
+| `opengl` | `egl`, `cgl` | Which OpenGL the Mac driver gives the process. `egl`: Mesa's EGL with Zink on KosmicKrisp, and no OpenGL where EGL does not start, as on a Mac without a Metal 4 GPU. `cgl`: Apple's OpenGL. Unset: Apple's OpenGL, as in upstream Wine. The value is the process's own; the programs it starts get their own rules' value ([OpenGL](#opengl)) | At load, read by winemac.drv |
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` is the same as unset: the executable's large-address-aware flag decides, as in upstream Wine. No effect on 64-bit | At load; ntdll applies it after the library returns |
@@ -29,7 +30,7 @@ and with none, Wine does.
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it. An entry of a built-in `*` rule is a default and leaves a variable the process already has alone; every other entry replaces it ([environment defaults](#environment-defaults)) | At load |
 
 The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
-`d3d9` and `wined3d` values are case-insensitive.
+`d3d9`, `wined3d` and `opengl` values are case-insensitive.
 
 ## Matching
 
@@ -88,11 +89,6 @@ The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
   reads it in the game's process when it creates such a swapchain, and
   logs `Allowing a frame latency of at least <n> frames.` then. Like the
   FEX entry, it leaves a value the caller exported alone.
-- The built-in `opengl-egl` rule sets `WINE_MAC_OPENGL=egl` for every
-  process, so the Mac driver gives OpenGL through Mesa's EGL with Zink
-  instead of Apple's OpenGL, which upstream Wine uses. Without a GPU of the
-  Metal 4 family the process then gets no OpenGL, and an exported
-  `WINE_MAC_OPENGL=cgl` gives it Apple's ([OpenGL](arm64.md#opengl)).
 - The entries and the reasoning for these rules are in
   [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). Their
   [recipes](#recipes) turn them off or change them.
@@ -171,11 +167,11 @@ name=dpi-aware;enabled=false
 
 Errors never abort a process.
 
-- A field with an unknown key, an unknown `dxgi`, `d3d9` or `wined3d`
-  value, a boolean other than `true` or `false` (so `TRUE` or `1` too), or
-  no `=` is ignored with a warning naming the rule and the field. The rest
-  of its rule still applies. An `enabled` with another value is ignored the
-  same way, so the rule stays enabled.
+- A field with an unknown key, an unknown `dxgi`, `d3d9`, `wined3d` or
+  `opengl` value, a boolean other than `true` or `false` (so `TRUE` or `1`
+  too), or no `=` is ignored with a warning naming the rule and the field.
+  The rest of its rule still applies. An `enabled` with another value is
+  ignored the same way, so the rule stays enabled.
 - So, from the library that reads tables without a header on, a key that a
   newer launcher sends and the library does not know costs only that field.
   The `compatdb.so` of a bundle from before, which requires the version
@@ -218,7 +214,7 @@ executable.
 | Give every process Wine's no-execute behaviour | `name=force-nx;enabled=false` |
 | Give one game FEX's full x87 precision | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |
 | Give every process FEX's full x87 precision | `name=fex-x87-reduced-precision;enabled=false` |
-| Give one game Apple's OpenGL | `name=my-game;exe=Game.exe;env=WINE_MAC_OPENGL=cgl` |
+| Give one game Apple's OpenGL | `name=my-game;exe=Game.exe;opengl=cgl` |
 | Give every process Apple's OpenGL | `name=opengl-egl;enabled=false` |
 | Put wined3d on Vulkan for one game | `name=my-game;exe=Game.exe;wined3d=vulkan` |
 
@@ -247,8 +243,8 @@ executable.
   carry over: the variable is unset in its children, and the default sets
   it again ([environment defaults](#environment-defaults)).
 - The settings ntdll stores for the process, `dpi_aware`,
-  `large_address_aware`, `gcmouse` and `force_nx`, are its own: the
-  programs a game starts get the value of their own rules.
+  `large_address_aware`, `gcmouse`, `force_nx` and `opengl`, are its own:
+  the programs a game starts get the value of their own rules.
 
 ## wined3d on Vulkan
 
@@ -298,6 +294,23 @@ executable.
   cursor's movement, so dropping the rule by name
   (`name=gcmouse;enabled=false`) turns GameController mice off for every
   process, as `gcmouse=false` in a `*` rule does.
+
+## OpenGL
+
+- The built-in `opengl-egl` rule sets `opengl=egl` for every process, so
+  the Mac driver gives OpenGL through Mesa's EGL with Zink instead of
+  Apple's OpenGL, which upstream Wine uses ([OpenGL](arm64.md#opengl)).
+  Without a GPU of the Metal 4 family the process then gets no OpenGL, and
+  a rule for it with `opengl=cgl` gives it Apple's ([recipes](#recipes)).
+- compatdb.so hands the value to ntdll through `set_compat_opengl`, and
+  winemac.drv reads it when the process first uses OpenGL
+  ([Wine-side contract](maintenance.md#wine-side-contract)). Without a
+  value from compatdb the Mac driver gives Apple's OpenGL, so dropping the
+  rule by name (`name=opengl-egl;enabled=false`) gives every process
+  Apple's OpenGL, as `opengl=cgl` in a `*` rule does.
+- The value is the process's own, not an environment variable: a program
+  that a game with `opengl=cgl` starts gets the value of its own rules,
+  the `opengl-egl` default unless a rule for it says otherwise.
 
 ## No-execute
 
@@ -368,9 +381,9 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
     decide;
   - `dll_overrides` and `arguments`, each entry with its rule, and for an
     argument whether it was appended or already present;
-  - `dpi_aware`, `large_address_aware`, `gcmouse` and `force_nx` (the
-    second and the last noting that they have no effect in a 64-bit
-    process);
+  - `dpi_aware`, `large_address_aware`, `gcmouse`, `force_nx` and
+    `opengl` (`large_address_aware` and `force_nx` noting that they have no
+    effect in a 64-bit process);
   - one `env NAME=value, rule <name>: ...` line per entry, saying whether
     it was set, removed (naming the earlier entry whose value it undoes, or
     saying the variable was not set, so there was nothing to remove), left
