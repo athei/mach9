@@ -190,6 +190,7 @@ type FnAddLoadOrderOverride = unsafe extern "C" fn(*const u16);
 type FnSetCompatDpiAwareness = unsafe extern "C" fn(c_int);
 type FnSetCompatLargeAddressAware = unsafe extern "C" fn(c_int);
 type FnSetCompatGcmouse = unsafe extern "C" fn(c_int);
+type FnSetCompatForceNx = unsafe extern "C" fn(c_int);
 
 /// The resolved ntdll functions. The first three are required; the hooks are
 /// optional and their features are skipped (with a log line) when absent.
@@ -202,6 +203,7 @@ pub struct Ntdll {
     set_compat_dpi_awareness: Option<FnSetCompatDpiAwareness>,
     set_compat_large_address_aware: Option<FnSetCompatLargeAddressAware>,
     set_compat_gcmouse: Option<FnSetCompatGcmouse>,
+    set_compat_force_nx: Option<FnSetCompatForceNx>,
 }
 
 /// Look one symbol up in the default (global) namespace.
@@ -234,6 +236,7 @@ impl Ntdll {
             let set_dpi = sym(b"set_compat_dpi_awareness\0");
             let set_laa = sym(b"set_compat_large_address_aware\0");
             let set_gcmouse = sym(b"set_compat_gcmouse\0");
+            let set_force_nx = sym(b"set_compat_force_nx\0");
             Some(Self {
                 current_teb: std::mem::transmute::<*mut c_void, FnCurrentTeb>(teb),
                 query_information_process: std::mem::transmute::<
@@ -255,6 +258,8 @@ impl Ntdll {
                 }),
                 set_compat_gcmouse: (!set_gcmouse.is_null())
                     .then(|| std::mem::transmute::<*mut c_void, FnSetCompatGcmouse>(set_gcmouse)),
+                set_compat_force_nx: (!set_force_nx.is_null())
+                    .then(|| std::mem::transmute::<*mut c_void, FnSetCompatForceNx>(set_force_nx)),
             })
         }
     }
@@ -370,6 +375,20 @@ impl Ntdll {
     /// through `ntdll_get_compat_gcmouse` when it reads its settings.
     pub fn set_compat_gcmouse(&self, value: c_int) {
         if let Some(f) = self.set_compat_gcmouse {
+            // SAFETY: the hook takes a plain int and only stores it.
+            unsafe { f(value) }
+        }
+    }
+
+    pub const fn has_set_compat_force_nx(&self) -> bool {
+        self.set_compat_force_nx.is_some()
+    }
+
+    /// Tell ntdll whether no-execute stays permanently on in a 32-bit
+    /// process: 1 for on, 0 for Wine's behaviour. ntdll reads the value when
+    /// the process first asks for or changes its execute flags.
+    pub fn set_compat_force_nx(&self, value: c_int) {
+        if let Some(f) = self.set_compat_force_nx {
             // SAFETY: the hook takes a plain int and only stores it.
             unsafe { f(value) }
         }

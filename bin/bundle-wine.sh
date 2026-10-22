@@ -1682,6 +1682,19 @@ check_vulkan() {
     echo "  The Vulkan manifest names lib/external/$(basename "$lib"), and ntdll sets VK_DRIVER_FILES."
 }
 
+# check_force_nx: exit unless ntdll exports set_compat_force_nx, the hook
+# compatdb.so hands the force_nx setting of its built-in force-nx rule to.
+# Without it compatdb.so only logs that the hook is missing, and 32-bit
+# programs without NX_COMPAT run with no-execute off.
+check_force_nx() {
+    if ! nm -gU "$unixdir/ntdll.so" 2>/dev/null | awk '{print $NF}' | grep -xF _set_compat_force_nx >/dev/null; then
+        echo "Error: $UNIX_DIR/ntdll.so does not export set_compat_force_nx; the Wine tree is"
+        echo "missing the ntdll change that keeps no-execute permanently on"
+        exit 1
+    fi
+    echo "  ntdll exports set_compat_force_nx."
+}
+
 # check_egl: exit unless OpenGL through Zink hangs together in the bundle:
 # win32u.so opens lib/external/libEGL.1.dylib, which exports what win32u
 # loads first and links the gallium library next to it, and the gallium
@@ -3032,9 +3045,10 @@ if [ -n "$DANGLING" ]; then
 fi
 echo "  No dangling symlinks."
 
-time_mark "Step 5: Vulkan, EGL and loader signature"
+time_mark "Step 5: Vulkan, EGL, no-execute hook and loader signature"
 check_vulkan
 check_egl
+check_force_nx
 check_loader_app
 
 # After everything above is in place, so the copied-in components and

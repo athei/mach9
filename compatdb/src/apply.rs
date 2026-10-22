@@ -131,6 +131,29 @@ pub fn gcmouse(nt: &Ntdll, on: bool, source: &str) {
     log::line(&format!("  gcmouse = {on}, {source}"));
 }
 
+/// Tell ntdll whether no-execute stays permanently on. `true` keeps it on in a
+/// 32-bit process whatever its modules' `NX_COMPAT` flags say. ntdll acts only
+/// on `true`, so `false` is the same as no value, and the log says so. A
+/// 64-bit process always has no-execute on, which `wow64` false says this one
+/// is, and the log says that too.
+///
+/// Logs the value only when it was handed over, like [`dpi_awareness`].
+pub fn force_nx(nt: &Ntdll, on: bool, source: &str, wow64: bool) {
+    let note = match (on, wow64) {
+        (_, false) => "; no effect in a 64-bit process",
+        (false, true) => " (same as unset: Wine's behaviour)",
+        (true, true) => "",
+    };
+    if !nt.has_set_compat_force_nx() {
+        log::line(&format!(
+            "  force_nx = {on}, {source}: ntdll lacks set_compat_force_nx, ignored"
+        ));
+        return;
+    }
+    nt.set_compat_force_nx(i32::from(on));
+    log::line(&format!("  force_nx = {on}, {source}{note}"));
+}
+
 /// Rewrite `CommandLine` and `Environment` in the 64-bit params and, for a
 /// wow64 process, in the 32-bit copy too: the command line to `cmd`, when
 /// there is one, and the environment with the `env` entries that apply
