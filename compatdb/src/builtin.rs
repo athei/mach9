@@ -261,6 +261,24 @@ fn programs() -> Vec<Rule> {
             dpi_aware: Some(false),
             ..Rule::default()
         },
+        // Age of Empires II HD draws its UI at a fixed size in pixels.
+        // Marked DPI-aware at 192 DPI (retina), it runs at the display's
+        // full resolution and its UI comes out too small to use; left
+        // DPI-unaware, Wine scales its window, as Windows does at 200%, and
+        // the UI has its intended size. Its manifest does not declare DPI
+        // awareness, but the game looks up SetProcessDPIAware and likely
+        // calls it at run time. The rule still wins: win32u sets the
+        // process awareness from it when it initializes, and refuses every
+        // later change. The fingerprint is the company alone: the product
+        // name of the build this was checked with, age2_x1, is the original
+        // game's, and newer Steam builds may have changed it.
+        Rule {
+            name: "aoe2-hd".into(),
+            exe: "AoK HD.exe".into(),
+            company: Some("Microsoft Corporation".into()),
+            dpi_aware: Some(false),
+            ..Rule::default()
+        },
     ]
 }
 
@@ -1017,10 +1035,15 @@ mod tests {
             company: "Entwell".into(),
             ..VersionInfo::default()
         };
+        let aoe2 = aoe2_hd_version();
         let table = table();
         assert_eq!(
             table.resolve("steamwebhelper.exe", &steam).matched,
             wildcards_and("steam-web-helper")
+        );
+        assert_eq!(
+            table.resolve("AoK HD.exe", &aoe2).matched,
+            wildcards_and("aoe2-hd")
         );
         assert_eq!(
             table.resolve("SocialClubHelper.exe", &social).matched,
@@ -1035,7 +1058,12 @@ mod tests {
             wildcards_and("nostale")
         );
         // An unrelated program of the same name gets only the `*` rules.
-        for exe in ["steamwebhelper.exe", "GTAIV.exe", "NostaleClientX.exe"] {
+        for exe in [
+            "steamwebhelper.exe",
+            "GTAIV.exe",
+            "NostaleClientX.exe",
+            "AoK HD.exe",
+        ] {
             assert_eq!(
                 table.resolve(exe, &VersionInfo::default()).matched,
                 wildcards(),
@@ -1065,5 +1093,48 @@ mod tests {
                 .dpi_aware,
             Some(true)
         );
+    }
+
+    /// The version resource of Age of Empires II HD's `AoK HD.exe`, as
+    /// compatdb.so reads it from the shipped exe.
+    fn aoe2_hd_version() -> VersionInfo {
+        VersionInfo {
+            company: "Microsoft Corporation".into(),
+            product: "age2_x1".into(),
+            original_filename: "age2_x1.exe".into(),
+        }
+    }
+
+    #[test]
+    fn age_of_empires_ii_hd_is_dpi_unaware_and_nothing_else_changes() {
+        // The fingerprinted rule beats the `dpi-aware` default for the game
+        // alone; every other setting stays the wildcards'.
+        let table = table();
+        let mut expected = table.resolve("game.exe", &VersionInfo::default());
+        expected.dpi_aware = Some(false);
+        set_by(&mut expected, "dpi_aware", "aoe2-hd");
+        expected.matched.push("aoe2-hd".to_string());
+        assert_eq!(table.resolve("AoK HD.exe", &aoe2_hd_version()), expected);
+        assert_eq!(expected.matched, wildcards_and("aoe2-hd"));
+        // Only the company is pinned, so a build with another product name
+        // still matches.
+        let newer = VersionInfo {
+            product: "Age of Empires II HD".into(),
+            ..aoe2_hd_version()
+        };
+        assert_eq!(table.resolve("AoK HD.exe", &newer).dpi_aware, Some(false));
+        // An executable of another name with the same version resource keeps
+        // the default, and so does one of the same name from another company.
+        assert_eq!(
+            table.resolve("age2_x1.exe", &aoe2_hd_version()).dpi_aware,
+            Some(true)
+        );
+        let other = VersionInfo {
+            company: "Some Vendor".into(),
+            ..aoe2_hd_version()
+        };
+        let resolution = table.resolve("AoK HD.exe", &other);
+        assert_eq!(resolution.dpi_aware, Some(true));
+        assert_eq!(resolution.matched, wildcards());
     }
 }
