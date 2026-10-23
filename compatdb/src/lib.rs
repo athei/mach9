@@ -6,14 +6,14 @@
 //! It is built for the arm64 Wine, which runs x86 programs under emulation
 //! and native ARM64 ones.
 //!
-//! It holds the built-in rules, appends the ones passed in
-//! [`ENV_VAR`](compatdb_table::ENV_VAR), resolves the rules that match this
-//! process and applies them: the D3D9 and DXGI trees, the wined3d renderer,
-//! DLL load-order overrides, the DPI awareness, large address awareness,
-//! whether the Mac driver reads raw mouse input from `GameController`, and
-//! command-line/environment rewrites. All the decision logic lives in
-//! [`compatdb_table`]; this crate only moves bytes in and out of the running
-//! process, so its `unsafe` is confined to a thin ntdll shell.
+//! It holds the built-in rules, appends the ones passed in [`ENV_VAR`],
+//! resolves the rules that match this process and applies them: the D3D9
+//! and DXGI trees, the wined3d renderer, DLL load-order overrides, the DPI
+//! awareness, large address awareness, whether the Mac driver reads raw
+//! mouse input from `GameController`, and command-line/environment
+//! rewrites. All the decision logic lives in [`compatdb_table`]; this crate
+//! only moves bytes in and out of the running process, so its `unsafe` is
+//! confined to a thin ntdll shell.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,

@@ -1,8 +1,9 @@
-//! Applying a [`Resolution`] to the current process: prepending the Direct3D
-//! trees, adding load-order overrides, setting the DPI awareness, large
-//! address awareness and the `GameController` mouse setting, rewriting the
-//! command line and environment in both PEB copies, and setting the
-//! environment entries in the process's unix environment.
+//! Applying a [`Resolution`](compatdb_table::Resolution) to the current
+//! process: prepending the Direct3D trees, adding load-order overrides,
+//! setting the DPI awareness, large address awareness and the
+//! `GameController` mouse setting, rewriting the command line and
+//! environment in both PEB copies, and setting the environment entries in
+//! the process's unix environment.
 
 use std::{
     ffi::{CString, OsStr},
