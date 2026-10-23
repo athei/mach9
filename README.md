@@ -136,7 +136,6 @@ any rule.
 | D3D10, D3D11 and D3D12 | DXMT, and vkd3d-proton for D3D12, instead of wined3d, which has no D3D12 here | Rule `dxmt` ([Direct3D backends](#direct3d-backends)) |
 | D3D9 | mtld3d instead of wined3d | Rule `mtld3d` ([Direct3D backends](#direct3d-backends)) |
 | DPI awareness | Every process is system-aware | Rule `dpi-aware` ([recipes](docs/compatdb.md#recipes)) |
-| Address space | Every 32-bit process gets 4 GB, even without the large-address-aware flag | Rule `large-address-aware` ([recipes](docs/compatdb.md#recipes)) |
 | Raw mouse input | Raw input and DirectInput take mouse movement from GameController, in the device's own counts, instead of from the cursor, which macOS accelerates and scales for retina: mouselook is linear | Rule `gcmouse` ([GameController mice](docs/compatdb.md#gamecontroller-mice)) |
 | x87 precision under FEX | FEX emulates every program's x87 code with reduced precision | Rule `fex-x87-reduced-precision` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
 | No-execute | Permanently on in every 32-bit process, even when its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine would turn it off | Rule `force-nx` ([no-execute](docs/compatdb.md#no-execute)) |

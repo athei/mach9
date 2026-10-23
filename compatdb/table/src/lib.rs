@@ -49,7 +49,6 @@ pub const BUILTIN_RULE_NAMES: &[&str] = &[
     "dxmt",
     "mtld3d",
     "dpi-aware",
-    "large-address-aware",
     "gcmouse",
     "fex-x87-reduced-precision",
     "opengl-egl",
@@ -61,6 +60,7 @@ pub const BUILTIN_RULE_NAMES: &[&str] = &[
     "gta-iv",
     "nostale",
     "aoe2-hd",
+    "world-of-warcraft",
 ];
 
 /// Whether `name` is the name of a built-in rule (see
