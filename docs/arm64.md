@@ -123,7 +123,7 @@ of the same name; the defaults are set in
 | Variable | What it is |
 |----------|------------|
 | `WINE_SRC` | The Wine source, a checkout of athei/wine |
-| `BUILD_DIR` | The Wine build tree, and under `$BUILD_DIR/compatdb` cargo's target directory for `compatdb.so`, one per checkout of this repository (`COMPATDB_TARGET` in [`bundle-wine.sh`](../bin/bundle-wine.sh)), so checkouts that share a Wine build do not share their `compatdb.so`; with `--compatdb-only` only that target directory |
+| `BUILD_DIR` | The Wine build tree, and under `$BUILD_DIR/compatdb` cargo's target directory for `compatdb.so`, one per checkout of this repository (`COMPATDB_TARGET` in [`bundle-wine.sh`](../bin/bundle-wine.sh)), so checkouts that share a Wine build do not share their `compatdb.so` |
 | `X86LIBS_BUILD_DIR` | The x86 tree for the x86_64 archives and the [graphics tests](#graphics-tests) of the SDK |
 | `WINE_SDK_DIR` | The [Wine SDK](#wine-sdk) |
 | `FEX_REPO`, `FEX_SRC` | FEX repository and the local clone `build-fex.sh` checks out |
@@ -519,8 +519,6 @@ does not run without it.
   verification require. The timestamp needs Apple's timestamp server;
   `LOADER_TIMESTAMP=0` signs without one for an offline local build, and the
   bundle step reports which was used. Such a bundle cannot be notarized.
-- `--compatdb-only` replaces `compatdb.so` outside the app, so the signature
-  stays valid.
 
 ## What the bundle step checks
 
@@ -600,9 +598,7 @@ After assembly:
   throwaway prefix, not the working directory
   (`VKD3D_SHADER_CACHE_PATH`): `wine --version`; a
   fresh prefix boots (`cmd /c exit`), with `compatdb:` lines and the
-  wineserver's
-  `msync: up and running.` line and no `msync: error:` line (with
-  `--compatdb-only`, a wineserver without msync skips that check);
+  wineserver's `msync: up and running.` line and no `msync: error:` line;
   winedbg's crash dialog is turned off in the prefix (`ShowCrashDialog`),
   so a program that crashes exits with a backtrace in the log instead of
   waiting for the time limit; the i386 `cmd.exe` runs; and
@@ -611,11 +607,9 @@ After assembly:
   compatdb lines must name the `dxgi` and `d3d9` trees the built-in rules
   give every arch. The x86 programs load `dxgi.dll` and
   `d3d9.dll`; the native one also loads `winemetal.dll` and `mtld3d.dll`,
-  which only the `dxmt` and `mtld3d` trees have. Before any of this runs,
-  every 64-bit marker of a Direct3D name must be a hybrid one, which a
-  native ARM64 process needs (see [Limitations](#limitations)). Then the
-  x86_64, i686 and native programs load every module of each Direct3D tree
-  in turn, the tree picked with a `WINE_COMPATDB` rule, which shows that
+  which only the `dxmt` and `mtld3d` trees have. Then the x86_64, i686 and
+  native programs load every module of each Direct3D tree in turn, the
+  tree picked with a `WINE_COMPATDB` rule, which shows that
   the prefix placeholders made from the default-dir markers let each tree
   in, and on the `wined3d` dxgi tree `d3d12.dll` must fail to load with
   error 126. No run with a `WINE_COMPATDB` rule may log a compatdb
@@ -676,40 +670,6 @@ After assembly:
   and says which checks it left out. Every run has a time limit, and
   none may print Wine's message that it cannot find FreeType: Wine then
   runs without TrueType fonts, and the program still succeeds.
-
-With `--compatdb-only`, the bundle step:
-
-- refuses a bundle that lacks the Vulkan loader, KosmicKrisp or its
-  manifest, such as one from before this build had Vulkan, and names what
-  is missing. compatdb.so does not disable `vulkan-1`, so in such a bundle
-  a game's own `vulkan-1.dll` would load and find no driver, and the smoke
-  test's Vulkan checks need Vulkan anyway. Such a bundle needs a full
-  bundle step;
-- refuses, before it replaces anything, a bundle whose 64-bit marker of a
-  Direct3D name is not a hybrid one, such as one from before the `dxmt` and
-  `mtld3d` trees were ARM64X: this compatdb.so gives native ARM64 programs
-  those trees, which they could not load there. Such a bundle needs a full
-  bundle step too;
-- refuses, before it replaces anything, a bundle whose `ntdll.so` does not
-  export `set_compat_force_nx` and `set_compat_opengl`: there this
-  compatdb.so could not keep no-execute on or ask for Mesa's EGL, and every
-  process would get Apple's OpenGL. Such a bundle needs a full bundle step
-  too;
-- builds `compatdb.so` and replaces the installed copy by copy and rename,
-  so a running process keeps a valid mapping;
-- removes quarantine from `compatdb.so` only, and only when it is there;
-- checks that the installed file matches the build output, the
-  `LEAK_PREFIXES` references and `minos` of `compatdb.so` only (the rest
-  was not built here), and runs the smoke test. On a bundle from before
-  vkd3d-proton, which has no `d3d12.dll` in the `dxmt` tree, it leaves out
-  the D3D12 checks and says so;
-- needs a bundle whose KosmicKrisp advertises its features without
-  `MESA_KK_EXPERIMENTAL`, since this compatdb.so no longer sets it. On an
-  older bundle `vulkan.exe` finds no transform feedback on a Mac with a
-  Metal 4 GPU and the step stops with a hint to bundle the whole build. On
-  a Mac without one, such as a hosted CI runner, `vulkan.exe` has to find
-  no device anyway, so the transform feedback check does not apply there
-  and an older bundle passes with only the checks above left out.
 
 ## Homebrew libraries and the floor
 

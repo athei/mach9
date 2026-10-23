@@ -306,8 +306,7 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
     ([OpenGL](compatdb.md#opengl)).
   - On an ntdll without one of them, compatdb.so logs that and skips the
     setting. The bundle step checks that `ntdll.so` exports
-    `set_compat_force_nx` and `set_compat_opengl`, and `--compatdb-only`
-    refuses a bundle without them
+    `set_compat_force_nx` and `set_compat_opengl`
     ([what the bundle step checks](arm64.md#what-the-bundle-step-checks)).
 - winemac exports `macdrv_functions`, the window, Metal and monitor helpers
   DXMT's `winemetal.so` uses. It gets the window's client view through its
