@@ -78,23 +78,15 @@ The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
   rewritten. A FEX config file does not override it, since FEX's
   environment layer outranks its config files, but the variable exported
   where the process starts does ([environment defaults](#environment-defaults)).
-- The built-in `vkd3d-proton-min-latency` rule sets
-  `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES` for every process, a minimum frame
-  latency for swapchains with a frame latency handle; the value is in
-  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). A D3D12 game
-  that waits on that handle at the default latency of 1 has the CPU and
-  the GPU take turns, and an Apple GPU then stays at a low clock; with the
-  variable, our vkd3d-proton lets the game run frames ahead, at the cost
-  of input latency ([vkd3d-proton](arm64.md#vkd3d-proton)). vkd3d-proton
-  reads it in the game's process when it creates such a swapchain, and
-  logs `Allowing a frame latency of at least <n> frames.` then. Like the
-  FEX entry, it leaves a value the caller exported alone.
-- The entries and the reasoning for these rules are in
-  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). Their
-  [recipes](#recipes) turn them off or change them.
+- The entry and the reasoning for this rule are in
+  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). Its
+  [recipes](#recipes) turn it off or change it.
 - KosmicKrisp's features need no rule: our Mesa fork advertises the ones
   Direct3D 12 and OpenGL through Zink need without `MESA_KK_EXPERIMENTAL`
   ([arm64.md](arm64.md#vulkan)).
+- D3D12's frame latency handles need no rule either: our vkd3d-proton
+  signals them once the GPU has finished a frame
+  ([arm64.md](arm64.md#vkd3d-proton)).
 
 ### Environment defaults
 
@@ -208,8 +200,6 @@ executable.
 | Force Direct3D trees for one game | `name=my-game;exe=Game.exe;dxgi=wined3d;d3d9=wined3d` (not for a D3D12 game: the `wined3d` tree has no D3D12) |
 | Hide D3D12 from one game, keeping DXMT for D3D10 and D3D11 | `name=my-game;exe=Game.exe;dll_overrides=d3d12,d3d12core=` |
 | Change a vkd3d-proton setting for one game | `name=my-game;exe=Game.exe;env=VKD3D_CONFIG=<options>` |
-| Give one game the frame latency it asks for | `name=my-game;exe=Game.exe;env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=` |
-| Give every game the frame latency it asks for | `name=vkd3d-proton-min-latency;enabled=false` |
 | Give one game Wine's no-execute behaviour | `name=my-game;exe=Game.exe;force_nx=false` |
 | Give every process Wine's no-execute behaviour | `name=force-nx;enabled=false` |
 | Give one game FEX's full x87 precision | `name=my-game;exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |

@@ -273,14 +273,14 @@ exits with the number of failed checks, at most 255.
   ([Vulkan](#vulkan)), which it finds through `winevulkan.dll` or
   `vulkan-1.dll`. The KosmicKrisp features it needs, which upstream Mesa
   counts as experimental, are always on in our Mesa ([Vulkan](#vulkan)).
-- Our commits add `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES`, the least frame
-  latency a swapchain's frame latency handle allows. compatdb's built-in
-  `vkd3d-proton-min-latency` rule sets a minimum frame latency for every
-  process, with the value in
-  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs): at a latency of
-  1 the CPU and the GPU take turns and an Apple GPU stays at a low clock
-  ([built-in environment rules](compatdb.md#built-in-environment-rules)).
-  The smoke test checks that vkd3d-proton reports it for its waitable
+- Our commits release a swapchain's frame latency handle once the GPU has
+  finished a present, instead of once the present is on screen, which on
+  KosmicKrisp comes one or more refresh cycles later. A game that waits on
+  the handle at the default latency of 1 would otherwise start a frame only
+  every few refresh cycles, with the GPU idle and at a low clock in
+  between. vkd3d-proton's own frame latency limit still waits for the
+  display, so the game cannot get further ahead of it than before. The
+  smoke test checks that vkd3d-proton reports this for its waitable
   swapchain.
 - `d3d12.dll` and `d3d12core.dll` go into the `dxmt` tree. vkd3d-proton
   has no DXGI of its own: a game creates its swapchain through DXMT's
