@@ -149,10 +149,10 @@ which says in its header what it does.
   a tag needs it, saves its caches for the tag builds and publishes
   nothing. A newer push to `main` cancels the run of `main` still
   in progress; a run on a tag is never cancelled.
-- The first lines of a release's notes name what it was built from, with
-  the Homebrew formula and version of each library the bundle carries
-  (`package.sh` in [`bin/ci/`](../bin/ci)). The list of changes is added by
-  hand before the draft is published.
+- A release's notes start with one bullet per source it was built from,
+  with its ref and commit (`package.sh` in [`bin/ci/`](../bin/ci)). The
+  changes are added by hand below them, as short bullets, before the draft
+  is published.
 
 ### Homebrew formulae
 
