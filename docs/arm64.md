@@ -603,7 +603,8 @@ After assembly:
   creates a legacy, a 4.x core and a compatibility context, each of which
   must clear, read back and swap: by default, where compatdb's
   `opengl-egl` rule must have handed over `opengl=egl`, on a Zink
-  renderer, and with a `WINE_COMPATDB` rule for the program with
+  renderer, with no `winediag` line saying that winemac.drv could not start
+  Mesa's EGL, and with a `WINE_COMPATDB` rule for the program with
   `opengl=cgl`, which compatdb must have handed over instead, on Apple's.
   Then
   [`smoke/vulkan.c`](../smoke/vulkan.c), compiled for x86_64 and i686,
@@ -618,9 +619,12 @@ After assembly:
   [`smoke/wined3d.c`](../smoke/wined3d.c), compiled for x86_64 and i686,
   must create a device for a hidden window through wined3d twice, with the
   `winediag` channel on: with the default renderer, where wined3d must not
-  report the Vulkan renderer, and with a `wined3d=vulkan` rule for the
-  program, where it must. The i686 program uses Direct3D 8. Wine builds no
-  64-bit `d3d8.dll`, so the x86_64 one uses Direct3D 9, with a rule giving
+  report the Vulkan renderer and, where OpenGL runs on Zink, the run must
+  have `opengl=egl` from compatdb and no `winediag` line saying that
+  winemac.drv could not start Mesa's EGL; and with a `wined3d=vulkan` rule
+  for the program, where wined3d must report it. The i686 program uses
+  Direct3D 8. Wine builds no 64-bit `d3d8.dll`, so the x86_64 one uses
+  Direct3D 9, with a rule giving
   it the `wined3d` d3d9 tree in both runs. KosmicKrisp only uses a GPU of
   the Metal 4 family, and a Mac without one, such as the virtual machine of
   a hosted CI runner, gives it no device. There, `vulkan.exe` has to fail

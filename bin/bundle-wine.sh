@@ -926,8 +926,9 @@ check_wined3d_device() {
         else
             echo "  Running wined3d.exe for $arch ($api) with the default renderer..."
             log="$TMP_DIR/wined3d-$arch.log"
-            run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag \
+            run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag,err+wgl \
                 WINE_COMPATDB="$rule" "$WINE_DIR/bin/wine" "$exe"
+            check_egl_used "wined3d.exe for $arch ($api)" "$log"
             smoke_check "wined3d.exe for $arch ($api)" 120 "$log"
             check_rules_read "wined3d.exe for $arch ($api)" "$log"
             if ! grep -q "wine-build smoke test: $arch $api device on " "$log" \
@@ -1371,7 +1372,10 @@ run_wgl() {
     time_mark "smoke: wgl.exe $arch ($name)"
     echo "  Running wgl.exe for $arch ($name), which must get the $want renderer..."
     log="$TMP_DIR/wgl-$arch-$name.log"
-    run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe" "$want"
+    run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag,err+wgl "$WINE_DIR/bin/wine" "$exe" "$want"
+    if [ "$name" = default ]; then
+        check_egl_used "wgl.exe for $arch ($name)" "$log"
+    fi
     smoke_check "wgl.exe for $arch ($name)" 120 "$log"
     case "$name" in
         default) line="compatdb: .*opengl = egl, rule opengl-egl$" ;;
@@ -1464,6 +1468,30 @@ check_freetype() {
     cat "$2"
     smoke_stop
     exit 1
+}
+
+# check_egl_used <what> <log>: on a Mac with Zink (ZINK_GL), for a run that
+# gets the built-in opengl-egl rule, exit with the log unless compatdb.so
+# handed over opengl=egl and winemac.drv did not say that Mesa's EGL failed
+# to start. winemac.drv does not fall back to Apple's OpenGL from EGL, so a
+# run whose EGL failed gets no OpenGL, and the failing context alone does not
+# say why; that line names the cause. Without Zink the line is expected
+# (check_wgl_no_egl), so nothing is checked there.
+check_egl_used() {
+    [ "$ZINK_GL" -eq 1 ] || return 0
+    if grep -qF "compatdb asks for Mesa's EGL, but " "$2"; then
+        echo "Error: $1 must run on Zink through Mesa's EGL, but winemac.drv could not start it:"
+        grep -F "compatdb asks for Mesa's EGL, but " "$2"
+        cat "$2"
+        smoke_stop
+        exit 1
+    fi
+    if ! grep -q "compatdb: .*opengl = egl, rule opengl-egl$" "$2"; then
+        echo "Error: compatdb.so did not hand opengl=egl to $1"
+        cat "$2"
+        smoke_stop
+        exit 1
+    fi
 }
 
 # smoke_stop: stop the throwaway prefix's wineserver, which is persistent
