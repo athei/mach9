@@ -131,14 +131,11 @@ What is pinned, and where, is in [arm64.md](arm64.md#pinned-inputs).
 
 ## Releases
 
-The workflows in [`.github/workflows/`](../.github/workflows) make the
-releases. Their steps call the build and bundle scripts and the scripts in
-[`bin/ci/`](../bin/ci), each of which says in its header what it does.
-
-| Tag | Workflow | Result |
-|-----|----------|--------|
-| `arm64-<Wine version>-<n>` | [`release.yml`](../.github/workflows/release.yml) | A draft release of the tag with the bundle and its symbols |
-| `compatdb-*` | [`release-compatdb.yml`](../.github/workflows/release-compatdb.yml) | A draft release with the bundle of an `arm64-*` release, `compatdb.so` replaced |
+An `arm64-<Wine version>-<n>` tag makes
+[`release.yml`](../.github/workflows/release.yml) build the bundle and
+attach it and its symbols to a draft release of the tag. Its steps call the
+build and bundle scripts and the scripts in [`bin/ci/`](../bin/ci), each of
+which says in its header what it does.
 
 - `release.yml` builds on a hosted runner of the floor's major macOS
   version, from the branch of athei/wine that
@@ -156,14 +153,6 @@ releases. Their steps call the build and bundle scripts and the scripts in
   the Homebrew formula and version of each library the bundle carries
   (`package.sh` in [`bin/ci/`](../bin/ci)). The list of changes is added by
   hand before the draft is published.
-- `release-compatdb.yml` takes the newest published `arm64-*` release by
-  publication date, or the one a manual run names as `base`, never a draft
-  or a pre-release, and never just the release GitHub marks as the latest,
-  which can be a `compatdb-*` one. It replaces `compatdb.so` with
-  `bundle-wine.sh --compatdb-only`, which runs the smoke test, and attaches
-  the base's symbols again under its own tag. It needs no signing identity:
-  the loader is the base's. So are the Homebrew libraries, so such a
-  release does not pick up newer ones, and its notes say so.
 
 ### Homebrew formulae
 
@@ -239,13 +228,10 @@ what its cache was made from:
   (`gh cache list --key dxmt-llvm15-`, then `gh cache delete <id>`) or
   change the pin.
 - The downloads: the pins of the downloads the cache holds, the ones the
-  `pins-key.sh` calls in `release.yml` and `release-compatdb.yml` name
+  `pins-key.sh` call for this cache in `release.yml` names
   ([`pins-key.sh`](../bin/ci/pins-key.sh) hashes their lines of
-  `redist.env`). Both workflows compute the key the same way and share the
-  cache, but only `release.yml` saves it: `release-compatdb.yml` fetches
-  llvm-mingw only, and an entry it saved would lack mtld3d. A new download
-  pinned in `redist.env` needs its prefix added to the `pins-key.sh` calls
-  of both workflows.
+  `redist.env`). A new download pinned in `redist.env` needs its prefix
+  added to that call.
 - cargo's registry: `compatdb/Cargo.lock`.
 
 A run on a tag writes caches that only later runs on the same tag can read,
