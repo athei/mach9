@@ -70,7 +70,7 @@ directory that an x64 process would load but not run natively
 | `FEX_HOSTFEATURES` | FEX's host feature overrides. x86_64 programs, which run as ARM64EC, run without AFP (the Arm floating-point behaviour FEX uses to match x86) by default, because the floating-point mode would have to change on every call between x86 code and native code, which costs more than AFP saves. `enableafp` turns it back on. i386 programs keep AFP |
 | `VK_DRIVER_FILES` | Unset: ntdll sets it to the bundle's `share/vulkan/icd.d`, so the Vulkan loader uses the bundled KosmicKrisp and no driver installed elsewhere on the Mac. Set: the loader uses the manifests it names instead. ntdll also leaves it unset when the caller sets `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES`; the loader then uses those, and the bundled driver is not added to them ([Vulkan](docs/arm64.md#vulkan)) |
 | `MESA_KK_EXPERIMENTAL` | Which of Mesa's own experimental features KosmicKrisp advertises. The features Direct3D 12 and OpenGL through Zink need are always on in this build, whatever it says ([Vulkan](docs/arm64.md#vulkan)) |
-| `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | vkd3d-proton's settings, as [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) describes them. A compatdb `env` rule sets one for one game ([recipes](docs/compatdb.md#recipes)). compatdb's built-in `vkd3d-proton-min-latency` rule sets `VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES` in every process that does not have it already, so a value exported where the process starts wins ([environment defaults](docs/compatdb.md#environment-defaults)) |
+| `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | vkd3d-proton's settings, as [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) describes them. A compatdb `env` rule sets one for one game ([recipes](docs/compatdb.md#recipes)) |
 | `WINE_D3D_CONFIG` | wined3d's settings, as in Wine. `renderer=vulkan` puts wined3d on KosmicKrisp. compatdb's `wined3d=vulkan` sets it for one game, keeping the variable's other options; the programs that game starts inherit it unless a rule for them sets `wined3d` ([wined3d on Vulkan](docs/compatdb.md#wined3d-on-vulkan)) |
 
 ### Direct3D backends
@@ -126,8 +126,10 @@ compatdb rules, on purpose: msync is the wineserver's, which starts before
 compatdb.so loads in any process; FEX's memory ordering and AFP are
 emulator settings, not compatibility settings; KosmicKrisp's features are
 what Direct3D 12 and OpenGL through Zink need, so nothing turns them off;
-and the Vulkan driver choice keeps the bundle self-contained, so it is
-ntdll's, before any rule.
+D3D12's frame latency handles are signalled about when Windows signals
+them, a fix rather than a setting to choose per game; and the Vulkan
+driver choice keeps the bundle self-contained, so it is ntdll's, before
+any rule.
 
 | Behavior | Default in this bundle | Decided by |
 |----------|------------------------|------------|
@@ -144,7 +146,7 @@ ntdll's, before any rule.
 | KosmicKrisp's experimental features | Advertised whatever `MESA_KK_EXPERIMENTAL` says | [Our Mesa](https://github.com/athei/mesa) at [`mesa-src.ref`](pins/mesa-src.ref) ([Vulkan](docs/arm64.md#vulkan)) |
 | Vulkan driver | Only the bundled KosmicKrisp: ntdll points `VK_DRIVER_FILES` at the bundle's manifest unless the caller sets `VK_DRIVER_FILES`, `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES` | ntdll of [our Wine](https://github.com/athei/wine) at [`wine-src.ref`](pins/wine-src.ref) ([environment variables](#environment-variables), [Vulkan](docs/arm64.md#vulkan)) |
 | OpenGL | Mesa's EGL with Zink on KosmicKrisp instead of Apple's OpenGL; no OpenGL on a Mac without a Metal 4 GPU unless a rule gives the program `opengl=cgl` | Rule `opengl-egl` ([OpenGL](docs/arm64.md#opengl), [recipes](docs/compatdb.md#recipes)) |
-| D3D12 frame latency handles | A game that waits on one runs extra frames ahead, so an Apple GPU keeps its clock up; more input latency | Rule `vkd3d-proton-min-latency` ([built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
+| D3D12 frame latency handles | Signalled once the GPU has finished a frame instead of once it is on screen, so a game that waits on one keeps the GPU busy; how far it gets ahead of the display stays bounded | [Our vkd3d-proton](https://github.com/athei/vkd3d-proton) at [`vkd3d-proton-src.ref`](pins/vkd3d-proton-src.ref) ([vkd3d-proton](docs/arm64.md#vkd3d-proton)) |
 | Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | Rule `no-mono-gecko` ([recipes](docs/compatdb.md#recipes)) |
 
 ## Building

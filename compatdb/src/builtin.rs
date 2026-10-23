@@ -8,9 +8,9 @@
 //! none of them can catch an unrelated program that happens to share a file
 //! name. The exceptions are `dxmt`, `mtld3d`, `dpi-aware`,
 //! `large-address-aware`, `gcmouse`, `fex-x87-reduced-precision`,
-//! `vkd3d-proton-min-latency`, `opengl-egl`, `force-nx` and `no-mono-gecko`,
-//! which match every process on purpose: each is a default that a more
-//! specific rule can override and that can be dropped by name.
+//! `opengl-egl`, `force-nx` and `no-mono-gecko`, which match every process
+//! on purpose: each is a default that a more specific rule can override and
+//! that can be dropped by name.
 
 use compatdb_table::{ANY_EXE, D3d9, Dxgi, OpenGl, Rule, Table};
 
@@ -117,29 +117,6 @@ fn defaults() -> Vec<Rule> {
             name: "fex-x87-reduced-precision".into(),
             exe: ANY_EXE.into(),
             env: vec![("FEX_X87REDUCEDPRECISION".into(), "1".into())],
-            ..Rule::default()
-        },
-        // A D3D12 game that waits on its swapchain's frame latency handle,
-        // at the default maximum latency of 1, starts a frame only after the
-        // previous one was presented, so the CPU and the GPU take turns.
-        // Apple GPUs then idle for part of every frame and stay at a low
-        // clock, and the game runs far slower than the GPU could: Hadron
-        // measured Teardown's first screen on an M2 Pro at 36 FPS, and at 69
-        // FPS with a latency of 2. Our vkd3d-proton, the bundle's D3D12,
-        // reads VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES as the least latency that
-        // handle allows, whatever the game asks for, which keeps the GPU busy
-        // at the cost of one frame of input latency. vkd3d-proton reads the
-        // variable in the Windows process when it creates the swapchain, long
-        // after compatdb has set it.
-        //
-        // It matches every process, like the rules above. A rule for one
-        // game with `env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=` removes it,
-        // and one with another value replaces it for that game. The variable
-        // exported where the process starts wins over it.
-        Rule {
-            name: "vkd3d-proton-min-latency".into(),
-            exe: ANY_EXE.into(),
-            env: vec![("VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES".into(), "2".into())],
             ..Rule::default()
         },
         // OpenGL goes through Mesa's EGL with Zink on KosmicKrisp, which
@@ -369,17 +346,11 @@ mod tests {
         let game = table.resolve("game.exe", &VersionInfo::default());
         // Unset, the defaults apply.
         let (set, kept) = applied(&game, &[]);
-        assert_eq!(
-            set,
-            [
-                "FEX_X87REDUCEDPRECISION=1",
-                "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2"
-            ]
-        );
+        assert_eq!(set, ["FEX_X87REDUCEDPRECISION=1"]);
         assert_eq!(kept, [] as [String; 0]);
         // Exported by the caller, the default leaves it alone.
         let (set, kept) = applied(&game, &["FEX_X87REDUCEDPRECISION"]);
-        assert_eq!(set, ["VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2"]);
+        assert_eq!(set, [] as [String; 0]);
         assert_eq!(kept, ["FEX_X87REDUCEDPRECISION"]);
         // The steps name the rule of each entry.
         let steps = game.env_steps(|_| false);
@@ -429,10 +400,6 @@ mod tests {
     /// The name of the rule that asks FEX for reduced x87 precision.
     const FEX_RULE: &str = "fex-x87-reduced-precision";
 
-    /// The name of the rule that gives vkd3d-proton's latency handles a
-    /// minimum latency.
-    const VKD3D_RULE: &str = "vkd3d-proton-min-latency";
-
     /// The name of the rule that asks the Mac driver for Mesa's EGL.
     const GL_RULE: &str = "opengl-egl";
 
@@ -448,7 +415,6 @@ mod tests {
             "large-address-aware",
             "gcmouse",
             FEX_RULE,
-            VKD3D_RULE,
             GL_RULE,
             NX_RULE,
             "no-mono-gecko",
@@ -464,20 +430,10 @@ mod tests {
         vec![("FEX_X87REDUCEDPRECISION".to_string(), "1".to_string())]
     }
 
-    /// The env of the rule for vkd3d-proton, spelled out for the same
-    /// reason: vkd3d-proton matches the name exactly (`swapchain.c` of our
-    /// fork) and ignores a value that is not a number from 1 to 16.
-    fn vkd3d_env() -> Vec<(String, String)> {
-        vec![(
-            "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES".to_string(),
-            "2".to_string(),
-        )]
-    }
-
     /// The wildcard rules that set env, each with its entries, in table
     /// order.
     fn wildcard_env_rules() -> Vec<(&'static str, Vec<(String, String)>)> {
-        vec![(FEX_RULE, fex_env()), (VKD3D_RULE, vkd3d_env())]
+        vec![(FEX_RULE, fex_env())]
     }
 
     /// The env every process gets from the built-in rules without the rule
@@ -558,10 +514,7 @@ mod tests {
             .encode_utf16()
             .collect();
         let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
-        assert_eq!(
-            String::from_utf16_lossy(&merged),
-            "OTHER=x\0VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2\0\0"
-        );
+        assert_eq!(String::from_utf16_lossy(&merged), "OTHER=x\0\0");
         // Another process keeps it.
         let other = table.resolve("other.exe", &VersionInfo::default());
         assert_eq!(other.env, wildcard_env());
@@ -570,19 +523,6 @@ mod tests {
         let game = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(game.env, wildcard_env_without(FEX_RULE));
         assert_eq!(game.matched, wildcards_without(FEX_RULE));
-        Ok(())
-    }
-
-    #[test]
-    fn the_table_gives_vkd3d_proton_a_minimum_frame_latency() -> TestResult {
-        let table = table();
-        let vkd3d = rule(&table, VKD3D_RULE)?;
-        assert_eq!(vkd3d.exe, ANY_EXE);
-        assert_eq!(vkd3d.env, vkd3d_env());
-        // Every process gets it, after the FEX entry.
-        let game = table.resolve("game.exe", &VersionInfo::default());
-        assert_eq!(game.env, wildcard_env());
-        assert_eq!(game.env.get(1), vkd3d_env().first());
         Ok(())
     }
 
@@ -647,48 +587,6 @@ mod tests {
         assert_eq!(game.force_nx, None);
         assert_eq!(game.matched, wildcards_without(NX_RULE));
         assert_eq!(game.env, wildcard_env());
-        Ok(())
-    }
-
-    #[test]
-    fn a_game_rule_or_disabling_by_name_changes_the_minimum_frame_latency() -> TestResult {
-        // For one game: an empty value, which removes the variable, folds
-        // after the default.
-        let table = with_overrides("name=old;exe=old.exe;env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=");
-        let old = table.resolve("Old.exe", &VersionInfo::default());
-        let removed = (
-            "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES".to_string(),
-            String::new(),
-        );
-        assert_eq!(old.env, wildcard_env_and(&[removed]));
-        let block: Vec<u16> = "VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2\0OTHER=x\0\0"
-            .encode_utf16()
-            .collect();
-        let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
-        assert_eq!(
-            String::from_utf16_lossy(&merged),
-            "OTHER=x\0FEX_X87REDUCEDPRECISION=1\0\0"
-        );
-        // Another value for one game replaces it there.
-        let table =
-            with_overrides("name=fast;exe=fast.exe;env=VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=3");
-        let fast = table.resolve("fast.exe", &VersionInfo::default());
-        let block: Vec<u16> = "\0".encode_utf16().collect();
-        let merged = compatdb_table::merge_env(&block, &fast.env).ok_or("unchanged")?;
-        assert!(
-            String::from_utf16_lossy(&merged).contains("VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=3\0")
-        );
-        assert!(
-            !String::from_utf16_lossy(&merged).contains("VKD3D_SWAPCHAIN_MIN_LATENCY_FRAMES=2\0")
-        );
-        // Another process keeps the default.
-        let other = table.resolve("other.exe", &VersionInfo::default());
-        assert_eq!(other.env, wildcard_env());
-        // For every process: drop the rule. The other entries stay.
-        let table = with_overrides(&format!("name={VKD3D_RULE};enabled=false"));
-        let game = table.resolve("game.exe", &VersionInfo::default());
-        assert_eq!(game.env, wildcard_env_without(VKD3D_RULE));
-        assert_eq!(game.matched, wildcards_without(VKD3D_RULE));
         Ok(())
     }
 

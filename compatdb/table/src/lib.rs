@@ -52,7 +52,6 @@ pub const BUILTIN_RULE_NAMES: &[&str] = &[
     "large-address-aware",
     "gcmouse",
     "fex-x87-reduced-precision",
-    "vkd3d-proton-min-latency",
     "opengl-egl",
     "force-nx",
     "no-mono-gecko",
