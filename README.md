@@ -171,7 +171,6 @@ bin/bundle-wine.sh   # assemble the bundle (see Layout)
 | `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the bundle in the [layout](#layout). Either way it asks before it deletes an existing one, unless `--yes` |
 | `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking, for an unattended run. A directory that is not empty and has no `bin/wine` is still refused |
 | `bundle-wine.sh` | `--runtime-only` | No development files; the flavor to put into an application |
-| `bundle-wine.sh` | `--compatdb-only` | Rebuilds `compatdb.so` into the existing bundle only (the default one, or `<dir>/wine` with `--dest`); no prompt, no `make install`, no Wine build needed; `--runtime-only` is ignored. It refuses a bundle without Vulkan ([what the bundle step checks](docs/arm64.md#what-the-bundle-step-checks)) |
 | `bundle-wine.sh` | `--strict-floor` | A Mach-O that needs a newer macOS than the floor is an error instead of a warning ([Homebrew libraries and the floor](docs/arm64.md#homebrew-libraries-and-the-floor)) |
 | `bundle-wine.sh` | `--symbols` | Also keeps the PE files as they were before their symbols were stripped, in `wine-symbols` next to the bundle |
 

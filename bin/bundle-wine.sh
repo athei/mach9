@@ -14,7 +14,6 @@ MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 . "$PINS_DIR/redist.env"
 DIST_DIR=""
 RUNTIME_ONLY=0
-COMPATDB_ONLY=0
 STRICT_FLOOR=0
 WITH_SYMBOLS=0
 ASSUME_YES=0
@@ -33,15 +32,12 @@ if [ -d "$MINGW_DIR/bin" ]; then
 fi
 
 usage() {
-    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--compatdb-only] [--strict-floor] [--symbols] [--yes]"
+    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--strict-floor] [--symbols] [--yes]"
     exit 1
 }
 
 # --dest names the directory the bundle goes into as <dir>/wine; without it,
-# its place in the layout (BUNDLE_DEST in profile.sh). --compatdb-only
-# replaces compatdb.so in the bundle already at <dir>/wine and leaves
-# everything else alone. --runtime-only is accepted alongside it and ignored,
-# since it only affects what a full bundle installs. --strict-floor turns a
+# its place in the layout (BUNDLE_DEST in profile.sh). --strict-floor turns a
 # Mach-O that needs a newer macOS than MACOS_FLOOR into an error instead of a
 # warning, for a CI or release build. The bundled libraries are Homebrew's
 # bottles, which carry the minos of the macOS they were poured for, so they
@@ -55,7 +51,6 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dest) [ $# -ge 2 ] || usage; DIST_DIR="$2"; shift 2 ;;
         --runtime-only) RUNTIME_ONLY=1; shift ;;
-        --compatdb-only) COMPATDB_ONLY=1; shift ;;
         --strict-floor) STRICT_FLOOR=1; shift ;;
         --symbols) WITH_SYMBOLS=1; shift ;;
         --yes) ASSUME_YES=1; shift ;;
@@ -620,35 +615,6 @@ run_limited() {
         || RUN_STATUS=$?
 }
 
-# check_hybrid_markers: exit unless the default dir's marker of every 64-bit
-# name a Direct3D tree supplies is a hybrid one. A native ARM64 process
-# rejects an AMD64 placeholder (docs/arm64.md, Limitations), and compatdb.so
-# gives such a process the dxmt and mtld3d trees by default, so with an AMD64
-# marker it could not load that name. A bundle from before the dxmt or
-# mtld3d tree was ARM64X has such markers; --compatdb-only runs this before
-# it replaces compatdb.so, so it leaves such a bundle as it was, and the
-# smoke test runs it first. The markers and not the trees are read, since a
-# tree can change after the bundle step (a development install of mtld3d)
-# without its marker following.
-check_hybrid_markers() {
-    local family dll f bad=0
-    for family in dxgi d3d9; do
-        for dll in $(family_dlls "$family" "$PE64_DIR"); do
-            f="$WINE_DIR/lib/wine/$PE64_DIR/$dll.dll"
-            if ! pe_is_arm64x "$f"; then
-                echo "Error: the marker $PE64_DIR/$dll.dll is not a hybrid one (PE machine $(pe_machine "$f")),"
-                echo "  so a native ARM64 program cannot load $dll.dll from any $family tree"
-                bad=1
-            fi
-        done
-    done
-    if [ "$bad" -ne 0 ]; then
-        echo "This bundle predates ARM64X builds of every Direct3D tree; bundle the"
-        echo "whole build instead of using --compatdb-only."
-        exit 1
-    fi
-}
-
 # check_rules_read <label> <log>: exit unless compatdb.so read the
 # WINE_COMPATDB rules of the run <label> logged in <log> without a warning.
 # It ignores a field it cannot read and applies the rest of the record, so a
@@ -704,8 +670,6 @@ smoke_test() {
     # caller's directory (or BUILD_DIR, where a full bundle runs this). The
     # prefix goes away with TMP_DIR. vkd3d-proton maps a unix path to Z:.
     wine_env+=(VKD3D_SHADER_CACHE_PATH="$TMP_DIR/prefix")
-    # Before any Wine process runs, so a failure leaves no wineserver behind.
-    check_hybrid_markers
     version=$("$WINE_DIR/bin/wine" --version) || {
         echo "Error: bundled wine failed to run"
         exit 1
@@ -720,10 +684,10 @@ smoke_test() {
         echo "  GPU instead, and wined3d.exe does not run with wined3d on Vulkan."
     fi
     gl_probe
-    bundle_egl
-    if [ "$BUNDLE_EGL" -eq 0 ]; then
-        echo "  This bundle has no EGL: OpenGL is Apple's only."
-    fi
+    # The Mac driver's OpenGL runs on Zink, with compatdb's opengl=egl, when
+    # a GPU supports the Metal 4 family: the bundle always has Mesa's EGL
+    # (Step 5 checks it).
+    ZINK_GL=$METAL4
     # compatdb's built-in opengl rule asks winemac.drv for Mesa's EGL,
     # which gives no OpenGL without Zink. There, the runs that need OpenGL
     # give their program a WINE_COMPATDB rule with opengl=cgl, which wins
@@ -773,13 +737,9 @@ smoke_test() {
     # prints an "msync: error:" line and runs without msync. Its other
     # "msync: error:" lines are failures too, while the "msync: error
     # setting ..." lines (no colon) only report a thread scheduling policy
-    # it could not set and are not. A bundle whose wineserver has no msync
-    # at all can only be one from before it, which --compatdb-only may meet
-    # and skips; a full bundle without it was built from a Wine source that
-    # lacks it, which is an error.
-    if [ "$COMPATDB_ONLY" -eq 1 ] && ! grep -qaF "msync: up and running." "$WINE_DIR/bin/wineserver"; then
-        echo "  Skipping the msync check: this wineserver predates msync."
-    elif ! grep -qF "msync: up and running." "$log" || grep -q "^msync: error:" "$log"; then
+    # it could not set and are not. A wineserver without msync was built
+    # from a Wine source that lacks it, which is an error.
+    if ! grep -qF "msync: up and running." "$log" || grep -q "^msync: error:" "$log"; then
         echo "Error: the wineserver of the prefix boot did not start msync:"
         grep "msync" "$log" || echo "  (no msync lines at all)"
         smoke_stop
@@ -812,7 +772,7 @@ smoke_test() {
     # winemetal.dll and mtld3d.dll, which only the dxmt and mtld3d trees
     # have, so the loads show that the ARM64 halves of DXMT's and mtld3d's
     # ARM64X DLLs came in through the hybrid placeholders of their names
-    # (Step 4, the markers), which check_hybrid_markers has checked above.
+    # (Step 4, the markers), whose machines Step 5 has checked.
     for arch in $SMOKE_PE_ARCHS; do
         cc="$MINGW_DIR/bin/$arch-w64-mingw32-clang"
         exe="$TMP_DIR/hello-$arch.exe"
@@ -844,46 +804,12 @@ smoke_test() {
     check_tree_loads x86_64 "${wine_env[@]}"
     check_tree_loads i686 "${wine_env[@]}"
     check_tree_loads aarch64 "${wine_env[@]}"
-    # --compatdb-only has already refused a bundle without Vulkan
-    # (check_vulkan_present), so every bundle that gets here has it.
-    # OpenGL first: on an older bundle, which --compatdb-only can meet and
-    # whose KosmicKrisp fails vulkan.exe, it still gets checked.
     check_wgl_runs "${wine_env[@]}"
     check_vulkan_runs "${wine_env[@]}"
-    # A bundle from before vkd3d-proton has no D3D12, which --compatdb-only
-    # may meet and skips, as it skips msync; a full bundle always has it.
-    if [ "$COMPATDB_ONLY" -eq 1 ] && [ ! -f "$WINE_DIR/lib/wine/dxgi/dxmt/$PE64_DIR/d3d12.dll" ]; then
-        echo "  Skipping the D3D12 check: this bundle predates vkd3d-proton."
-    else
-        check_d3d12_runs "${wine_env[@]}"
-    fi
+    check_d3d12_runs "${wine_env[@]}"
     check_wined3d_device "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
-}
-
-# check_vulkan_present: exit unless the bundle has the Vulkan loader,
-# KosmicKrisp and its manifest, naming each one that is missing. compatdb.so
-# does not disable vulkan-1, so in a bundle without Vulkan a game's own
-# vulkan-1.dll would load and find no driver, and the smoke test's Vulkan
-# checks need it anyway. --compatdb-only runs it before it builds anything,
-# since it may meet a bundle from before Vulkan; a full bundle checks the
-# same files in Step 5.
-check_vulkan_present() {
-    local f missing=0
-    for f in share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json \
-             lib/external/libvulkan.1.dylib lib/external/libvulkan_kosmickrisp.dylib; do
-        if [ ! -e "$WINE_DIR/$f" ]; then
-            echo "Error: $WINE_DIR/$f is missing"
-            missing=1
-        fi
-    done
-    if [ "$missing" -ne 0 ]; then
-        echo "This bundle has no Vulkan. compatdb.so does not disable a"
-        echo "game's own vulkan-1.dll, which would find no driver, and the smoke test"
-        echo "needs Vulkan. Bundle the whole build instead of using --compatdb-only."
-        exit 1
-    fi
 }
 
 # check_wined3d_device <env-command>...: build smoke/wined3d.c for x86_64 and
@@ -904,10 +830,10 @@ check_vulkan_present() {
 # so the second run is what shows the opt-in works. It needs a KosmicKrisp
 # device, so on a Mac without a Metal 4 GPU (metal4_probe) only the first
 # run happens. The first needs an OpenGL context, which winemac.drv gets
-# from Zink with a Metal 4 GPU and a bundle with EGL (ZINK_GL, bundle_egl),
-# through compatdb's opengl=egl, and otherwise only from an accelerated
-# Apple renderer, for which smoke_test sets GL_SETTING to opengl=cgl, which
-# goes into the program's rule. With neither (gl_probe) it must fail the
+# from Zink with a Metal 4 GPU (ZINK_GL), through compatdb's opengl=egl,
+# and otherwise only from an accelerated Apple renderer, for which
+# smoke_test sets GL_SETTING to opengl=cgl, which goes into the program's
+# rule. With neither (gl_probe) it must fail the
 # way a missing renderer makes it fail instead (check_wined3d_no_gl). The
 # second does not use OpenGL and still happens on a Mac with a Metal 4 GPU.
 check_wined3d_device() {
@@ -1069,14 +995,6 @@ check_vulkan_runs() {
         echo "  Running vulkan.exe for $arch..."
         log="$TMP_DIR/vulkan-$arch.log"
         run_limited 120 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
-        # A bundle from before the always-on features, which --compatdb-only
-        # can meet, got them from MESA_KK_EXPERIMENTAL, which compatdb.so no
-        # longer sets.
-        if [ "$RUN_STATUS" -ne 0 ] && grep "does not offer VK_EXT_transform_feedback" "$log" >/dev/null; then
-            echo "  This bundle's KosmicKrisp advertises transform feedback only when"
-            echo "  MESA_KK_EXPERIMENTAL names it, which compatdb.so no longer sets: it predates the"
-            echo "  Mesa fork's always-on features. Bundle the whole build instead of using --compatdb-only."
-        fi
         smoke_check "vulkan.exe for $arch" 120 "$log"
         want="wine-build smoke test: $arch vulkan device "
         if ! grep -q "$want" "$log"; then
@@ -1221,30 +1139,6 @@ check_d3d12_no_gpu() {
     exit 1
 }
 
-# bundle_egl: set BUNDLE_EGL to 1 when the bundle has Mesa's EGL in
-# lib/external, and MESA_GALLIUM to the name of the one gallium library next
-# to it, which carries Mesa's version, and BUNDLE_EGL to 0 when it has no
-# EGL, as a bundle from before EGL that --compatdb-only meets. A full bundle
-# always has it (Step 5 checks). ZINK_GL is 1 when the Mac driver's OpenGL
-# runs on Zink with compatdb's opengl=egl: the bundle has EGL and a
-# GPU supports the Metal 4 family (metal4_probe, which has to run first).
-bundle_egl() {
-    local lib gallium=()
-    BUNDLE_EGL=0
-    ZINK_GL=0
-    [ -f "$EXT_DIR/libEGL.1.dylib" ] || return 0
-    for lib in "$EXT_DIR"/libgallium-*.dylib; do
-        [ -f "$lib" ] && gallium+=("$(basename "$lib")")
-    done
-    if [ ${#gallium[@]} -ne 1 ]; then
-        echo "Error: lib/external has libEGL.1.dylib and ${#gallium[@]} libgallium-*.dylib, not one"
-        exit 1
-    fi
-    MESA_GALLIUM=${gallium[0]}
-    BUNDLE_EGL=1
-    ZINK_GL=$METAL4
-}
-
 # check_egl_host: build smoke/egl.c for the host and run it on the bundle's
 # lib/external/libEGL.1.dylib, outside Wine, with nothing in its environment
 # but VK_DRIVER_FILES naming the bundle's manifest directory, as ntdll sets
@@ -1253,14 +1147,10 @@ bundle_egl() {
 # Vulkan loader and the driver from lib/external, and from nowhere else. This
 # shows the chain resolves inside the bundle before Wine is involved. It
 # needs a KosmicKrisp device, so on a Mac without a Metal 4 GPU
-# (metal4_probe) it is skipped, and so it is for a bundle without EGL
-# (bundle_egl).
+# (metal4_probe) it is skipped. MESA_GALLIUM comes from check_mesa_build.
 check_egl_host() {
     local log="$TMP_DIR/egl.log" lib want status=0
-    if [ "$BUNDLE_EGL" -eq 0 ]; then
-        echo "  Skipping the host EGL check: this bundle has no EGL."
-        return 0
-    elif [ "$METAL4" -eq 0 ]; then
+    if [ "$METAL4" -eq 0 ]; then
         echo "  Skipping the host EGL check: Zink needs a KosmicKrisp device."
         return 0
     fi
@@ -1300,9 +1190,9 @@ check_egl_host() {
 # context, each of which must clear, read back and swap, and whose renderer
 # must contain the string it is given. <env-command> drops the caller's
 # WINE_COMPATDB, so compatdb's built-in opengl rule decides: it asks
-# winemac.drv for Mesa's EGL, which runs on Zink when the bundle has EGL and
-# a GPU supports the Metal 4 family (ZINK_GL, see bundle_egl), and gives no
-# OpenGL at all otherwise, since winemac.drv does not fall back from EGL.
+# winemac.drv for Mesa's EGL, which runs on Zink when a GPU supports the
+# Metal 4 family (ZINK_GL, set in smoke_test), and gives no OpenGL at all
+# otherwise, since winemac.drv does not fall back from EGL.
 # With Zink each arch runs by default, where the renderer must be Zink and
 # the compatdb log must show the rule's opengl=egl. Without Zink it runs by
 # default once to show that EGL is still the default there and gets no
@@ -1710,16 +1600,13 @@ check_vulkan() {
 # the settings of its built-in force_nx and opengl rules to:
 # set_compat_force_nx and set_compat_opengl. Without them compatdb.so only
 # logs that a hook is missing, and every 32-bit program without NX_COMPAT
-# runs with no-execute off and every process gets Apple's OpenGL. Run for a
-# full bundle and, before anything is replaced, for --compatdb-only, whose
-# bundle may predate the hooks and then needs a full bundle step.
+# runs with no-execute off and every process gets Apple's OpenGL.
 check_compat_hooks() {
     local hook
     for hook in set_compat_force_nx set_compat_opengl; do
         if ! nm -gU "$unixdir/ntdll.so" 2>/dev/null | awk '{print $NF}' | grep -xF "_$hook" >/dev/null; then
-            echo "Error: $UNIX_DIR/ntdll.so does not export $hook; the Wine of this bundle"
-            echo "predates the hook through which compatdb.so hands that setting over (bundle"
-            echo "the whole build)"
+            echo "Error: $UNIX_DIR/ntdll.so does not export $hook, the hook through which"
+            echo "compatdb.so hands that setting over; the Wine source lacks it"
             exit 1
         fi
     done
@@ -2166,57 +2053,8 @@ check_loader_app() {
     echo "  and the cross-architecture entitlement."
 }
 
-# The bundle's dylibs, for both a full bundle and --compatdb-only, whose
-# smoke test reads them too.
+# The bundle's dylibs.
 EXT_DIR="$WINE_DIR/lib/external"
-
-# ── compatdb-only: replace compatdb.so in an existing bundle ────────────
-# For a change confined to the compatdb/ crate. Nothing is wiped, nothing is
-# prompted for and nothing is read from $BUILD_DIR except cargo's target dir,
-# so this works on any existing arm64 bundle, one this script built or one
-# unpacked there.
-if [ "$COMPATDB_ONLY" -eq 1 ]; then
-    if [ ! -x "$WINE_DIR/bin/wine" ]; then
-        echo "Error: no bundle at $WINE_DIR (--compatdb-only updates an existing"
-        echo "arm64 bundle; build or unpack one there first)"
-        exit 1
-    fi
-    check_vulkan_present
-    check_hybrid_markers
-    check_compat_hooks
-
-    echo "==> Step 1: Build compatdb.so"
-    build_compatdb
-
-    # Same reason as Step 4f of a full bundle. A freshly linked file normally
-    # carries no quarantine, so only remove it when it is there.
-    echo "==> Step 2: Remove inherited quarantine"
-    if xattr -p com.apple.quarantine "$unixdir/compatdb.so" >/dev/null 2>&1; then
-        xattr -d com.apple.quarantine "$unixdir/compatdb.so"
-    fi
-
-    echo "==> Step 3: Verify"
-    if ! cmp -s "$COMPATDB_BUILD" "$unixdir/compatdb.so"; then
-        echo "Error: $UNIX_DIR/compatdb.so does not match the build output"
-        exit 1
-    fi
-    echo "  compatdb.so: $(file -b "$unixdir/compatdb.so")"
-    LEAKED=0
-    check_no_leaks "$unixdir/compatdb.so"
-    if [ $LEAKED -ne 0 ]; then
-        echo "Error: compatdb.so is not self-contained"
-        exit 1
-    fi
-    # Only compatdb.so: the rest of the bundle was not built here, and keeps
-    # whatever floor it was built for.
-    check_minos "$unixdir/compatdb.so"
-    smoke_test
-
-    echo ""
-    echo "==> Done! compatdb.so updated in:"
-    echo "    $WINE_DIR/"
-    exit 0
-fi
 
 # ── Preflight ───────────────────────────────────────────────────────────
 # What a full bundle needs beyond the Wine build, checked before Step 0

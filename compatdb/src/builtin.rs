@@ -523,8 +523,7 @@ mod tests {
     #[test]
     fn the_table_leaves_vulkan_1_alone() {
         // The bundle ships Wine's Vulkan, so no built-in rule disables the
-        // loader. --compatdb-only relies on this when it refuses a bundle
-        // without Vulkan, where a game's own vulkan-1.dll would load.
+        // loader.
         assert!(
             !table()
                 .rules
