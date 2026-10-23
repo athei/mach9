@@ -110,8 +110,7 @@ jobs:
         uses: ./scripts/.github/actions/brew
 
       # Each key changes with the pins of what its cache holds, not with the
-      # rest of redist.env. release-compatdb.yml computes the redist key the
-      # same way, so both workflows share that cache. The ccache key rolls:
+      # rest of redist.env. The ccache key rolls:
       # every run restores the newest one of the prefix, and a run on the
       # default branch saves its own.
       # The compilers go through the ccache of the Homebrew formulae

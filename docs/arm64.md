@@ -724,7 +724,7 @@ libraries meet the floor:
 - On a host of the floor's major version, every bottle's `minos` is below
   the floor. A CI or release build has to run on such a host, takes the
   libraries from Homebrew and passes `--strict-floor`, so a file above the
-  floor fails the bundle step. The release workflows run on a runner of that
+  floor fails the bundle step. The release workflow runs on a runner of that
   version ([releases](maintenance.md#releases)).
 - On a newer macOS, Homebrew pours that version's bottles, and the bundle
   step warns about each of them. That is expected for a local build, which

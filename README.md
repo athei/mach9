@@ -21,12 +21,10 @@ built from [`compatdb/`](compatdb). Direct3D 12 is vkd3d-proton on Vulkan.
 The `arm64-*` [releases](https://github.com/athei/wine-build/releases)
 carry the bundle and, in a second archive, its PE files before their
 symbols were stripped. The [release workflow](.github/workflows/release.yml)
-builds them, and a `compatdb-*` release is the bundle of an `arm64-*` one
-with only `compatdb.so` replaced ([releases](docs/maintenance.md#releases)).
-The loader is signed by a certificate of the team that the provisioning
-profile in [`signing/`](signing) belongs to
-([loader app](docs/arm64.md#loader-app)). To build the bundle locally, see
-[Building](#building).
+builds them ([releases](docs/maintenance.md#releases)). The loader is
+signed by a certificate of the team that the provisioning profile in
+[`signing/`](signing) belongs to ([loader app](docs/arm64.md#loader-app)).
+To build the bundle locally, see [Building](#building).
 
 The `cx-*` releases are the x86_64 Wine this repository built before, run
 under Rosetta. They are frozen and kept for comparison.
@@ -188,9 +186,9 @@ bin/bundle-wine.sh   # assemble the bundle (see Layout)
 
 | Path | What it holds |
 |------|---------------|
-| [`bin/`](bin) | The build and bundle scripts; [`bin/lib/profile.sh`](bin/lib/profile.sh) holds the settings and helpers they share, [`bin/ci/`](bin/ci) what the release workflows run besides them |
+| [`bin/`](bin) | The build and bundle scripts; [`bin/lib/profile.sh`](bin/lib/profile.sh) holds the settings and helpers they share, [`bin/ci/`](bin/ci) what the workflows run besides them |
 | [`pins/`](pins) | The pinned inputs: [`redist.env`](pins/redist.env), the refs of the sources the build checks out, and the Homebrew formulae a CI build installs |
-| [`.github/workflows/`](.github/workflows) | The release workflows ([releases](docs/maintenance.md#releases)) |
+| [`.github/workflows/`](.github/workflows) | The CI workflows ([releases](docs/maintenance.md#releases)) |
 | [`compatdb/`](compatdb) | The Cargo workspace of `compatdb.so` and the `compatdb-table` crate ([docs/compatdb.md](docs/compatdb.md)); run cargo there |
 | [`smoke/`](smoke) | The programs the bundle step builds and runs to check the bundle |
 | [`signing/`](signing) | The loader's provisioning profile |

@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-# package.sh [--base <release> [--base-notes <file>]] <tag> <outdir>: pack
-# the bundle bundle-wine.sh made in its place in the layout (BUNDLE_DEST in
-# profile.sh) as the release <tag>, into <outdir>:
+# package.sh <tag> <outdir>: pack the bundle bundle-wine.sh made in its
+# place in the layout (BUNDLE_DEST in profile.sh) as the release <tag>, into
+# <outdir>:
 #
 #   wine-<tag>-macos-arm64.tar.xz          the bundle, as wine/
 #   wine-<tag>-macos-arm64-symbols.tar.xz  wine-symbols/ (bundle-wine.sh
@@ -19,13 +19,6 @@ set -e
 # repository must have no uncommitted changes, and the Wine SDK must be
 # staged from that Wine commit, or the notes would name something the bundle
 # was not built from.
-#
-# With --base, the bundle is the release <release> with compatdb.so replaced
-# (bundle-wine.sh --compatdb-only). Only the bundle is packed, since the PE
-# files and their symbols are the base's, and the notes name this
-# repository's commit and the base, say that the Homebrew libraries are the
-# base's, and end with the first line of <file>, which holds the base's
-# notes.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # BUNDLE_DEST, WINE_SRC, WINE_SDK_DIR, FEX_DIST, MESA_DIST, DXMT_DIST,
@@ -34,26 +27,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$SCRIPT_DIR/lib/profile.sh"
 
 usage() {
-    echo "Usage: $0 [--base <release> [--base-notes <file>]] <tag> <outdir>"
+    echo "Usage: $0 <tag> <outdir>"
     exit 1
 }
 
-BASE=""
-BASE_NOTES=""
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --base) [ $# -ge 2 ] || usage; BASE="$2"; shift 2 ;;
-        --base-notes) [ $# -ge 2 ] || usage; BASE_NOTES="$2"; shift 2 ;;
-        -*) usage ;;
-        *) break ;;
-    esac
-done
 [ $# -eq 2 ] || usage
+case "$1" in
+    -*) usage ;;
+esac
 TAG="$1"
 OUT="$2"
-if [ -n "$BASE_NOTES" ] && [ -z "$BASE" ]; then
-    usage
-fi
 WINE_DIR="$BUNDLE_DEST/wine"
 SYMBOLS_DIR="$BUNDLE_DEST/wine-symbols"
 BUNDLE_TAR="$OUT/wine-$TAG-macos-arm64.tar.xz"
@@ -159,67 +142,52 @@ if [ ! -L "$WINE_DIR/bin/wine" ] && [ ! -e "$WINE_DIR/bin/wine" ]; then
 fi
 clean_tree "$REPO_DIR"
 self="$(github_name "${GITHUB_REPOSITORY:-$(git -C "$REPO_DIR" remote get-url origin)}")@$(git -C "$REPO_DIR" rev-parse --short=11 HEAD)"
+if [ ! -d "$SYMBOLS_DIR" ]; then
+    echo "Error: no $SYMBOLS_DIR (run bundle-wine.sh with --symbols)"
+    exit 1
+fi
+clean_tree "$WINE_SRC"
+wine_commit=$(wine_src_commit)
+if [ "$(cat "$WINE_SDK_DIR/WINE_COMMIT" 2>/dev/null)" != "$wine_commit" ]; then
+    echo "Error: the Wine SDK at $WINE_SDK_DIR is not for $WINE_SRC at $wine_commit,"
+    echo "so the bundle may not be either (run build-wine.sh and bundle-wine.sh)"
+    exit 1
+fi
+# The describe form the notes use: the release tag and the number of
+# commits on top of it, without the commit, which they name already.
+describe=$(git -C "$WINE_SRC" describe --long HEAD 2>/dev/null) || {
+    echo "Error: git describe finds no Wine release tag in $WINE_SRC; fetch the tag"
+    echo "of the release the source is based on"
+    exit 1
+}
+describe=${describe%-g*}
+wine_ref=$(tr -d '[:space:]' < "$PINS_DIR/wine-src.ref")
+wine_repo=$(github_name "$(git -C "$WINE_SRC" remote get-url origin)")
+for f in "$FEX_DIST/COMMIT" "$MESA_DIST/COMMIT" "$DXMT_DIST/COMMIT" \
+         "$VKD3D_PROTON_DIST/COMMIT"; do
+    if [ ! -s "$f" ]; then
+        echo "Error: no $f (run build-wine.sh)"
+        exit 1
+    fi
+done
+brew_libs=$(brew_kegs)
 mkdir -p "$OUT"
 
-if [ -n "$BASE" ]; then
-    echo "==> Packing $WINE_DIR as $TAG, from $BASE"
-    pack "$BUNDLE_TAR" "$BUNDLE_DEST" wine
-    {
-        echo "compatdb from $self on Wine $BASE"
-        echo ""
-        echo "- Homebrew libraries: those of $BASE"
-        if [ -n "$BASE_NOTES" ] && [ -n "$(head -n 1 "$BASE_NOTES" | tr -d '\r')" ]; then
-            echo ""
-            echo "$BASE: $(head -n 1 "$BASE_NOTES" | tr -d '\r')"
-        fi
-    } > "$NOTES"
-else
-    if [ ! -d "$SYMBOLS_DIR" ]; then
-        echo "Error: no $SYMBOLS_DIR (run bundle-wine.sh with --symbols)"
-        exit 1
+echo "==> Packing $WINE_DIR as $TAG"
+pack "$BUNDLE_TAR" "$BUNDLE_DEST" wine
+pack "$SYMBOLS_TAR" "$BUNDLE_DEST" wine-symbols --exclude "$TREE_MARKER"
+{
+    echo "Wine distribution built from $wine_repo@$wine_ref ($(short "$wine_commit"), $describe) with $self."
+    echo ""
+    echo "- FEX: $(github_name "$FEX_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/fex-src.ref") ($(short "$(cat "$FEX_DIST/COMMIT")"))"
+    echo "- Mesa: $(github_name "$MESA_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref") ($(short "$(cat "$MESA_DIST/COMMIT")"))"
+    echo "- DXMT: $(github_name "$DXMT_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref") ($(short "$(cat "$DXMT_DIST/COMMIT")"))"
+    echo "- vkd3d-proton: $(github_name "$VKD3D_PROTON_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/vkd3d-proton-src.ref") ($(short "$(cat "$VKD3D_PROTON_DIST/COMMIT")"))"
+    if [ -n "$brew_libs" ]; then
+        echo "- Homebrew libraries:"
+        echo "$brew_libs" | LC_ALL=C sort -u | awk '{ print "  - " $0 }'
     fi
-    clean_tree "$WINE_SRC"
-    wine_commit=$(wine_src_commit)
-    if [ "$(cat "$WINE_SDK_DIR/WINE_COMMIT" 2>/dev/null)" != "$wine_commit" ]; then
-        echo "Error: the Wine SDK at $WINE_SDK_DIR is not for $WINE_SRC at $wine_commit,"
-        echo "so the bundle may not be either (run build-wine.sh and bundle-wine.sh)"
-        exit 1
-    fi
-    # The describe form the notes use: the release tag and the number of
-    # commits on top of it, without the commit, which they name already.
-    describe=$(git -C "$WINE_SRC" describe --long HEAD 2>/dev/null) || {
-        echo "Error: git describe finds no Wine release tag in $WINE_SRC; fetch the tag"
-        echo "of the release the source is based on"
-        exit 1
-    }
-    describe=${describe%-g*}
-    wine_ref=$(tr -d '[:space:]' < "$PINS_DIR/wine-src.ref")
-    wine_repo=$(github_name "$(git -C "$WINE_SRC" remote get-url origin)")
-    for f in "$FEX_DIST/COMMIT" "$MESA_DIST/COMMIT" "$DXMT_DIST/COMMIT" \
-             "$VKD3D_PROTON_DIST/COMMIT"; do
-        if [ ! -s "$f" ]; then
-            echo "Error: no $f (run build-wine.sh)"
-            exit 1
-        fi
-    done
-    brew_libs=$(brew_kegs)
-
-    echo "==> Packing $WINE_DIR as $TAG"
-    pack "$BUNDLE_TAR" "$BUNDLE_DEST" wine
-    pack "$SYMBOLS_TAR" "$BUNDLE_DEST" wine-symbols --exclude "$TREE_MARKER"
-    {
-        echo "Wine distribution built from $wine_repo@$wine_ref ($(short "$wine_commit"), $describe) with $self."
-        echo ""
-        echo "- FEX: $(github_name "$FEX_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/fex-src.ref") ($(short "$(cat "$FEX_DIST/COMMIT")"))"
-        echo "- Mesa: $(github_name "$MESA_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref") ($(short "$(cat "$MESA_DIST/COMMIT")"))"
-        echo "- DXMT: $(github_name "$DXMT_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref") ($(short "$(cat "$DXMT_DIST/COMMIT")"))"
-        echo "- vkd3d-proton: $(github_name "$VKD3D_PROTON_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/vkd3d-proton-src.ref") ($(short "$(cat "$VKD3D_PROTON_DIST/COMMIT")"))"
-        if [ -n "$brew_libs" ]; then
-            echo "- Homebrew libraries:"
-            echo "$brew_libs" | LC_ALL=C sort -u | awk '{ print "  - " $0 }'
-        fi
-    } > "$NOTES"
-fi
+} > "$NOTES"
 
 echo "==> Notes ($NOTES)"
 sed 's/^/    /' "$NOTES"
