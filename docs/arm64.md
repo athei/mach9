@@ -19,14 +19,14 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
   readable page is executable, so FEX has to treat all writable memory as
   possible code and translates it again whenever it changes. compatdb's
   `force_nx` setting keeps no-execute permanently on, so the process cannot
-  turn it off, and its built-in `force-nx` rule sets it for every process
+  turn it off, and a built-in rule sets it for every process
   ([no-execute](compatdb.md#no-execute)). For a game that needs no-execute
   off, a compatdb rule gives it Wine's behaviour again
   ([recipes](compatdb.md#recipes)).
 - FEX is upstream FEX with our own commits on top, from
   [athei/FEX](https://github.com/athei/FEX) at the ref
-  [`fex-src.ref`](../pins/fex-src.ref) names. compatdb's built-in
-  `fex-x87-reduced-precision` rule asks FEX for faster x87 emulation
+  [`fex-src.ref`](../pins/fex-src.ref) names. A built-in compatdb rule
+  asks FEX for faster x87 emulation in every process
   ([defaults](../README.md#defaults-that-differ-from-wine),
   [built-in environment rules](compatdb.md#built-in-environment-rules)).
 - DXMT is built from our fork against this Wine (see [DXMT](#dxmt)), and
@@ -450,8 +450,8 @@ which stops at 4.1 core and 2.1 compatibility.
 - The Mac driver's EGL driver, part of our Wine series, takes the choice
   from compatdb's `opengl` setting, which ntdll stores for the process,
   when the process first uses OpenGL: `egl` for EGL, `cgl` for Apple's
-  OpenGL, and Apple's OpenGL unset, as in upstream Wine. compatdb's
-  built-in `opengl-egl` rule sets `egl` for every process
+  OpenGL, and Apple's OpenGL unset, as in upstream Wine. A built-in
+  compatdb rule sets `egl` for every process
   ([OpenGL](compatdb.md#opengl)).
 - With `egl` the Mac driver does not fall back: where EGL does not start,
   as on a Mac without a GPU of the Metal 4 family, where KosmicKrisp has no
@@ -608,7 +608,7 @@ After assembly:
   waiting for the time limit; the i386 `cmd.exe` runs; and
   [`smoke/hello.c`](../smoke/hello.c), compiled for each architecture in
   `SMOKE_PE_ARCHS`, prints its marker and must load its DLLs. Each one's
-  compatdb lines must name the trees the built-in `dxmt` and `mtld3d` rules
+  compatdb lines must name the `dxgi` and `d3d9` trees the built-in rules
   give every arch. The x86 programs load `dxgi.dll` and
   `d3d9.dll`; the native one also loads `winemetal.dll` and `mtld3d.dll`,
   which only the `dxmt` and `mtld3d` trees have. Before any of this runs,
@@ -627,8 +627,8 @@ After assembly:
   `lib/external/`. After the tree loads, [`smoke/wgl.c`](../smoke/wgl.c),
   compiled for each architecture in `SMOKE_PE_ARCHS`, opens a window,
   creates a legacy, a 4.x core and a compatibility context, each of which
-  must clear, read back and swap: by default, where compatdb's
-  `opengl-egl` rule must have handed over `opengl=egl`, on a Zink
+  must clear, read back and swap: by default, where compatdb's built-in
+  rule must have handed over `opengl=egl`, on a Zink
   renderer, with no `winediag` line saying that winemac.drv could not start
   Mesa's EGL, and with a `WINE_COMPATDB` rule for the program with
   `opengl=cgl`, which compatdb must have handed over instead, on Apple's.
@@ -657,8 +657,8 @@ After assembly:
   creating its instance after the Vulkan loader read the bundled manifest
   and found no GPU, `d3d12.exe` has to fail creating its first device with
   `E_FAIL` after the same, the `wined3d=vulkan` runs and the host EGL
-  check are left out, and Mesa's EGL, which the `opengl-egl` rule asks
-  for, gives no OpenGL. So `wgl.exe` runs by default once per arch, where
+  check are left out, and Mesa's EGL, which a built-in rule asks for,
+  gives no OpenGL. So `wgl.exe` runs by default once per arch, where
   the rule must have handed over `opengl=egl` and the program must get no
   context, and the runs that need OpenGL, `wgl.exe` and the wined3d runs
   with the default renderer, give the program a rule with `opengl=cgl` for
