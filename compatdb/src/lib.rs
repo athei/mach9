@@ -34,8 +34,8 @@ use std::{
 };
 
 use compatdb_table::{
-    Arch, D3d9, DllOverrideReset, Dxgi, ENV_VAR, EnvStep, Origin, Resolution, Table, VersionInfo,
-    Wined3d, basename_of, upstream,
+    Arch, ArgumentsDropped, D3d9, DllOverrideReset, Dxgi, ENV_VAR, EnvStep, Origin, Resolution,
+    Table, VersionInfo, Wined3d, basename_of, upstream,
 };
 
 use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TEB_PEB_OFFSET};
@@ -149,6 +149,9 @@ extern "C" fn run() {
         &resolution.arguments_from,
         Some(&appended),
     ));
+    for dropped in &resolution.arguments_dropped {
+        log::line(&dropped_line(dropped));
+    }
     // A default env entry leaves a variable the process already has alone,
     // whether it is in the environment block or only in the unix
     // environment.
@@ -278,6 +281,21 @@ fn list_line(key: &str, entries: &[String], from: &[Origin], applied: Option<&[b
         })
         .collect();
     format!("  {key} = {}", items.join("; "))
+}
+
+/// The log line of an `arguments_override` that dropped arguments: where it
+/// came from, and each argument it dropped with where that came from.
+fn dropped_line(dropped: &ArgumentsDropped) -> String {
+    let items: Vec<String> = dropped
+        .entries
+        .iter()
+        .map(|(entry, from)| format!("{entry} ({})", from.label()))
+        .collect();
+    format!(
+        "  arguments_override, {}: dropped {}",
+        dropped.by.label(),
+        items.join("; ")
+    )
 }
 
 /// The log line of an env entry: its value, where it came from and what it
@@ -705,6 +723,22 @@ mod tests {
             env_line(&step("1", true, Some(wow())), None),
             "  env FEX_X87REDUCEDPRECISION=1, built-in: replaced by a later entry from \
              built-in for WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)"
+        );
+    }
+
+    #[test]
+    fn an_arguments_override_line_names_what_it_dropped() {
+        let dropped = ArgumentsDropped {
+            by: Origin::Line(1),
+            entries: vec![
+                ("--in-process-gpu".into(), wow()),
+                ("-x".into(), Origin::BuiltIn),
+            ],
+        };
+        assert_eq!(
+            dropped_line(&dropped),
+            "  arguments_override, WINE_COMPATDB line 1: dropped --in-process-gpu (built-in \
+             for WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)); -x (built-in)"
         );
     }
 
