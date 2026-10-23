@@ -6,17 +6,13 @@
 //! DLL load-order overrides, the DPI awareness, large address awareness,
 //! whether the Mac driver reads raw mouse input from `GameController`,
 //! whether no-execute stays permanently on, command-line switches and
-//! environment entries.
+//! environment entries. A rule has no name: it is its matchers and its
+//! values.
 //!
 //! Shared by `compatdb.so`, the unix library wine's ntdll loads into every
-//! process (it holds the built-in rules, parses [`ENV_VAR`], overlays the
-//! result onto them and applies whatever matches the process), and by any
+//! process (it holds the built-in rules, parses [`ENV_VAR`], appends the
+//! result to them and applies whatever matches the process), and by any
 //! launcher that wants to feed it extra rules through that variable.
-//!
-//! The built-in rules themselves live in `compatdb.so`, not here, but their
-//! names are [`BUILTIN_RULE_NAMES`], so a launcher can tell when a rule it
-//! sends names a built-in one: such a rule is merged into the built-in rule,
-//! and its matchers are ignored (see [`Table::overlay`]).
 //!
 //! Everything here is pure: it works on `&str`, `&[u16]` (UTF-16 as wine hands
 //! it over) and owned values, with no unsafe and no I/O, so the library's
@@ -38,45 +34,11 @@ use std::fmt::Write as _;
 /// tree to the library.
 pub const ENV_VAR: &str = "WINE_COMPATDB";
 
-/// The names of the built-in rules of `compatdb.so`, in table order.
-///
-/// A rule from [`ENV_VAR`] with one of these names (matched
-/// case-insensitively) is merged into that built-in rule, which keeps its own
-/// matchers. A test in `compatdb.so` checks that this list is its built-in
-/// table's, so it matches the `compatdb.so` of a bundle only when the
-/// launcher's revision of this crate and the bundle are updated together.
-pub const BUILTIN_RULE_NAMES: &[&str] = &[
-    "dxmt",
-    "mtld3d",
-    "dpi-aware",
-    "gcmouse",
-    "fex-x87-reduced-precision",
-    "opengl-egl",
-    "force-nx",
-    "no-mono-gecko",
-    "rockstar-launcher",
-    "rockstar-social-club-ui",
-    "steam-web-helper",
-    "gta-iv",
-    "nostale",
-    "aoe2-hd",
-    "world-of-warcraft",
-];
-
-/// Whether `name` is the name of a built-in rule (see
-/// [`BUILTIN_RULE_NAMES`]), compared case-insensitively as the overlay does.
-#[must_use]
-pub fn is_builtin_rule_name(name: &str) -> bool {
-    BUILTIN_RULE_NAMES
-        .iter()
-        .any(|builtin| builtin.eq_ignore_ascii_case(name))
-}
-
 /// Whether `line` is a version header of the old format, `v=` and nothing
 /// but ASCII digits, which launchers wrote as the first line of a table.
 ///
 /// [`Table::parse`] skips such a first line. It can never be a rule: a rule
-/// needs a `name` field, and this line has only `v`.
+/// needs an `exe` field, and this line has only `v`.
 fn is_legacy_header(line: &str) -> bool {
     line.strip_prefix("v=")
         .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
@@ -215,7 +177,7 @@ fn string_value(blob: &[u16], key: &str) -> String {
 /// work with its own.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dxgi {
-    /// DXMT, which the built-in `dxmt` rule gives every program.
+    /// DXMT, which a built-in rule gives every program.
     Dxmt,
     /// Wine's own wined3d, what upstream Wine loads, and so what a process
     /// gets when no rule names an implementation.
@@ -268,7 +230,7 @@ impl Dxgi {
 /// implementation's `d3d9.dll` touches `dxgi.dll`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum D3d9 {
-    /// mtld3d, which the built-in `mtld3d` rule gives every program.
+    /// mtld3d, which a built-in rule gives every program.
     Mtld3d,
     /// Wine's own wined3d, what upstream Wine loads, and so what a process
     /// gets when no rule names an implementation.
@@ -487,15 +449,24 @@ pub const IMAGE_FILE_MACHINE_ARM64: u16 = 0xaa64;
 /// The exe pattern that matches every process.
 pub const ANY_EXE: &str = "*";
 
+/// Where a rule comes from. It decides how the log names the rule's values
+/// (see [`Origin`]) and whether its `env` entries are defaults (see
+/// [`Rule::env`]). Never serialized.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Source {
+    /// Compiled into `compatdb.so`, which is what [`Rule::default`] gives.
+    #[default]
+    BuiltIn,
+    /// Line `n` of [`ENV_VAR`], counted from 1 as [`Table::parse`] reads
+    /// the value, blank lines and a legacy header included.
+    Line(usize),
+}
+
 /// One rule of the table: what it matches, and the settings it applies to a
-/// process that matches. `name` is its identity and `exe` its only required
-/// matcher; everything else is optional.
+/// process that matches. A rule has no name; `exe` is its only required
+/// matcher, and everything else is optional.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
-    /// The rule's name, unique within a table. Carries no meaning beyond
-    /// identity: it is what a game file names to extend, override or drop a
-    /// rule, and what the log prints. Matched case-insensitively.
-    pub name: String,
     /// Image basename to match, case-insensitively, or [`ANY_EXE`] for every
     /// process.
     pub exe: String,
@@ -512,11 +483,11 @@ pub struct Rule {
     /// The renderer of wined3d, for every wined3d user in the process.
     pub wined3d: Option<Wined3d>,
     /// Which OpenGL the Mac driver gives the process. Unset leaves the
-    /// decision to a less specific rule; with none, the Mac driver gives
+    /// decision to a rule folded earlier; with none, the Mac driver gives
     /// Apple's OpenGL, as upstream Wine does.
     pub opengl: Option<OpenGl>,
     /// Whether the process is DPI-aware (system-aware) or unaware. Unset
-    /// leaves the decision to a less specific rule, and with none to wine
+    /// leaves the decision to a rule folded earlier, and with none to wine
     /// (the registry and the manifest).
     pub dpi_aware: Option<bool>,
     /// Whether a 32-bit process gets the 4 GB address space whatever its
@@ -527,8 +498,8 @@ pub struct Rule {
     /// Whether the Mac driver takes the mouse movement of raw input
     /// (`WM_INPUT`) and `DirectInput` from `GameController`'s `GCMouse`, in the
     /// device's own counts, instead of from the cursor's movement, which macOS
-    /// accelerates and scales for retina. Unset leaves the decision to a less
-    /// specific rule; with none, the Mac driver keeps upstream Wine's
+    /// accelerates and scales for retina. Unset leaves the decision to a rule
+    /// folded earlier; with none, the Mac driver keeps upstream Wine's
     /// behaviour, the cursor's movement.
     pub gcmouse: Option<bool>,
     /// Whether no-execute stays permanently on in a 32-bit process, even when
@@ -538,32 +509,51 @@ pub struct Rule {
     /// `env` entry, the value is the process's own: the processes it starts
     /// get their own rules' value.
     pub force_nx: Option<bool>,
-    /// `WINEDLLOVERRIDES` elements (each a `names=order` string).
+    /// The scalar keys (those of [`SCALAR_KEYS`]) this rule sets to
+    /// `default`: from this rule on the setting is unset again, so upstream
+    /// Wine decides unless a rule folded later sets it. A key is either here
+    /// or has a value in its field, never both.
+    pub resets: Vec<&'static str>,
+    /// `WINEDLLOVERRIDES` elements (each a `names=order` string). An entry
+    /// whose order is `default` sets no load order: it removes the entries
+    /// that the rules folded before it gave its modules, so the registry and
+    /// `WINEDLLOVERRIDES` decide for them again.
     pub dll_overrides: Vec<String>,
     /// Text appended to the command line, unless already present.
     pub arguments: Vec<String>,
     /// Environment entries; an empty value removes the variable. The library
     /// sets them in the process's environment block and unix environment
-    /// when it loads, before any PE code runs.
+    /// when it loads, before any PE code runs. The entries of a built-in
+    /// rule that matches every process (`exe` [`ANY_EXE`], no fingerprint)
+    /// are defaults: such an entry sets its variable only where the process
+    /// does not have it, so a value the caller exported wins. Every other
+    /// entry replaces the variable.
     pub env: Vec<(String, String)>,
-    /// How many of the first [`Rule::env`] entries are defaults: such an
-    /// entry sets its variable only where the process does not have it, so a
-    /// value the caller exported wins. The built-in `*` rules mark their own
-    /// entries so; entries an override adds by name come after them and
-    /// replace like any other. Never serialized, so a rule from [`ENV_VAR`]
-    /// has none.
-    pub env_defaults: usize,
-    /// What overrides merged in by name changed, for the log. Never
-    /// serialized.
-    pub changed: Changed,
     /// `WINEDEBUG` channels for this process. Applied by the launcher through
     /// wine's own `WINEDEBUG=<exe>:` prefix, not by the library, because the
     /// channels are parsed before it loads; never serialized.
     pub debug_channels: Vec<String>,
-    /// False marks an override that drops the rule of this name. Default true;
-    /// only travels on the wire when false.
-    pub enabled: bool,
+    /// Where the rule comes from. Never serialized: [`Table::parse`] sets
+    /// it to the line it read the rule from.
+    pub source: Source,
 }
+
+/// The keys of the settings that hold one value, which `default` resets (see
+/// [`Rule::resets`]), in the order of the fields.
+pub const SCALAR_KEYS: &[&str] = &[
+    "dxgi",
+    "d3d9",
+    "wined3d",
+    "opengl",
+    "dpi_aware",
+    "large_address_aware",
+    "gcmouse",
+    "force_nx",
+];
+
+/// The value of a scalar key that resets it (see [`Rule::resets`]), and of a
+/// `dll_overrides` entry that removes the overrides of its modules.
+pub const DEFAULT_VALUE: &str = "default";
 
 /// What upstream Wine does for each setting of a [`Rule`] when no rule sets
 /// it, as the log of `compatdb.so` prints it.
@@ -609,44 +599,9 @@ pub fn upstream(key: &str) -> &'static str {
         .map_or("unknown", |(_, what)| what)
 }
 
-/// What the overrides an [`Table::overlay`] merged into a rule by name
-/// changed in it: the scalar settings they set, and where in each list their
-/// entries start.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Changed {
-    pub keys: Vec<&'static str>,
-    pub dll_overrides: Option<usize>,
-    pub arguments: Option<usize>,
-    pub env: Option<usize>,
-}
-
-impl Changed {
-    /// Note that an override set the scalar `key`.
-    fn key(&mut self, key: &'static str) {
-        if !self.keys.contains(&key) {
-            self.keys.push(key);
-        }
-    }
-
-    /// Whether an override set the scalar `key`.
-    #[must_use]
-    pub fn has(&self, key: &str) -> bool {
-        self.keys.contains(&key)
-    }
-}
-
-/// Note where an override's entries start in a list `len` long, when it
-/// brings `adds` of them and none came before.
-const fn mark_start(start: &mut Option<usize>, len: usize, adds: usize) {
-    if adds > 0 && start.is_none() {
-        *start = Some(len);
-    }
-}
-
 impl Default for Rule {
     fn default() -> Self {
         Self {
-            name: String::new(),
             exe: String::new(),
             company: None,
             product: None,
@@ -659,13 +614,12 @@ impl Default for Rule {
             large_address_aware: None,
             gcmouse: None,
             force_nx: None,
+            resets: Vec::new(),
             dll_overrides: Vec::new(),
             arguments: Vec::new(),
             env: Vec::new(),
-            env_defaults: 0,
-            changed: Changed::default(),
             debug_channels: Vec::new(),
-            enabled: true,
+            source: Source::BuiltIn,
         }
     }
 }
@@ -689,9 +643,10 @@ impl Rule {
     }
 
     /// How specific this rule is, which is the order [`Table::resolve`] folds
-    /// matching rules in: a wildcard rule first (a launch-wide default), then
-    /// one naming an executable, then one that also pins a version
-    /// fingerprint. A more specific rule therefore wins a scalar field.
+    /// the matching rules of a layer in: a wildcard rule first (a launch-wide
+    /// default), then one naming an executable, then one that also pins a
+    /// version fingerprint. Within a layer a more specific rule therefore
+    /// wins a scalar field.
     #[must_use]
     pub fn specificity(&self) -> u8 {
         let fingerprinted =
@@ -722,81 +677,33 @@ impl Rule {
             && self.original_filename == other.original_filename
     }
 
-    /// Lay an override on top of this rule: a set scalar field wins, lists are
-    /// appended (this rule's own entries first), env entries are appended (a
-    /// later duplicate name wins when the block is merged). The override's
-    /// env entries come after this rule's defaults, so they are none.
-    fn overlay(&mut self, over: Self) {
-        if over.company.is_some() {
-            self.company = over.company;
-        }
-        if over.product.is_some() {
-            self.product = over.product;
-        }
-        if over.original_filename.is_some() {
-            self.original_filename = over.original_filename;
-        }
-        if over.dxgi.is_some() {
-            self.dxgi = over.dxgi;
-            self.changed.key("dxgi");
-        }
-        if over.d3d9.is_some() {
-            self.d3d9 = over.d3d9;
-            self.changed.key("d3d9");
-        }
-        if over.wined3d.is_some() {
-            self.wined3d = over.wined3d;
-            self.changed.key("wined3d");
-        }
-        if over.opengl.is_some() {
-            self.opengl = over.opengl;
-            self.changed.key("opengl");
-        }
-        if over.dpi_aware.is_some() {
-            self.dpi_aware = over.dpi_aware;
-            self.changed.key("dpi_aware");
-        }
-        if over.large_address_aware.is_some() {
-            self.large_address_aware = over.large_address_aware;
-            self.changed.key("large_address_aware");
-        }
-        if over.gcmouse.is_some() {
-            self.gcmouse = over.gcmouse;
-            self.changed.key("gcmouse");
-        }
-        if over.force_nx.is_some() {
-            self.force_nx = over.force_nx;
-            self.changed.key("force_nx");
-        }
-        if !over.exe.is_empty() {
-            self.exe = over.exe;
-        }
-        mark_start(
-            &mut self.changed.dll_overrides,
-            self.dll_overrides.len(),
-            over.dll_overrides.len(),
-        );
-        mark_start(
-            &mut self.changed.arguments,
-            self.arguments.len(),
-            over.arguments.len(),
-        );
-        mark_start(&mut self.changed.env, self.env.len(), over.env.len());
-        self.dll_overrides.extend(over.dll_overrides);
-        self.arguments.extend(over.arguments);
-        self.env.extend(over.env);
-        self.debug_channels.extend(over.debug_channels);
+    /// Whether this rule's `env` entries are defaults, which leave a variable
+    /// the process already has alone: those of a built-in rule that matches
+    /// every process (see [`Rule::env`]).
+    #[must_use]
+    pub fn env_is_default(&self) -> bool {
+        self.source == Source::BuiltIn && self.specificity() == 0
     }
 
-    /// Whether the entry at `index` of the list whose overrides start at
-    /// `start` came from an override merged in by name.
-    fn is_changed(start: Option<usize>, index: usize) -> bool {
-        start.is_some_and(|start| index >= start)
+    /// The matchers of this rule as the log prints them: the `exe`, then the
+    /// fingerprint values it pins in parentheses, for example
+    /// `WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)`.
+    #[must_use]
+    pub fn matchers(&self) -> String {
+        let pins: Vec<&str> = [&self.company, &self.product, &self.original_filename]
+            .into_iter()
+            .filter_map(Option::as_deref)
+            .collect();
+        if pins.is_empty() {
+            self.exe.clone()
+        } else {
+            format!("{} ({})", self.exe, pins.join(", "))
+        }
     }
 }
 
-/// The whole database: the built-in rules plus whatever a game file added,
-/// in the order they were declared.
+/// The whole database: the built-in rules followed by the rules of
+/// [`ENV_VAR`], in the order they were declared.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Table {
     pub rules: Vec<Rule>,
@@ -804,9 +711,9 @@ pub struct Table {
 
 /// The settings that apply to one process.
 ///
-/// Every matching rule folded in specificity order, so a scalar holds the most
-/// specific rule's value and the lists accumulate. Also names the rules that
-/// matched, for the log.
+/// Every matching rule folded in the order [`Table::resolve`] describes, so a
+/// scalar holds the value of the last rule that set it and the lists
+/// accumulate. Also says where each value came from, for the log.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Resolution {
     pub dxgi: Option<Dxgi>,
@@ -821,6 +728,9 @@ pub struct Resolution {
     /// Where each entry of [`Resolution::dll_overrides`] came from, at the
     /// same index.
     pub dll_overrides_from: Vec<Origin>,
+    /// Each module a `<module>=default` entry named, in fold order, with
+    /// what that did to the entries before it.
+    pub dll_overrides_reset: Vec<DllOverrideReset>,
     pub arguments: Vec<String>,
     /// Where each entry of [`Resolution::arguments`] came from, at the same
     /// index.
@@ -830,30 +740,59 @@ pub struct Resolution {
     pub env_from: Vec<EnvFrom>,
     /// Where each scalar setting came from, by its key (`dxgi`, `d3d9`,
     /// `wined3d`, `opengl`, `dpi_aware`, `large_address_aware`, `gcmouse`,
-    /// `force_nx`): the most specific rule that set it. A key no rule set is
-    /// missing.
+    /// `force_nx`): the last rule folded that set it. A key no rule set, or
+    /// one a later rule reset, is missing.
     pub set_by: Vec<(&'static str, Origin)>,
-    /// Names of the rules that matched, in the order they were folded.
-    pub matched: Vec<String>,
+    /// The scalar settings a rule set to `default` and no rule folded after
+    /// it set again, by key, with that rule.
+    pub reset_by: Vec<(&'static str, Origin)>,
 }
 
-/// Where a value of a [`Resolution`] came from: its rule, and whether an
-/// override merged into that rule by name set it.
+/// What a `<module>=default` entry of `dll_overrides` did.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Origin {
-    pub rule: String,
-    pub changed: bool,
+pub struct DllOverrideReset {
+    /// The module it names.
+    pub module: String,
+    /// The rule of the entry.
+    pub by: Origin,
+    /// Where each entry it took the module out of came from; empty when no
+    /// rule folded before it had given the module a load order.
+    pub removed: Vec<Origin>,
+}
+
+/// Where a value of a [`Resolution`] came from: the rule that set it, by its
+/// [`Source`] and, for a built-in rule that does not match every process,
+/// its matchers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// A built-in rule that matches every process.
+    BuiltIn,
+    /// A built-in rule for the processes its matchers (see
+    /// [`Rule::matchers`]) describe.
+    BuiltInFor(String),
+    /// Line `n` of [`ENV_VAR`].
+    Line(usize),
 }
 
 impl Origin {
-    /// How the log names it: `rule <name>`, and `changed by WINE_COMPATDB`
-    /// when an override set the value.
+    /// Where the values of `rule` come from.
+    #[must_use]
+    pub fn of(rule: &Rule) -> Self {
+        match rule.source {
+            Source::Line(n) => Self::Line(n),
+            Source::BuiltIn if rule.specificity() == 0 => Self::BuiltIn,
+            Source::BuiltIn => Self::BuiltInFor(rule.matchers()),
+        }
+    }
+
+    /// How the log names it: `built-in`, `built-in for <matchers>` or
+    /// `WINE_COMPATDB line <n>`.
     #[must_use]
     pub fn label(&self) -> String {
-        if self.changed {
-            format!("rule {}, changed by {ENV_VAR}", self.rule)
-        } else {
-            format!("rule {}", self.rule)
+        match self {
+            Self::BuiltIn => String::from("built-in"),
+            Self::BuiltInFor(matchers) => format!("built-in for {matchers}"),
+            Self::Line(n) => format!("{ENV_VAR} line {n}"),
         }
     }
 }
@@ -861,10 +800,10 @@ impl Origin {
 /// Where an env entry of a [`Resolution`] came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvFrom {
-    /// The rule that set it, and whether an override merged into it did.
+    /// The rule that set it.
     pub origin: Origin,
-    /// Whether it is a default (see [`Rule::env_defaults`]), which leaves a
-    /// variable the process already has alone.
+    /// Whether it is a default (see [`Rule::env_is_default`]), which leaves
+    /// a variable the process already has alone.
     pub default: bool,
 }
 
@@ -874,7 +813,7 @@ pub struct EnvStep {
     pub name: String,
     /// The value it sets; empty removes the variable.
     pub value: String,
-    /// The rule that set it, and whether an override merged into it did.
+    /// The rule that set it.
     pub origin: Origin,
     /// False for a default whose variable the process already had, which it
     /// leaves alone.
@@ -925,27 +864,18 @@ impl Resolution {
     /// `None`, with nothing changed, when no rule sets it: then the process
     /// keeps whatever `WINE_D3D_CONFIG` it has, from a rule's `env` or
     /// inherited, and without one wined3d uses OpenGL. Call it once, after
-    /// [`Table::resolve`].
+    /// [`Table::resolve`], which records where the setting came from; a
+    /// resolution without that record is left as it is.
     pub fn apply_wined3d(&mut self) -> Option<Wined3d> {
         let wined3d = self.wined3d?;
+        let origin = self.origin("wined3d")?.clone();
         let value = wined3d.config(self.d3d_config().filter(|value| !value.is_empty()));
         self.env.push((Wined3d::CONFIG_VAR.to_string(), value));
-        let origin = self.origin("wined3d").cloned().unwrap_or(Origin {
-            rule: String::new(),
-            changed: false,
-        });
         self.env_from.push(EnvFrom {
             origin,
             default: false,
         });
         Some(wined3d)
-    }
-
-    /// The rule that set the scalar setting `key`, or `None` when no rule
-    /// did.
-    #[must_use]
-    pub fn set_by(&self, key: &str) -> Option<&str> {
-        self.origin(key).map(|origin| origin.rule.as_str())
     }
 
     /// Where the scalar setting `key` came from, or `None` when no rule set
@@ -969,17 +899,90 @@ impl Resolution {
         self.env_from.get(i).map(|from| &from.origin)
     }
 
-    /// Record that `rule` set the scalar setting `key`, replacing a less
-    /// specific rule that set it before.
+    /// The rule that reset the scalar setting `key` to `default`, when no
+    /// rule folded after it set it again.
+    #[must_use]
+    pub fn reset_origin(&self, key: &str) -> Option<&Origin> {
+        self.reset_by
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, origin)| origin)
+    }
+
+    /// Record that `rule` set the scalar setting `key`, replacing a rule
+    /// folded before that set or reset it.
     fn record(&mut self, key: &'static str, rule: &Rule) {
         self.set_by.retain(|(k, _)| *k != key);
-        self.set_by.push((
-            key,
-            Origin {
-                rule: rule.name.clone(),
-                changed: rule.changed.has(key),
-            },
-        ));
+        self.reset_by.retain(|(k, _)| *k != key);
+        self.set_by.push((key, Origin::of(rule)));
+    }
+
+    /// Unset the scalar setting `key`, as `rule` sets it to `default`, and
+    /// record that it did. A key that is not one of [`SCALAR_KEYS`] is
+    /// ignored.
+    fn reset(&mut self, key: &'static str, rule: &Rule) {
+        match key {
+            "dxgi" => self.dxgi = None,
+            "d3d9" => self.d3d9 = None,
+            "wined3d" => self.wined3d = None,
+            "opengl" => self.opengl = None,
+            "dpi_aware" => self.dpi_aware = None,
+            "large_address_aware" => self.large_address_aware = None,
+            "gcmouse" => self.gcmouse = None,
+            "force_nx" => self.force_nx = None,
+            _ => return,
+        }
+        self.set_by.retain(|(k, _)| *k != key);
+        self.reset_by.retain(|(k, _)| *k != key);
+        self.reset_by.push((key, Origin::of(rule)));
+    }
+
+    /// Fold the `dll_overrides` entries of `rule` into the list: an entry
+    /// whose order is `default` takes its modules out of the entries before
+    /// it, dropping an entry left without one, and every other entry is
+    /// appended.
+    fn fold_dll_overrides(&mut self, rule: &Rule) {
+        let origin = Origin::of(rule);
+        for entry in &rule.dll_overrides {
+            let Some(modules) = default_modules(entry) else {
+                self.dll_overrides.push(entry.clone());
+                self.dll_overrides_from.push(origin.clone());
+                continue;
+            };
+            for module in modules {
+                let mut removed = Vec::new();
+                let mut kept = Vec::new();
+                let entries = std::mem::take(&mut self.dll_overrides)
+                    .into_iter()
+                    .zip(std::mem::take(&mut self.dll_overrides_from));
+                for (earlier, from) in entries {
+                    match without_module(&earlier, module) {
+                        Without::Absent => kept.push((earlier, from)),
+                        Without::Emptied => removed.push(from),
+                        Without::Rest(rest) => {
+                            removed.push(from.clone());
+                            kept.push((rest, from));
+                        }
+                    }
+                }
+                let (entries, from): (Vec<_>, Vec<_>) = kept.into_iter().unzip();
+                self.dll_overrides = entries;
+                self.dll_overrides_from = from;
+                self.dll_overrides_reset.push(DllOverrideReset {
+                    module: module.to_string(),
+                    by: origin.clone(),
+                    removed,
+                });
+            }
+        }
+    }
+
+    /// Fold the arguments of `rule` into the list: they append.
+    fn fold_arguments(&mut self, rule: &Rule) {
+        let origin = Origin::of(rule);
+        self.arguments.extend(rule.arguments.iter().cloned());
+        self.arguments_from
+            .extend(rule.arguments.iter().map(|_| origin.clone()));
     }
 
     /// The env entries in order, each with the rule that set it and whether
@@ -988,30 +991,23 @@ impl Resolution {
     /// caller exported wins over a built-in `*` rule; every other entry
     /// applies, replacing the value or, when empty, removing the variable.
     /// An entry that a later applied entry for the same variable replaces
-    /// names that entry's rule.
+    /// says where that entry came from.
+    ///
+    /// [`Resolution::env_from`] has one entry per env entry, as
+    /// [`Table::resolve`] and [`Resolution::apply_wined3d`] keep it.
     #[must_use]
     pub fn env_steps(&self, has: impl Fn(&str) -> bool) -> Vec<EnvStep> {
         let mut steps: Vec<EnvStep> = self
             .env
             .iter()
-            .enumerate()
-            .map(|(i, (name, value))| {
-                let from = self.env_from.get(i);
-                let default = from.is_some_and(|from| from.default);
-                EnvStep {
-                    name: name.clone(),
-                    value: value.clone(),
-                    origin: from.map_or(
-                        Origin {
-                            rule: String::new(),
-                            changed: false,
-                        },
-                        |from| from.origin.clone(),
-                    ),
-                    applied: !(default && has(name)),
-                    replaced_by: None,
-                    removes: None,
-                }
+            .zip(&self.env_from)
+            .map(|((name, value), from)| EnvStep {
+                name: name.clone(),
+                value: value.clone(),
+                origin: from.origin.clone(),
+                applied: !(from.default && has(name)),
+                replaced_by: None,
+                removes: None,
             })
             .collect();
         let same = |a: &EnvStep, b: &EnvStep| a.applied && a.name.eq_ignore_ascii_case(&b.name);
@@ -1048,16 +1044,22 @@ impl Table {
     /// basename (see [`basename_of`]); `version` is the image's version
     /// resource, for the optional fingerprint constraints.
     ///
-    /// Rules are folded least specific first (see [`Rule::specificity`]), and
-    /// within a tier in table order, which puts the built-ins before a game's.
-    /// So a scalar field ends up holding the most specific rule's value and a
-    /// rule naming a process always beats a launch-wide default, while the
-    /// lists accumulate across every rule that matched.
+    /// The built-in rules fold first and the rules of [`ENV_VAR`] after
+    /// them, so any value a rule from the variable sets beats every
+    /// built-in value. Within each of the two layers the rules fold least
+    /// specific first (see [`Rule::specificity`]) and within a tier in table
+    /// order, which is line order for the variable's rules. So a scalar
+    /// field ends up holding the value of the last rule that sets it: in a
+    /// layer, a rule naming a process beats a launch-wide default. The lists
+    /// accumulate across every rule that matched. The exceptions are a
+    /// scalar set to `default` (see [`Rule::resets`]), and a `dll_overrides`
+    /// entry with the order `default`, which takes its modules out of the
+    /// entries before it.
     ///
-    /// The sort has to stay stable: rules of equal specificity fold in table
-    /// order, which is what lets a launcher's `*` rule, appended after the
-    /// built-in `*` rules, win a scalar over them and add its list entries
-    /// after theirs.
+    /// The sort has to stay stable: rules of equal layer and specificity
+    /// fold in table order, which is what lets a launcher's `*` rule,
+    /// appended after the built-in `*` rules, add its list entries after
+    /// theirs.
     ///
     /// A rule whose executable matches but whose fingerprint does not simply
     /// does not apply; nothing falls back to it, and the rules that do match
@@ -1069,7 +1071,7 @@ impl Table {
             .iter()
             .filter(|rule| rule.matches(exe, version))
             .collect();
-        matching.sort_by_key(|rule| rule.specificity());
+        matching.sort_by_key(|rule| (rule.source != Source::BuiltIn, rule.specificity()));
         let mut r = Resolution::default();
         for rule in matching {
             if let Some(dxgi) = rule.dxgi {
@@ -1104,99 +1106,43 @@ impl Table {
                 r.force_nx = Some(force_nx);
                 r.record("force_nx", rule);
             }
-            let origin = |start: Option<usize>, i: usize| Origin {
-                rule: rule.name.clone(),
-                changed: Rule::is_changed(start, i),
-            };
-            r.dll_overrides.extend(rule.dll_overrides.iter().cloned());
-            r.dll_overrides_from.extend(
-                (0..rule.dll_overrides.len()).map(|i| origin(rule.changed.dll_overrides, i)),
-            );
-            r.arguments.extend(rule.arguments.iter().cloned());
-            r.arguments_from
-                .extend((0..rule.arguments.len()).map(|i| origin(rule.changed.arguments, i)));
+            // A key is either reset or set (see Rule::resets); a rule built
+            // with both keeps its value, as it serializes.
+            for &key in &rule.resets {
+                if scalar_value(rule, key).is_none() {
+                    r.reset(key, rule);
+                }
+            }
+            let origin = Origin::of(rule);
+            r.fold_dll_overrides(rule);
+            r.fold_arguments(rule);
+            let default = rule.env_is_default();
             r.env.extend(rule.env.iter().cloned());
-            r.env_from.extend((0..rule.env.len()).map(|i| EnvFrom {
-                origin: origin(rule.changed.env, i),
-                default: i < rule.env_defaults,
+            r.env_from.extend(rule.env.iter().map(|_| EnvFrom {
+                origin: origin.clone(),
+                default,
             }));
-            r.matched.push(rule.name.clone());
         }
         r
     }
 
-    /// Lay a set of overrides on top of this table, matching by rule name.
-    ///
-    /// An override naming a rule that is already there is merged into it field
-    /// by field (a set scalar wins, lists append), one naming a rule that is
-    /// not is appended, and one marked `enabled = false` removes the rule of
-    /// that name. Matching by name rather than by executable is what lets two
-    /// rules name the same executable with different fingerprints, and what
-    /// keeps a new rule from inheriting an unrelated rule's fingerprint.
-    ///
-    /// An override that names no rule here may only add a new one, so it has to
-    /// bring an `exe` of its own. One that does not (an `enabled = false` for a
-    /// rule that is gone, or a rule whose only home was a misspelled name) can
-    /// never match a process, so it is dropped with a warning.
-    ///
-    /// An override merged into a rule this table had before the overlay, a
-    /// built-in rule for `compatdb.so`, cannot change which processes it
-    /// matches: its `exe`, `company`, `product` and `original_filename` are
-    /// ignored with a warning each, so a built-in `*` rule stays global and a
-    /// built-in rule for one program keeps its pin. A rule an earlier
-    /// override in the same set added takes them like any other field.
-    ///
-    /// Returns the warnings, for the caller to log.
-    pub fn overlay(&mut self, overrides: Self) -> Vec<String> {
-        let mut before: Vec<String> = self
-            .rules
-            .iter()
-            .map(|rule| rule.name.to_ascii_lowercase())
-            .collect();
-        let mut warnings = Vec::new();
-        for mut over in overrides.rules {
-            let pos = self
-                .rules
-                .iter()
-                .position(|rule| rule.name.eq_ignore_ascii_case(&over.name));
-            match pos {
-                Some(i) if !over.enabled => {
-                    // A rule added again under this name later is a new one,
-                    // not the built-in rule, and takes matchers.
-                    let gone = self.rules.remove(i);
-                    before.retain(|name| !name.eq_ignore_ascii_case(&gone.name));
-                }
-                Some(i) => {
-                    if let Some(existing) = self.rules.get_mut(i) {
-                        if before.contains(&existing.name.to_ascii_lowercase()) {
-                            warnings.extend(keep_matchers(&existing.name, &mut over));
-                        }
-                        existing.overlay(over);
-                    }
-                }
-                None if over.enabled && !over.exe.is_empty() => self.rules.push(over),
-                None => warnings.push(format!("override names no rule: {}", over.name)),
-            }
-        }
-        warnings
-    }
-
-    /// Every pair of rules that matches exactly the same processes, by name.
-    /// A duplicate can only be a mistake, so the launcher warns about it.
+    /// Every pair of rules that matches exactly the same processes, by their
+    /// index in the table. A duplicate can only be a mistake, so the
+    /// launcher warns about it.
     ///
     /// Plain wildcard rules (`exe = *` with no fingerprint) are left out: they
     /// are defaults that are meant to stack, one per setting, so several of
     /// them matching every process is not a mistake.
     #[must_use]
-    pub fn duplicate_matchers(&self) -> Vec<(String, String)> {
+    pub fn duplicate_matchers(&self) -> Vec<(usize, usize)> {
         let mut pairs = Vec::new();
         for (i, rule) in self.rules.iter().enumerate() {
             if rule.specificity() == 0 {
                 continue;
             }
-            for other in self.rules.iter().skip(i.saturating_add(1)) {
+            for (j, other) in self.rules.iter().enumerate().skip(i.saturating_add(1)) {
                 if rule.matches_the_same_as(other) {
-                    pairs.push((rule.name.clone(), other.name.clone()));
+                    pairs.push((i, j));
                 }
             }
         }
@@ -1214,66 +1160,103 @@ impl Table {
             .join("\n")
     }
 
-    /// Parse the value of [`ENV_VAR`]. Lenient, since the `.so` must never
-    /// abort a process: a field with an unknown key or a value its key does
-    /// not take is ignored with a diagnostic naming the rule and the field,
-    /// and the rest of its record still applies. Only a record without a
-    /// `name` is skipped, since an override cannot say which rule it is for
-    /// without one. A first line that is a version header of the old format
-    /// (`v=<digits>`) is skipped too, so a launcher that still writes one
-    /// keeps working. Returns the table and the diagnostics (empty when
-    /// clean).
+    /// Parse the value of [`ENV_VAR`], each rule with its line as its
+    /// [`Source`]. Lenient, since the `.so` must never abort a process: a
+    /// field with an unknown key or a value its key does not take is ignored
+    /// with a diagnostic naming the line and the field, and the rest of its
+    /// line still applies. Only a line without an `exe` is ignored as a
+    /// whole, since it matches no process. A first line that is a version
+    /// header of the old format (`v=<digits>`) is skipped too, so a launcher
+    /// that still writes one keeps working. Returns the table and the
+    /// diagnostics (empty when clean).
     #[must_use]
     pub fn parse(text: &str) -> (Self, Vec<String>) {
-        let mut lines = text.lines().peekable();
-        lines.next_if(|line| is_legacy_header(line));
+        let mut lines = text.lines().enumerate().peekable();
+        lines.next_if(|(_, line)| is_legacy_header(line));
         let mut diagnostics = Vec::new();
         let mut rules = Vec::new();
-        for line in lines {
+        for (i, line) in lines {
             if line.trim().is_empty() {
                 continue;
             }
-            match record_to_rule(line) {
-                Ok((rule, ignored)) => {
-                    diagnostics.extend(
-                        ignored
-                            .into_iter()
-                            .map(|field| format!("rule {:?}: ignoring {field}", rule.name)),
-                    );
-                    rules.push(rule);
-                }
-                Err(reason) => diagnostics.push(format!("skipping record {line:?}: {reason}")),
+            let n = i.saturating_add(1);
+            let (rule, ignored) = record_to_rule(line, n);
+            diagnostics.extend(
+                ignored
+                    .into_iter()
+                    .map(|field| format!("{ENV_VAR} line {n}: ignoring {field}")),
+            );
+            if rule.exe.is_empty() {
+                diagnostics.push(format!(
+                    "{ENV_VAR} line {n}: ignoring the line, it has no exe"
+                ));
+            } else {
+                rules.push(rule);
             }
         }
         (Self { rules }, diagnostics)
     }
 }
 
-/// Clear the matchers of `over`, an override of the rule `name` the table
-/// already had, and say for each it set that it is ignored.
-fn keep_matchers(name: &str, over: &mut Rule) -> Vec<String> {
-    let mut ignored = Vec::new();
-    if !over.exe.is_empty() {
-        ignored.push(format!("exe={}", std::mem::take(&mut over.exe)));
-    }
-    for (key, value) in [
-        ("company", over.company.take()),
-        ("product", over.product.take()),
-        ("original_filename", over.original_filename.take()),
-    ] {
-        if let Some(value) = value {
-            ignored.push(format!("{key}={value}"));
-        }
-    }
-    ignored
-        .into_iter()
-        .map(|field| {
-            format!(
-                "rule {name:?}: ignoring {field}; an override cannot change the processes a \
-                 built-in rule matches"
-            )
-        })
+/// The modules of a `dll_overrides` entry whose order is `default`, or
+/// `None` for an entry with any other order.
+fn default_modules(entry: &str) -> Option<Vec<&str>> {
+    let (names, order) = entry.split_once('=')?;
+    // Case-insensitive, unlike the `default` of a scalar: `Default` would
+    // otherwise reach ntdll, which reads an order with no `n` or `b` as
+    // disabled.
+    order
+        .trim()
+        .eq_ignore_ascii_case(DEFAULT_VALUE)
+        .then(|| module_names(names))
+}
+
+/// The module names of the `names` part of a `dll_overrides` entry.
+fn module_names(names: &str) -> Vec<&str> {
+    names
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
         .collect()
+}
+
+/// Whether two module names of `dll_overrides` entries name the same module:
+/// compared case-insensitively, with or without `.dll`.
+fn same_module(a: &str, b: &str) -> bool {
+    let (a, b) = (a.to_ascii_lowercase(), b.to_ascii_lowercase());
+    a.strip_suffix(".dll").unwrap_or(&a) == b.strip_suffix(".dll").unwrap_or(&b)
+}
+
+/// A `dll_overrides` entry with one module taken out (see
+/// [`without_module`]).
+#[derive(Debug, PartialEq, Eq)]
+enum Without {
+    /// The entry does not name the module.
+    Absent,
+    /// The module was the entry's only one, so nothing is left.
+    Emptied,
+    /// The entry with its other modules and the same order.
+    Rest(String),
+}
+
+/// The `dll_overrides` entry `entry` without `module`.
+fn without_module(entry: &str, module: &str) -> Without {
+    let Some((names, order)) = entry.split_once('=') else {
+        return Without::Absent;
+    };
+    let all = module_names(names);
+    let rest: Vec<&str> = all
+        .iter()
+        .copied()
+        .filter(|name| !same_module(name, module))
+        .collect();
+    if rest.len() == all.len() {
+        Without::Absent
+    } else if rest.is_empty() {
+        Without::Emptied
+    } else {
+        Without::Rest(format!("{}={order}", rest.join(",")))
+    }
 }
 
 /// The basename of a DOS image path (`...\Foo\Bar.exe` -> `Bar.exe`), decoded
@@ -1382,7 +1365,7 @@ pub fn merge_env(block: &[u16], entries: &[(String, String)]) -> Option<Vec<u16>
 
 /// Serialize one rule. `debug_channels` is deliberately left out: whoever
 /// starts wine applies those through `WINEDEBUG`, and the library would see
-/// them too late.
+/// them too late. So is `source`, which [`Table::parse`] sets from the line.
 ///
 /// A library that does not know a key added later ignores that field with
 /// a diagnostic and applies the rest of the record. That is safe only for a
@@ -1391,14 +1374,7 @@ pub fn merge_env(block: &[u16], entries: &[(String, String)]) -> Option<Vec<u16>
 /// setting: a library that ignored an unknown matcher would apply the rule
 /// to more processes than it names.
 fn rule_to_record(rule: &Rule) -> String {
-    let mut fields: Vec<String> = vec![field("name", &rule.name)];
-    if !rule.enabled {
-        // A disabled rule is a directive to drop the rule of that name, so it
-        // travels as the name and nothing else.
-        fields.push(String::from("enabled=false"));
-        return fields.join(";");
-    }
-    fields.push(field("exe", &rule.exe));
+    let mut fields: Vec<String> = vec![field("exe", &rule.exe)];
     if let Some(v) = &rule.company {
         fields.push(field("company", v));
     }
@@ -1408,26 +1384,11 @@ fn rule_to_record(rule: &Rule) -> String {
     if let Some(v) = &rule.original_filename {
         fields.push(field("original_filename", v));
     }
-    if let Some(dxgi) = rule.dxgi {
-        fields.push(field("dxgi", dxgi.as_str()));
-    }
-    if let Some(d3d9) = rule.d3d9 {
-        fields.push(field("d3d9", d3d9.as_str()));
-    }
-    if let Some(wined3d) = rule.wined3d {
-        fields.push(field("wined3d", wined3d.as_str()));
-    }
-    if let Some(opengl) = rule.opengl {
-        fields.push(field("opengl", opengl.as_str()));
-    }
-    for (key, value) in [
-        ("dpi_aware", rule.dpi_aware),
-        ("large_address_aware", rule.large_address_aware),
-        ("gcmouse", rule.gcmouse),
-        ("force_nx", rule.force_nx),
-    ] {
-        if let Some(value) = value {
-            fields.push(field(key, if value { "true" } else { "false" }));
+    for &key in SCALAR_KEYS {
+        if let Some(value) = scalar_value(rule, key) {
+            fields.push(field(key, value));
+        } else if rule.resets.contains(&key) {
+            fields.push(field(key, DEFAULT_VALUE));
         }
     }
     for over in &rule.dll_overrides {
@@ -1442,18 +1403,40 @@ fn rule_to_record(rule: &Rule) -> String {
     fields.join(";")
 }
 
+/// The wire spelling of the value `rule` sets for the scalar `key`, or
+/// `None` when it sets none.
+fn scalar_value(rule: &Rule, key: &str) -> Option<&'static str> {
+    let boolean = |value: Option<bool>| value.map(|on| if on { "true" } else { "false" });
+    match key {
+        "dxgi" => rule.dxgi.map(Dxgi::as_str),
+        "d3d9" => rule.d3d9.map(D3d9::as_str),
+        "wined3d" => rule.wined3d.map(Wined3d::as_str),
+        "opengl" => rule.opengl.map(OpenGl::as_str),
+        "dpi_aware" => boolean(rule.dpi_aware),
+        "large_address_aware" => boolean(rule.large_address_aware),
+        "gcmouse" => boolean(rule.gcmouse),
+        "force_nx" => boolean(rule.force_nx),
+        _ => None,
+    }
+}
+
 /// Read one record into a rule. A field that cannot be read (an unknown key,
 /// a value its key does not take, no `=`) is left out, and what was wrong
 /// with it is returned next to the rule for the caller to report; the other
-/// fields still apply. Only a record without a `name` fails as a whole.
+/// fields still apply. `line` is the record's line, which becomes the rule's
+/// [`Source`].
 ///
 /// The matcher keys are a closed set (see [`rule_to_record`]), so an unknown
 /// key is a setting this library does not know, or a typo. A misspelt
 /// matcher is ignored like any other unknown key, with the warning, and the
-/// rule then matches more processes than it meant to.
-fn record_to_rule(record: &str) -> Result<(Rule, Vec<String>), String> {
-    let mut rule = Rule::default();
-    let mut have_name = false;
+/// rule then matches more processes than it meant to. The `name` and
+/// `enabled` keys of the old format, where an override merged into or
+/// dropped a rule by name, are unknown keys too.
+fn record_to_rule(record: &str, line: usize) -> (Rule, Vec<String>) {
+    let mut rule = Rule {
+        source: Source::Line(line),
+        ..Rule::default()
+    };
     let mut ignored = Vec::new();
     for raw in record.split(';') {
         if raw.is_empty() {
@@ -1463,41 +1446,50 @@ fn record_to_rule(record: &str) -> Result<(Rule, Vec<String>), String> {
             ignored.push(format!("field {raw:?} without '='"));
             continue;
         };
-        if key == "name" {
-            rule.name = decode(value);
-            have_name = true;
-        } else if let Err(reason) = set_field(&mut rule, key, value) {
+        if let Err(reason) = set_field(&mut rule, key, value) {
             ignored.push(reason);
         }
     }
-    if !have_name {
-        return Err(String::from("no name field"));
-    }
-    // `exe` may legitimately be absent: an override that extends or drops a
-    // rule declared elsewhere carries only the fields it changes. A rule that
-    // ends up with no exe at all matches nothing, which `overlay` reports.
-    Ok((rule, ignored))
+    (rule, ignored)
 }
 
 /// Set the field `key` of `rule` from its wire `value`, or say why it
 /// cannot be set, leaving the rule as it was.
 fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
+    let resets = &mut rule.resets;
     match key {
         "exe" => rule.exe = decode(value),
         "company" => rule.company = Some(decode(value)),
         "product" => rule.product = Some(decode(value)),
         "original_filename" => rule.original_filename = Some(decode(value)),
-        // A value other than `true` or `false` is ignored like any bad
-        // boolean, so the rule stays enabled: a typo never drops a rule.
-        "enabled" => rule.enabled = parse_bool(key, value)?,
-        "dxgi" => rule.dxgi = Some(parse_value(key, value, Dxgi::parse)?),
-        "d3d9" => rule.d3d9 = Some(parse_value(key, value, D3d9::parse)?),
-        "wined3d" => rule.wined3d = Some(parse_value(key, value, Wined3d::parse)?),
-        "opengl" => rule.opengl = Some(parse_value(key, value, OpenGl::parse)?),
-        "dpi_aware" => rule.dpi_aware = Some(parse_bool(key, value)?),
-        "large_address_aware" => rule.large_address_aware = Some(parse_bool(key, value)?),
-        "gcmouse" => rule.gcmouse = Some(parse_bool(key, value)?),
-        "force_nx" => rule.force_nx = Some(parse_bool(key, value)?),
+        "dxgi" => set_scalar(&mut rule.dxgi, resets, "dxgi", value, |v| {
+            parse_value("dxgi", v, Dxgi::parse)
+        })?,
+        "d3d9" => set_scalar(&mut rule.d3d9, resets, "d3d9", value, |v| {
+            parse_value("d3d9", v, D3d9::parse)
+        })?,
+        "wined3d" => set_scalar(&mut rule.wined3d, resets, "wined3d", value, |v| {
+            parse_value("wined3d", v, Wined3d::parse)
+        })?,
+        "opengl" => set_scalar(&mut rule.opengl, resets, "opengl", value, |v| {
+            parse_value("opengl", v, OpenGl::parse)
+        })?,
+        "dpi_aware" => set_scalar(&mut rule.dpi_aware, resets, "dpi_aware", value, |v| {
+            parse_bool("dpi_aware", v)
+        })?,
+        "large_address_aware" => set_scalar(
+            &mut rule.large_address_aware,
+            resets,
+            "large_address_aware",
+            value,
+            |v| parse_bool("large_address_aware", v),
+        )?,
+        "gcmouse" => set_scalar(&mut rule.gcmouse, resets, "gcmouse", value, |v| {
+            parse_bool("gcmouse", v)
+        })?,
+        "force_nx" => set_scalar(&mut rule.force_nx, resets, "force_nx", value, |v| {
+            parse_bool("force_nx", v)
+        })?,
         "dll_overrides" => rule.dll_overrides.push(decode(value)),
         "arguments" => rule.arguments.push(decode(value)),
         "env" => {
@@ -1505,6 +1497,30 @@ fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
             rule.env.push((decode(name), decode(val)));
         }
         other => return Err(format!("unknown key {other:?}")),
+    }
+    Ok(())
+}
+
+/// Set the scalar `slot`, whose key is `key`, from its wire `value`:
+/// `default` clears it and marks the key reset (see [`Rule::resets`]),
+/// anything else is read by `parse` and takes the key out of `resets`. The
+/// last field for a key wins, as for any scalar. A value `parse` rejects
+/// leaves both as they were.
+fn set_scalar<T>(
+    slot: &mut Option<T>,
+    resets: &mut Vec<&'static str>,
+    key: &'static str,
+    value: &str,
+    parse: impl Fn(&str) -> Result<T, String>,
+) -> Result<(), String> {
+    if decode(value) == DEFAULT_VALUE {
+        *slot = None;
+        if !resets.contains(&key) {
+            resets.push(key);
+        }
+    } else {
+        *slot = Some(parse(value)?);
+        resets.retain(|k| *k != key);
     }
     Ok(())
 }
@@ -1668,6 +1684,32 @@ mod tests {
         out
     }
 
+    /// `table` as [`Table::parse`] reads it back from its env value: each
+    /// rule with its line as its source.
+    fn as_sent(table: &Table) -> Table {
+        Table {
+            rules: table
+                .rules
+                .iter()
+                .enumerate()
+                .map(|(i, rule)| Rule {
+                    source: Source::Line(i.saturating_add(1)),
+                    ..rule.clone()
+                })
+                .collect(),
+        }
+    }
+
+    /// The built-in-looking `table` with `text` parsed and appended, as
+    /// `compatdb.so` builds its table; `text` must parse cleanly.
+    fn with_lines(table: &Table, text: &str) -> Table {
+        let (parsed, diagnostics) = Table::parse(text);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let mut table = table.clone();
+        table.rules.extend(parsed.rules);
+        table
+    }
+
     #[test]
     fn encode_decode_round_trips_specials() {
         for raw in [
@@ -1703,7 +1745,6 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "rockstar-launcher".into(),
                     exe: "Launcher.exe".into(),
                     company: Some("Rockstar Games".into()),
                     product: Some("Rockstar Games Launcher".into()),
@@ -1711,14 +1752,12 @@ mod tests {
                     ..Rule::default()
                 },
                 Rule {
-                    name: "social-club-ui".into(),
                     exe: "SocialClubHelper.exe".into(),
                     arguments: vec!["--in-process-gpu --disable-gpu".into()],
                     original_filename: Some("SocialClubHelper.exe".into()),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "wow".into(),
                     exe: "WoW.exe".into(),
                     d3d9: Some(D3d9::Wined3d),
                     dll_overrides: vec!["d3d12,vulkan-1=".into()],
@@ -1729,37 +1768,44 @@ mod tests {
         };
         let (parsed, diagnostics) = Table::parse(&table.to_env_value());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed, table);
+        assert_eq!(parsed, as_sent(&table));
     }
 
     #[test]
     fn env_field_survives_an_equals_in_the_value() {
         let table = Table {
             rules: vec![Rule {
-                name: "x".into(),
                 exe: "x.exe".into(),
                 env: vec![("A".into(), "b=c;d".into())],
                 ..Rule::default()
             }],
         };
         let (parsed, _) = Table::parse(&table.to_env_value());
-        assert_eq!(parsed, table);
+        assert_eq!(parsed, as_sent(&table));
     }
 
     #[test]
     fn a_legacy_header_on_the_first_line_is_skipped() {
         // What a launcher written for the versioned format sends: the same
-        // records mean the same with any version header in front, or none.
-        let records = "name=rockstar-launcher;dxgi=dxmt\n\
-                       name=wow;exe=WoW.exe;company=Blizzard;d3d9=wined3d;wined3d=vulkan;env=A=1\n\
-                       name=dpi-aware;enabled=false";
+        // records mean the same with any version header in front, or none,
+        // and the header counts as a line.
+        let records = "exe=Launcher.exe;dxgi=dxmt\n\
+                       exe=WoW.exe;company=Blizzard;d3d9=wined3d;wined3d=vulkan;env=A=1";
         let (bare, diagnostics) = Table::parse(records);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(bare.rules.len(), 3);
+        assert_eq!(bare.rules.len(), 2);
         for header in ["v=5", "v=6", "v=7", "v=10"] {
             let (table, diagnostics) = Table::parse(&format!("{header}\n{records}"));
             assert!(diagnostics.is_empty(), "{header}: {diagnostics:?}");
-            assert_eq!(table, bare, "{header}");
+            let sources: Vec<Source> = table.rules.iter().map(|r| r.source).collect();
+            assert_eq!(sources, [Source::Line(2), Source::Line(3)], "{header}");
+            let mut shifted = bare.clone();
+            for rule in &mut shifted.rules {
+                if let Source::Line(n) = rule.source {
+                    rule.source = Source::Line(n.saturating_add(1));
+                }
+            }
+            assert_eq!(table, shifted, "{header}");
         }
     }
 
@@ -1774,25 +1820,31 @@ mod tests {
             "v=-1",
             "V=6",
             " v=6",
-            "v=6;name=x",
-            "name=x;v=6",
+            "v=6;exe=x",
+            "exe=x;v=6",
         ] {
             assert!(!is_legacy_header(other), "{other}");
         }
-        // Anything else on the first line is a record: one with a name is a
+        // Anything else on the first line is a record: one with an exe is a
         // rule, and one without, a legacy header that looks almost right
-        // included, is skipped with a diagnostic.
-        let (table, diagnostics) = Table::parse("name=x;exe=x.exe\nname=y;exe=y.exe");
+        // included, is ignored with a diagnostic.
+        let (table, diagnostics) = Table::parse("exe=x.exe\nexe=y.exe");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(table.rules.len(), 2);
-        let (table, diagnostics) = Table::parse("v=6a\nname=x;exe=x.exe");
+        let (table, diagnostics) = Table::parse("v=6a\nexe=x.exe");
         assert_eq!(table.rules.len(), 1);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        // Only the first line can be one; a later one is a record without a
-        // name.
-        let (table, diagnostics) = Table::parse("name=x;exe=x.exe\nv=6");
+        assert_eq!(
+            diagnostics,
+            [
+                "WINE_COMPATDB line 1: ignoring unknown key \"v\"",
+                "WINE_COMPATDB line 1: ignoring the line, it has no exe"
+            ]
+        );
+        // Only the first line can be one; a later one is a line without an
+        // exe.
+        let (table, diagnostics) = Table::parse("exe=x.exe\nv=6");
         assert_eq!(table.rules.len(), 1);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
     }
 
     #[test]
@@ -1800,18 +1852,18 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "game".into(),
                     exe: "game.exe".into(),
                     dxgi: Some(Dxgi::Wined3d),
                     wined3d: Some(Wined3d::Vulkan),
                     env: vec![("A".into(), "1".into())],
                     ..Rule::default()
                 },
-                // A disabled rule carries nothing but its name.
+                // Neither the source nor the debug channels travel.
                 Rule {
-                    name: "dropped".into(),
+                    exe: ANY_EXE.into(),
                     gcmouse: Some(false),
-                    enabled: false,
+                    debug_channels: vec!["+loaddll".into()],
+                    source: Source::Line(7),
                     ..Rule::default()
                 },
             ],
@@ -1819,61 +1871,99 @@ mod tests {
         let value = table.to_env_value();
         assert_eq!(
             value,
-            "name=game;exe=game.exe;dxgi=wined3d;wined3d=vulkan;env=A=1\n\
-             name=dropped;enabled=false"
+            "exe=game.exe;dxgi=wined3d;wined3d=vulkan;env=A=1\n\
+             exe=*;gcmouse=false"
         );
         let (parsed, diagnostics) = Table::parse(&value);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed.rules.first(), table.rules.first());
+        assert_eq!(parsed.rules.first(), as_sent(&table).rules.first());
         assert_eq!(parsed.to_env_value(), value);
         assert_eq!(Table::default().to_env_value(), "");
         assert_eq!(Table::parse(""), (Table::default(), Vec::new()));
     }
 
     #[test]
-    fn parse_skips_a_record_without_a_name_but_keeps_the_rest() {
-        let (table, diagnostics) = Table::parse("exe=no-name.exe\nname=ok;exe=ok.exe");
-        assert_eq!(table.rules.len(), 1);
-        assert_eq!(table.rules.first().map(|r| r.exe.as_str()), Some("ok.exe"));
-        assert_eq!(diagnostics.len(), 1);
-    }
-
-    #[test]
-    fn an_override_carrying_only_the_changed_fields_needs_no_exe() {
-        // What a game file writes to extend a built-in rule: the name it is
-        // addressing plus the one field it changes.
-        let (over, diagnostics) = Table::parse("name=rockstar-launcher;dxgi=dxmt");
+    fn parse_numbers_the_lines_and_counts_blank_ones() {
+        let (table, diagnostics) = Table::parse("exe=a.exe\n\nexe=b.exe\n  \nexe=c.exe");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(over.rules.len(), 1);
-        assert_eq!(over.rules.first().map(|r| r.exe.as_str()), Some(""));
+        let sources: Vec<Source> = table.rules.iter().map(|r| r.source).collect();
+        assert_eq!(sources, [Source::Line(1), Source::Line(3), Source::Line(5)]);
     }
 
     #[test]
-    fn overlay_drops_an_override_that_could_never_match() {
-        // A misspelled name with no exe of its own: it neither extends a rule
-        // nor stands on its own, so it is reported rather than kept.
-        let mut base = Table::default();
-        let unmatched = base.overlay(Table {
-            rules: vec![Rule {
-                name: "typo".into(),
-                dxgi: Some(Dxgi::Dxmt),
-                ..Rule::default()
-            }],
-        });
-        assert_eq!(unmatched, vec!["override names no rule: typo".to_string()]);
-        assert_eq!(base.rules, []);
+    fn parse_ignores_a_line_without_an_exe_and_keeps_the_rest() {
+        // What a launcher wrote to change a built-in rule by name in the old
+        // format: it has no exe, so it matches no process.
+        for (line, said) in [
+            ("dxgi=dxmt", vec![]),
+            ("exe=", vec![]),
+            (
+                "name=rockstar-launcher;dxgi=dxmt",
+                vec!["WINE_COMPATDB line 1: ignoring unknown key \"name\""],
+            ),
+            (
+                "name=dpi-aware;enabled=false",
+                vec![
+                    "WINE_COMPATDB line 1: ignoring unknown key \"name\"",
+                    "WINE_COMPATDB line 1: ignoring unknown key \"enabled\"",
+                ],
+            ),
+        ] {
+            let (table, diagnostics) = Table::parse(&format!("{line}\nexe=ok.exe"));
+            assert_eq!(table.rules.len(), 1, "{line}");
+            assert_eq!(table.rules.first().map(|r| r.exe.as_str()), Some("ok.exe"));
+            let mut want: Vec<String> = said.into_iter().map(String::from).collect();
+            want.push("WINE_COMPATDB line 1: ignoring the line, it has no exe".into());
+            assert_eq!(diagnostics, want, "{line}");
+        }
+    }
+
+    #[test]
+    fn the_name_and_enabled_of_the_old_format_are_unknown_keys() {
+        // A launcher written for the old format names its rules and may
+        // send `enabled`. Each such field is ignored with a warning, and the
+        // rest of the line applies: `enabled=false` no longer drops a rule,
+        // and a rule named like a built-in one is a rule of its own.
+        let (table, diagnostics) = Table::parse(
+            "name=my-game;exe=Game.exe;dpi_aware=false\nname=x;enabled=false;exe=*;gcmouse=false",
+        );
+        assert_eq!(
+            table.rules,
+            [
+                Rule {
+                    exe: "Game.exe".into(),
+                    dpi_aware: Some(false),
+                    source: Source::Line(1),
+                    ..Rule::default()
+                },
+                Rule {
+                    exe: ANY_EXE.into(),
+                    gcmouse: Some(false),
+                    source: Source::Line(2),
+                    ..Rule::default()
+                },
+            ]
+        );
+        assert_eq!(
+            diagnostics,
+            [
+                "WINE_COMPATDB line 1: ignoring unknown key \"name\"",
+                "WINE_COMPATDB line 2: ignoring unknown key \"name\"",
+                "WINE_COMPATDB line 2: ignoring unknown key \"enabled\"",
+            ]
+        );
     }
 
     #[test]
     fn a_field_that_cannot_be_read_is_ignored_and_the_rest_applies() -> TestResult {
         // An unknown key, a value its key does not take and a field without
-        // '=' each cost only that field, with one diagnostic naming the rule
+        // '=' each cost only that field, with one diagnostic naming the line
         // and the field. The record before and after it still applies.
         let want = Rule {
-            name: "x".into(),
             exe: "x.exe".into(),
             d3d9: Some(D3d9::Wined3d),
             env: vec![("A".into(), "1".into())],
+            source: Source::Line(1),
             ..Rule::default()
         };
         for (field, said) in [
@@ -1884,22 +1974,22 @@ mod tests {
             ("d3d9=gptk", "unknown d3d9 value \"gptk\""),
             ("wined3d=opengl", "unknown wined3d value \"opengl\""),
             ("dpi_aware=yes", "unknown dpi_aware value \"yes\""),
-            // A bad `enabled` leaves the rule enabled.
-            ("enabled=False", "unknown enabled value \"False\""),
-            ("enabled=no", "unknown enabled value \"no\""),
             ("bogus", "field \"bogus\" without '='"),
         ] {
-            let text = format!("name=x;{field};exe=x.exe;d3d9=wined3d;env=A=1\nname=ok;exe=ok.exe");
+            let text = format!("{field};exe=x.exe;d3d9=wined3d;env=A=1\nexe=ok.exe");
             let (table, diagnostics) = Table::parse(&text);
             assert_eq!(table.rules.first(), Some(&want), "{field}");
             assert_eq!(
-                table.rules.get(1).map(|r| r.name.as_str()),
-                Some("ok"),
+                table.rules.get(1).map(|r| r.exe.as_str()),
+                Some("ok.exe"),
                 "{field}"
             );
             let diagnostic = diagnostics.first().ok_or("no diagnostic")?;
             assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-            assert_eq!(diagnostic, &format!("rule \"x\": ignoring {said}"));
+            assert_eq!(
+                diagnostic,
+                &format!("WINE_COMPATDB line 1: ignoring {said}")
+            );
         }
         Ok(())
     }
@@ -1909,13 +1999,11 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "aware".into(),
                     exe: ANY_EXE.into(),
                     dpi_aware: Some(true),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "unaware".into(),
                     exe: "old.exe".into(),
                     d3d9: Some(D3d9::Wined3d),
                     dpi_aware: Some(false),
@@ -1923,7 +2011,6 @@ mod tests {
                     ..Rule::default()
                 },
                 Rule {
-                    name: "unset".into(),
                     exe: "other.exe".into(),
                     ..Rule::default()
                 },
@@ -1932,21 +2019,20 @@ mod tests {
         let text = table.to_env_value();
         assert_eq!(
             text,
-            "name=aware;exe=*;dpi_aware=true\n\
-             name=unaware;exe=old.exe;d3d9=wined3d;dpi_aware=false;dll_overrides=a=\n\
-             name=unset;exe=other.exe"
+            "exe=*;dpi_aware=true\n\
+             exe=old.exe;d3d9=wined3d;dpi_aware=false;dll_overrides=a=\n\
+             exe=other.exe"
         );
         let (parsed, diagnostics) = Table::parse(&text);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed, table);
+        assert_eq!(parsed, as_sent(&table));
     }
 
     #[test]
     fn a_bad_dpi_aware_value_is_ignored() {
         for bad in ["yes", "1", "TRUE", ""] {
-            let (table, diagnostics) = Table::parse(&format!(
-                "name=x;exe=x.exe;dpi_aware={bad}\nname=ok;exe=ok.exe"
-            ));
+            let (table, diagnostics) =
+                Table::parse(&format!("exe=x.exe;dpi_aware={bad}\nexe=ok.exe"));
             assert_eq!(table.rules.len(), 2, "dpi_aware={bad:?}");
             assert_eq!(table.rules.first().map(|r| r.dpi_aware), Some(None));
             assert_eq!(diagnostics.len(), 1, "dpi_aware={bad:?}");
@@ -1958,26 +2044,22 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "pinned".into(),
                     exe: "game.exe".into(),
                     company: Some("Acme".into()),
                     dpi_aware: Some(true),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "named".into(),
                     exe: "game.exe".into(),
                     dpi_aware: Some(false),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     dpi_aware: Some(true),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "quiet".into(),
                     exe: "quiet.exe".into(),
                     arguments: vec!["-x".into()],
                     ..Rule::default()
@@ -2001,48 +2083,58 @@ mod tests {
         let pinned = table.resolve("game.exe", &acme);
         assert_eq!(pinned.dpi_aware, Some(true));
         assert_eq!(
-            pinned.matched,
-            vec![
-                "defaults".to_string(),
-                "named".to_string(),
-                "pinned".to_string()
-            ]
+            pinned.origin("dpi_aware"),
+            Some(&Origin::BuiltInFor("game.exe (Acme)".into()))
         );
         // A more specific rule that leaves it unset inherits the wildcard's.
         let quiet = table.resolve("quiet.exe", &VersionInfo::default());
         assert_eq!(quiet.dpi_aware, Some(true));
-        assert_eq!(
-            quiet.matched,
-            vec!["defaults".to_string(), "quiet".to_string()]
-        );
+        assert_eq!(quiet.origin("dpi_aware"), Some(&Origin::BuiltIn));
+        assert_eq!(quiet.arguments, ["-x"]);
         // With no rule setting it, the resolution leaves it to wine.
         assert_eq!(Table::default().resolve("x.exe", &acme).dpi_aware, None);
     }
 
     #[test]
-    fn overlay_by_name_replaces_dpi_aware_only_when_set() {
-        let mut base = Table {
+    fn a_later_star_rule_changes_a_builtin_value_only_when_it_sets_the_key() {
+        let base = Table {
             rules: vec![Rule {
-                name: "defaults".into(),
                 exe: ANY_EXE.into(),
                 dpi_aware: Some(true),
+                large_address_aware: Some(true),
+                gcmouse: Some(true),
+                force_nx: Some(true),
                 ..Rule::default()
             }],
         };
-        // An override that does not mention it leaves the value alone.
-        let (over, diagnostics) = Table::parse("name=defaults;dll_overrides=a=");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(base.overlay(over), [] as [String; 0]);
-        assert_eq!(base.rules.first().map(|r| r.dpi_aware), Some(Some(true)));
-        // One that sets it replaces it.
-        let (over, diagnostics) = Table::parse("name=defaults;dpi_aware=false");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(base.overlay(over), [] as [String; 0]);
-        assert_eq!(base.rules.first().map(|r| r.dpi_aware), Some(Some(false)));
-        assert_eq!(
-            base.resolve("x.exe", &VersionInfo::default()).dpi_aware,
-            Some(false)
-        );
+        // A rule that does not mention them leaves the values alone.
+        let table = with_lines(&base, "exe=*;dll_overrides=a=");
+        let r = table.resolve("x.exe", &VersionInfo::default());
+        assert_eq!(r.dpi_aware, Some(true));
+        assert_eq!(r.large_address_aware, Some(true));
+        assert_eq!(r.gcmouse, Some(true));
+        assert_eq!(r.force_nx, Some(true));
+        assert_eq!(r.origin("dpi_aware"), Some(&Origin::BuiltIn));
+        // One that sets a key replaces that value and no other.
+        for key in ["dpi_aware", "large_address_aware", "gcmouse", "force_nx"] {
+            let table = with_lines(&base, &format!("exe=*;{key}=false"));
+            let r = table.resolve("x.exe", &VersionInfo::default());
+            let values = [
+                ("dpi_aware", r.dpi_aware),
+                ("large_address_aware", r.large_address_aware),
+                ("gcmouse", r.gcmouse),
+                ("force_nx", r.force_nx),
+            ];
+            for (k, value) in values {
+                if k == key {
+                    assert_eq!(value, Some(false), "{key}");
+                    assert_eq!(r.origin(k), Some(&Origin::Line(1)), "{key}");
+                } else {
+                    assert_eq!(value, Some(true), "{key}: {k}");
+                    assert_eq!(r.origin(k), Some(&Origin::BuiltIn), "{key}: {k}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -2050,20 +2142,17 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     large_address_aware: Some(true),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "old".into(),
                     exe: "old.exe".into(),
                     dpi_aware: Some(false),
                     large_address_aware: Some(false),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "unset".into(),
                     exe: "other.exe".into(),
                     ..Rule::default()
                 },
@@ -2072,13 +2161,13 @@ mod tests {
         let text = table.to_env_value();
         assert_eq!(
             text,
-            "name=defaults;exe=*;large_address_aware=true\n\
-             name=old;exe=old.exe;dpi_aware=false;large_address_aware=false\n\
-             name=unset;exe=other.exe"
+            "exe=*;large_address_aware=true\n\
+             exe=old.exe;dpi_aware=false;large_address_aware=false\n\
+             exe=other.exe"
         );
         let (parsed, diagnostics) = Table::parse(&text);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed, table);
+        assert_eq!(parsed, as_sent(&table));
     }
 
     #[test]
@@ -2086,7 +2175,7 @@ mod tests {
         let key = "large_address_aware";
         for bad in ["yes", "1", "False", ""] {
             let (table, diagnostics) = Table::parse(&format!(
-                "name=x;exe=x.exe;dpi_aware=false;{key}={bad}\nname=ok;exe=ok.exe"
+                "exe=x.exe;dpi_aware=false;{key}={bad}\nexe=ok.exe"
             ));
             assert_eq!(table.rules.len(), 2, "{key}={bad:?}");
             let x = table.rules.first();
@@ -2105,20 +2194,17 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "pinned".into(),
                     exe: "game.exe".into(),
                     company: Some("Acme".into()),
                     dpi_aware: Some(false),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "named".into(),
                     exe: "game.exe".into(),
                     large_address_aware: Some(false),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     large_address_aware: Some(true),
                     ..Rule::default()
@@ -2147,7 +2233,6 @@ mod tests {
         // It alone makes a resolution non-empty.
         let table = Table {
             rules: vec![Rule {
-                name: "laa".into(),
                 exe: ANY_EXE.into(),
                 large_address_aware: Some(false),
                 ..Rule::default()
@@ -2157,47 +2242,21 @@ mod tests {
     }
 
     #[test]
-    fn overlay_by_name_replaces_large_address_aware_only_when_set() -> TestResult {
-        let mut base = Table {
-            rules: vec![Rule {
-                name: "defaults".into(),
-                exe: ANY_EXE.into(),
-                large_address_aware: Some(true),
-                ..Rule::default()
-            }],
-        };
-        let (over, diagnostics) = Table::parse("name=defaults;dll_overrides=a=");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(base.overlay(over), [] as [String; 0]);
-        let rule = base.rules.first().ok_or("no rule")?;
-        assert_eq!(rule.large_address_aware, Some(true));
-        let (over, diagnostics) = Table::parse("name=defaults;large_address_aware=false");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(base.overlay(over), [] as [String; 0]);
-        let rule = base.rules.first().ok_or("no rule")?;
-        assert_eq!(rule.large_address_aware, Some(false));
-        Ok(())
-    }
-
-    #[test]
     fn gcmouse_round_trips_and_is_absent_when_unset() {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     gcmouse: Some(true),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "old".into(),
                     exe: "old.exe".into(),
                     large_address_aware: Some(false),
                     gcmouse: Some(false),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "unset".into(),
                     exe: "other.exe".into(),
                     ..Rule::default()
                 },
@@ -2206,13 +2265,13 @@ mod tests {
         let text = table.to_env_value();
         assert_eq!(
             text,
-            "name=defaults;exe=*;gcmouse=true\n\
-             name=old;exe=old.exe;large_address_aware=false;gcmouse=false\n\
-             name=unset;exe=other.exe"
+            "exe=*;gcmouse=true\n\
+             exe=old.exe;large_address_aware=false;gcmouse=false\n\
+             exe=other.exe"
         );
         let (parsed, diagnostics) = Table::parse(&text);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed, table);
+        assert_eq!(parsed, as_sent(&table));
     }
 
     #[test]
@@ -2220,7 +2279,7 @@ mod tests {
         let key = "gcmouse";
         for bad in ["yes", "1", "False", ""] {
             let (table, diagnostics) = Table::parse(&format!(
-                "name=x;exe=x.exe;dpi_aware=false;{key}={bad}\nname=ok;exe=ok.exe"
+                "exe=x.exe;dpi_aware=false;{key}={bad}\nexe=ok.exe"
             ));
             assert_eq!(table.rules.len(), 2, "{key}={bad:?}");
             let x = table.rules.first();
@@ -2239,20 +2298,17 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "pinned".into(),
                     exe: "game.exe".into(),
                     company: Some("Acme".into()),
                     dpi_aware: Some(false),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "named".into(),
                     exe: "game.exe".into(),
                     gcmouse: Some(false),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     gcmouse: Some(true),
                     ..Rule::default()
@@ -2281,7 +2337,6 @@ mod tests {
         // It alone makes a resolution non-empty.
         let table = Table {
             rules: vec![Rule {
-                name: "gcmouse".into(),
                 exe: ANY_EXE.into(),
                 gcmouse: Some(false),
                 ..Rule::default()
@@ -2291,47 +2346,21 @@ mod tests {
     }
 
     #[test]
-    fn overlay_by_name_replaces_gcmouse_only_when_set() -> TestResult {
-        let mut base = Table {
-            rules: vec![Rule {
-                name: "defaults".into(),
-                exe: ANY_EXE.into(),
-                gcmouse: Some(true),
-                ..Rule::default()
-            }],
-        };
-        let (over, diagnostics) = Table::parse("name=defaults;dll_overrides=a=");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(base.overlay(over), [] as [String; 0]);
-        let rule = base.rules.first().ok_or("no rule")?;
-        assert_eq!(rule.gcmouse, Some(true));
-        let (over, diagnostics) = Table::parse("name=defaults;gcmouse=false");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(base.overlay(over), [] as [String; 0]);
-        let rule = base.rules.first().ok_or("no rule")?;
-        assert_eq!(rule.gcmouse, Some(false));
-        Ok(())
-    }
-
-    #[test]
     fn force_nx_round_trips_and_is_absent_when_unset() {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     force_nx: Some(true),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "old".into(),
                     exe: "old.exe".into(),
                     gcmouse: Some(false),
                     force_nx: Some(false),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "unset".into(),
                     exe: "other.exe".into(),
                     ..Rule::default()
                 },
@@ -2340,13 +2369,13 @@ mod tests {
         let text = table.to_env_value();
         assert_eq!(
             text,
-            "name=defaults;exe=*;force_nx=true\n\
-             name=old;exe=old.exe;gcmouse=false;force_nx=false\n\
-             name=unset;exe=other.exe"
+            "exe=*;force_nx=true\n\
+             exe=old.exe;gcmouse=false;force_nx=false\n\
+             exe=other.exe"
         );
         let (parsed, diagnostics) = Table::parse(&text);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed, table);
+        assert_eq!(parsed, as_sent(&table));
     }
 
     #[test]
@@ -2354,7 +2383,7 @@ mod tests {
         let key = "force_nx";
         for bad in ["yes", "1", "False", ""] {
             let (table, diagnostics) = Table::parse(&format!(
-                "name=x;exe=x.exe;dpi_aware=false;{key}={bad}\nname=ok;exe=ok.exe"
+                "exe=x.exe;dpi_aware=false;{key}={bad}\nexe=ok.exe"
             ));
             assert_eq!(table.rules.len(), 2, "{key}={bad:?}");
             let x = table.rules.first();
@@ -2369,45 +2398,220 @@ mod tests {
     }
 
     #[test]
-    fn force_nx_resolves_to_the_most_specific_rule_and_overlays_by_name() -> TestResult {
-        let mut table = Table {
+    fn force_nx_resolves_to_the_most_specific_rule() {
+        let base = Table {
             rules: vec![
                 Rule {
-                    name: "named".into(),
                     exe: "game.exe".into(),
                     force_nx: Some(false),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     force_nx: Some(true),
                     ..Rule::default()
                 },
             ],
         };
-        let other = table.resolve("other.exe", &VersionInfo::default());
+        let other = base.resolve("other.exe", &VersionInfo::default());
         assert_eq!(other.force_nx, Some(true));
-        assert_eq!(other.set_by("force_nx"), Some("defaults"));
-        let named = table.resolve("Game.exe", &VersionInfo::default());
+        assert_eq!(other.origin("force_nx"), Some(&Origin::BuiltIn));
+        let named = base.resolve("Game.exe", &VersionInfo::default());
         assert_eq!(named.force_nx, Some(false));
-        assert_eq!(named.set_by("force_nx"), Some("named"));
+        assert_eq!(
+            named.origin("force_nx"),
+            Some(&Origin::BuiltInFor("game.exe".into()))
+        );
         let none = Table::default().resolve("x.exe", &VersionInfo::default());
         assert_eq!(none.force_nx, None);
         assert!(none.is_empty());
-        // An override by name replaces it only when it sets it.
-        let (over, diagnostics) = Table::parse("name=defaults;dll_overrides=a=");
+        // A `*` rule from WINE_COMPATDB folds after every built-in rule, so
+        // it beats the built-in rule for one program too.
+        let table = with_lines(&base, "exe=*;force_nx=false\nexe=*;dll_overrides=a=");
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.force_nx, Some(false));
+        assert_eq!(other.origin("force_nx"), Some(&Origin::Line(1)));
+        let table = with_lines(&base, "exe=*;force_nx=true");
+        let named = table.resolve("Game.exe", &VersionInfo::default());
+        assert_eq!(named.force_nx, Some(true));
+        assert_eq!(named.origin("force_nx"), Some(&Origin::Line(1)));
+    }
+
+    #[test]
+    fn the_rules_of_wine_compatdb_fold_after_every_builtin_rule() {
+        let base = Table {
+            rules: vec![
+                Rule {
+                    exe: "game.exe".into(),
+                    company: Some("Acme".into()),
+                    dpi_aware: Some(false),
+                    gcmouse: Some(false),
+                    ..Rule::default()
+                },
+                Rule {
+                    exe: ANY_EXE.into(),
+                    dpi_aware: Some(true),
+                    gcmouse: Some(true),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let acme = VersionInfo {
+            company: "Acme".into(),
+            ..VersionInfo::default()
+        };
+        // The least specific line beats the most specific built-in rule.
+        let table = with_lines(&base, "exe=*;dpi_aware=true");
+        let game = table.resolve("game.exe", &acme);
+        assert_eq!(game.dpi_aware, Some(true));
+        assert_eq!(game.origin("dpi_aware"), Some(&Origin::Line(1)));
+        // The key it leaves alone keeps the built-in value.
+        assert_eq!(game.gcmouse, Some(false));
+        // Among the lines, specificity still decides before line order.
+        let table = with_lines(
+            &base,
+            "exe=game.exe;company=Acme;dpi_aware=false\nexe=game.exe;dpi_aware=true\nexe=*;dpi_aware=true",
+        );
+        let game = table.resolve("game.exe", &acme);
+        assert_eq!(game.dpi_aware, Some(false));
+        assert_eq!(game.origin("dpi_aware"), Some(&Origin::Line(1)));
+    }
+
+    #[test]
+    fn default_resets_a_scalar_from_that_rule_on() -> TestResult {
+        let base = Table {
+            rules: vec![Rule {
+                exe: ANY_EXE.into(),
+                dxgi: Some(Dxgi::Dxmt),
+                wined3d: Some(Wined3d::Vulkan),
+                dpi_aware: Some(true),
+                ..Rule::default()
+            }],
+        };
+        let table = with_lines(
+            &base,
+            "exe=*;dxgi=default;wined3d=default;dpi_aware=default",
+        );
+        let r = table.resolve("x.exe", &VersionInfo::default());
+        assert_eq!((r.dxgi, r.wined3d, r.dpi_aware), (None, None, None));
+        assert_eq!(r.set_by, []);
+        for key in ["dxgi", "wined3d", "dpi_aware"] {
+            assert_eq!(r.reset_origin(key), Some(&Origin::Line(1)), "{key}");
+        }
+        assert!(r.is_empty());
+        // A rule folded later sets it again.
+        let table = with_lines(&base, "exe=*;dpi_aware=default\nexe=x.exe;dpi_aware=false");
+        let r = table.resolve("x.exe", &VersionInfo::default());
+        assert_eq!(r.dpi_aware, Some(false));
+        assert_eq!(r.reset_origin("dpi_aware"), None);
+        // Within one line the last field for a key wins.
+        let (parsed, diagnostics) = Table::parse(
+            "exe=a.exe;dpi_aware=default;dpi_aware=true\nexe=b.exe;gcmouse=false;gcmouse=default",
+        );
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(table.overlay(over), [] as [String; 0]);
-        let rule = table.rules.get(1).ok_or("no rule")?;
-        assert_eq!(rule.force_nx, Some(true));
-        let (over, diagnostics) = Table::parse("name=defaults;force_nx=false");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(table.overlay(over), [] as [String; 0]);
-        let resolution = table.resolve("other.exe", &VersionInfo::default());
-        assert_eq!(resolution.force_nx, Some(false));
-        assert!(resolution.origin("force_nx").ok_or("no origin")?.changed);
+        let a = parsed.rules.first().ok_or("no a")?;
+        assert_eq!((a.dpi_aware, a.resets.clone()), (Some(true), vec![]));
+        let b = parsed.rules.get(1).ok_or("no b")?;
+        assert_eq!((b.gcmouse, b.resets.clone()), (None, vec!["gcmouse"]));
+        // Every scalar key takes it, and nothing else does: `default` is
+        // case-sensitive like the booleans, and `env` and `arguments` take it
+        // as text.
+        for key in SCALAR_KEYS {
+            let (parsed, diagnostics) = Table::parse(&format!("exe=a.exe;{key}=default"));
+            assert!(diagnostics.is_empty(), "{key}: {diagnostics:?}");
+            assert_eq!(
+                parsed.rules.first().map(|r| r.resets.clone()),
+                Some(vec![*key])
+            );
+        }
+        let (parsed, diagnostics) =
+            Table::parse("exe=a.exe;dpi_aware=Default;env=A=default;arguments=default");
+        assert_eq!(
+            diagnostics,
+            ["WINE_COMPATDB line 1: ignoring unknown dpi_aware value \"Default\""]
+        );
+        let a = parsed.rules.first().ok_or("no a")?;
+        assert_eq!(a.resets, [] as [&str; 0]);
+        assert_eq!(a.env, [("A".to_string(), "default".to_string())]);
+        assert_eq!(a.arguments, ["default"]);
         Ok(())
+    }
+
+    #[test]
+    fn a_reset_round_trips_through_the_env_value() {
+        let table = Table {
+            rules: vec![Rule {
+                exe: "a.exe".into(),
+                dxgi: Some(Dxgi::Wined3d),
+                resets: vec!["opengl", "force_nx"],
+                dll_overrides: vec!["mscoree=default".into()],
+                ..Rule::default()
+            }],
+        };
+        let text = table.to_env_value();
+        assert_eq!(
+            text,
+            "exe=a.exe;dxgi=wined3d;opengl=default;force_nx=default;dll_overrides=mscoree=default"
+        );
+        let (parsed, diagnostics) = Table::parse(&text);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(parsed, as_sent(&table));
+        // A rule built with both a value and a reset for one key keeps the
+        // value, in the resolution as on the wire.
+        let both = Table {
+            rules: vec![Rule {
+                exe: ANY_EXE.into(),
+                dxgi: Some(Dxgi::Wined3d),
+                resets: vec!["dxgi"],
+                ..Rule::default()
+            }],
+        };
+        let r = both.resolve("x.exe", &VersionInfo::default());
+        assert_eq!(r.dxgi, Some(Dxgi::Wined3d));
+        assert_eq!(r.reset_origin("dxgi"), None);
+        assert_eq!(both.to_env_value(), "exe=*;dxgi=wined3d");
+    }
+
+    #[test]
+    fn a_default_dll_override_takes_its_modules_out_of_the_entries_before_it() {
+        let base = Table {
+            rules: vec![
+                Rule {
+                    exe: ANY_EXE.into(),
+                    dll_overrides: vec!["mscoree,mshtml=".into(), "d3d12=".into()],
+                    ..Rule::default()
+                },
+                Rule {
+                    exe: "game.exe".into(),
+                    dll_overrides: vec!["D3D12.DLL=n".into()],
+                    ..Rule::default()
+                },
+            ],
+        };
+        let table = with_lines(
+            &base,
+            "exe=*;dll_overrides=d3d12=default;dll_overrides=mshtml=b",
+        );
+        let game = table.resolve("game.exe", &VersionInfo::default());
+        // Both entries for d3d12 go, whatever their case or suffix; the
+        // other modules and later entries stay.
+        assert_eq!(game.dll_overrides, ["mscoree,mshtml=", "mshtml=b"]);
+        assert_eq!(game.dll_overrides_from, [Origin::BuiltIn, Origin::Line(1)]);
+        assert_eq!(
+            game.dll_overrides_reset,
+            [DllOverrideReset {
+                module: "d3d12".into(),
+                by: Origin::Line(1),
+                removed: vec![Origin::BuiltIn, Origin::BuiltInFor("game.exe".into())],
+            }]
+        );
+        assert_eq!(default_modules("a, b =default"), Some(vec!["a", "b"]));
+        assert_eq!(default_modules("a=n,b"), None);
+        // Unlike a scalar's, this `default` is case-insensitive.
+        assert_eq!(default_modules("a=Default"), Some(vec!["a"]));
+        assert_eq!(without_module("a,b=", "B.dll"), Without::Rest("a=".into()));
+        assert_eq!(without_module("a=", "a"), Without::Emptied);
+        assert_eq!(without_module("a=", "b"), Without::Absent);
     }
 
     #[test]
@@ -2416,14 +2620,14 @@ mod tests {
         // the library does not know, it costs only its own field, with a
         // warning, and the rest of the record still applies.
         let (table, diagnostics) =
-            Table::parse("name=old;exe=old.exe;x87_sidecar=false;large_address_aware=false");
+            Table::parse("exe=old.exe;x87_sidecar=false;large_address_aware=false");
         assert_eq!(
             table.rules.first().map(|r| r.large_address_aware),
             Some(Some(false))
         );
         assert_eq!(
             diagnostics,
-            ["rule \"old\": ignoring unknown key \"x87_sidecar\"".to_string()]
+            ["WINE_COMPATDB line 1: ignoring unknown key \"x87_sidecar\"".to_string()]
         );
     }
 
@@ -2432,14 +2636,12 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "first".into(),
                     exe: "game.exe".into(),
                     dxgi: Some(Dxgi::Dxmt),
                     dll_overrides: vec!["a=".into()],
                     ..Rule::default()
                 },
                 Rule {
-                    name: "second".into(),
                     exe: "GAME.EXE".into(),
                     dxgi: Some(Dxgi::Wined3d),
                     dll_overrides: vec!["b=".into()],
@@ -2456,7 +2658,6 @@ mod tests {
     fn a_fingerprint_constraint_is_an_optional_extra_filter() {
         let table = Table {
             rules: vec![Rule {
-                name: "rockstar-launcher".into(),
                 exe: "Launcher.exe".into(),
                 company: Some("Rockstar Games".into()),
                 product: Some("Rockstar Games Launcher".into()),
@@ -2488,7 +2689,6 @@ mod tests {
     fn a_bare_basename_rule_needs_no_fingerprint() {
         let table = Table {
             rules: vec![Rule {
-                name: "steam-web-helper".into(),
                 exe: "steamwebhelper.exe".into(),
                 arguments: vec!["--in-process-gpu".into()],
                 ..Rule::default()
@@ -2672,7 +2872,6 @@ mod tests {
         );
         // A rule that pins a field the exe leaves empty does not match it.
         let pinned = |product: Option<&str>, original_filename: Option<&str>| Rule {
-            name: "nostale".into(),
             exe: "NostaleClientX.exe".into(),
             company: Some("Entwell".into()),
             product: product.map(Into::into),
@@ -2826,108 +3025,137 @@ mod tests {
     }
 
     #[test]
-    fn the_resolution_names_the_rule_behind_every_setting() {
+    fn the_resolution_says_where_every_value_came_from() {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "pinned".into(),
                     exe: "game.exe".into(),
                     company: Some("Acme".into()),
+                    product: Some("Game".into()),
                     dpi_aware: Some(false),
                     arguments: vec!["-b".into()],
                     ..Rule::default()
                 },
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     dxgi: Some(Dxgi::Dxmt),
                     dpi_aware: Some(true),
                     dll_overrides: vec!["a=".into()],
                     arguments: vec!["-a".into()],
                     env: vec![("A".into(), "1".into()), ("B".into(), "2".into())],
-                    env_defaults: 1,
                     ..Rule::default()
                 },
             ],
         };
         let acme = VersionInfo {
             company: "Acme".into(),
+            product: "Game".into(),
             ..VersionInfo::default()
         };
         let r = table.resolve("game.exe", &acme);
-        // A scalar names the most specific rule that set it.
-        assert_eq!(r.set_by("dxgi"), Some("defaults"));
-        assert_eq!(r.set_by("dpi_aware"), Some("pinned"));
-        assert_eq!(r.set_by("d3d9"), None);
-        // Lists name the rule of each entry.
-        let rules = |from: &[Origin]| from.iter().map(|o| o.rule.clone()).collect::<Vec<_>>();
-        assert_eq!(rules(&r.dll_overrides_from), ["defaults"]);
+        // A scalar says which rule set it last, the most specific one.
+        let pinned = Origin::BuiltInFor("game.exe (Acme, Game)".into());
+        assert_eq!(r.origin("dxgi"), Some(&Origin::BuiltIn));
+        assert_eq!(r.origin("dpi_aware"), Some(&pinned));
+        assert_eq!(r.origin("d3d9"), None);
+        assert_eq!(pinned.label(), "built-in for game.exe (Acme, Game)");
+        assert_eq!(Origin::BuiltIn.label(), "built-in");
+        assert_eq!(Origin::Line(3).label(), "WINE_COMPATDB line 3");
+        // Lists say it for each entry.
+        assert_eq!(r.dll_overrides_from, [Origin::BuiltIn]);
         assert_eq!(r.arguments, ["-a", "-b"]);
-        assert_eq!(rules(&r.arguments_from), ["defaults", "pinned"]);
-        // Only the first env entry of the rule is a default.
-        let steps = r.env_steps(|_| true);
+        assert_eq!(r.arguments_from, [Origin::BuiltIn, pinned]);
+        // Both entries of a built-in `*` rule are defaults, which a variable
+        // the process has keeps out.
+        let steps = r.env_steps(|name| name == "A");
         assert_eq!(
             steps
                 .iter()
-                .map(|s| (s.name.as_str(), s.origin.rule.as_str(), s.applied))
+                .map(|s| (s.name.as_str(), &s.origin, s.applied))
                 .collect::<Vec<_>>(),
-            [("A", "defaults", false), ("B", "defaults", true)]
-        );
-        // Nothing came from an override merged in by name.
-        assert!(r.set_by.iter().all(|(_, origin)| !origin.changed));
-        assert_eq!(
-            r.origin("dxgi").map(Origin::label).as_deref(),
-            Some("rule defaults")
+            [
+                ("A", &Origin::BuiltIn, false),
+                ("B", &Origin::BuiltIn, true)
+            ]
         );
     }
 
     #[test]
-    fn a_value_an_override_merged_in_by_name_says_so() -> TestResult {
-        let mut table = Table {
+    fn only_the_env_entries_of_a_builtin_star_rule_are_defaults() {
+        let base = Table {
+            rules: vec![
+                Rule {
+                    exe: ANY_EXE.into(),
+                    env: vec![("A".into(), "1".into())],
+                    ..Rule::default()
+                },
+                Rule {
+                    exe: ANY_EXE.into(),
+                    company: Some("Acme".into()),
+                    env: vec![("B".into(), "1".into())],
+                    ..Rule::default()
+                },
+                Rule {
+                    exe: "game.exe".into(),
+                    env: vec![("C".into(), "1".into())],
+                    ..Rule::default()
+                },
+            ],
+        };
+        let table = with_lines(&base, "exe=*;env=D=1");
+        let defaults: Vec<bool> = table.rules.iter().map(Rule::env_is_default).collect();
+        assert_eq!(defaults, [true, false, false, false]);
+        let acme = VersionInfo {
+            company: "Acme".into(),
+            ..VersionInfo::default()
+        };
+        let r = table.resolve("game.exe", &acme);
+        let applied: Vec<(&str, bool)> = r
+            .env_steps(|_| true)
+            .iter()
+            .map(|s| (if s.name == "A" { "A" } else { "other" }, s.applied))
+            .collect();
+        assert_eq!(
+            applied,
+            [
+                ("A", false),
+                ("other", true),
+                ("other", true),
+                ("other", true)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rule_from_wine_compatdb_is_named_by_its_line() -> TestResult {
+        let base = Table {
             rules: vec![Rule {
-                name: "defaults".into(),
                 exe: ANY_EXE.into(),
                 dpi_aware: Some(true),
                 gcmouse: Some(true),
                 dll_overrides: vec!["a=".into()],
                 env: vec![("A".into(), "1".into())],
-                env_defaults: 1,
                 ..Rule::default()
             }],
         };
-        let (over, diagnostics) =
-            Table::parse("name=defaults;dpi_aware=false;dll_overrides=b=;env=A=2");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(table.overlay(over), [] as [String; 0]);
+        let table = with_lines(&base, "v=7\nexe=*;dpi_aware=false;dll_overrides=b=;env=A=2");
         let r = table.resolve("x.exe", &VersionInfo::default());
-        // The scalar the override set says so; the one it left does not.
+        // The scalar the line set says so; the one it left does not.
         let dpi = r.origin("dpi_aware").ok_or("no dpi_aware")?;
-        assert_eq!(dpi.label(), "rule defaults, changed by WINE_COMPATDB");
-        assert!(!r.origin("gcmouse").ok_or("no gcmouse")?.changed);
-        // Of the lists, only the entries the override added do.
-        let changed = |from: &[Origin]| from.iter().map(|o| o.changed).collect::<Vec<_>>();
-        assert_eq!(changed(&r.dll_overrides_from), [false, true]);
-        // The override's env entry replaces, and the built-in's own entry,
-        // still a default, names the rule that replaced it.
+        assert_eq!(dpi.label(), "WINE_COMPATDB line 2");
+        assert_eq!(r.origin("gcmouse"), Some(&Origin::BuiltIn));
+        assert_eq!(r.dll_overrides_from, [Origin::BuiltIn, Origin::Line(2)]);
+        // The line's env entry replaces, and the built-in's own entry, a
+        // default, says which line replaced it.
         let steps = r.env_steps(|_| false);
         assert_eq!(
             steps
                 .iter()
-                .map(|s| {
-                    (
-                        s.value.as_str(),
-                        s.origin.changed,
-                        s.replaced_by.as_ref().map(Origin::label),
-                    )
-                })
+                .map(|s| (s.value.as_str(), &s.origin, s.replaced_by.clone()))
                 .collect::<Vec<_>>(),
             [
-                (
-                    "1",
-                    false,
-                    Some("rule defaults, changed by WINE_COMPATDB".to_string())
-                ),
-                ("2", true, None)
+                ("1", &Origin::BuiltIn, Some(Origin::Line(2))),
+                ("2", &Origin::Line(2), None)
             ]
         );
         // Left alone, the default is replaced all the same.
@@ -2944,16 +3172,13 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "game".into(),
                     exe: "game.exe".into(),
                     env: vec![("A".into(), String::new()), ("B".into(), String::new())],
                     ..Rule::default()
                 },
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     env: vec![("A".into(), "1".into())],
-                    env_defaults: 1,
                     ..Rule::default()
                 },
             ],
@@ -2964,10 +3189,10 @@ mod tests {
             steps
                 .iter()
                 .find(|s| s.name == name && s.value.is_empty())
-                .and_then(|s| s.removes.as_ref().map(|o| o.rule.clone()))
+                .and_then(|s| s.removes.clone())
         };
         // A removes what the default set; B had no earlier entry.
-        assert_eq!(removes("A"), Some("defaults".to_string()));
+        assert_eq!(removes("A"), Some(Origin::BuiltIn));
         assert_eq!(removes("B"), None);
         // Left alone, the default set nothing for the removal to undo.
         let steps = r.env_steps(|name| name == "A");
@@ -2985,7 +3210,6 @@ mod tests {
         // The literal names every field, so a new one does not compile until
         // it is added here, and with it its entry in UPSTREAM.
         let rule = Rule {
-            name: "all".into(),
             exe: "all.exe".into(),
             company: Some("c".into()),
             product: Some("p".into()),
@@ -2998,15 +3222,15 @@ mod tests {
             large_address_aware: Some(true),
             gcmouse: Some(true),
             force_nx: Some(true),
+            // Every key with a value, so nothing is reset.
+            resets: Vec::new(),
             dll_overrides: vec!["a=".into()],
             arguments: vec!["-a".into()],
             env: vec![("A".into(), "1".into())],
-            env_defaults: 0,
-            changed: Changed::default(),
             debug_channels: Vec::new(),
-            enabled: true,
+            source: Source::BuiltIn,
         };
-        let matchers = ["name", "exe", "company", "product", "original_filename"];
+        let matchers = ["exe", "company", "product", "original_filename"];
         let record = rule_to_record(&rule);
         let keys: Vec<&str> = record
             .split(';')
@@ -3017,6 +3241,10 @@ mod tests {
             assert_ne!(upstream(key), "unknown", "{key} has no UPSTREAM entry");
         }
         assert_eq!(keys.len(), UPSTREAM.len());
+        // The scalar keys are the settings that are not lists, in order.
+        let lists = ["dll_overrides", "arguments", "env"];
+        let scalars: Vec<&str> = keys.into_iter().filter(|k| !lists.contains(k)).collect();
+        assert_eq!(scalars, SCALAR_KEYS);
     }
 
     #[test]
@@ -3054,201 +3282,43 @@ mod tests {
     }
 
     #[test]
-    fn overlay_merges_by_name_appends_lists_and_adds_new_rules() -> TestResult {
-        let mut base = Table {
+    fn a_rule_for_the_same_exe_does_not_take_another_rules_fingerprint() {
+        // Each rule stands on its own matchers. A rule from WINE_COMPATDB
+        // for a common basename does not inherit the fingerprint of a
+        // built-in rule for it, and the built-in rule is unchanged.
+        let base = Table {
             rules: vec![Rule {
-                name: "rockstar-launcher".into(),
-                exe: "Launcher.exe".into(),
-                company: Some("Rockstar Games".into()),
-                dxgi: Some(Dxgi::Wined3d),
-                dll_overrides: vec!["a=".into()],
-                ..Rule::default()
-            }],
-        };
-        let unmatched = base.overlay(Table {
-            rules: vec![
-                Rule {
-                    name: "Rockstar-Launcher".into(), // case-insensitive match
-                    dxgi: Some(Dxgi::Dxmt),
-                    dll_overrides: vec!["b=".into()],
-                    ..Rule::default()
-                },
-                Rule {
-                    name: "new".into(),
-                    exe: "New.exe".into(),
-                    arguments: vec!["-x".into()],
-                    ..Rule::default()
-                },
-            ],
-        });
-        assert_eq!(unmatched, [] as [String; 0]);
-        let launcher = base
-            .rules
-            .iter()
-            .find(|r| r.name == "rockstar-launcher")
-            .ok_or("no launcher rule")?;
-        assert_eq!(launcher.dxgi, Some(Dxgi::Dxmt)); // override wins
-        assert_eq!(launcher.company.as_deref(), Some("Rockstar Games")); // untouched survives
-        assert_eq!(launcher.exe, "Launcher.exe"); // an override needs no exe
-        assert_eq!(
-            launcher.dll_overrides,
-            vec!["a=".to_string(), "b=".to_string()]
-        ); // appended
-        assert!(base.rules.iter().any(|r| r.exe == "New.exe")); // new rule added
-        Ok(())
-    }
-
-    #[test]
-    fn overlay_leaves_a_rule_with_the_same_exe_under_another_name_alone() -> TestResult {
-        // The bug named rules exist to fix: keying by executable made a new
-        // rule for a common basename merge into an unrelated one and inherit
-        // its fingerprint.
-        let mut base = Table {
-            rules: vec![Rule {
-                name: "rockstar-launcher".into(),
                 exe: "Launcher.exe".into(),
                 company: Some("Rockstar Games".into()),
                 dxgi: Some(Dxgi::Wined3d),
                 ..Rule::default()
             }],
         };
-        base.overlay(Table {
-            rules: vec![Rule {
-                name: "my-launcher".into(),
-                exe: "Launcher.exe".into(),
-                dxgi: Some(Dxgi::Dxmt),
-                ..Rule::default()
-            }],
-        });
-        assert_eq!(base.rules.len(), 2);
-        let mine = base
-            .rules
-            .iter()
-            .find(|r| r.name == "my-launcher")
-            .ok_or("no my-launcher rule")?;
-        assert!(mine.company.is_none(), "no fingerprint inherited");
-        assert_eq!(
-            base.rules
-                .iter()
-                .find(|r| r.name == "rockstar-launcher")
-                .map(|r| r.dxgi),
-            Some(Some(Dxgi::Wined3d)),
-            "the pinned rule is untouched"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn overlay_reports_an_override_that_names_no_rule() {
-        let mut base = Table::default();
-        let unmatched = base.overlay(Table {
-            rules: vec![Rule {
-                name: "gone".into(),
-                enabled: false,
-                ..Rule::default()
-            }],
-        });
-        assert_eq!(unmatched, vec!["override names no rule: gone".to_string()]);
-        assert_eq!(base.rules, []);
-    }
-
-    #[test]
-    fn an_override_by_name_keeps_the_matchers_of_a_rule_the_table_had() -> TestResult {
-        let mut base = Table {
-            rules: vec![Rule {
-                name: "defaults".into(),
-                exe: ANY_EXE.into(),
-                dpi_aware: Some(true),
-                env: vec![("A".into(), "1".into())],
-                env_defaults: 1,
-                ..Rule::default()
-            }],
+        let table = with_lines(&base, "exe=Launcher.exe;dxgi=dxmt;dll_overrides=b=");
+        assert_eq!(table.rules.first(), base.rules.first());
+        let rockstar = VersionInfo {
+            company: "Rockstar Games".into(),
+            ..VersionInfo::default()
         };
-        let (over, diagnostics) = Table::parse(
-            "name=defaults;exe=game.exe;company=Acme;dpi_aware=false;env=A=2\n\
-             name=mine;exe=mine.exe\n\
-             name=mine;company=Me",
+        // Another program of that name gets the new rule alone.
+        let other = table.resolve("Launcher.exe", &VersionInfo::default());
+        assert_eq!(other.dxgi, Some(Dxgi::Dxmt));
+        assert_eq!(other.dll_overrides, ["b="]);
+        // The Rockstar launcher gets both. The line folds after every
+        // built-in rule, so it takes the scalar, and the lists accumulate.
+        let launcher = table.resolve("Launcher.exe", &rockstar);
+        assert_eq!(launcher.dxgi, Some(Dxgi::Dxmt));
+        assert_eq!(launcher.origin("dxgi"), Some(&Origin::Line(1)));
+        assert_eq!(launcher.dll_overrides, ["b="]);
+        // A fingerprint keeps a line to the Rockstar launcher alone.
+        let table = with_lines(&base, "exe=Launcher.exe;company=Rockstar;dxgi=dxmt");
+        let launcher = table.resolve("Launcher.exe", &rockstar);
+        assert_eq!(launcher.dxgi, Some(Dxgi::Dxmt));
+        assert!(
+            table
+                .resolve("Launcher.exe", &VersionInfo::default())
+                .is_empty()
         );
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        let warnings = base.overlay(over);
-        assert_eq!(
-            warnings,
-            [
-                "rule \"defaults\": ignoring exe=game.exe; an override cannot change the \
-                 processes a built-in rule matches",
-                "rule \"defaults\": ignoring company=Acme; an override cannot change the \
-                 processes a built-in rule matches",
-            ]
-        );
-        // The built-in rule stays global, takes the setting, and keeps its
-        // own entry a default with the override's after it.
-        let defaults = base.rules.first().ok_or("no defaults")?;
-        assert_eq!(defaults.exe, ANY_EXE);
-        assert_eq!(defaults.company, None);
-        assert_eq!(defaults.dpi_aware, Some(false));
-        assert_eq!(defaults.env_defaults, 1);
-        let other = base.resolve("other.exe", &VersionInfo::default());
-        assert_eq!(other.dpi_aware, Some(false));
-        let steps = other.env_steps(|_| true);
-        assert_eq!(
-            steps.iter().map(|s| s.applied).collect::<Vec<_>>(),
-            [false, true]
-        );
-        // A rule an earlier override added takes a matcher like any field.
-        let mine = base.rules.get(1).ok_or("no mine")?;
-        assert_eq!(mine.company.as_deref(), Some("Me"));
-        // So does one added again under the name of a rule the table had,
-        // after an earlier override dropped that rule.
-        let (over, diagnostics) = Table::parse(
-            "name=defaults;enabled=false\n\
-             name=defaults;exe=game.exe\n\
-             name=defaults;company=Acme",
-        );
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(base.overlay(over), [] as [String; 0]);
-        let again = base
-            .rules
-            .iter()
-            .find(|r| r.name == "defaults")
-            .ok_or("no defaults")?;
-        assert_eq!(again.exe, "game.exe");
-        assert_eq!(again.company.as_deref(), Some("Acme"));
-        Ok(())
-    }
-
-    #[test]
-    fn overlay_disabled_drops_the_rule_of_that_name() {
-        let mut base = Table {
-            rules: vec![Rule {
-                name: "steam-web-helper".into(),
-                exe: "steamwebhelper.exe".into(),
-                ..Rule::default()
-            }],
-        };
-        let unmatched = base.overlay(Table {
-            rules: vec![Rule {
-                name: "steam-web-helper".into(),
-                enabled: false,
-                ..Rule::default()
-            }],
-        });
-        assert_eq!(unmatched, [] as [String; 0]);
-        assert_eq!(base.rules, []);
-    }
-
-    #[test]
-    fn a_disabled_override_round_trips_through_the_wire() {
-        let table = Table {
-            rules: vec![Rule {
-                name: "x".into(),
-                enabled: false,
-                ..Rule::default()
-            }],
-        };
-        let (parsed, diagnostics) = Table::parse(&table.to_env_value());
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed, table);
-        assert_eq!(parsed.rules.first().map(|r| r.enabled), Some(false));
     }
 
     #[test]
@@ -3256,14 +3326,12 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     dxgi: Some(Dxgi::Dxmt),
                     dll_overrides: vec!["global=".into()],
                     ..Rule::default()
                 },
                 Rule {
-                    name: "launcher".into(),
                     exe: "Launcher.exe".into(),
                     dxgi: Some(Dxgi::Wined3d),
                     dll_overrides: vec!["specific=".into()],
@@ -3274,18 +3342,18 @@ mod tests {
         // The wildcard alone reaches an unrelated process.
         let other = table.resolve("Other.exe", &VersionInfo::default());
         assert_eq!(other.dxgi, Some(Dxgi::Dxmt));
-        assert_eq!(other.matched, vec!["defaults".to_string()]);
+        assert_eq!(other.dll_overrides, ["global="]);
         // Both match Launcher.exe; the more specific rule takes the scalar and
         // the lists accumulate least-specific-first.
         let launcher = table.resolve("launcher.exe", &VersionInfo::default());
         assert_eq!(launcher.dxgi, Some(Dxgi::Wined3d));
         assert_eq!(
-            launcher.dll_overrides,
-            vec!["global=".to_string(), "specific=".to_string()]
+            launcher.origin("dxgi"),
+            Some(&Origin::BuiltInFor("Launcher.exe".into()))
         );
         assert_eq!(
-            launcher.matched,
-            vec!["defaults".to_string(), "launcher".to_string()]
+            launcher.dll_overrides,
+            vec!["global=".to_string(), "specific=".to_string()]
         );
     }
 
@@ -3294,13 +3362,11 @@ mod tests {
         // Table order must not decide a scalar; specificity does. Same two
         // rules as above with the specific one declared first.
         let specific = Rule {
-            name: "launcher".into(),
             exe: "Launcher.exe".into(),
             dxgi: Some(Dxgi::Wined3d),
             ..Rule::default()
         };
         let wildcard = Rule {
-            name: "defaults".into(),
             exe: ANY_EXE.into(),
             dxgi: Some(Dxgi::Dxmt),
             ..Rule::default()
@@ -3319,14 +3385,12 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "rockstar-launcher".into(),
                     exe: "Launcher.exe".into(),
                     company: Some("Rockstar Games".into()),
                     dxgi: Some(Dxgi::Wined3d),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "acme-launcher".into(),
                     exe: "Launcher.exe".into(),
                     company: Some("Acme".into()),
                     dxgi: Some(Dxgi::Dxmt),
@@ -3342,17 +3406,18 @@ mod tests {
             company: "Acme Inc".into(),
             ..VersionInfo::default()
         };
+        let launcher = table.resolve("Launcher.exe", &rockstar);
+        assert_eq!(launcher.dxgi, Some(Dxgi::Wined3d));
         assert_eq!(
-            table.resolve("Launcher.exe", &rockstar).matched,
-            vec!["rockstar-launcher".to_string()]
+            launcher.origin("dxgi"),
+            Some(&Origin::BuiltInFor("Launcher.exe (Rockstar Games)".into()))
         );
         assert_eq!(table.resolve("Launcher.exe", &acme).dxgi, Some(Dxgi::Dxmt));
         // A third program of that name matches neither.
-        assert_eq!(
+        assert!(
             table
                 .resolve("Launcher.exe", &VersionInfo::default())
-                .matched,
-            [] as [String; 0]
+                .is_empty()
         );
     }
 
@@ -3389,28 +3454,22 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "one".into(),
                     exe: "game.exe".into(),
                     company: Some("Acme".into()),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "two".into(),
                     exe: "GAME.EXE".into(),
                     company: Some("Acme".into()),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "three".into(),
                     exe: "game.exe".into(),
                     ..Rule::default()
                 },
             ],
         };
-        assert_eq!(
-            table.duplicate_matchers(),
-            vec![("one".to_string(), "two".to_string())]
-        );
+        assert_eq!(table.duplicate_matchers(), vec![(0, 1)]);
     }
 
     #[test]
@@ -3420,40 +3479,32 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "no-mono-gecko".into(),
                     exe: ANY_EXE.into(),
                     dll_overrides: vec!["mscoree,mshtml=".into()],
                     ..Rule::default()
                 },
                 Rule {
-                    name: "dpi-aware".into(),
                     exe: ANY_EXE.into(),
                     dpi_aware: Some(true),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "global".into(),
                     exe: ANY_EXE.into(),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "acme-one".into(),
                     exe: ANY_EXE.into(),
                     company: Some("Acme".into()),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "acme-two".into(),
                     exe: ANY_EXE.into(),
                     company: Some("Acme".into()),
                     ..Rule::default()
                 },
             ],
         };
-        assert_eq!(
-            table.duplicate_matchers(),
-            vec![("acme-one".to_string(), "acme-two".to_string())]
-        );
+        assert_eq!(table.duplicate_matchers(), vec![(3, 4)]);
     }
 
     /// Every arch a program can have, which every implementation serves.
@@ -3517,13 +3568,11 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     dxgi: Some(Dxgi::Wined3d),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "game".into(),
                     exe: "game.exe".into(),
                     d3d9: Some(D3d9::Wined3d),
                     ..Rule::default()
@@ -3552,56 +3601,44 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "vk".into(),
                     exe: "vk.exe".into(),
                     wined3d: Some(Wined3d::Vulkan),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "gl".into(),
                     exe: "gl.exe".into(),
                     wined3d: Some(Wined3d::Gl),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "unset".into(),
                     exe: "unset.exe".into(),
                     ..Rule::default()
                 },
             ],
         };
         let value = table.to_env_value();
-        assert!(
-            value.contains("name=vk;exe=vk.exe;wined3d=vulkan"),
-            "{value}"
-        );
-        assert!(value.contains("name=gl;exe=gl.exe;wined3d=gl"), "{value}");
-        assert!(
-            !value.contains("name=unset;exe=unset.exe;wined3d"),
-            "{value}"
-        );
+        assert!(value.contains("exe=vk.exe;wined3d=vulkan"), "{value}");
+        assert!(value.contains("exe=gl.exe;wined3d=gl"), "{value}");
+        assert!(!value.contains("exe=unset.exe;wined3d"), "{value}");
         let (parsed, diagnostics) = Table::parse(&value);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed, table);
-        let (bad, diagnostics) =
-            Table::parse("name=x;exe=x.exe;wined3d=opengl\nname=ok;exe=ok.exe");
+        assert_eq!(parsed, as_sent(&table));
+        let (bad, diagnostics) = Table::parse("exe=x.exe;wined3d=opengl\nexe=ok.exe");
         assert_eq!(bad.rules.len(), 2);
         assert_eq!(bad.rules.first().map(|r| r.wined3d), Some(None));
         assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
-    fn wined3d_resolves_to_the_most_specific_rule_and_overlays_by_name() {
-        let mut table = Table {
+    fn wined3d_resolves_to_the_most_specific_rule() {
+        let base = Table {
             rules: vec![
                 Rule {
-                    name: "game".into(),
                     exe: "game.exe".into(),
                     wined3d: Some(Wined3d::Gl),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "global".into(),
                     exe: ANY_EXE.into(),
                     wined3d: Some(Wined3d::Vulkan),
                     ..Rule::default()
@@ -3609,26 +3646,20 @@ mod tests {
             ],
         };
         let none = VersionInfo::default();
-        assert_eq!(table.resolve("game.exe", &none).wined3d, Some(Wined3d::Gl));
+        assert_eq!(base.resolve("game.exe", &none).wined3d, Some(Wined3d::Gl));
         assert_eq!(
-            table.resolve("other.exe", &none).wined3d,
+            base.resolve("other.exe", &none).wined3d,
             Some(Wined3d::Vulkan)
         );
-        // An override by name changes the setting and keeps the rest.
-        let (over, diagnostics) = Table::parse("name=game;wined3d=vulkan");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(table.overlay(over), [] as [String; 0]);
+        // A later rule of the same tier changes the setting for the game
+        // and leaves other processes alone.
+        let table = with_lines(&base, "exe=game.exe;wined3d=vulkan");
+        let game = table.resolve("game.exe", &none);
+        assert_eq!(game.wined3d, Some(Wined3d::Vulkan));
+        assert_eq!(game.origin("wined3d"), Some(&Origin::Line(1)));
         assert_eq!(
-            table.resolve("game.exe", &none).wined3d,
-            Some(Wined3d::Vulkan)
-        );
-        // Dropping the wildcard leaves other processes with no opinion.
-        let (over, _) = Table::parse("name=global;enabled=false");
-        assert_eq!(table.overlay(over), [] as [String; 0]);
-        assert_eq!(table.resolve("other.exe", &none).wined3d, None);
-        assert_eq!(
-            table.resolve("game.exe", &none).wined3d,
-            Some(Wined3d::Vulkan)
+            table.resolve("other.exe", &none).origin("wined3d"),
+            Some(&Origin::BuiltIn)
         );
     }
 
@@ -3644,19 +3675,16 @@ mod tests {
         let table = Table {
             rules: vec![
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     opengl: Some(OpenGl::Egl),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "apple".into(),
                     exe: "apple.exe".into(),
                     opengl: Some(OpenGl::Cgl),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "unset".into(),
                     exe: "unset.exe".into(),
                     ..Rule::default()
                 },
@@ -3665,14 +3693,14 @@ mod tests {
         let value = table.to_env_value();
         assert_eq!(
             value,
-            "name=defaults;exe=*;opengl=egl\n\
-             name=apple;exe=apple.exe;opengl=cgl\n\
-             name=unset;exe=unset.exe"
+            "exe=*;opengl=egl\n\
+             exe=apple.exe;opengl=cgl\n\
+             exe=unset.exe"
         );
         let (parsed, diagnostics) = Table::parse(&value);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(parsed, table);
-        let (bad, diagnostics) = Table::parse("name=x;exe=x.exe;opengl=gl\nname=ok;exe=ok.exe");
+        assert_eq!(parsed, as_sent(&table));
+        let (bad, diagnostics) = Table::parse("exe=x.exe;opengl=gl\nexe=ok.exe");
         assert_eq!(bad.rules.len(), 2);
         assert_eq!(bad.rules.first().map(|r| r.opengl), Some(None));
         assert_eq!(diagnostics.len(), 1);
@@ -3683,17 +3711,15 @@ mod tests {
     }
 
     #[test]
-    fn opengl_resolves_to_the_most_specific_rule_and_overlays_by_name() -> TestResult {
-        let mut table = Table {
+    fn opengl_resolves_to_the_most_specific_rule() {
+        let base = Table {
             rules: vec![
                 Rule {
-                    name: "apple".into(),
                     exe: "apple.exe".into(),
                     opengl: Some(OpenGl::Cgl),
                     ..Rule::default()
                 },
                 Rule {
-                    name: "defaults".into(),
                     exe: ANY_EXE.into(),
                     opengl: Some(OpenGl::Egl),
                     ..Rule::default()
@@ -3701,26 +3727,25 @@ mod tests {
             ],
         };
         let none = VersionInfo::default();
-        let apple = table.resolve("Apple.exe", &none);
+        let apple = base.resolve("Apple.exe", &none);
         assert_eq!(apple.opengl, Some(OpenGl::Cgl));
-        assert_eq!(apple.set_by("opengl"), Some("apple"));
+        assert_eq!(
+            apple.origin("opengl"),
+            Some(&Origin::BuiltInFor("apple.exe".into()))
+        );
         // It is a setting of the process, not an env entry.
         assert_eq!(apple.env, []);
-        let other = table.resolve("other.exe", &none);
+        let other = base.resolve("other.exe", &none);
         assert_eq!(other.opengl, Some(OpenGl::Egl));
         assert!(Table::default().resolve("x.exe", &none).opengl.is_none());
-        // An override by name replaces it only when it sets it.
-        let (over, diagnostics) = Table::parse("name=defaults;opengl=cgl");
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(table.overlay(over), [] as [String; 0]);
+        // A `*` rule from WINE_COMPATDB changes it for every process, the
+        // one a built-in rule names included.
+        let table = with_lines(&base, "exe=*;opengl=cgl");
         let other = table.resolve("other.exe", &none);
         assert_eq!(other.opengl, Some(OpenGl::Cgl));
-        assert!(other.origin("opengl").ok_or("no origin")?.changed);
-        // Dropping the wildcard leaves other processes with no opinion.
-        let (over, _) = Table::parse("name=defaults;enabled=false");
-        assert_eq!(table.overlay(over), [] as [String; 0]);
-        assert_eq!(table.resolve("other.exe", &none).opengl, None);
-        Ok(())
+        assert_eq!(other.origin("opengl"), Some(&Origin::Line(1)));
+        let table = with_lines(&base, "exe=*;opengl=egl");
+        assert_eq!(table.resolve("apple.exe", &none).opengl, Some(OpenGl::Egl));
     }
 
     #[test]
@@ -3728,6 +3753,7 @@ mod tests {
         let resolved = |wined3d| Resolution {
             wined3d,
             env: vec![pair("A", "1")],
+            set_by: vec![("wined3d", Origin::Line(1))],
             ..Resolution::default()
         };
         // Each renderer a rule sets goes after the rules' env, OpenGL as
@@ -3760,6 +3786,7 @@ mod tests {
                         "renderer=no3d,csmt=0x1;MaxVersionGL=0x40001",
                     ),
                 ],
+                set_by: vec![("wined3d", Origin::Line(1))],
                 ..Resolution::default()
             };
             assert_eq!(r.apply_wined3d(), Some(wined3d));
@@ -3778,6 +3805,7 @@ mod tests {
         let mut r = Resolution {
             wined3d: Some(Wined3d::Vulkan),
             env: vec![pair("WINE_D3D_CONFIG", "")],
+            set_by: vec![("wined3d", Origin::Line(1))],
             ..Resolution::default()
         };
         r.apply_wined3d();

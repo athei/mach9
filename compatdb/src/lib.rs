@@ -6,7 +6,7 @@
 //! It is built for the arm64 Wine, which runs x86 programs under emulation
 //! and native ARM64 ones.
 //!
-//! It holds the built-in rules, overlays the ones passed in
+//! It holds the built-in rules, appends the ones passed in
 //! [`ENV_VAR`](compatdb_table::ENV_VAR), resolves the rules that match this
 //! process and applies them: the D3D9 and DXGI trees, the wined3d renderer,
 //! DLL load-order overrides, the DPI awareness, large address awareness,
@@ -34,7 +34,8 @@ use std::{
 };
 
 use compatdb_table::{
-    Arch, D3d9, Dxgi, ENV_VAR, EnvStep, Origin, Table, VersionInfo, Wined3d, basename_of, upstream,
+    Arch, D3d9, DllOverrideReset, Dxgi, ENV_VAR, EnvStep, Origin, Resolution, Table, VersionInfo,
+    Wined3d, basename_of, upstream,
 };
 
 use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TEB_PEB_OFFSET};
@@ -44,19 +45,18 @@ use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TE
 #[unsafe(link_section = "__DATA,__mod_init_func")]
 static INIT: extern "C" fn() = run;
 
-/// The built-in rules with the overrides from [`ENV_VAR`] laid on top, plus
-/// the lines worth logging about the overrides: parse diagnostics,
-/// overrides that name no rule, and matchers an override of a built-in rule
-/// cannot change.
+/// The built-in rules followed by the rules from [`ENV_VAR`], plus what
+/// could not be read from that variable, for the log.
 fn load_table() -> (Table, Vec<String>) {
-    // The built-in rules are compiled in; only overrides travel in the
-    // environment (absent unless something set it). Overlay them.
+    // The built-in rules are compiled in; only the caller's rules travel in
+    // the environment (absent unless something set it). They come after the
+    // built-in ones, so within a tier they fold later.
     let mut table = builtin::table();
     let mut messages = Vec::new();
     if let Some(text) = read_env() {
-        let (overrides, diagnostics) = Table::parse(&text);
+        let (rules, diagnostics) = Table::parse(&text);
         messages.extend(diagnostics);
-        messages.extend(table.overlay(overrides));
+        table.rules.extend(rules.rules);
     }
     (table, messages)
 }
@@ -86,13 +86,6 @@ extern "C" fn run() {
     // What could not be read from WINE_COMPATDB goes in the block of the
     // process, next to the configuration it leaves.
     log_warnings(&messages);
-    if resolution.matched.is_empty() {
-        // Diagnose a miss by the fingerprint on the line above: an empty one
-        // means the image carries no version resource for a rule to pin.
-        log::line("  no rule matched");
-    } else {
-        log::line(&format!("  rules = {}", resolution.matched.join(", ")));
-    }
 
     // Every process gets one tree of each family prepended: a rule's choice,
     // which for most is a built-in `*` rule's, or wined3d, upstream Wine's,
@@ -110,7 +103,7 @@ extern "C" fn run() {
         pe_dir,
         "dxgi",
         dxgi.as_str(),
-        &source("dxgi", resolution.origin("dxgi")),
+        &scalar_source(&resolution, "dxgi"),
     );
     let d3d9 = D3d9::effective(resolution.d3d9, process.arch);
     apply::tree(
@@ -118,13 +111,13 @@ extern "C" fn run() {
         pe_dir,
         "d3d9",
         d3d9.as_str(),
-        &source("d3d9", resolution.origin("d3d9")),
+        &scalar_source(&resolution, "d3d9"),
     );
     // One renderer for every wined3d user in the process, whichever tree or
     // API brought wined3d in. A renderer a rule sets travels as an env
-    // entry, applied with the rest below. Without one, the log names the
-    // renderer the WINE_D3D_CONFIG the process ends up with asks for: a
-    // rule's env, or else the one it inherited.
+    // entry, applied with the rest below, whose line shows it. Without one,
+    // the log names the renderer the WINE_D3D_CONFIG the process ends up
+    // with asks for: a rule's env, or else the one it inherited.
     let wined3d = resolution.apply_wined3d();
     let config = match resolution.d3d_config() {
         Some(value) => Some((value.to_owned(), resolution.d3d_config_origin())),
@@ -132,7 +125,8 @@ extern "C" fn run() {
     };
     log::line(&wined3d_line(
         wined3d,
-        resolution.origin("wined3d"),
+        &scalar_source(&resolution, "wined3d"),
+        resolution.reset_origin("wined3d"),
         config.as_ref().map(|(value, rule)| (value.as_str(), *rule)),
     ));
 
@@ -142,6 +136,9 @@ extern "C" fn run() {
         &resolution.dll_overrides_from,
         None,
     ));
+    for reset in &resolution.dll_overrides_reset {
+        log::line(&dll_reset_line(reset));
+    }
     apply::dll_overrides(&nt, &resolution.dll_overrides);
     apply_hooks(&nt, &process, &resolution);
     let (cmd, appended) =
@@ -182,58 +179,84 @@ extern "C" fn run() {
 /// with its log line: the DPI awareness, large address awareness, the
 /// `GameController` mouse setting, whether no-execute stays on and which
 /// OpenGL the Mac driver gives.
-fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &compatdb_table::Resolution) {
+fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &Resolution) {
     match resolution.dpi_aware {
-        Some(aware) => apply::dpi_awareness(
-            nt,
-            aware,
-            &source("dpi_aware", resolution.origin("dpi_aware")),
-        ),
-        None => log::line(&unset_line("dpi_aware")),
+        Some(aware) => apply::dpi_awareness(nt, aware, &scalar_source(resolution, "dpi_aware")),
+        None => log::line(&scalar_unset_line(resolution, "dpi_aware")),
     }
     match resolution.large_address_aware {
         Some(laa) => apply::large_address_aware(
             nt,
             laa,
-            &source(
-                "large_address_aware",
-                resolution.origin("large_address_aware"),
-            ),
+            &scalar_source(resolution, "large_address_aware"),
             process.params32.is_some(),
         ),
-        None => log::line(&unset_line("large_address_aware")),
+        None => log::line(&scalar_unset_line(resolution, "large_address_aware")),
     }
     match resolution.gcmouse {
-        Some(on) => apply::gcmouse(nt, on, &source("gcmouse", resolution.origin("gcmouse"))),
-        None => log::line(&unset_line("gcmouse")),
+        Some(on) => apply::gcmouse(nt, on, &scalar_source(resolution, "gcmouse")),
+        None => log::line(&scalar_unset_line(resolution, "gcmouse")),
     }
     match resolution.force_nx {
         Some(on) => apply::force_nx(
             nt,
             on,
-            &source("force_nx", resolution.origin("force_nx")),
+            &scalar_source(resolution, "force_nx"),
             process.params32.is_some(),
         ),
-        None => log::line(&unset_line("force_nx")),
+        None => log::line(&scalar_unset_line(resolution, "force_nx")),
     }
     match resolution.opengl {
-        Some(opengl) => apply::opengl(nt, opengl, &source("opengl", resolution.origin("opengl"))),
-        None => log::line(&unset_line("opengl")),
+        Some(opengl) => apply::opengl(nt, opengl, &scalar_source(resolution, "opengl")),
+        None => log::line(&scalar_unset_line(resolution, "opengl")),
     }
 }
 
-/// Where the setting `key` came from, for the log: its rule (see
-/// [`Origin::label`]), or, when no rule set it, what upstream Wine does.
-fn source(key: &str, origin: Option<&Origin>) -> String {
-    origin.map_or_else(
-        || format!("unset (upstream: {})", upstream(key)),
-        Origin::label,
-    )
+/// Where the setting `key` came from, for the log: its rule's source (see
+/// [`Origin::label`]), or, when no rule set it, what upstream Wine does,
+/// followed by the rule that reset it to `default`, when one did.
+fn source(key: &str, origin: Option<&Origin>, reset: Option<&Origin>) -> String {
+    match (origin, reset) {
+        (Some(origin), _) => origin.label(),
+        (None, Some(reset)) => format!(
+            "unset (upstream: {}), reset by {}",
+            upstream(key),
+            reset.label()
+        ),
+        (None, None) => format!("unset (upstream: {})", upstream(key)),
+    }
+}
+
+/// [`source`] of the scalar setting `key` of `resolution`.
+fn scalar_source(resolution: &Resolution, key: &str) -> String {
+    source(key, resolution.origin(key), resolution.reset_origin(key))
+}
+
+/// The log line of the scalar setting `key` of `resolution`, which no rule
+/// set or the last rule for it reset.
+fn scalar_unset_line(resolution: &Resolution, key: &str) -> String {
+    format!("  {key} = {}", scalar_source(resolution, key))
 }
 
 /// The log line of the setting `key` that no rule set.
 fn unset_line(key: &str) -> String {
-    format!("  {key} = {}", source(key, None))
+    format!("  {key} = {}", source(key, None, None))
+}
+
+/// The log line of a `<module>=default` entry of `dll_overrides`: where it
+/// came from, and whose overrides of the module it removed.
+fn dll_reset_line(reset: &DllOverrideReset) -> String {
+    let what = if reset.removed.is_empty() {
+        String::from("no override to remove")
+    } else {
+        let from: Vec<String> = reset.removed.iter().map(Origin::label).collect();
+        format!("removes the override from {}", from.join("; "))
+    };
+    format!(
+        "  dll_overrides {}=default, {}: {what}",
+        reset.module,
+        reset.by.label()
+    )
 }
 
 /// The log line of a list setting: each entry with where it came from, and,
@@ -261,14 +284,14 @@ fn list_line(key: &str, entries: &[String], from: &[Origin], applied: Option<&[b
 /// did. `has` is the value the process had for the variable, if any.
 fn env_line(step: &EnvStep, has: Option<&str>) -> String {
     let what = match (&step.replaced_by, step.applied, step.value.is_empty()) {
-        (Some(later), _, _) => format!("replaced by {}", later.label()),
+        (Some(later), _, _) => format!("replaced by a later entry from {}", later.label()),
         (None, false, _) => format!(
             "left alone, the process has {}={}",
             step.name,
             has.unwrap_or_default()
         ),
         (None, true, true) => match (&step.removes, has) {
-            (Some(earlier), _) => format!("removes the value of {}", earlier.label()),
+            (Some(earlier), _) => format!("removes the value from {}", earlier.label()),
             (None, Some(_)) => String::from("removed"),
             (None, None) => String::from("not set, nothing to remove"),
         },
@@ -282,8 +305,8 @@ fn env_line(step: &EnvStep, has: Option<&str>) -> String {
     )
 }
 
-/// Log each message about the overrides from [`ENV_VAR`] as a warning: a
-/// field or record that was ignored, or an override that names no rule.
+/// Log each message about the rules from [`ENV_VAR`] as a warning: a field
+/// or a line that was ignored.
 fn log_warnings(messages: &[String]) {
     for m in messages {
         log::line(&format!("  warning: {m}"));
@@ -301,33 +324,31 @@ const fn arch_name(arch: Arch) -> &'static str {
 }
 
 /// The log line naming the wined3d renderer of a process and where it comes
-/// from, in the style of the tree lines. `set` is the renderer a rule set and
-/// `origin` where that came from; `config` is the `WINE_D3D_CONFIG` the
-/// process has otherwise, with the rule whose `env` set it, or `None` for
-/// one it inherited. Without either, the line says what upstream Wine does.
+/// from, like the other settings. `set` is the renderer a rule set and
+/// `source` the [`source`] of the setting; `reset` is the rule that reset it
+/// to `default`, if any; `config` is the `WINE_D3D_CONFIG` the process has
+/// otherwise, with the rule whose `env` set it, or `None` for one it
+/// inherited. Without either, the line says what upstream Wine does.
 fn wined3d_line(
     set: Option<Wined3d>,
-    origin: Option<&Origin>,
+    source: &str,
+    reset: Option<&Origin>,
     config: Option<(&str, Option<&Origin>)>,
 ) -> String {
     let asks = config.and_then(|(value, from)| Wined3d::renderer_in(value).map(|r| (r, from)));
+    let reset = reset.map_or_else(String::new, |by| format!(", reset by {}", by.label()));
     match (set, asks) {
-        (Some(wined3d), _) => format!(
-            "  wined3d = {} (through {}), {}",
-            wined3d.as_str(),
-            Wined3d::CONFIG_VAR,
-            source("wined3d", origin)
+        (Some(wined3d), _) => format!("  wined3d = {}, {source}", wined3d.as_str()),
+        (None, Some((renderer, None))) => format!(
+            "  wined3d = {renderer}, from the inherited {}{reset}",
+            Wined3d::CONFIG_VAR
         ),
-        (None, Some((renderer, from))) => format!(
-            "{}; {} {} asks for {renderer}",
-            unset_line("wined3d"),
+        (None, Some((renderer, Some(from)))) => format!(
+            "  wined3d = {renderer}, from the {} of {}{reset}",
             Wined3d::CONFIG_VAR,
-            from.map_or_else(
-                || String::from("(inherited)"),
-                |from| format!("({})", from.label())
-            )
+            from.label()
         ),
-        (None, None) => unset_line("wined3d"),
+        (None, None) => format!("  wined3d = {source}"),
     }
 }
 
@@ -505,120 +526,185 @@ mod tests {
         }
     }
 
-    /// Where a value came from: rule `rule`, and whether an override merged
-    /// into it set the value.
-    fn origin(rule: &str, changed: bool) -> Origin {
-        Origin {
-            rule: rule.into(),
-            changed,
-        }
+    /// The source of the built-in rule for World of Warcraft, as the log
+    /// names it.
+    fn wow() -> Origin {
+        Origin::BuiltInFor("WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)".into())
     }
 
     #[test]
     fn the_wined3d_line_names_the_renderer() {
-        let unset = format!("  wined3d = unset (upstream: {})", upstream("wined3d"));
-        let game = origin("game", false);
-        // A renderer a rule set wins the line over any config.
+        let unset = source("wined3d", None, None);
+        let line = Origin::Line(2);
+        // A renderer a rule set wins the line over any config, and reads like
+        // any other setting.
         for config in [None, Some(("renderer=vulkan", None))] {
             assert_eq!(
-                wined3d_line(Some(Wined3d::Gl), Some(&game), config),
-                "  wined3d = gl (through WINE_D3D_CONFIG), rule game"
+                wined3d_line(Some(Wined3d::Gl), &line.label(), None, config),
+                "  wined3d = gl, WINE_COMPATDB line 2"
             );
         }
         assert_eq!(
-            wined3d_line(Some(Wined3d::Vulkan), Some(&origin("game", true)), None),
-            "  wined3d = vulkan (through WINE_D3D_CONFIG), rule game, changed by WINE_COMPATDB"
+            wined3d_line(Some(Wined3d::Vulkan), &wow().label(), None, None),
+            "  wined3d = vulkan, built-in for WoW.exe (Blizzard Entertainment, World of \
+             Warcraft, WoW.exe)"
         );
         // Not set: what a config asks for, inherited or from a rule's env,
         // else what upstream Wine does, which may still come from the
         // registry.
         assert_eq!(
-            wined3d_line(None, None, Some(("csmt=0,renderer=vulkan", None))),
-            format!("{unset}; WINE_D3D_CONFIG (inherited) asks for vulkan")
+            wined3d_line(None, &unset, None, Some(("csmt=0,renderer=vulkan", None))),
+            "  wined3d = vulkan, from the inherited WINE_D3D_CONFIG"
         );
-        let mine = origin("my-game", false);
         assert_eq!(
-            wined3d_line(None, None, Some(("renderer=vulkan", Some(&mine)))),
-            format!("{unset}; WINE_D3D_CONFIG (rule my-game) asks for vulkan")
+            wined3d_line(None, &unset, None, Some(("renderer=vulkan", Some(&line)))),
+            "  wined3d = vulkan, from the WINE_D3D_CONFIG of WINE_COMPATDB line 2"
         );
-        let changed = origin("my-game", true);
         assert_eq!(
-            wined3d_line(None, None, Some(("renderer=vulkan", Some(&changed)))),
+            wined3d_line(
+                None,
+                &unset,
+                None,
+                Some(("renderer=vulkan", Some(&Origin::BuiltIn)))
+            ),
+            "  wined3d = vulkan, from the WINE_D3D_CONFIG of built-in"
+        );
+        for config in [None, Some(("", None)), Some(("csmt=0", Some(&line)))] {
+            assert_eq!(
+                wined3d_line(None, &unset, None, config),
+                format!("  wined3d = {unset}")
+            );
+        }
+        // A reset says so, with or without a config that asks for a
+        // renderer.
+        let reset = source("wined3d", None, Some(&line));
+        assert_eq!(
+            wined3d_line(None, &reset, Some(&line), None),
             format!(
-                "{unset}; WINE_D3D_CONFIG (rule my-game, changed by WINE_COMPATDB) asks for \
-                 vulkan"
+                "  wined3d = unset (upstream: {}), reset by WINE_COMPATDB line 2",
+                upstream("wined3d")
             )
         );
-        for config in [None, Some(("", None)), Some(("csmt=0", Some(&mine)))] {
-            assert_eq!(wined3d_line(None, None, config), unset);
-        }
+        assert_eq!(
+            wined3d_line(None, &reset, Some(&line), Some(("renderer=vulkan", None))),
+            "  wined3d = vulkan, from the inherited WINE_D3D_CONFIG, reset by WINE_COMPATDB line 2"
+        );
+        assert_eq!(
+            wined3d_line(
+                None,
+                &reset,
+                Some(&line),
+                Some(("renderer=gl", Some(&Origin::Line(3))))
+            ),
+            "  wined3d = gl, from the WINE_D3D_CONFIG of WINE_COMPATDB line 3, reset by \
+             WINE_COMPATDB line 2"
+        );
     }
 
     #[test]
-    fn the_list_and_env_lines_name_each_rule_and_what_happened() {
+    fn a_reset_scalar_and_a_default_dll_override_say_which_line_reset_them() {
+        assert_eq!(
+            source("dpi_aware", None, Some(&Origin::Line(3))),
+            format!(
+                "unset (upstream: {}), reset by WINE_COMPATDB line 3",
+                upstream("dpi_aware")
+            )
+        );
+        // A value set after the reset is what the line shows.
+        assert_eq!(
+            source("dpi_aware", Some(&Origin::Line(4)), None),
+            "WINE_COMPATDB line 4"
+        );
+        let reset = |removed: Vec<Origin>| DllOverrideReset {
+            module: "mscoree".into(),
+            by: Origin::Line(1),
+            removed,
+        };
+        assert_eq!(
+            dll_reset_line(&reset(vec![Origin::BuiltIn])),
+            "  dll_overrides mscoree=default, WINE_COMPATDB line 1: removes the override from \
+             built-in"
+        );
+        assert_eq!(
+            dll_reset_line(&reset(vec![Origin::BuiltIn, wow()])),
+            "  dll_overrides mscoree=default, WINE_COMPATDB line 1: removes the override from \
+             built-in; built-in for WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)"
+        );
+        assert_eq!(
+            dll_reset_line(&reset(Vec::new())),
+            "  dll_overrides mscoree=default, WINE_COMPATDB line 1: no override to remove"
+        );
+    }
+
+    #[test]
+    fn the_list_and_env_lines_name_the_source_of_each_entry_and_what_happened() {
         assert_eq!(
             list_line("arguments", &[], &[], Some(&[])),
             "  arguments = unset (upstream: the command line the process was started with)"
         );
         let args = ["--in-process-gpu".to_string(), "-x".to_string()];
-        let from = [origin("steam-web-helper", false), origin("game", true)];
+        let from = [wow(), Origin::Line(1)];
         assert_eq!(
             list_line("arguments", &args, &from, Some(&[false, true])),
-            "  arguments = --in-process-gpu (rule steam-web-helper, already present); \
-             -x (rule game, changed by WINE_COMPATDB, appended)"
+            "  arguments = --in-process-gpu (built-in for WoW.exe (Blizzard Entertainment, \
+             World of Warcraft, WoW.exe), already present); -x (WINE_COMPATDB line 1, \
+             appended)"
         );
         assert_eq!(
-            list_line("dll_overrides", &args[..1], &from[..1], None),
-            "  dll_overrides = --in-process-gpu (rule steam-web-helper)"
+            list_line(
+                "dll_overrides",
+                &["mscoree,mshtml=".into()],
+                &[Origin::BuiltIn],
+                None
+            ),
+            "  dll_overrides = mscoree,mshtml= (built-in)"
         );
-        let step = |value: &str, applied, replaced_by: Option<&str>| EnvStep {
+        let step = |value: &str, applied, replaced_by: Option<Origin>| EnvStep {
             name: "FEX_X87REDUCEDPRECISION".into(),
             value: value.into(),
-            origin: origin("fex-x87", false),
+            origin: Origin::BuiltIn,
             applied,
-            replaced_by: replaced_by.map(|rule| origin(rule, false)),
+            replaced_by,
             removes: None,
         };
         assert_eq!(
             env_line(&step("1", true, None), None),
-            "  env FEX_X87REDUCEDPRECISION=1, rule fex-x87: set"
+            "  env FEX_X87REDUCEDPRECISION=1, built-in: set"
         );
         assert_eq!(
             env_line(&step("", true, None), Some("0")),
-            "  env FEX_X87REDUCEDPRECISION=, rule fex-x87: removed"
+            "  env FEX_X87REDUCEDPRECISION=, built-in: removed"
         );
         assert_eq!(
             env_line(&step("", true, None), None),
-            "  env FEX_X87REDUCEDPRECISION=, rule fex-x87: not set, nothing to remove"
+            "  env FEX_X87REDUCEDPRECISION=, built-in: not set, nothing to remove"
         );
         // A removal after an earlier entry set the variable undoes that one,
         // whether or not the process had it.
         let undo = EnvStep {
-            removes: Some(origin("game", true)),
+            origin: Origin::Line(3),
+            removes: Some(Origin::BuiltIn),
             ..step("", true, None)
         };
         assert_eq!(
             env_line(&undo, None),
-            "  env FEX_X87REDUCEDPRECISION=, rule fex-x87: removes the value of rule game, \
-             changed by WINE_COMPATDB"
+            "  env FEX_X87REDUCEDPRECISION=, WINE_COMPATDB line 3: removes the value from \
+             built-in"
         );
         assert_eq!(
             env_line(&step("1", false, None), Some("0")),
-            "  env FEX_X87REDUCEDPRECISION=1, rule fex-x87: left alone, the process has \
+            "  env FEX_X87REDUCEDPRECISION=1, built-in: left alone, the process has \
              FEX_X87REDUCEDPRECISION=0"
         );
         assert_eq!(
-            env_line(&step("1", true, Some("my-game")), None),
-            "  env FEX_X87REDUCEDPRECISION=1, rule fex-x87: replaced by rule my-game"
+            env_line(&step("1", true, Some(Origin::Line(2))), None),
+            "  env FEX_X87REDUCEDPRECISION=1, built-in: replaced by a later entry from \
+             WINE_COMPATDB line 2"
         );
-        let by_override = EnvStep {
-            replaced_by: Some(origin("fex-x87", true)),
-            ..step("1", true, None)
-        };
         assert_eq!(
-            env_line(&by_override, None),
-            "  env FEX_X87REDUCEDPRECISION=1, rule fex-x87: replaced by rule fex-x87, changed by \
-             WINE_COMPATDB"
+            env_line(&step("1", true, Some(wow())), None),
+            "  env FEX_X87REDUCEDPRECISION=1, built-in: replaced by a later entry from \
+             built-in for WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)"
         );
     }
 
@@ -637,8 +723,12 @@ mod tests {
             unset_line("opengl"),
             "  opengl = unset (upstream: Apple's OpenGL)"
         );
-        assert_eq!(source("dxgi", None), "unset (upstream: wined3d)");
-        assert_eq!(source("dxgi", Some(&origin("dxmt", false))), "rule dxmt");
+        assert_eq!(source("dxgi", None, None), "unset (upstream: wined3d)");
+        assert_eq!(source("dxgi", Some(&Origin::BuiltIn), None), "built-in");
+        assert_eq!(
+            source("dxgi", Some(&Origin::Line(4)), None),
+            "WINE_COMPATDB line 4"
+        );
         for (key, _) in compatdb_table::UPSTREAM {
             assert!(!unset_line(key).contains("unknown"), "{key}");
         }

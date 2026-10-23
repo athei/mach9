@@ -663,7 +663,7 @@ check_rules_read() {
 }
 
 # check_default_trees <log>: exit unless compatdb.so reported in <log> the
-# tree the built-in dxmt and mtld3d rules give every process, the first of
+# tree the built-in rules for dxgi and d3d9 give every process, the first of
 # each family's list in profile.sh, which is the same for every arch. The
 # "(from ...)" lines only appear once it found and prepended them.
 check_default_trees() {
@@ -724,7 +724,7 @@ smoke_test() {
     if [ "$BUNDLE_EGL" -eq 0 ]; then
         echo "  This bundle has no EGL: OpenGL is Apple's only."
     fi
-    # compatdb's built-in opengl-egl rule asks winemac.drv for Mesa's EGL,
+    # compatdb's built-in opengl rule asks winemac.drv for Mesa's EGL,
     # which gives no OpenGL without Zink. There, the runs that need OpenGL
     # give their program a WINE_COMPATDB rule with opengl=cgl, which wins
     # over the built-in rule for that program, and expect Apple's renderer
@@ -806,7 +806,7 @@ smoke_test() {
     # the test does not depend on what the prefix happens to contain. Each
     # prints a marker naming the architecture it was compiled for, then loads
     # the DLLs it is given and says whether all of them loaded. Its compatdb
-    # lines say which trees it got: the ones the built-in dxmt and mtld3d
+    # lines say which trees it got: the ones the built-in dxgi and d3d9
     # rules give every arch (compatdb/src/builtin.rs). An x86
     # program loads dxgi.dll and d3d9.dll. A native ARM64 program also loads
     # winemetal.dll and mtld3d.dll, which only the dxmt and mtld3d trees
@@ -914,7 +914,7 @@ check_wined3d_device() {
     local arch exe log want api flags rule tree
     for arch in x86_64 i686; do
         exe="$TMP_DIR/wined3d-$arch.exe"
-        rule="name=smoke;exe=$(basename "$exe")$GL_SETTING"
+        rule="exe=$(basename "$exe")$GL_SETTING"
         # The compatdb line each run must show for the tree the program's
         # rule asks for; none for d3d8, which no tree decides.
         if [ "$arch" = x86_64 ]; then
@@ -1299,7 +1299,7 @@ check_egl_host() {
 # opens a window and creates a legacy, a 4.x core and a compatibility
 # context, each of which must clear, read back and swap, and whose renderer
 # must contain the string it is given. <env-command> drops the caller's
-# WINE_COMPATDB, so compatdb's built-in opengl-egl rule decides: it asks
+# WINE_COMPATDB, so compatdb's built-in opengl rule decides: it asks
 # winemac.drv for Mesa's EGL, which runs on Zink when the bundle has EGL and
 # a GPU supports the Metal 4 family (ZINK_GL, see bundle_egl), and gives no
 # OpenGL at all otherwise, since winemac.drv does not fall back from EGL.
@@ -1323,7 +1323,7 @@ check_wgl_runs() {
         fi
         if [ "$ACCEL_GL" -eq 1 ]; then
             run_wgl "$arch" "$exe" Apple cgl "$@" \
-                WINE_COMPATDB="name=smoke;exe=$(basename "$exe");opengl=cgl"
+                WINE_COMPATDB="exe=$(basename "$exe");opengl=cgl"
         fi
     done
     if [ "$ACCEL_GL" -eq 0 ]; then
@@ -1333,7 +1333,7 @@ check_wgl_runs() {
 
 # check_wgl_no_egl <arch> <exe> <env-command>...: on a Mac without Zink, run
 # the wgl.exe <exe> for <arch> under <env-command> with nothing chosen, and
-# exit unless compatdb's built-in opengl-egl rule handed opengl=egl to it,
+# exit unless compatdb's built-in opengl rule handed opengl=egl to it,
 # winemac.drv said that EGL did not start and OpenGL is disabled, and
 # wgl.exe found no pixel format (exit status 2, FAIL_PIXEL_FORMAT in
 # smoke/wgl.c) after its window came up. Any other failure, the window
@@ -1349,7 +1349,7 @@ check_wgl_no_egl() {
     run_limited 120 "$log" "$@" WINEDEBUG=-all,err+winediag "$WINE_DIR/bin/wine" "$exe"
     if [ "$RUN_STATUS" -eq 142 ]; then
         echo "Error: wgl.exe for $arch with nothing chosen did not exit within 120 seconds"
-    elif ! grep -q "compatdb: .*opengl = egl, rule opengl-egl$" "$log"; then
+    elif ! grep -q "compatdb: .*opengl = egl, built-in$" "$log"; then
         echo "Error: compatdb.so did not hand opengl=egl to wgl.exe for $arch"
     elif ! grep -q "err:winediag:.*compatdb asks for Mesa's EGL, but .*; OpenGL is disabled" "$log"; then
         echo "Error: winemac.drv did not say that Mesa's EGL failed and OpenGL is disabled in"
@@ -1386,9 +1386,9 @@ run_wgl() {
     fi
     smoke_check "wgl.exe for $arch ($name)" 120 "$log"
     case "$name" in
-        default) line="compatdb: .*opengl = egl, rule opengl-egl$" ;;
+        default) line="compatdb: .*opengl = egl, built-in$" ;;
         cgl)
-            line="compatdb: .*opengl = cgl, rule smoke$"
+            line="compatdb: .*opengl = cgl, WINE_COMPATDB line 1$"
             check_rules_read "wgl.exe for $arch ($name)" "$log"
             ;;
     esac
@@ -1479,7 +1479,7 @@ check_freetype() {
 }
 
 # check_egl_used <what> <log>: on a Mac with Zink (ZINK_GL), for a run that
-# gets the built-in opengl-egl rule, exit with the log unless compatdb.so
+# gets the built-in opengl rule, exit with the log unless compatdb.so
 # handed over opengl=egl and winemac.drv did not say that Mesa's EGL failed
 # to start. winemac.drv does not fall back to Apple's OpenGL from EGL, so a
 # run whose EGL failed gets no OpenGL, and the failing context alone does not
@@ -1494,7 +1494,7 @@ check_egl_used() {
         smoke_stop
         exit 1
     fi
-    if ! grep -q "compatdb: .*opengl = egl, rule opengl-egl$" "$2"; then
+    if ! grep -q "compatdb: .*opengl = egl, built-in$" "$2"; then
         echo "Error: compatdb.so did not hand opengl=egl to $1"
         cat "$2"
         smoke_stop
@@ -1539,11 +1539,13 @@ check_tree_loads() {
             time_mark "smoke: $arch on $family/$impl"
             log="$TMP_DIR/trees-$arch-$family-$impl.log"
             run_limited 120 "$log" "$@" \
-                WINE_COMPATDB="name=smoke;exe=$(basename "$exe");$family=$impl" \
+                WINE_COMPATDB="exe=$(basename "$exe");$family=$impl" \
                 "$WINE_DIR/bin/wine" "$exe" "${names[@]}"
             smoke_check "the $arch program on the $family/$impl tree" 120 "$log"
             check_rules_read "the $arch program on the $family/$impl tree" "$log"
-            for want in "compatdb: .*$family = $impl (from" \
+            # The source must be the run's rule, so a run that asks for the
+            # tree a built-in rule gives anyway still shows the rule applied.
+            for want in "compatdb: .*$family = $impl (from .*), WINE_COMPATDB line 1\$" \
                         "wine-build smoke test: $arch loads ${names[*]}"; do
                 if ! grep -q "$want" "$log"; then
                     echo "Error: the $arch program on the $family/$impl tree did not print '$want'"
@@ -1582,7 +1584,7 @@ check_no_d3d12() {
     log="$TMP_DIR/trees-$arch-no-d3d12-${settings%%;*}.log"
     log="${log//=/-}"
     run_limited 120 "$log" "$@" \
-        WINE_COMPATDB="name=smoke;exe=$(basename "$exe");$settings" \
+        WINE_COMPATDB="exe=$(basename "$exe");$settings" \
         "$WINE_DIR/bin/wine" "$exe" dxgi.dll d3d12.dll
     smoke_check "the $arch program loading d3d12.dll ($label)" 120 "$log"
     check_rules_read "the $arch program loading d3d12.dll ($label)" "$log"
@@ -1705,7 +1707,7 @@ check_vulkan() {
 }
 
 # check_compat_hooks: exit unless ntdll exports the hooks compatdb.so hands
-# the settings of its built-in force-nx and opengl-egl rules to:
+# the settings of its built-in force_nx and opengl rules to:
 # set_compat_force_nx and set_compat_opengl. Without them compatdb.so only
 # logs that a hook is missing, and every 32-bit program without NX_COMPAT
 # runs with no-execute off and every process gets Apple's OpenGL. Run for a
