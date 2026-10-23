@@ -98,7 +98,7 @@ of the same name; the defaults are set in
 | Variable | What it is |
 |----------|------------|
 | `WINE_SRC` | The Wine source, a checkout of athei/wine |
-| `BUILD_DIR` | The Wine build tree; with `--compatdb-only` only cargo's target directory, `$BUILD_DIR/compatdb` |
+| `BUILD_DIR` | The Wine build tree, and under `$BUILD_DIR/compatdb` cargo's target directory for `compatdb.so`, one per checkout of this repository (`COMPATDB_TARGET` in [`bundle-wine.sh`](../bin/bundle-wine.sh)), so checkouts that share a Wine build do not share their `compatdb.so`; with `--compatdb-only` only that target directory |
 | `X86LIBS_BUILD_DIR` | The x86 tree for the x86_64 archives and the [graphics tests](#graphics-tests) of the SDK |
 | `WINE_SDK_DIR` | The [Wine SDK](#wine-sdk) |
 | `FEX_REPO`, `FEX_SRC` | FEX repository and the local clone `build-fex.sh` checks out |

@@ -79,7 +79,15 @@ WINE_DIR="$DIST_DIR/wine"
 # never in it.
 SYMBOLS_DIR="$DIST_DIR/wine-symbols"
 unixdir="$WINE_DIR/lib/wine/$UNIX_DIR"
-COMPATDB_BUILD="$BUILD_DIR/compatdb/$RUST_TARGET/release/libcompatdb.dylib"
+# cargo's target directory for compatdb/: one per checkout of this
+# repository, under BUILD_DIR/compatdb, named after the start of the
+# SHA-256 of REPO_DIR. cargo identifies a workspace's own packages by their
+# path inside the workspace, so two checkouts sharing a target directory
+# share their build: cargo takes a build that another checkout made as
+# current while the sources it reads are older than it, and the bundle
+# would get that checkout's compatdb.so.
+COMPATDB_TARGET="$BUILD_DIR/compatdb/$(printf '%s' "$REPO_DIR" | shasum -a 256 | cut -c1-12)"
+COMPATDB_BUILD="$COMPATDB_TARGET/$RUST_TARGET/release/libcompatdb.dylib"
 
 TMP_DIR=$(mktemp -d)
 cleanup() {
@@ -355,7 +363,7 @@ build_compatdb() {
         echo "(rustup target add $RUST_TARGET)"
         exit 1
     fi
-    (cd "$REPO_DIR/compatdb" && CARGO_TARGET_DIR="$BUILD_DIR/compatdb" \
+    (cd "$REPO_DIR/compatdb" && CARGO_TARGET_DIR="$COMPATDB_TARGET" \
         cargo build --quiet --release --locked --manifest-path "$REPO_DIR/compatdb/Cargo.toml" \
             -p compatdb --target "$RUST_TARGET")
     echo "    $UNIX_DIR/compatdb.so"
