@@ -3,8 +3,8 @@ name: Release
 # Builds the arm64 bundle on a hosted runner, from the Wine branch in
 # pins/wine-src.ref and the pins of this commit, and signs its loader with
 # the identity in the release environment's secrets. An arm64-* tag attaches
-# the bundle and its symbols to a draft release of that tag. A ci-* tag or a
-# manual run builds the same and keeps the tarballs as a workflow artifact.
+# the bundle and its symbols to a draft release of that tag. A manual run
+# builds and bundles the same and publishes nothing.
 #
 # The logic lives in bin/ and bin/ci/, which also run on a Mac. The caches
 # a run on a tag writes serve only later runs on that tag; a manual run on
@@ -12,7 +12,7 @@ name: Release
 
 on:
   push:
-    tags: ['arm64-*', 'ci-*']
+    tags: ['arm64-*']
   workflow_dispatch:
 
 permissions:
@@ -287,21 +287,11 @@ jobs:
       - name: Bundle
         run: scripts/bin/bundle-wine.sh --strict-floor --symbols --yes
 
-      # A tag names the build; a manual run has none, so it is named after
-      # the scripts commit.
-      - name: Name the build
-        id: name
-        run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            echo "name=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=ci-$(git -C scripts rev-parse --short=11 HEAD)" >> "$GITHUB_OUTPUT"
-          fi
-
+      # Only for a release: packing takes minutes and nothing else uses the
+      # tarballs.
       - name: Package
-        env:
-          NAME: ${{ steps.name.outputs.name }}
-        run: scripts/bin/ci/package.sh "$NAME" "$RUNNER_TEMP/release"
+        if: startsWith(github.ref, 'refs/tags/arm64-')
+        run: scripts/bin/ci/package.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"
 
       - name: Create draft release
         if: startsWith(github.ref, 'refs/tags/arm64-')
@@ -316,15 +306,6 @@ jobs:
             --notes-file "$RUNNER_TEMP/release/notes.md" \
             "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64.tar.xz" \
             "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64-symbols.tar.xz"
-
-      - name: Keep the tarballs
-        if: ${{ !startsWith(github.ref, 'refs/tags/arm64-') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: wine-${{ steps.name.outputs.name }}-macos-arm64
-          path: ${{ runner.temp }}/release
-          retention-days: 7
-          compression-level: 0
 
       - name: Remove the signing identity
         if: always()

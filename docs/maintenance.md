@@ -138,7 +138,6 @@ releases. Their steps call the build and bundle scripts and the scripts in
 | Tag | Workflow | Result |
 |-----|----------|--------|
 | `arm64-<Wine version>-<n>` | [`release.yml`](../.github/workflows/release.yml) | A draft release of the tag with the bundle and its symbols |
-| `ci-*` | [`release.yml`](../.github/workflows/release.yml) | The same build, kept as a workflow artifact for a few days; no release |
 | `compatdb-*` | [`release-compatdb.yml`](../.github/workflows/release-compatdb.yml) | A draft release with the bundle of an `arm64-*` release, `compatdb.so` replaced |
 
 - `release.yml` builds on a hosted runner of the floor's major macOS
@@ -146,8 +145,8 @@ releases. Their steps call the build and bundle scripts and the scripts in
   [`wine-src.ref`](../pins/wine-src.ref) names and the pins of the tagged
   commit, and runs the bundle step with `--strict-floor` and `--symbols`.
   The runner starts without build trees; what it takes from earlier runs is
-  in [other caches](#other-caches). A manual run of it builds the same as a
-  `ci-*` tag.
+  in [other caches](#other-caches). A manual run of it builds and bundles
+  the same and publishes nothing.
 - The first lines of a release's notes name what it was built from, with
   the Homebrew formula and version of each library the bundle carries
   (`package.sh` in [`bin/ci/`](../bin/ci)). The list of changes is added by
@@ -262,9 +261,8 @@ keychain of its own for the bundle step and deletes that keychain at the end
 of the job.
 
 - Create the environment `release` in the repository settings, and limit its
-  deployments to the tag patterns `arm64-*` and `ci-*` and the branch `main`,
-  from which the manual runs start. A run from any other ref cannot use the
-  secrets.
+  deployments to the tag pattern `arm64-*` and the branch `main`, from which
+  the manual runs start. A run from any other ref cannot use the secrets.
 - Export the identity: in Keychain Access, under My Certificates, select the
   "Developer ID Application" certificate of the profile's team with its
   private key (it must be one of the certificates the profile lists, which
