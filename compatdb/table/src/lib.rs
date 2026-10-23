@@ -521,6 +521,11 @@ pub struct Rule {
     pub dll_overrides: Vec<String>,
     /// Text appended to the command line, unless already present.
     pub arguments: Vec<String>,
+    /// When set, the arguments that replace the list the rules folded before
+    /// this one accumulated (see [`Table::resolve`]); `Some` with no entries
+    /// clears it. This rule's own [`Rule::arguments`] and those of the rules
+    /// folded after it still append.
+    pub arguments_override: Option<Vec<String>>,
     /// Environment entries; an empty value removes the variable. The library
     /// sets them in the process's environment block and unix environment
     /// when it loads, before any PE code runs. The entries of a built-in
@@ -617,6 +622,7 @@ impl Default for Rule {
             resets: Vec::new(),
             dll_overrides: Vec::new(),
             arguments: Vec::new(),
+            arguments_override: None,
             env: Vec::new(),
             debug_channels: Vec::new(),
             source: Source::BuiltIn,
@@ -735,6 +741,9 @@ pub struct Resolution {
     /// Where each entry of [`Resolution::arguments`] came from, at the same
     /// index.
     pub arguments_from: Vec<Origin>,
+    /// Each `arguments_override` that dropped entries from the argument
+    /// list, in fold order.
+    pub arguments_dropped: Vec<ArgumentsDropped>,
     pub env: Vec<(String, String)>,
     /// Where each entry of [`Resolution::env`] came from, at the same index.
     pub env_from: Vec<EnvFrom>,
@@ -795,6 +804,16 @@ impl Origin {
             Self::Line(n) => format!("{ENV_VAR} line {n}"),
         }
     }
+}
+
+/// An `arguments_override` that dropped the arguments the rules folded
+/// before it had accumulated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArgumentsDropped {
+    /// The rule whose `arguments_override` it is.
+    pub by: Origin,
+    /// The arguments it dropped, each with where it came from.
+    pub entries: Vec<(String, Origin)>,
 }
 
 /// Where an env entry of a [`Resolution`] came from.
@@ -977,9 +996,26 @@ impl Resolution {
         }
     }
 
-    /// Fold the arguments of `rule` into the list: they append.
+    /// Fold the arguments of `rule` into the list: its `arguments_override`,
+    /// when set, replaces what the rules folded before it accumulated, and
+    /// its `arguments` append.
     fn fold_arguments(&mut self, rule: &Rule) {
         let origin = Origin::of(rule);
+        if let Some(over) = &rule.arguments_override {
+            let entries: Vec<(String, Origin)> = std::mem::take(&mut self.arguments)
+                .into_iter()
+                .zip(std::mem::take(&mut self.arguments_from))
+                .collect();
+            if !entries.is_empty() {
+                self.arguments_dropped.push(ArgumentsDropped {
+                    by: origin.clone(),
+                    entries,
+                });
+            }
+            self.arguments.extend(over.iter().cloned());
+            self.arguments_from
+                .extend(over.iter().map(|_| origin.clone()));
+        }
         self.arguments.extend(rule.arguments.iter().cloned());
         self.arguments_from
             .extend(rule.arguments.iter().map(|_| origin.clone()));
@@ -1052,9 +1088,12 @@ impl Table {
     /// field ends up holding the value of the last rule that sets it: in a
     /// layer, a rule naming a process beats a launch-wide default. The lists
     /// accumulate across every rule that matched. The exceptions are a
-    /// scalar set to `default` (see [`Rule::resets`]), and a `dll_overrides`
-    /// entry with the order `default`, which takes its modules out of the
-    /// entries before it.
+    /// rule's `arguments_override`, which replaces the arguments the rules
+    /// folded before it accumulated (the `arguments` of the rule itself and
+    /// of the rules folded after it append to it), a scalar set to
+    /// `default` (see [`Rule::resets`]), and a `dll_overrides` entry with
+    /// the order `default`, which takes its modules out of the entries
+    /// before it.
     ///
     /// The sort has to stay stable: rules of equal layer and specificity
     /// fold in table order, which is what lets a launcher's `*` rule,
@@ -1394,6 +1433,13 @@ fn rule_to_record(rule: &Rule) -> String {
     for over in &rule.dll_overrides {
         fields.push(field("dll_overrides", over));
     }
+    match &rule.arguments_override {
+        // An override without entries clears the list, so it travels as the
+        // key with an empty value.
+        Some(texts) if texts.is_empty() => fields.push(String::from("arguments_override=")),
+        Some(texts) => fields.extend(texts.iter().map(|t| field("arguments_override", t))),
+        None => {}
+    }
     for text in &rule.arguments {
         fields.push(field("arguments", text));
     }
@@ -1492,6 +1538,14 @@ fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), String> {
         })?,
         "dll_overrides" => rule.dll_overrides.push(decode(value)),
         "arguments" => rule.arguments.push(decode(value)),
+        // Present at all, the override is set; an empty value adds no entry,
+        // so `arguments_override=` alone clears the list.
+        "arguments_override" => {
+            let texts = rule.arguments_override.get_or_insert_default();
+            if !value.is_empty() {
+                texts.push(decode(value));
+            }
+        }
         "env" => {
             let (name, val) = value.split_once('=').unwrap_or((value, ""));
             rule.env.push((decode(name), decode(val)));
@@ -3226,16 +3280,20 @@ mod tests {
             resets: Vec::new(),
             dll_overrides: vec!["a=".into()],
             arguments: vec!["-a".into()],
+            arguments_override: Some(vec!["-b".into()]),
             env: vec![("A".into(), "1".into())],
             debug_channels: Vec::new(),
             source: Source::BuiltIn,
         };
         let matchers = ["exe", "company", "product", "original_filename"];
+        // `arguments_override` is a way of setting `arguments`, which the
+        // log prints, so it has no line, and no entry, of its own.
+        let modifiers = ["arguments_override"];
         let record = rule_to_record(&rule);
         let keys: Vec<&str> = record
             .split(';')
             .filter_map(|field| field.split_once('=').map(|(key, _)| key))
-            .filter(|key| !matchers.contains(key))
+            .filter(|key| !matchers.contains(key) && !modifiers.contains(key))
             .collect();
         for key in &keys {
             assert_ne!(upstream(key), "unknown", "{key} has no UPSTREAM entry");
@@ -3319,6 +3377,204 @@ mod tests {
                 .resolve("Launcher.exe", &VersionInfo::default())
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn arguments_override_round_trips_and_an_empty_one_clears() {
+        let table = Table {
+            rules: vec![
+                Rule {
+                    exe: "a.exe".into(),
+                    arguments_override: Some(vec!["-x".into(), "-y z".into()]),
+                    arguments: vec!["-w".into()],
+                    ..Rule::default()
+                },
+                Rule {
+                    exe: "b.exe".into(),
+                    arguments_override: Some(Vec::new()),
+                    ..Rule::default()
+                },
+                Rule {
+                    exe: "c.exe".into(),
+                    ..Rule::default()
+                },
+            ],
+        };
+        let text = table.to_env_value();
+        assert_eq!(
+            text,
+            "exe=a.exe;arguments_override=-x;arguments_override=-y z;arguments=-w\n\
+             exe=b.exe;arguments_override=\n\
+             exe=c.exe"
+        );
+        let (parsed, diagnostics) = Table::parse(&text);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(parsed, as_sent(&table));
+        // An empty value among others adds no entry.
+        let (parsed, _) = Table::parse("exe=a.exe;arguments_override=;arguments_override=-x");
+        assert_eq!(
+            parsed.rules.first().map(|r| r.arguments_override.clone()),
+            Some(Some(vec!["-x".to_string()]))
+        );
+    }
+
+    /// The built-in-looking rules of the `arguments_override` tests: a `*`
+    /// rule and a rule for `game.exe`, each with one argument.
+    fn argument_rules() -> Table {
+        Table {
+            rules: vec![
+                Rule {
+                    exe: ANY_EXE.into(),
+                    arguments: vec!["-all".into()],
+                    ..Rule::default()
+                },
+                Rule {
+                    exe: "game.exe".into(),
+                    company: Some("Acme".into()),
+                    arguments: vec!["-game".into()],
+                    ..Rule::default()
+                },
+            ],
+        }
+    }
+
+    /// The version resource the `game.exe` rule of [`argument_rules`] pins.
+    fn acme() -> VersionInfo {
+        VersionInfo {
+            company: "Acme".into(),
+            ..VersionInfo::default()
+        }
+    }
+
+    #[test]
+    fn arguments_override_replaces_what_the_rules_before_it_accumulated() {
+        // A rule for the game, folded after both built-in rules, replaces
+        // both of their arguments with its own.
+        let table = with_lines(
+            &argument_rules(),
+            "exe=game.exe;company=Acme;arguments_override=-mine",
+        );
+        let r = table.resolve("game.exe", &acme());
+        assert_eq!(r.arguments, ["-mine"]);
+        assert_eq!(r.arguments_from, [Origin::Line(1)]);
+        let builtin_game = Origin::BuiltInFor("game.exe (Acme)".into());
+        assert_eq!(
+            r.arguments_dropped,
+            [ArgumentsDropped {
+                by: Origin::Line(1),
+                entries: vec![
+                    ("-all".into(), Origin::BuiltIn),
+                    ("-game".into(), builtin_game),
+                ],
+            }]
+        );
+        // Another process keeps the `*` rule's argument.
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.arguments, ["-all"]);
+        assert_eq!(other.arguments_dropped, []);
+    }
+
+    #[test]
+    fn an_empty_arguments_override_clears_the_list() {
+        let table = with_lines(&argument_rules(), "exe=*;arguments_override=");
+        // It folds after every built-in rule, so it drops the arguments of
+        // both, the rule for the game included.
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.arguments, [] as [String; 0]);
+        assert_eq!(
+            other.arguments_dropped,
+            [ArgumentsDropped {
+                by: Origin::Line(1),
+                entries: vec![("-all".into(), Origin::BuiltIn)],
+            }]
+        );
+        let game = table.resolve("game.exe", &acme());
+        assert_eq!(game.arguments, [] as [String; 0]);
+        // An override that finds nothing to drop is not reported.
+        let table = with_lines(&Table::default(), "exe=*;arguments_override=");
+        let r = table.resolve("x.exe", &VersionInfo::default());
+        assert_eq!(r.arguments_dropped, []);
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn arguments_after_an_override_still_append() {
+        // The rule's own `arguments` come after its override, and so do
+        // those of the rules folded after it: a later line of the same tier
+        // and a more specific line.
+        let table = with_lines(
+            &argument_rules(),
+            "exe=game.exe;arguments=-specific\nexe=*;arguments_override=-new;arguments=-own\n\
+             exe=*;arguments=-later",
+        );
+        let game = table.resolve("game.exe", &acme());
+        assert_eq!(game.arguments, ["-new", "-own", "-later", "-specific"]);
+        assert_eq!(
+            game.arguments_from,
+            [
+                Origin::Line(2),
+                Origin::Line(2),
+                Origin::Line(3),
+                Origin::Line(1)
+            ]
+        );
+        // A later override in the same tier drops the earlier one's
+        // arguments too, and each drop is reported on its own.
+        let table = with_lines(
+            &argument_rules(),
+            "exe=*;arguments_override=-first\nexe=*;arguments_override=-second",
+        );
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.arguments, ["-second"]);
+        assert_eq!(
+            other.arguments_dropped,
+            [
+                ArgumentsDropped {
+                    by: Origin::Line(1),
+                    entries: vec![("-all".into(), Origin::BuiltIn)],
+                },
+                ArgumentsDropped {
+                    by: Origin::Line(2),
+                    entries: vec![("-first".into(), Origin::Line(1))],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_less_specific_override_cannot_drop_a_more_specific_lines_arguments() {
+        // Within WINE_COMPATDB tiers still fold least specific first, so a
+        // `*` override runs before a line for the game and leaves its
+        // argument, whatever the line order.
+        for text in [
+            "exe=game.exe;arguments=-mine\nexe=*;arguments_override=-x",
+            "exe=*;arguments_override=-x\nexe=game.exe;arguments=-mine",
+        ] {
+            let table = with_lines(&argument_rules(), text);
+            let game = table.resolve("game.exe", &acme());
+            assert_eq!(game.arguments, ["-x", "-mine"], "{text}");
+        }
+        // A basename line without a fingerprint still drops the built-in
+        // rule's argument, since every line folds after every built-in rule.
+        let table = with_lines(&argument_rules(), "exe=game.exe;arguments_override=");
+        let game = table.resolve("game.exe", &acme());
+        assert_eq!(game.arguments, [] as [String; 0]);
+    }
+
+    #[test]
+    fn an_overridden_list_is_appended_unless_already_present() -> TestResult {
+        let table = with_lines(
+            &argument_rules(),
+            "exe=game.exe;company=Acme;arguments_override=-a;arguments_override=-b",
+        );
+        let r = table.resolve("game.exe", &acme());
+        let (out, appended) = append_cmdline_each(&u16s("game.exe -b"), &r.arguments);
+        assert_eq!(
+            String::from_utf16_lossy(&out.ok_or("unchanged")?),
+            "game.exe -b -a"
+        );
+        assert_eq!(appended, [true, false]);
+        Ok(())
     }
 
     #[test]

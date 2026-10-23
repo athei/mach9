@@ -276,7 +276,9 @@ fn programs() -> Vec<Rule> {
 
 #[cfg(test)]
 mod tests {
-    use compatdb_table::{DllOverrideReset, Origin, Resolution, Source, VersionInfo, Wined3d};
+    use compatdb_table::{
+        ArgumentsDropped, DllOverrideReset, Origin, Resolution, Source, VersionInfo, Wined3d,
+    };
 
     use super::*;
 
@@ -1027,6 +1029,36 @@ mod tests {
             [Origin::BuiltIn, Origin::Line(1)]
         );
         assert_eq!(table.duplicate_matchers(), []);
+    }
+
+    #[test]
+    fn an_arguments_override_drops_a_builtin_helpers_switch() -> TestResult {
+        let table = table();
+        let steam = rule(&table, "steamwebhelper.exe")?;
+        let version = version_of(steam);
+        let from = Origin::BuiltInFor(steam.matchers());
+        // A rule from WINE_COMPATDB folds after the helper's, with or without
+        // a fingerprint, and replaces its switch.
+        for (text, want) in [
+            (
+                "exe=steamwebhelper.exe;company=Valve;arguments_override=",
+                vec![],
+            ),
+            ("exe=steamwebhelper.exe;arguments_override=-x", vec!["-x"]),
+        ] {
+            let table = with_lines(text);
+            let helper = table.resolve("steamwebhelper.exe", &version);
+            assert_eq!(helper.arguments, want, "{text}");
+            assert_eq!(
+                helper.arguments_dropped,
+                [ArgumentsDropped {
+                    by: Origin::Line(1),
+                    entries: vec![("--in-process-gpu".into(), from.clone())],
+                }],
+                "{text}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

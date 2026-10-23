@@ -27,6 +27,7 @@ A setting a rule leaves unset is no opinion: a rule folded earlier decides
 | `gcmouse` | `true`, `false` | `true`: the Mac driver takes the mouse movement of raw input (`WM_INPUT`) and DirectInput from GameController's `GCMouse`, in the device's own counts, so mouselook is linear. `false`: that movement is the cursor's, which macOS accelerates and scales for retina. Unset: the same as `false`, as in upstream Wine ([GameController mice](#gamecontroller-mice)) | At load, read by winemac.drv |
 | `force_nx` | `true`, `false` | `true`: no-execute stays permanently on in a 32-bit process, even when its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine turns it off, and the process cannot turn it off. `false` is the same as unset: Wine's behaviour. No effect on 64-bit, which always has no-execute on. The value is the process's own; the programs it starts get their own rules' value ([no-execute](#no-execute)) | At load, read by ntdll |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
+| `arguments_override` | text, repeatable; an empty value alone clears | Replaces the `arguments` that the rules folded before this one gathered with its own values, which then go in the same way. The rule's own `arguments` and those of the rules folded after it still append ([merging](#merging)) | At load, as `arguments` |
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it. An entry of a built-in `*` rule is a default and leaves a variable the process already has alone; every other entry replaces it ([environment defaults](#environment-defaults)) | At load |
 
 The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
@@ -36,7 +37,8 @@ Each key above that holds one value, `dxgi`, `d3d9`, `wined3d`, `opengl`,
 `dpi_aware`, `large_address_aware`, `gcmouse` and `force_nx`, also takes
 `default`, in lower case: the setting is unset again from that rule on, so
 upstream Wine decides, unless a rule folded later sets it. `env` and
-`arguments` take no `default`: an empty `env` value removes the variable.
+`arguments` take no `default`: an empty `env` value removes the variable,
+and `arguments_override=` clears the arguments.
 
 ## Matching
 
@@ -84,6 +86,12 @@ upstream Wine decides, unless a rule folded later sets it. `env` and
   case-insensitive too, unlike a scalar's: an order such as `Default` would
   otherwise reach ntdll, which reads an order without `n` or `b` as
   disabled.
+- `arguments_override` replaces the `arguments` the rules folded before it
+  gathered, the built-in rules and the less specific tiers and earlier
+  lines of `WINE_COMPATDB`, with its own values, and an empty
+  `arguments_override=` clears them. The rule's own `arguments` and those
+  of every rule folded after it still append. The final list goes in as
+  `arguments` does, each entry only where the command line lacks it.
 
 ## Built-in rules
 
@@ -232,16 +240,20 @@ executable.
 | Give every process Apple's OpenGL | `exe=*;opengl=cgl` |
 | Put wined3d on Vulkan for one game | `exe=Game.exe;wined3d=vulkan` |
 | Leave one game to what upstream Wine does for a setting | `exe=Game.exe;<key>=default` |
+| Replace the arguments the rules give one game with your own | `exe=Game.exe;arguments_override=-windowed` |
+| Give one game no arguments from any rule | `exe=Game.exe;arguments_override=` |
 | Keep a program that a built-in rule pins on its tree under a `*` rule | `exe=<its exe>;dxgi=<its tree>` |
 
 - A `*` rule from `WINE_COMPATDB` folds after every built-in rule, so it
   also changes the programs that the built-in rules for one program set up
   ([`builtin.rs`](../compatdb/src/builtin.rs)), in both directions:
   `exe=*;dxgi=dxmt` moves the Rockstar Games Launcher onto DXMT, which
-  lacks the D3D10.1 device it needs, and `exe=*;dxgi=wined3d` moves the
-  Steam and Social Club web helpers (CEF) off DXMT. A rule for such a
-  program that sets its tree again keeps it as the built-in rule had it;
-  the log shows each value with its source.
+  lacks the D3D10.1 device it needs, `exe=*;dxgi=wined3d` moves the Steam
+  and Social Club web helpers (CEF) off DXMT, and
+  `exe=*;arguments_override=` takes `--in-process-gpu` from them, which
+  leaves the Steam UI blank again. A rule for such a program that sets its
+  tree again, or adds the argument again, keeps it as the built-in rule
+  had it; the log shows each value with its source.
 - A game that can use D3D12 and D3D11 usually takes D3D12 when
   `d3d12.dll` loads, which in the `dxmt` tree means vkd3d-proton. The rule
   that hides D3D12 disables both of vkd3d-proton's modules through
@@ -412,6 +424,9 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
   - one `dll_overrides <module>=default, <source>: ...` line for each
     module an entry with the order `default` names, with the sources of
     the overrides it removed, or saying there was none to remove;
+  - one `arguments_override, <source>: dropped ...` line for each
+    `arguments_override` that dropped arguments, naming each with its
+    source;
   - `dpi_aware`, `large_address_aware`, `gcmouse`, `force_nx` and
     `opengl` (`large_address_aware` and `force_nx` noting that they have no
     effect in a 64-bit process);
