@@ -23,7 +23,7 @@ and with none, Wine does.
 | `opengl` | `egl`, `cgl` | Which OpenGL the Mac driver gives the process. `egl`: Mesa's EGL with Zink on KosmicKrisp, and no OpenGL where EGL does not start, as on a Mac without a Metal 4 GPU. `cgl`: Apple's OpenGL. Unset: Apple's OpenGL, as in upstream Wine. The value is the process's own; the programs it starts get their own rules' value ([OpenGL](#opengl)) | At load, read by winemac.drv |
 | `dll_overrides` | `WINEDLLOVERRIDES`-style `names=order`, repeatable | Added through ntdll's load-order hook | At load |
 | `dpi_aware` | `true`, `false` | `true`: DPI-aware (system-aware). `false`: unaware. win32u applies it before the `AppCompatFlags\Layers` registry value and the manifest, and the first setting wins, so the rule beats both. `true` also caps a program that asks for per-monitor awareness at system-aware | At load, read by win32u |
-| `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` is the same as unset: the executable's large-address-aware flag decides, as in upstream Wine. No effect on 64-bit | At load; ntdll applies it after the library returns |
+| `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` is the same as unset: the executable's large-address-aware flag decides, as in upstream Wine. No built-in `*` rule sets it. No effect on 64-bit | At load; ntdll applies it after the library returns |
 | `gcmouse` | `true`, `false` | `true`: the Mac driver takes the mouse movement of raw input (`WM_INPUT`) and DirectInput from GameController's `GCMouse`, in the device's own counts, so mouselook is linear. `false`: that movement is the cursor's, which macOS accelerates and scales for retina. Unset: the same as `false`, as in upstream Wine ([GameController mice](#gamecontroller-mice)) | At load, read by winemac.drv |
 | `force_nx` | `true`, `false` | `true`: no-execute stays permanently on in a 32-bit process, even when its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine turns it off, and the process cannot turn it off. `false` is the same as unset: Wine's behaviour. No effect on 64-bit, which always has no-execute on. The value is the process's own; the programs it starts get their own rules' value ([no-execute](#no-execute)) | At load, read by ntdll |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
@@ -117,7 +117,7 @@ environment variable.
 
 ```
 name=my-game;exe=Game.exe;company=Some Vendor;d3d9=wined3d;dpi_aware=false;env=MTL_HUD_ENABLED=1
-name=old-game;exe=OldGame.exe;large_address_aware=false
+name=old-game;exe=OldGame.exe;large_address_aware=true
 name=dpi-aware;enabled=false
 ```
 
@@ -191,8 +191,11 @@ executable.
 | Make one game DPI-unaware | `name=my-game;exe=Game.exe;dpi_aware=false` |
 | Make every process DPI-unaware | `name=global;exe=*;dpi_aware=false` |
 | Let the registry and the manifest decide DPI awareness | `name=dpi-aware;enabled=false` |
-| Stop forcing 4 GB for one game | `name=my-game;exe=Game.exe;large_address_aware=false` |
-| Stop forcing 4 GB for every process | `name=large-address-aware;enabled=false` |
+| Give one 32-bit game 4 GB without the large-address-aware flag | `name=my-game;exe=Game.exe;large_address_aware=true` |
+| Give every 32-bit process 4 GB | `name=global;exe=*;large_address_aware=true` |
+| Leave one game to its executable's flag under such a `*` rule | `name=my-game;exe=Game.exe;large_address_aware=false` |
+| Leave World of Warcraft to its executable's flag | `name=world-of-warcraft;large_address_aware=false` |
+| Drop the built-in rule for World of Warcraft | `name=world-of-warcraft;enabled=false` |
 | Give one game the cursor's mouse movement instead of GameController's | `name=my-game;exe=Game.exe;gcmouse=false` |
 | Give every process the cursor's mouse movement | `name=gcmouse;enabled=false` |
 | Give every process wined3d for D3D10 and D3D11, and no D3D12 | `name=dxmt;enabled=false` |

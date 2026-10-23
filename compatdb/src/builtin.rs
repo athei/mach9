@@ -6,11 +6,10 @@
 //!
 //! Every rule that names an executable also carries a version fingerprint, so
 //! none of them can catch an unrelated program that happens to share a file
-//! name. The exceptions are `dxmt`, `mtld3d`, `dpi-aware`,
-//! `large-address-aware`, `gcmouse`, `fex-x87-reduced-precision`,
-//! `opengl-egl`, `force-nx` and `no-mono-gecko`, which match every process
-//! on purpose: each is a default that a more specific rule can override and
-//! that can be dropped by name.
+//! name. The exceptions are `dxmt`, `mtld3d`, `dpi-aware`, `gcmouse`,
+//! `fex-x87-reduced-precision`, `opengl-egl`, `force-nx` and
+//! `no-mono-gecko`, which match every process on purpose: each is a default
+//! that a more specific rule can override and that can be dropped by name.
 
 use compatdb_table::{ANY_EXE, D3d9, Dxgi, OpenGl, Rule, Table};
 
@@ -63,19 +62,6 @@ fn defaults() -> Vec<Rule> {
             name: "dpi-aware".into(),
             exe: ANY_EXE.into(),
             dpi_aware: Some(true),
-            ..Rule::default()
-        },
-        // Every 32-bit process gets the 4 GB address space, whether or not
-        // its executable has the large-address-aware flag. Older games
-        // that run out of their 2 GB long before they would on Windows,
-        // because Wine itself and the Direct3D layers take a share, get
-        // the headroom. A rule for one game with `large_address_aware =
-        // false` stops forcing it; an executable that has the flag keeps
-        // it regardless. 64-bit processes are not affected.
-        Rule {
-            name: "large-address-aware".into(),
-            exe: ANY_EXE.into(),
-            large_address_aware: Some(true),
             ..Rule::default()
         },
         // The Mac driver takes the mouse movement of raw input (WM_INPUT)
@@ -283,6 +269,25 @@ fn programs() -> Vec<Rule> {
             dpi_aware: Some(false),
             ..Rule::default()
         },
+        // Every 32-bit WoW client with these version strings gets the 4 GB
+        // address space. Under Wine the client shares its 2 GB with Wine
+        // itself and the Direct3D layers, so it runs out long before it
+        // would on Windows. The clients checked are 1.12.1 and 3.3.5a: both
+        // carry these three strings, and their unpatched builds lack the
+        // large-address-aware flag. The matcher cannot pin FileVersion, so
+        // other 32-bit clients with the same strings get it too. Patched
+        // private-server clients, such as Turtle WoW's, already have the
+        // flag and need no rule; a client that has it loses nothing. A
+        // 64-bit client is not affected.
+        Rule {
+            name: "world-of-warcraft".into(),
+            exe: "WoW.exe".into(),
+            company: Some("Blizzard Entertainment".into()),
+            product: Some("World of Warcraft".into()),
+            original_filename: Some("WoW.exe".into()),
+            large_address_aware: Some(true),
+            ..Rule::default()
+        },
     ]
 }
 
@@ -412,7 +417,6 @@ mod tests {
             "dxmt",
             "mtld3d",
             "dpi-aware",
-            "large-address-aware",
             "gcmouse",
             FEX_RULE,
             GL_RULE,
@@ -760,7 +764,10 @@ mod tests {
         assert_eq!(resolution.matched, wildcards());
         assert_eq!(resolution.dll_overrides, wildcard_overrides());
         assert_eq!(resolution.dpi_aware, Some(true));
-        assert_eq!(resolution.large_address_aware, Some(true));
+        // No `*` rule forces large address awareness: the executable's flag
+        // decides, as in upstream Wine.
+        assert_eq!(resolution.large_address_aware, None);
+        assert_eq!(resolution.set_by("large_address_aware"), None);
         assert_eq!(resolution.gcmouse, Some(true));
         assert_eq!(resolution.force_nx, Some(true));
         assert_eq!(resolution.opengl, Some(OpenGl::Egl));
@@ -857,29 +864,100 @@ mod tests {
         let resolution = table.resolve("game.exe", &VersionInfo::default());
         assert_eq!(resolution.gcmouse, None);
         assert_eq!(resolution.matched, wildcards_without("gcmouse"));
-        assert_eq!(resolution.large_address_aware, Some(true));
+        assert_eq!(resolution.force_nx, Some(true));
         assert_eq!(resolution.dpi_aware, Some(true));
     }
 
     #[test]
-    fn a_game_rule_turns_large_address_awareness_off() {
-        let table = with_overrides("name=old;exe=old.exe;large_address_aware=false");
+    fn a_game_rule_gives_one_game_4_gb() {
+        let table = with_overrides("name=old;exe=old.exe;large_address_aware=true");
         let old = table.resolve("Old.exe", &VersionInfo::default());
-        assert_eq!(old.large_address_aware, Some(false));
+        assert_eq!(old.large_address_aware, Some(true));
+        assert_eq!(old.set_by("large_address_aware"), Some("old"));
         assert_eq!(old.matched, wildcards_and("old"));
-        // Another process keeps the default.
+        // Nothing else changes for that game.
+        let mut expected = table.resolve("other.exe", &VersionInfo::default());
+        expected.large_address_aware = Some(true);
+        set_by(&mut expected, "large_address_aware", "old");
+        expected.matched.push("old".to_string());
+        assert_eq!(old, expected);
+        // Another process keeps the executable's flag.
+        let other = table.resolve("other.exe", &VersionInfo::default());
+        assert_eq!(other.large_address_aware, None);
+        // A launch-wide rule gives every process 4 GB, and a rule for one
+        // game takes it back to the executable's flag.
+        let table = with_overrides(
+            "name=global;exe=*;large_address_aware=true\n\
+             name=old;exe=old.exe;large_address_aware=false",
+        );
         let other = table.resolve("other.exe", &VersionInfo::default());
         assert_eq!(other.large_address_aware, Some(true));
-        // The plain wildcard rules still stack without being reported.
-        assert_eq!(table.duplicate_matchers(), []);
+        assert_eq!(other.matched, wildcards_and("global"));
+        let old = table.resolve("Old.exe", &VersionInfo::default());
+        assert_eq!(old.large_address_aware, Some(false));
     }
 
     #[test]
-    fn disabling_the_laa_rule_leaves_no_opinion() {
-        let table = with_overrides("name=large-address-aware;enabled=false");
-        let resolution = table.resolve("game.exe", &VersionInfo::default());
-        assert_eq!(resolution.large_address_aware, None);
-        assert_eq!(resolution.dpi_aware, Some(true));
+    fn an_override_of_the_old_large_address_aware_rule_names_no_rule() {
+        // The built-in `*` rule that gave every process 4 GB is gone. A
+        // launcher that still drops or changes it by name gets a warning, and
+        // nothing else changes.
+        for text in [
+            "name=large-address-aware;enabled=false",
+            "name=large-address-aware;large_address_aware=false",
+        ] {
+            let mut table = table();
+            let (over, diagnostics) = Table::parse(text);
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            assert_eq!(
+                table.overlay(over),
+                ["override names no rule: large-address-aware"],
+                "{text}"
+            );
+            assert_eq!(table, super::table(), "{text}");
+        }
+        assert!(!compatdb_table::is_builtin_rule_name("large-address-aware"));
+    }
+
+    /// The version resource of World of Warcraft's `WoW.exe`, as compatdb.so
+    /// reads it from the shipped 1.12.1 and 3.3.5a clients, the patched
+    /// 1.12.1 client of the Turtle server included: the three strings are the
+    /// same in all of them.
+    fn wow_version() -> VersionInfo {
+        VersionInfo {
+            company: "Blizzard Entertainment".into(),
+            product: "World of Warcraft".into(),
+            original_filename: "WoW.exe".into(),
+        }
+    }
+
+    #[test]
+    fn world_of_warcraft_gets_4_gb_and_nothing_else_changes() {
+        let table = table();
+        let mut expected = table.resolve("game.exe", &VersionInfo::default());
+        expected.large_address_aware = Some(true);
+        set_by(&mut expected, "large_address_aware", "world-of-warcraft");
+        expected.matched.push("world-of-warcraft".to_string());
+        assert_eq!(table.resolve("WoW.exe", &wow_version()), expected);
+        assert_eq!(expected.matched, wildcards_and("world-of-warcraft"));
+        // The 3.3.5a client spells its file Wow.exe; the basename matches
+        // case-insensitively.
+        assert_eq!(table.resolve("Wow.exe", &wow_version()), expected);
+        // A WoW.exe without that resource or from another company, and an
+        // executable of another name with it, keep the executable's flag.
+        let other = VersionInfo {
+            company: "Some Vendor".into(),
+            ..wow_version()
+        };
+        for (exe, version) in [
+            ("WoW.exe", VersionInfo::default()),
+            ("WoW.exe", other),
+            ("WowError.exe", wow_version()),
+        ] {
+            let resolution = table.resolve(exe, &version);
+            assert_eq!(resolution.large_address_aware, None, "{exe}");
+            assert_eq!(resolution.matched, wildcards(), "{exe}");
+        }
     }
 
     #[test]
@@ -1000,12 +1078,17 @@ mod tests {
             table.resolve("NostaleClientX.exe", &nostale).matched,
             wildcards_and("nostale")
         );
+        assert_eq!(
+            table.resolve("WoW.exe", &wow_version()).matched,
+            wildcards_and("world-of-warcraft")
+        );
         // An unrelated program of the same name gets only the `*` rules.
         for exe in [
             "steamwebhelper.exe",
             "GTAIV.exe",
             "NostaleClientX.exe",
             "AoK HD.exe",
+            "WoW.exe",
         ] {
             assert_eq!(
                 table.resolve(exe, &VersionInfo::default()).matched,
