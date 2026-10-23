@@ -3,23 +3,48 @@ name: Release
 # Builds the arm64 bundle on a hosted runner, from the Wine branch in
 # pins/wine-src.ref and the pins of this commit, and signs its loader with
 # the identity in the release environment's secrets. An arm64-* tag attaches
-# the bundle and its symbols to a draft release of that tag. A manual run
-# builds and bundles the same and publishes nothing.
+# the bundle and its symbols to a draft release of that tag. A push to main
+# that changes a file the build reads, the schedule and a manual run build,
+# bundle and package the same and publish nothing.
 #
 # The logic lives in bin/ and bin/ci/, which also run on a Mac. The caches
-# a run on a tag writes serve only later runs on that tag; a manual run on
-# main writes caches that every later run can read.
+# a run on a tag writes serve only later runs on that tag. A run on main
+# saves every cache it builds, which every later run can read, so a release
+# finds the components the newest build of main built and its ccache
+# directory. GitHub evicts a cache that no run used for a week; the
+# scheduled runs, twice a week, use the current ones on main, so a release
+# after a quiet week still finds them.
 
 on:
   push:
     tags: ['arm64-*']
+    branches: [main]
+    # What the build and bundle steps read. GitHub applies path filters to
+    # branch pushes only, so every arm64-* tag still runs.
+    paths:
+      - 'bin/**'
+      - 'compatdb/**'
+      - 'pins/**'
+      - 'signing/**'
+      - 'smoke/**'
+      - '.github/actions/**'
+      - '.github/workflows/release.yml'
+  # Twice a week, so no cache goes a week unused even when a run starts
+  # late, and after brew-cache.yml's daily run, so the Homebrew kegs are
+  # current.
+  schedule:
+    - cron: '47 5 * * 1,4'
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# A push to main cancels the build of main that is still running, which a
+# newer commit makes pointless. A release is never cancelled, and a run on a
+# tag shares its group with nothing but runs on that tag.
 concurrency:
   group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') }}
 
 # bash -eo pipefail, so a failure inside a pipe fails the step.
 defaults:
@@ -217,12 +242,14 @@ jobs:
         if: always() && steps.build.conclusion != 'skipped'
         run: '"$WINE_BUILD_CCACHE" --show-stats'
 
-      # Only on the default branch: every saved directory is a full one, and
-      # a tag run's could only be read by later runs on that tag, so saving
-      # them would fill the repository's cache budget for little. Tag runs
-      # restore the newest one main saved.
+      # Only on main, the default branch: every saved directory is a full
+      # one, and a tag run's could only be read by later runs on that tag, so
+      # saving them would fill the repository's cache budget for little. Tag
+      # runs restore the newest one main saved. The branch is named here
+      # because the payload of a scheduled run has no repository to read the
+      # default branch from.
       - name: Save the ccache directory
-        if: always() && steps.build.conclusion != 'skipped' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: always() && steps.build.conclusion != 'skipped' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/ccache
@@ -287,11 +314,17 @@ jobs:
       - name: Bundle
         run: scripts/bin/bundle-wine.sh --strict-floor --symbols --yes
 
-      # Only for a release: packing takes minutes and nothing else uses the
-      # tarballs.
+      # Every run packs, so a change that breaks package.sh fails on main
+      # before a tag needs it. A release names the tarballs after its tag;
+      # any other run after the scripts commit, and keeps them nowhere.
       - name: Package
-        if: startsWith(github.ref, 'refs/tags/arm64-')
-        run: scripts/bin/ci/package.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/arm64-* ]]; then
+            name=$GITHUB_REF_NAME
+          else
+            name=main-${GITHUB_SHA:0:11}
+          fi
+          scripts/bin/ci/package.sh "$name" "$RUNNER_TEMP/release"
 
       - name: Create draft release
         if: startsWith(github.ref, 'refs/tags/arm64-')
