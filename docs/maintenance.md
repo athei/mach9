@@ -145,8 +145,13 @@ releases. Their steps call the build and bundle scripts and the scripts in
   [`wine-src.ref`](../pins/wine-src.ref) names and the pins of the tagged
   commit, and runs the bundle step with `--strict-floor` and `--symbols`.
   The runner starts without build trees; what it takes from earlier runs is
-  in [other caches](#other-caches). A manual run of it builds and bundles
-  the same and publishes nothing.
+  in [other caches](#other-caches).
+- `release.yml` also runs on `main`: on a push that changes a file the
+  build reads (its `paths` filter), on a schedule, and by hand. Such a run
+  builds, bundles and packs the same, so a broken `package.sh` shows before
+  a tag needs it, saves its caches for the tag builds and publishes
+  nothing. A newer push to `main` cancels the run of `main` still
+  in progress; a run on a tag is never cancelled.
 - The first lines of a release's notes name what it was built from, with
   the Homebrew formula and version of each library the bundle carries
   (`package.sh` in [`bin/ci/`](../bin/ci)). The list of changes is added by
@@ -225,9 +230,7 @@ what its cache was made from:
   is a full one, so saving every run's would crowd the repository's cache
   out. ccache itself checks each object against the compiler, its
   arguments and the sources, and `CCACHE_MAXSIZE` in `release.yml` bounds
-  the directory. Its statistics for the run follow the build step. Caches
-  unused for a week are evicted, so a release after a longer pause builds
-  everything again.
+  the directory. Its statistics for the run follow the build step.
 - DXMT's LLVM: the LLVM pin in [`redist.env`](../pins/redist.env), the
   floor, the Xcode version and the runner image. A change to how
   `build-dxmt.sh` builds LLVM does not change it, just as a local build
@@ -247,10 +250,17 @@ what its cache was made from:
 
 A run on a tag writes caches that only later runs on the same tag can read,
 so a failed release that is run again reuses them; it writes no ccache
-directory. A manual run on `main` writes caches every run can read; start
-one after a pin, a build script or the Wine branch changed to keep the tag
-builds fast. A tag build without one builds the components that changed
-since the last run on `main` and compiles with that run's ccache directory.
+directory. A run on `main` writes caches every run can read, so a tag build
+builds only the components that changed since the last run on `main` and
+compiles with that run's ccache directory. A push that changes a pin or a
+script starts such a run. A new commit on a branch a pin names, such as the
+Wine branch, does not; the next scheduled run picks it up, or start a run
+on `main` by hand before tagging. GitHub evicts caches that no run used for
+a week; the scheduled runs use the current ones more often than that, so
+they outlast a quiet week, but only up to the 60 days without activity
+after which GitHub disables the scheduled workflows of a public
+repository; re-enable `release.yml` in the Actions tab then, as
+`brew-cache.yml`.
 
 ### Signing identity
 
@@ -261,8 +271,9 @@ keychain of its own for the bundle step and deletes that keychain at the end
 of the job.
 
 - Create the environment `release` in the repository settings, and limit its
-  deployments to the tag pattern `arm64-*` and the branch `main`, from which
-  the manual runs start. A run from any other ref cannot use the secrets.
+  deployments to the tag pattern `arm64-*` and the branch `main`, whose
+  builds sign the loader too. A run from any other ref cannot use the
+  secrets.
 - Export the identity: in Keychain Access, under My Certificates, select the
   "Developer ID Application" certificate of the profile's team with its
   private key (it must be one of the certificates the profile lists, which
