@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-# package.sh <tag> <outdir>: pack the bundle bundle-wine.sh made in its
-# place in the layout (BUNDLE_DEST in profile.sh) as the release <tag>, into
-# <outdir>:
+# package.sh [--notes-only] <tag> <outdir>: pack the bundle bundle-wine.sh
+# made in its place in the layout (BUNDLE_DEST in profile.sh) as the release
+# <tag>, into <outdir>:
 #
 #   wine-<tag>-macos-arm64.tar.xz          the bundle, as wine/
 #   wine-<tag>-macos-arm64-symbols.tar.xz  wine-symbols/ (bundle-wine.sh
@@ -24,6 +24,13 @@ set -e
 # repository must have no uncommitted changes, and the Wine SDK must be
 # staged from that Wine commit, or the notes would name something the bundle
 # was not built from.
+#
+# --notes-only runs every check that comes before packing and writes and
+# prints the notes, but packs only a small part of each tree into a
+# temporary directory, which it lists with macOS's tar and deletes
+# (trial_pack). A run that publishes nothing (release.yml on main) still
+# fails where a release would, and runs the same packing code, without
+# spending the time to pack the whole trees.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # BUNDLE_DEST, WINE_SRC, WINE_SDK_DIR, FEX_DIST, MESA_DIST, DXMT_DIST,
@@ -32,10 +39,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$SCRIPT_DIR/lib/profile.sh"
 
 usage() {
-    echo "Usage: $0 <tag> <outdir>"
+    echo "Usage: $0 [--notes-only] <tag> <outdir>"
     exit 1
 }
 
+NOTES_ONLY=0
+if [ "${1:-}" = --notes-only ]; then
+    NOTES_ONLY=1
+    shift
+fi
 [ $# -eq 2 ] || usage
 case "$1" in
     -*) usage ;;
@@ -96,6 +108,57 @@ pack() {
     }
 }
 
+# The file of wine-symbols that trial_pack packs: a small Wine module, which
+# Wine builds with debug info, so Step 4e of bundle-wine.sh keeps a copy of
+# it in every bundle made with --symbols.
+TRIAL_SYMBOLS_FILE=lib/wine/i386-windows/version.dll
+
+# trial_list <archive>: print what macOS's tar lists in <archive>, or exit.
+trial_list() {
+    /usr/bin/tar -tJf "$1" || {
+        echo "Error: /usr/bin/tar cannot list $1" >&2
+        exit 1
+    }
+}
+
+# trial_pack: for --notes-only, pack a small part of each tree with pack(),
+# as a release packs the whole of them, into a temporary directory, list
+# each archive with macOS's tar and delete the directory. The bundle's part
+# is its bin/. The symbols' part is a wine-symbols/ in the temporary
+# directory with TRIAL_SYMBOLS_FILE and the tree marker copied from the real
+# one, packed with the options a release passes, so --exclude has to drop
+# the marker.
+TRIAL_DIR=""
+trial_pack() {
+    local in bin_list symbols_list
+    if [ ! -f "$SYMBOLS_DIR/$TRIAL_SYMBOLS_FILE" ] || [ ! -f "$SYMBOLS_DIR/$TREE_MARKER" ]; then
+        echo "Error: $SYMBOLS_DIR has no $TRIAL_SYMBOLS_FILE or no $TREE_MARKER"
+        echo "to try packing with (run bundle-wine.sh with --symbols)"
+        exit 1
+    fi
+    TRIAL_DIR=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/package-trial.XXXXXX")
+    trap 'rm -rf "$TRIAL_DIR"' EXIT
+    in="$TRIAL_DIR/in/wine-symbols"
+    mkdir -p "$in/$(dirname "$TRIAL_SYMBOLS_FILE")"
+    cp -p "$SYMBOLS_DIR/$TREE_MARKER" "$in/"
+    cp -p "$SYMBOLS_DIR/$TRIAL_SYMBOLS_FILE" "$in/$TRIAL_SYMBOLS_FILE"
+    pack "$TRIAL_DIR/bin.tar.xz" "$WINE_DIR" bin 6
+    pack "$TRIAL_DIR/symbols.tar.xz" "$TRIAL_DIR/in" wine-symbols 3 --exclude "$TREE_MARKER"
+    bin_list=$(trial_list "$TRIAL_DIR/bin.tar.xz")
+    symbols_list=$(trial_list "$TRIAL_DIR/symbols.tar.xz")
+    echo "    bin.tar.xz lists $(grep -c . <<< "$bin_list") entries"
+    echo "    symbols.tar.xz lists $(grep -c . <<< "$symbols_list") entries"
+    if ! grep -qxF "wine-symbols/$TRIAL_SYMBOLS_FILE" <<< "$symbols_list"; then
+        echo "Error: symbols.tar.xz does not hold wine-symbols/$TRIAL_SYMBOLS_FILE"
+        exit 1
+    fi
+    if grep -qF "$TREE_MARKER" <<< "$symbols_list"; then
+        echo "Error: symbols.tar.xz holds $TREE_MARKER"
+        exit 1
+    fi
+    rm -rf "$TRIAL_DIR"
+}
+
 if [ ! -L "$WINE_DIR/bin/wine" ] && [ ! -e "$WINE_DIR/bin/wine" ]; then
     echo "Error: no bundle at $WINE_DIR (run bundle-wine.sh)"
     exit 1
@@ -136,9 +199,14 @@ if ! command -v xz >/dev/null; then
 fi
 mkdir -p "$OUT"
 
-echo "==> Packing $WINE_DIR as $TAG"
-pack "$BUNDLE_TAR" "$BUNDLE_DEST" wine 6
-pack "$SYMBOLS_TAR" "$BUNDLE_DEST" wine-symbols 3 --exclude "$TREE_MARKER"
+if [ "$NOTES_ONLY" -eq 1 ]; then
+    echo "==> Packing a part of each tree to try it (--notes-only)"
+    trial_pack
+else
+    echo "==> Packing $WINE_DIR as $TAG"
+    pack "$BUNDLE_TAR" "$BUNDLE_DEST" wine 6
+    pack "$SYMBOLS_TAR" "$BUNDLE_DEST" wine-symbols 3 --exclude "$TREE_MARKER"
+fi
 {
     echo "- Wine: $wine_repo@$wine_ref ($(short "$wine_commit"), $describe)"
     echo "- Scripts: $self"
