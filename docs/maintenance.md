@@ -145,10 +145,14 @@ which says in its header what it does.
   in [other caches](#other-caches).
 - `release.yml` also runs on `main`: on a push that changes a file the
   build reads (its `paths` filter), on a schedule, and by hand. Such a run
-  builds, bundles and packs the same, so a broken `package.sh` shows before
-  a tag needs it, saves its caches for the tag builds and publishes
-  nothing. A newer push to `main` cancels the run of `main` still
-  in progress; a run on a tag is never cancelled.
+  builds and bundles the same and runs `package.sh --notes-only`, which
+  runs every check `package.sh` makes before it packs, writes the notes,
+  and packs only a small part of each tree with the same code, then lists
+  and deletes those archives. A change that breaks `package.sh` shows
+  before a tag needs it. Only a tag packs the whole trees. Such a run saves
+  its caches for the tag builds and publishes nothing. A newer push to
+  `main` cancels the run of `main` still in progress; a run on a tag is
+  never cancelled.
 - A release's notes start with one bullet per source it was built from,
   with its ref and commit (`package.sh` in [`bin/ci/`](../bin/ci)). The
   changes are added by hand below them, as short bullets, before the draft

@@ -4,8 +4,9 @@ name: Release
 # pins/wine-src.ref and the pins of this commit, and signs its loader with
 # the identity in the release environment's secrets. An arm64-* tag attaches
 # the bundle and its symbols to a draft release of that tag. A push to main
-# that changes a file the build reads, the schedule and a manual run build,
-# bundle and package the same and publish nothing.
+# that changes a file the build reads, the schedule and a manual run build
+# and bundle the same, check what packaging needs without packing, and
+# publish nothing.
 #
 # The logic lives in bin/ and bin/ci/, which also run on a Mac. The caches
 # a run on a tag writes serve only later runs on that tag. A run on main
@@ -336,17 +337,19 @@ jobs:
       - name: Bundle
         run: scripts/bin/bundle-wine.sh --strict-floor --symbols --yes
 
-      # Every run packs, so a change that breaks package.sh fails on main
-      # before a tag needs it. A release names the tarballs after its tag;
-      # any other run after the scripts commit, and keeps them nowhere.
+      # Only a release packs the trees, naming the tarballs after its tag.
+      # Any other run passes --notes-only: package.sh runs every check it
+      # makes before packing, writes the notes, and packs only a small part
+      # of each tree with the same code, which it lists and deletes. A change
+      # that breaks any of that fails on main before a tag needs it, without
+      # spending the time to pack tarballs that would be kept nowhere.
       - name: Package
         run: |
           if [[ "$GITHUB_REF" == refs/tags/arm64-* ]]; then
-            name=$GITHUB_REF_NAME
+            scripts/bin/ci/package.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"
           else
-            name=main-${GITHUB_SHA:0:11}
+            scripts/bin/ci/package.sh --notes-only "main-${GITHUB_SHA:0:11}" "$RUNNER_TEMP/release"
           fi
-          scripts/bin/ci/package.sh "$name" "$RUNNER_TEMP/release"
 
       - name: Create draft release
         if: startsWith(github.ref, 'refs/tags/arm64-')
