@@ -40,9 +40,28 @@ jobs:
           path: scripts
           persist-credentials: false
 
+      # The Xcode choice, cached as in release.yml, under the same key.
+      - name: Compute the Xcode choice key
+        id: xcode-key
+        run: echo "key=xcode-choice-$RUNNER_OS-$ImageOS-${ImageVersion:-run$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT}-${{ hashFiles('scripts/bin/ci/host.sh', 'scripts/bin/lib/profile.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Xcode choice
+        id: xcode-choice
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/xcode-choice
+          key: ${{ steps.xcode-key.outputs.key }}
+
       # The Xcode release.yml selects before it installs the formulae.
       - name: Report the runner and select Xcode
-        run: scripts/bin/ci/host.sh
+        run: scripts/bin/ci/host.sh --xcode-choice "$RUNNER_TEMP/xcode-choice"
+
+      - name: Save the Xcode choice
+        if: steps.xcode-choice.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/xcode-choice
+          key: ${{ steps.xcode-key.outputs.key }}
 
       - name: Install the Homebrew formulae
         uses: ./scripts/.github/actions/brew

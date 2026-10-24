@@ -101,8 +101,31 @@ jobs:
             "refs/tags/wine-$version:refs/tags/wine-$version"
           git -C src describe HEAD
 
+      # The Xcode host.sh chose on an earlier run on the same runner image,
+      # so it need not ask every Xcode for its SDK again (host.sh, header).
+      # The key changes with the image and with host.sh and profile.sh,
+      # which decide the choice; a runner that names no image version gets a
+      # key no other run has.
+      - name: Compute the Xcode choice key
+        id: xcode-key
+        run: echo "key=xcode-choice-$RUNNER_OS-$ImageOS-${ImageVersion:-run$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT}-${{ hashFiles('scripts/bin/ci/host.sh', 'scripts/bin/lib/profile.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Xcode choice
+        id: xcode-choice
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/xcode-choice
+          key: ${{ steps.xcode-key.outputs.key }}
+
       - name: Report the runner, select Xcode and its Metal toolchain
-        run: scripts/bin/ci/host.sh --metal
+        run: scripts/bin/ci/host.sh --metal --xcode-choice "$RUNNER_TEMP/xcode-choice"
+
+      - name: Save the Xcode choice
+        if: steps.xcode-choice.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/xcode-choice
+          key: ${{ steps.xcode-key.outputs.key }}
 
       # The formulae at the newest versions Homebrew has, from and into the
       # cache brew-cache.yml keeps current on the default branch.
