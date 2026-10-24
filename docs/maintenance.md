@@ -193,8 +193,8 @@ commands and the manifest are described in the header of
 
 The runner also caches the staged directories of Mesa, FEX, DXMT and
 vkd3d-proton, the compiler output of ccache, DXMT's LLVM libraries, the
-downloads `redist.env` pins and cargo's registry. Each key changes only with
-what its cache was made from:
+downloads `redist.env` pins, cargo's registry and the Xcode `host.sh` chose.
+Each key changes only with what its cache was made from:
 
 - Each staged directory: the runner image and the hash of the `KEY` line
   its build script would write into it, which the script prints with
@@ -233,6 +233,10 @@ what its cache was made from:
   `redist.env`). A new download pinned in `redist.env` needs its prefix
   added to that call.
 - cargo's registry: `compatdb/Cargo.lock`.
+- The Xcode choice: the runner image and its version, and the hashes of
+  [`host.sh`](../bin/ci/host.sh) and [`profile.sh`](../bin/lib/profile.sh).
+  `host.sh` searches again when the Xcode it names is gone;
+  `brew-cache.yml` uses the same key.
 
 A run on a tag writes caches that only later runs on the same tag can read,
 so a failed release that is run again reuses them; it writes no ccache
