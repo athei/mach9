@@ -10,6 +10,11 @@ set -e
 #                                          --symbols), without its tree marker
 #   notes.md                               the start of the release notes
 #
+# The bundle is compressed at xz's default preset, since it is what people
+# download. The symbols, more than twice the size, take a faster preset,
+# which compresses them several times as fast for a somewhat larger archive.
+# Both go through xz's own command, which has to be on PATH (Homebrew's xz).
+#
 # The notes are one bullet per source the bundle was built from: the Wine
 # source, as the ref in pins/wine-src.ref with the commit and `git describe`
 # of WINE_SRC, this repository's commit, and the commits FEX, Mesa, DXMT and
@@ -67,18 +72,28 @@ clean_tree() {
     fi
 }
 
-# pack <out> <dir> <name> [<tar option>...]: write <dir>/<name> to <out> as
-# an xz-compressed tar, compressing with every core. Extended attributes,
-# ACLs, file flags and AppleDouble files are left out, so nothing the build
-# host attached (quarantine, provenance) travels with the bundle. Code
-# signatures are inside the Mach-O files and wine.app, not in attributes.
+# pack <out> <dir> <name> <preset> [<tar option>...]: write <dir>/<name> to
+# <out> as a tar compressed by xz at <preset>, with every core. Extended
+# attributes, ACLs, file flags and AppleDouble files are left out, so nothing
+# the build host attached (quarantine, provenance) travels with the bundle.
+# Code signatures are inside the Mach-O files and wine.app, not in
+# attributes. The compression is xz's own command and not tar's -J, because
+# macOS's tar compresses on one thread whatever its xz:threads option says.
+# A failure of either half removes <out>.
 pack() {
-    local out="$1" dir="$2" name="$3"
-    shift 3
-    echo "    $(basename "$out")"
+    local out="$1" dir="$2" name="$3" preset="$4"
+    shift 4
+    echo "    $(basename "$out") (xz -$preset)"
     rm -f "$out"
-    COPYFILE_DISABLE=1 tar --no-xattrs --no-acls --no-fflags --no-mac-metadata \
-        --options xz:threads=0 "$@" -C "$dir" -cJf "$out" "$name"
+    (
+        set -o pipefail
+        COPYFILE_DISABLE=1 tar --no-xattrs --no-acls --no-fflags --no-mac-metadata \
+            "$@" -C "$dir" -cf - "$name" | xz -T0 "-$preset" > "$out"
+    ) || {
+        rm -f "$out"
+        echo "Error: packing $dir/$name into $out failed"
+        exit 1
+    }
 }
 
 if [ ! -L "$WINE_DIR/bin/wine" ] && [ ! -e "$WINE_DIR/bin/wine" ]; then
@@ -115,11 +130,15 @@ for f in "$FEX_DIST/COMMIT" "$MESA_DIST/COMMIT" "$DXMT_DIST/COMMIT" \
         exit 1
     fi
 done
+if ! command -v xz >/dev/null; then
+    echo "Error: no xz on PATH (brew install xz)"
+    exit 1
+fi
 mkdir -p "$OUT"
 
 echo "==> Packing $WINE_DIR as $TAG"
-pack "$BUNDLE_TAR" "$BUNDLE_DEST" wine
-pack "$SYMBOLS_TAR" "$BUNDLE_DEST" wine-symbols --exclude "$TREE_MARKER"
+pack "$BUNDLE_TAR" "$BUNDLE_DEST" wine 6
+pack "$SYMBOLS_TAR" "$BUNDLE_DEST" wine-symbols 3 --exclude "$TREE_MARKER"
 {
     echo "- Wine: $wine_repo@$wine_ref ($(short "$wine_commit"), $describe)"
     echo "- Scripts: $self"
