@@ -79,9 +79,11 @@ fn defaults() -> Vec<Rule> {
         // x86 code runs under FEX, which by default emulates x87
         // floating-point code, which games built for 32-bit x86 use heavily,
         // at its full 80-bit precision, and such games run slowly that way.
-        // Its X87ReducedPrecision option computes with 64-bit precision
+        // Its X87ReducedPrecision option computes with 64-bit doubles
         // instead, which is fast at some cost in accuracy (FEX warns of
-        // possible rendering bugs). FEX takes the option from
+        // possible rendering bugs). Our FEX still rounds to single precision
+        // when the x87 precision control asks for 24 bits, as D3D9 sets it
+        // when it creates a device. FEX takes the option from
         // FEX_X87REDUCEDPRECISION, parsed as an integer (so "1", not
         // "true"), and reads it from the Windows environment block when its
         // process init runs, after this library has written its env there.
