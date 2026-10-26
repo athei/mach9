@@ -12,11 +12,15 @@
 //!
 //! The policy for settings that older launchers wrote lives here too: the
 //! retired keys, values and environment variables, and the refusal of
-//! `arguments_override` in a rule for every process.
+//! `arguments_override` in a rule for every process
+//! ([`Key::allowed_on_any`]). So does what a launcher needs to check its
+//! configuration before it builds a rule: which keys a later layer of it
+//! replaces ([`Key::replaces_on_merge`]) and which environment names a rule
+//! refuses ([`check_env_name`]).
 
 use crate::{
     Argument, DEFAULT_VALUE, DebugChannel, DllOverride, EnvEntry, EnvName, Exe, FieldError,
-    Fingerprint, Key, Rule, Scalar, ScalarValue, Setting, Severity,
+    Fingerprint, Key, KeyKind, Rule, Scalar, ScalarValue, Setting, Severity,
 };
 
 /// The keys that are no longer read, each with why and what to do instead
@@ -76,6 +80,36 @@ pub fn retired_env(name: &str) -> Option<Key> {
         .map(|&(_, key)| key)
 }
 
+/// Check `name` as the name of a rule's environment entry, with the errors
+/// [`Rule::set_env`] gives for it.
+///
+/// A launcher runs it on the names of its own configuration, such as an
+/// `[env]` table, before it builds a rule from them, or on the environment
+/// it starts Wine with.
+///
+/// # Errors
+///
+/// [`FieldError::RetiredEnv`] for a variable that a setting replaced (see
+/// [`retired_env`]), and the errors of [`EnvName::new`]:
+/// [`FieldError::InvalidEnvName`] for an empty name or one with a `=`,
+/// [`FieldError::Nul`] for one with a NUL.
+pub fn check_env_name(name: &str) -> Result<(), FieldError> {
+    env_name(name)?;
+    Ok(())
+}
+
+/// `name` as the name of a rule's environment entry, or the error of
+/// [`check_env_name`].
+fn env_name(name: &str) -> Result<EnvName, FieldError> {
+    if let Some(key) = retired_env(name) {
+        return Err(FieldError::RetiredEnv {
+            name: name.to_owned(),
+            key,
+        });
+    }
+    EnvName::new(name)
+}
+
 /// The variables a launcher removes from the environment it starts Wine
 /// with, when it inherited them, so that the launch does not depend on
 /// where the launcher itself was started from.
@@ -124,6 +158,68 @@ impl Key {
         }
         name.parse()
     }
+
+    /// Whether a rule for every process, one whose `exe` is `*`
+    /// ([`Exe::Any`]) with or without a fingerprint, may hold this setting.
+    ///
+    /// It may hold every scalar setting, every list and `env`, but not
+    /// `arguments_override`: for every process that would take away the
+    /// arguments the built-in rules give single programs. A matcher is not a
+    /// setting, so this is `false` for one: `exe` decides whether the rule
+    /// is for every process at all, and a fingerprint narrows the processes
+    /// it matches, so neither belongs among the settings a launcher offers
+    /// for every process.
+    ///
+    /// [`Rule::set`] and [`Rule::set_list`] refuse a setting for which this
+    /// is `false` in a `*` rule, and an `exe` of `*` in a rule that holds
+    /// one, with [`FieldError::ArgumentsOverrideOnAny`].
+    #[must_use]
+    pub const fn allowed_on_any(self) -> bool {
+        match self.kind() {
+            KeyKind::Matcher => false,
+            KeyKind::Scalar(_) | KeyKind::List | KeyKind::Env => {
+                !matches!(self, Self::ArgumentsOverride)
+            }
+        }
+    }
+
+    /// Whether a later layer's value for this key takes the place of an
+    /// earlier layer's, rather than adding to it, when a launcher builds one
+    /// rule from several layers of its configuration, such as a file of
+    /// defaults and a file per game laid over it.
+    ///
+    /// - A matcher or a scalar setting holds one value, so the later layer's
+    ///   replaces it: `true`.
+    /// - A list adds the later layer's entries after the earlier layer's:
+    ///   `false`.
+    /// - `arguments_override` is the exception among the lists: `true`. A
+    ///   rule has one override, the whole list that replaces the arguments
+    ///   of the rules folded before it (see [`Rule::arguments_override`]).
+    ///   The entries of two layers added together would be an override
+    ///   neither layer wrote, and an empty list in the later layer has to
+    ///   clear an earlier layer's override, as `arguments_override=` alone
+    ///   clears the arguments on the wire.
+    /// - `env` adds the later layer's entries: `false`. The entries fold in
+    ///   order, so a later entry for the same variable wins.
+    ///
+    /// This is only about layers of one rule. Between rules nothing
+    /// replaces: every rule that matches a process applies, in the order
+    /// [`Table::resolve`](crate::Table::resolve) folds them.
+    #[must_use]
+    pub const fn replaces_on_merge(self) -> bool {
+        match self.kind() {
+            KeyKind::Matcher | KeyKind::Scalar(_) => true,
+            KeyKind::List => matches!(self, Self::ArgumentsOverride),
+            KeyKind::Env => false,
+        }
+    }
+}
+
+/// Whether a `*` rule refuses the field `key`: a setting that
+/// [`Key::allowed_on_any`] does not allow. A matcher is not a setting, and a
+/// `*` rule takes the fingerprints.
+const fn refused_on_any(key: Key) -> bool {
+    !matches!(key.kind(), KeyKind::Matcher) && !key.allowed_on_any()
 }
 
 impl Rule {
@@ -144,12 +240,14 @@ impl Rule {
     /// setting does not know, a part that is empty or holds a NUL, and the
     /// errors of [`Rule::set_env`]. A retired value is
     /// [`FieldError::RetiredValue`]: `dxgi` `gptk`, a warning, since the
-    /// built-in rules then decide as if there were no value. An entry of
-    /// `arguments_override`, or an `exe` of `*` in a rule that has one, is
-    /// [`FieldError::ArgumentsOverrideOnAny`]: for every process it would
+    /// built-in rules then decide as if there were no value. A setting that
+    /// [`Key::allowed_on_any`] does not allow, `arguments_override`, in a
+    /// rule whose `exe` is `*`, or an `exe` of `*` in a rule that holds one,
+    /// is [`FieldError::ArgumentsOverrideOnAny`]: for every process it would
     /// take away the arguments the built-in rules give single programs.
     /// Make the rule with its `exe` first.
     pub fn set(&mut self, key: Key, value: &str) -> Result<(), FieldError> {
+        self.refuse_on_any(key)?;
         if let Some(scalar) = key.scalar() {
             let setting = scalar_setting(scalar, value)?;
             self.put_scalar(scalar, setting);
@@ -158,7 +256,11 @@ impl Rule {
         match key {
             Key::Exe => {
                 let exe = Exe::new(value)?;
-                if exe.is_any() && self.arguments_override.is_some() {
+                if exe.is_any()
+                    && Key::ALL
+                        .iter()
+                        .any(|&key| refused_on_any(key) && self.holds(key))
+                {
                     return Err(FieldError::ArgumentsOverrideOnAny);
                 }
                 self.exe = exe;
@@ -169,7 +271,6 @@ impl Rule {
             Key::DllOverrides => self.dll_overrides.push(DllOverride::new(value)?),
             Key::Arguments => self.arguments.push(Argument::new(value)?),
             Key::ArgumentsOverride => {
-                self.refuse_override_on_any()?;
                 let argument = Argument::new(value)?;
                 self.arguments_override
                     .get_or_insert_default()
@@ -210,8 +311,10 @@ impl Rule {
     ///
     /// # Errors
     ///
-    /// [`FieldError::NotAList`] for a key that holds one value, and the
-    /// first error [`Rule::set`] gives for one of the values.
+    /// [`FieldError::NotAList`] for a key that holds one value,
+    /// [`FieldError::ArgumentsOverrideOnAny`] as for [`Rule::set`], even
+    /// with no values, and the first error [`Rule::set`] gives for one of
+    /// the values.
     pub fn set_list<T: AsRef<str>>(
         &mut self,
         key: Key,
@@ -223,12 +326,10 @@ impl Rule {
             Key::Arguments => rule.arguments.clear(),
             Key::DebugChannels => rule.debug_channels.clear(),
             Key::Env => rule.env.clear(),
-            Key::ArgumentsOverride => {
-                rule.refuse_override_on_any()?;
-                rule.arguments_override = Some(Vec::new());
-            }
+            Key::ArgumentsOverride => rule.arguments_override = Some(Vec::new()),
             _ => return Err(FieldError::NotAList(key)),
         }
+        self.refuse_on_any(key)?;
         for value in values {
             rule.set(key, value.as_ref())?;
         }
@@ -241,28 +342,48 @@ impl Rule {
     ///
     /// # Errors
     ///
-    /// [`FieldError::RetiredEnv`] for a variable that a setting replaced
-    /// (see [`retired_env`]), and the errors of [`EnvName::new`] and
-    /// [`EnvEntry::new`].
+    /// The errors of [`check_env_name`] for `name`, and of [`EnvEntry::new`]
+    /// for `value`.
     pub fn set_env(&mut self, name: &str, value: &str) -> Result<(), FieldError> {
-        if let Some(key) = retired_env(name) {
-            return Err(FieldError::RetiredEnv {
-                name: name.to_owned(),
-                key,
-            });
-        }
-        let entry = EnvEntry::new(EnvName::new(name)?, value)?;
+        self.refuse_on_any(Key::Env)?;
+        let entry = EnvEntry::new(env_name(name)?, value)?;
         self.env.push(entry);
         Ok(())
     }
 
     /// [`FieldError::ArgumentsOverrideOnAny`] when the rule matches every
-    /// process by its `exe`.
-    const fn refuse_override_on_any(&self) -> Result<(), FieldError> {
-        if self.exe.is_any() {
+    /// process by its `exe` and refuses the setting `key` there (see
+    /// [`Key::allowed_on_any`]).
+    const fn refuse_on_any(&self, key: Key) -> Result<(), FieldError> {
+        if self.exe.is_any() && refused_on_any(key) {
             Err(FieldError::ArgumentsOverrideOnAny)
         } else {
             Ok(())
+        }
+    }
+
+    /// Whether the rule holds the setting `key`: a scalar setting set or
+    /// reset, a list or `env` with an entry, an `arguments_override` with or
+    /// without entries. `false` for a matcher, which is not a setting.
+    fn holds(&self, key: Key) -> bool {
+        match key {
+            Key::DllOverrides => !self.dll_overrides.is_empty(),
+            Key::ArgumentsOverride => self.arguments_override.is_some(),
+            Key::Arguments => !self.arguments.is_empty(),
+            Key::DebugChannels => !self.debug_channels.is_empty(),
+            Key::Env => !self.env.is_empty(),
+            Key::Exe | Key::Company | Key::Product | Key::OriginalFilename => false,
+            Key::Dxgi
+            | Key::D3d9
+            | Key::Wined3d
+            | Key::OpenGl
+            | Key::DpiAware
+            | Key::LargeAddressAware
+            | Key::Gcmouse
+            | Key::ForceNx
+            | Key::MetalHud => key
+                .scalar()
+                .is_some_and(|scalar| !self.scalar(scalar).is_unset()),
         }
     }
 }

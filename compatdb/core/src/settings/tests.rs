@@ -356,25 +356,147 @@ fn a_retired_environment_variable_names_the_setting_that_replaced_it() -> TestRe
     Ok(())
 }
 
+/// A value every field of `key` takes.
+const fn sample(key: Key) -> &'static str {
+    match key {
+        Key::Exe => "Game.exe",
+        Key::Company | Key::Product | Key::OriginalFilename => "Acme; 100%",
+        Key::Dxgi => "dxmt",
+        Key::D3d9 => "default",
+        Key::Wined3d => "gl",
+        Key::OpenGl => "egl",
+        Key::DllOverrides => "d3d12=",
+        Key::ArgumentsOverride | Key::Arguments => "-x \"two words\"",
+        Key::DebugChannels => "+relay",
+        Key::Env => "A=1;2",
+        _ => "true",
+    }
+}
+
+#[test]
+fn allowed_on_any_is_what_a_rule_for_every_process_takes() -> TestResult {
+    let allowed: Vec<Key> = Key::ALL
+        .iter()
+        .copied()
+        .filter(|key| key.allowed_on_any())
+        .collect();
+    assert_eq!(
+        allowed,
+        [
+            Key::Dxgi,
+            Key::D3d9,
+            Key::Wined3d,
+            Key::OpenGl,
+            Key::DpiAware,
+            Key::LargeAddressAware,
+            Key::Gcmouse,
+            Key::ForceNx,
+            Key::MetalHud,
+            Key::DllOverrides,
+            Key::Arguments,
+            Key::DebugChannels,
+            Key::Env,
+        ]
+    );
+    for &key in Key::ALL {
+        if key.kind() == KeyKind::Matcher {
+            continue;
+        }
+        // `set`, `set_list` and `set_env` agree with it, with or without a
+        // fingerprint on the `*` rule.
+        for any in [
+            Rule::new(Exe::Any),
+            Rule::new(Exe::Any).with_company(Fingerprint::new("Acme")?),
+        ] {
+            let refused = Err(FieldError::ArgumentsOverrideOnAny);
+            let set = any.clone().set(key, sample(key));
+            assert_eq!(set.is_ok(), key.allowed_on_any(), "{key}: {set:?}");
+            if !key.allowed_on_any() {
+                assert_eq!(set, refused, "{key}");
+            }
+            if key.kind() == KeyKind::List || key.kind() == KeyKind::Env {
+                let list = any.clone().set_list(key, [] as [&str; 0]);
+                assert_eq!(list.is_ok(), key.allowed_on_any(), "{key}: {list:?}");
+            }
+            // A rule that holds the setting cannot become a `*` rule
+            // unless the setting is allowed there.
+            let mut rule = game()?;
+            rule.set(key, sample(key))?;
+            assert_eq!(
+                rule.set(Key::Exe, Exe::ANY).is_ok(),
+                key.allowed_on_any(),
+                "{key}"
+            );
+        }
+    }
+    // A `*` rule still takes its matchers: they decide what it matches.
+    let mut any = Rule::new(Exe::Any);
+    for key in [Key::Company, Key::Product, Key::OriginalFilename, Key::Exe] {
+        assert!(!key.allowed_on_any(), "{key}");
+        any.set(key, sample(key))?;
+    }
+    Ok(())
+}
+
+#[test]
+fn only_arguments_override_among_the_lists_replaces_on_merge() {
+    for &key in Key::ALL {
+        let expected = match key.kind() {
+            KeyKind::Matcher | KeyKind::Scalar(_) => true,
+            KeyKind::List => key == Key::ArgumentsOverride,
+            KeyKind::Env => false,
+        };
+        assert_eq!(key.replaces_on_merge(), expected, "{key}");
+    }
+    let replaced: Vec<Key> = Key::ALL
+        .iter()
+        .copied()
+        .filter(|key| key.kind() == KeyKind::List && key.replaces_on_merge())
+        .collect();
+    assert_eq!(replaced, [Key::ArgumentsOverride]);
+}
+
+#[test]
+fn check_env_name_gives_the_errors_of_set_env() -> TestResult {
+    for name in [
+        "WINE_MAC_OPENGL",
+        "WineDebug",
+        "WINEDLLOVERRIDES",
+        "",
+        "A=B",
+        "A\0",
+        "VKD3D_CONFIG",
+        "MTL_HUD_ENABLED",
+    ] {
+        let mut rule = game()?;
+        assert_eq!(check_env_name(name), rule.set_env(name, "1"), "{name:?}");
+    }
+    assert_eq!(
+        check_env_name("WINE_MAC_OPENGL"),
+        Err(FieldError::RetiredEnv {
+            name: "WINE_MAC_OPENGL".into(),
+            key: Key::OpenGl
+        })
+    );
+    assert_eq!(
+        check_env_name("A=B"),
+        Err(FieldError::InvalidEnvName("A=B".into()))
+    );
+    assert_eq!(
+        check_env_name(""),
+        Err(FieldError::InvalidEnvName(String::new()))
+    );
+    assert_eq!(check_env_name("A\0"), Err(FieldError::Nul));
+    assert_eq!(check_env_name("VKD3D_CONFIG"), Ok(()));
+    Ok(())
+}
+
 #[test]
 fn a_rule_the_settings_layer_builds_travels_as_it_is() -> TestResult {
     // Every key, the way a launcher sets it, then through the wire.
     let mut rule = game()?;
     for &key in Key::ALL {
-        let value = match key {
-            Key::Exe => "Game.exe",
-            Key::Company | Key::Product | Key::OriginalFilename => "Acme; 100%",
-            Key::Dxgi => "dxmt",
-            Key::D3d9 => "default",
-            Key::Wined3d => "gl",
-            Key::OpenGl => "egl",
-            Key::DllOverrides => "d3d12=",
-            Key::ArgumentsOverride | Key::Arguments => "-x \"two words\"",
-            Key::DebugChannels => "+relay",
-            Key::Env => "A=1;2",
-            _ => "true",
-        };
-        rule.set(key, value)?;
+        rule.set(key, sample(key))?;
     }
     let mut table = Table::new();
     table.push(rule);

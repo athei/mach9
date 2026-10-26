@@ -401,8 +401,12 @@
 //! - Build `WINEDEBUG` itself: Wine reads it before `compatdb.so` loads.
 //!   Its own entries come first, then [`Table::winedebug`], joined with
 //!   `,`.
+//! - Ask the crate instead of naming keys: [`Key::replaces_on_merge`] when
+//!   it lays one layer of its configuration over another, and
+//!   [`Key::allowed_on_any`] for the settings it offers for every process.
 //! - Refuse an environment entry for a variable a setting replaced
-//!   ([`retired_env`]); [`Rule::set_env`] does. That includes
+//!   ([`retired_env`]); [`Rule::set_env`] does, and [`check_env_name`]
+//!   checks a name on its own. That includes
 //!   `WINEDLLOVERRIDES`: an override `compatdb.so` adds replaces its entry
 //!   for the same module, so it cannot undo one, while a rule's
 //!   `<module>=default` can.
@@ -476,7 +480,7 @@ pub use crate::{
         ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution, ScalarState,
     },
     rule::{DEFAULT_VALUE, Rule, Setting},
-    settings::{inherited_conflicts, retired_env},
+    settings::{check_env_name, inherited_conflicts, retired_env},
     table::{Source, Table},
     value::{D3d9, Dxgi, METAL_HUD_ENV, OpenGl, Wined3d, metal_hud_env},
     version::VersionInfo,
