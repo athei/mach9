@@ -29,6 +29,8 @@
 )]
 
 pub mod builtin;
+mod error;
+mod key;
 mod process;
 mod resolve;
 mod rule;
@@ -38,12 +40,14 @@ mod version;
 mod wire;
 
 pub use crate::{
+    error::FieldError,
+    key::{Key, KeyKind, Scalar, ScalarValue, ValueKind},
     process::{
         Arch, IMAGE_FILE_MACHINE_ARM64, append_cmdline, append_cmdline_each, basename_of,
         env_value, merge_env,
     },
     resolve::{ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution},
-    rule::{ANY_EXE, DEFAULT_VALUE, Rule, SCALAR_KEYS, Source, UPSTREAM, upstream},
+    rule::{ANY_EXE, DEFAULT_VALUE, Rule, Source},
     table::Table,
     value::{D3d9, Dxgi, OpenGl, Wined3d},
     version::VersionInfo,

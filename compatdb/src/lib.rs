@@ -34,8 +34,8 @@ use std::{
 };
 
 use compatdb_core::{
-    Arch, ArgumentsDropped, D3d9, DllOverrideReset, Dxgi, ENV_VAR, EnvStep, Origin, Resolution,
-    Table, VersionInfo, Wined3d, basename_of, upstream,
+    Arch, ArgumentsDropped, D3d9, DllOverrideReset, Dxgi, ENV_VAR, EnvStep, Key, Origin,
+    Resolution, Scalar, Table, VersionInfo, Wined3d, basename_of,
 };
 
 use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TEB_PEB_OFFSET};
@@ -101,17 +101,17 @@ extern "C" fn run() {
     apply::tree(
         &nt,
         pe_dir,
-        "dxgi",
+        Scalar::Dxgi.as_str(),
         dxgi.as_str(),
-        &scalar_source(&resolution, "dxgi"),
+        &scalar_source(&resolution, Scalar::Dxgi),
     );
     let d3d9 = D3d9::effective(resolution.d3d9, process.arch);
     apply::tree(
         &nt,
         pe_dir,
-        "d3d9",
+        Scalar::D3d9.as_str(),
         d3d9.as_str(),
-        &scalar_source(&resolution, "d3d9"),
+        &scalar_source(&resolution, Scalar::D3d9),
     );
     // One renderer for every wined3d user in the process, whichever tree or
     // API brought wined3d in. A renderer a rule sets travels as an env
@@ -125,13 +125,13 @@ extern "C" fn run() {
     };
     log::line(&wined3d_line(
         wined3d,
-        &scalar_source(&resolution, "wined3d"),
-        resolution.reset_origin("wined3d"),
+        &scalar_source(&resolution, Scalar::Wined3d),
+        resolution.reset_origin(Scalar::Wined3d.as_str()),
         config.as_ref().map(|(value, rule)| (value.as_str(), *rule)),
     ));
 
     log::line(&list_line(
-        "dll_overrides",
+        Key::DllOverrides,
         &resolution.dll_overrides,
         &resolution.dll_overrides_from,
         None,
@@ -144,7 +144,7 @@ extern "C" fn run() {
     let (cmd, appended) =
         compatdb_core::append_cmdline_each(&process.cmdline, &resolution.arguments);
     log::line(&list_line(
-        "arguments",
+        Key::Arguments,
         &resolution.arguments,
         &resolution.arguments_from,
         Some(&appended),
@@ -160,7 +160,7 @@ extern "C" fn run() {
     };
     let steps = resolution.env_steps(|name| has(name).is_some());
     if steps.is_empty() {
-        log::line(&unset_line("env"));
+        log::line(&unset_line(Key::Env));
     }
     for step in &steps {
         log::line(&env_line(step, has(&step.name).as_deref()));
@@ -184,41 +184,48 @@ extern "C" fn run() {
 /// OpenGL the Mac driver gives.
 fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &Resolution) {
     match resolution.dpi_aware {
-        Some(aware) => apply::dpi_awareness(nt, aware, &scalar_source(resolution, "dpi_aware")),
-        None => log::line(&scalar_unset_line(resolution, "dpi_aware")),
+        Some(aware) => {
+            apply::dpi_awareness(nt, aware, &scalar_source(resolution, Scalar::DpiAware));
+        }
+        None => log::line(&scalar_unset_line(resolution, Scalar::DpiAware)),
     }
     match resolution.large_address_aware {
         Some(laa) => apply::large_address_aware(
             nt,
             laa,
-            &scalar_source(resolution, "large_address_aware"),
+            &scalar_source(resolution, Scalar::LargeAddressAware),
             process.params32.is_some(),
         ),
-        None => log::line(&scalar_unset_line(resolution, "large_address_aware")),
+        None => log::line(&scalar_unset_line(resolution, Scalar::LargeAddressAware)),
     }
     match resolution.gcmouse {
-        Some(on) => apply::gcmouse(nt, on, &scalar_source(resolution, "gcmouse")),
-        None => log::line(&scalar_unset_line(resolution, "gcmouse")),
+        Some(on) => apply::gcmouse(nt, on, &scalar_source(resolution, Scalar::Gcmouse)),
+        None => log::line(&scalar_unset_line(resolution, Scalar::Gcmouse)),
     }
     match resolution.force_nx {
         Some(on) => apply::force_nx(
             nt,
             on,
-            &scalar_source(resolution, "force_nx"),
+            &scalar_source(resolution, Scalar::ForceNx),
             process.params32.is_some(),
         ),
-        None => log::line(&scalar_unset_line(resolution, "force_nx")),
+        None => log::line(&scalar_unset_line(resolution, Scalar::ForceNx)),
     }
     match resolution.opengl {
-        Some(opengl) => apply::opengl(nt, opengl, &scalar_source(resolution, "opengl")),
-        None => log::line(&scalar_unset_line(resolution, "opengl")),
+        Some(opengl) => apply::opengl(nt, opengl, &scalar_source(resolution, Scalar::OpenGl)),
+        None => log::line(&scalar_unset_line(resolution, Scalar::OpenGl)),
     }
+}
+
+/// What upstream Wine does for the setting `key` when no rule sets it.
+fn upstream(key: Key) -> &'static str {
+    key.upstream().unwrap_or_default()
 }
 
 /// Where the setting `key` came from, for the log: its rule's source (see
 /// [`Origin::label`]), or, when no rule set it, what upstream Wine does,
 /// followed by the rule that reset it to `default`, when one did.
-fn source(key: &str, origin: Option<&Origin>, reset: Option<&Origin>) -> String {
+fn source(key: Key, origin: Option<&Origin>, reset: Option<&Origin>) -> String {
     match (origin, reset) {
         (Some(origin), _) => origin.label(),
         (None, Some(reset)) => format!(
@@ -230,19 +237,24 @@ fn source(key: &str, origin: Option<&Origin>, reset: Option<&Origin>) -> String 
     }
 }
 
-/// [`source`] of the scalar setting `key` of `resolution`.
-fn scalar_source(resolution: &Resolution, key: &str) -> String {
-    source(key, resolution.origin(key), resolution.reset_origin(key))
+/// [`source`] of the scalar setting `scalar` of `resolution`.
+fn scalar_source(resolution: &Resolution, scalar: Scalar) -> String {
+    let key = scalar.as_str();
+    source(
+        scalar.key(),
+        resolution.origin(key),
+        resolution.reset_origin(key),
+    )
 }
 
-/// The log line of the scalar setting `key` of `resolution`, which no rule
-/// set or the last rule for it reset.
-fn scalar_unset_line(resolution: &Resolution, key: &str) -> String {
-    format!("  {key} = {}", scalar_source(resolution, key))
+/// The log line of the scalar setting `scalar` of `resolution`, which no
+/// rule set or the last rule for it reset.
+fn scalar_unset_line(resolution: &Resolution, scalar: Scalar) -> String {
+    format!("  {scalar} = {}", scalar_source(resolution, scalar))
 }
 
 /// The log line of the setting `key` that no rule set.
-fn unset_line(key: &str) -> String {
+fn unset_line(key: Key) -> String {
     format!("  {key} = {}", source(key, None, None))
 }
 
@@ -264,7 +276,7 @@ fn dll_reset_line(reset: &DllOverrideReset) -> String {
 
 /// The log line of a list setting: each entry with where it came from, and,
 /// when `applied` is given, whether it went in.
-fn list_line(key: &str, entries: &[String], from: &[Origin], applied: Option<&[bool]>) -> String {
+fn list_line(key: Key, entries: &[String], from: &[Origin], applied: Option<&[bool]>) -> String {
     if entries.is_empty() {
         return unset_line(key);
     }

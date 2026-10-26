@@ -30,12 +30,14 @@ A setting a rule leaves unset is no opinion: a rule folded earlier decides
 | `arguments_override` | text, repeatable; an empty value alone clears | Replaces the `arguments` that the rules folded before this one gathered with its own values, which then go in the same way. The rule's own `arguments` and those of the rules folded after it still append ([merging](#merging)) | At load, as `arguments` |
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it. An entry of a built-in `*` rule is a default and leaves a variable the process already has alone; every other entry replaces it ([environment defaults](#environment-defaults)) | At load |
 
-The boolean keys take exactly `true` or `false`, case-sensitive. `dxgi`,
-`d3d9`, `wined3d` and `opengl` values are case-insensitive.
+Every word the format defines, the keys, the values of `dxgi`, `d3d9`,
+`wined3d` and `opengl`, `true`, `false` and `default`, is read in any case
+and written in lowercase. User data, the `exe`, the fingerprint values,
+env names and values, arguments and DLL override text, is kept as written.
 
 Each key above that holds one value, `dxgi`, `d3d9`, `wined3d`, `opengl`,
 `dpi_aware`, `large_address_aware`, `gcmouse` and `force_nx`, also takes
-`default`, in lower case: the setting is unset again from that rule on, so
+`default`: the setting is unset again from that rule on, so
 upstream Wine decides, unless a rule folded later sets it. `env` and
 `arguments` take no `default`: an empty `env` value removes the variable,
 and `arguments_override=` clears the arguments.
@@ -83,7 +85,7 @@ and `arguments_override=` clears the arguments.
   `DllOverrides` and `WINEDLLOVERRIDES` then decide for those modules,
   which they cannot while compatdb has an entry for them. A module name
   matches case-insensitively, with or without `.dll`. This `default` is
-  case-insensitive too, unlike a scalar's: an order such as `Default` would
+  case-insensitive too, like a scalar's: an order such as `Default` would
   otherwise reach ntdll, which reads an order without `n` or `b` as
   disabled.
 - `arguments_override` replaces the `arguments` the rules folded before it
@@ -174,9 +176,8 @@ exe=*;gcmouse=false
   launchers wrote for an older format, is ignored, so their tables still
   apply; it still counts as a line.
 - Keys: the matching keys (`exe`, required, and `company`, `product`,
-  `original_filename`) and the [settings](#settings). The parser,
-  `record_to_rule` in
-  [`compatdb/core/src/wire.rs`](../compatdb/core/src/wire.rs), is the
+  `original_filename`) and the [settings](#settings). `Key` in
+  [`compatdb/core/src/key.rs`](../compatdb/core/src/key.rs) is the
   authoritative list.
 - Inside a value, `%`, `;`, CR, LF and other control characters are
   percent-encoded (`%3B` for `;`, `%25` for `%`). Everything else, including
@@ -187,9 +188,9 @@ exe=*;gcmouse=false
 Errors never abort a process.
 
 - A field with an unknown key, an unknown `dxgi`, `d3d9`, `wined3d` or
-  `opengl` value, a boolean other than `true` or `false` (so `TRUE` or `1`
-  too), or no `=` is ignored with a warning naming the line and the field.
-  The rest of its line still applies.
+  `opengl` value, a boolean other than `true` or `false` in any case (so
+  `1` or `yes`), or no `=` is ignored with a warning naming the line and
+  the field. The rest of its line still applies.
 - `name` and `enabled`, which launchers wrote for an older format where a
   rule named a built-in rule to change or drop it, are unknown keys like
   any other. A line with them and an `exe` is a rule of its own;
@@ -403,8 +404,8 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
   setting gets a line with its value and its source, or, where no rule set
   it, `unset (upstream: ...)` with what upstream Wine does instead, followed
   by `reset by <source>` when the last rule for it set it to `default`.
-  Those descriptions are `UPSTREAM` in
-  [`compatdb/core/src/rule.rs`](../compatdb/core/src/rule.rs).
+  Those descriptions are `Key::upstream` in
+  [`compatdb/core/src/key.rs`](../compatdb/core/src/key.rs).
 - A source is `built-in` for a built-in rule that matches every process,
   `built-in for <exe> (<fingerprint values>)` for a built-in rule for one
   program, with the values it pins, and `WINE_COMPATDB line <n>` for a

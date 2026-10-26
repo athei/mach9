@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ANY_EXE, SCALAR_KEYS, append_cmdline_each, merge_env};
+use crate::{ANY_EXE, append_cmdline_each, merge_env};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
@@ -369,27 +369,24 @@ fn default_resets_a_scalar_from_that_rule_on() -> TestResult {
     assert_eq!((a.dpi_aware, a.resets.clone()), (Some(true), vec![]));
     let b = parsed.rules.get(1).ok_or("no b")?;
     assert_eq!((b.gcmouse, b.resets.clone()), (None, vec!["gcmouse"]));
-    // Every scalar key takes it, and nothing else does: `default` is
-    // case-sensitive like the booleans, and `env` and `arguments` take it
-    // as text.
-    for key in SCALAR_KEYS {
-        let (parsed, diagnostics) = Table::parse(&format!("exe=a.exe;{key}=default"));
-        assert!(diagnostics.is_empty(), "{key}: {diagnostics:?}");
+    // Every scalar key takes it, and nothing else does: `default` is a word
+    // of the format, read in any case like the booleans, while `env` and
+    // `arguments` take it as text.
+    for scalar in Scalar::ALL {
+        let (parsed, diagnostics) = Table::parse(&format!("exe=a.exe;{scalar}=default"));
+        assert!(diagnostics.is_empty(), "{scalar}: {diagnostics:?}");
         assert_eq!(
             parsed.rules.first().map(|r| r.resets.clone()),
-            Some(vec![*key])
+            Some(vec![scalar.as_str()])
         );
     }
     let (parsed, diagnostics) =
-        Table::parse("exe=a.exe;dpi_aware=Default;env=A=default;arguments=default");
-    assert_eq!(
-        diagnostics,
-        ["WINE_COMPATDB line 1: ignoring unknown dpi_aware value \"Default\""]
-    );
+        Table::parse("exe=a.exe;dpi_aware=Default;env=A=default;arguments=DEFAULT");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let a = parsed.rules.first().ok_or("no a")?;
-    assert_eq!(a.resets, [] as [&str; 0]);
+    assert_eq!(a.resets, ["dpi_aware"]);
     assert_eq!(a.env, [("A".to_string(), "default".to_string())]);
-    assert_eq!(a.arguments, ["default"]);
+    assert_eq!(a.arguments, ["DEFAULT"]);
     Ok(())
 }
 

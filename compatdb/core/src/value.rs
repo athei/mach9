@@ -1,14 +1,16 @@
 //! The values of the settings that choose between implementations: the
 //! Direct3D trees, the wined3d renderer and the Mac driver's OpenGL.
 
-use crate::Arch;
+use std::{fmt, str::FromStr};
+
+use crate::{Arch, FieldError, Key};
 
 /// Which implementation of the DXGI family a process loads.
 ///
 /// D3D10, D3D10.1, D3D11 and D3D12 travel together because they all create
 /// their device through one `dxgi.dll`, and each implementation's modules only
 /// work with its own.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Dxgi {
     /// DXMT, which a built-in rule gives every program.
     Dxmt,
@@ -18,17 +20,10 @@ pub enum Dxgi {
 }
 
 impl Dxgi {
-    /// Parse a wire/TOML value, case-insensitively.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "dxmt" => Some(Self::Dxmt),
-            "wined3d" => Some(Self::Wined3d),
-            _ => None,
-        }
-    }
+    /// Every implementation.
+    pub const ALL: &'static [Self] = &[Self::Dxmt, Self::Wined3d];
 
-    /// The wire/TOML spelling, which is also the `lib/wine/dxgi/<name>` tree.
+    /// The wire spelling, which is also the `lib/wine/dxgi/<name>` tree.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -61,7 +56,7 @@ impl Dxgi {
 
 /// Which D3D9 implementation a process loads. Independent of [`Dxgi`]: neither
 /// implementation's `d3d9.dll` touches `dxgi.dll`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum D3d9 {
     /// mtld3d, which a built-in rule gives every program.
     Mtld3d,
@@ -71,17 +66,10 @@ pub enum D3d9 {
 }
 
 impl D3d9 {
-    /// Parse a wire/TOML value, case-insensitively.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "mtld3d" => Some(Self::Mtld3d),
-            "wined3d" => Some(Self::Wined3d),
-            _ => None,
-        }
-    }
+    /// Every implementation.
+    pub const ALL: &'static [Self] = &[Self::Mtld3d, Self::Wined3d];
 
-    /// The wire/TOML spelling, which is also the `lib/wine/d3d9/<name>` tree.
+    /// The wire spelling, which is also the `lib/wine/d3d9/<name>` tree.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -118,7 +106,7 @@ impl D3d9 {
 /// of [`Dxgi`] and [`D3d9`], D3D8 and `DirectDraw`), and it reads its settings
 /// once, so this is a setting of the process, not of a family. It chooses no
 /// tree: [`Dxgi`] and [`D3d9`] still decide whether wined3d is used at all.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Wined3d {
     /// OpenGL, wined3d's own default.
     Gl,
@@ -131,17 +119,11 @@ impl Wined3d {
     /// `name=value` options.
     pub const CONFIG_VAR: &'static str = "WINE_D3D_CONFIG";
 
-    /// Parse a wire/TOML value, case-insensitively.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "gl" => Some(Self::Gl),
-            "vulkan" => Some(Self::Vulkan),
-            _ => None,
-        }
-    }
+    /// Every renderer.
+    pub const ALL: &'static [Self] = &[Self::Gl, Self::Vulkan];
 
-    /// The wire/TOML spelling.
+    /// The wire spelling, which is also the value of wined3d's `renderer`
+    /// option.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -186,7 +168,7 @@ impl Wined3d {
 /// The value is the process's own: ntdll stores it for winemac.drv, which
 /// reads it when OpenGL is first initialized, so a program does not take the
 /// choice of the program that started it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum OpenGl {
     /// Mesa's EGL, with Zink on `KosmicKrisp`. Without a GPU `KosmicKrisp`
     /// can use, the process gets no OpenGL.
@@ -196,17 +178,10 @@ pub enum OpenGl {
 }
 
 impl OpenGl {
-    /// Parse a wire/TOML value, case-insensitively.
-    #[must_use]
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "egl" => Some(Self::Egl),
-            "cgl" => Some(Self::Cgl),
-            _ => None,
-        }
-    }
+    /// Every OpenGL.
+    pub const ALL: &'static [Self] = &[Self::Egl, Self::Cgl];
 
-    /// The wire/TOML spelling.
+    /// The wire spelling.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -223,6 +198,88 @@ impl OpenGl {
             Self::Egl => 1,
             Self::Cgl => 0,
         }
+    }
+}
+
+/// The value of `all` that `name` spells `s`, ASCII-case-insensitively, or
+/// the error for the setting `key`, whose spellings without `default` are
+/// the ones it lists.
+fn parse_word<T: Copy>(
+    key: Key,
+    all: &[T],
+    name: fn(T) -> &'static str,
+    s: &str,
+) -> Result<T, FieldError> {
+    all.iter()
+        .copied()
+        .find(|value| name(*value).eq_ignore_ascii_case(s))
+        .ok_or_else(|| FieldError::BadValue {
+            key,
+            value: s.to_owned(),
+            expected: key
+                .values()
+                .split_last()
+                .map_or(&[], |(_default, words)| words),
+        })
+}
+
+impl FromStr for Dxgi {
+    type Err = FieldError;
+
+    /// The implementation spelled `s`, ASCII-case-insensitively.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_word(Key::Dxgi, Self::ALL, Self::as_str, s)
+    }
+}
+
+impl FromStr for D3d9 {
+    type Err = FieldError;
+
+    /// The implementation spelled `s`, ASCII-case-insensitively.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_word(Key::D3d9, Self::ALL, Self::as_str, s)
+    }
+}
+
+impl FromStr for Wined3d {
+    type Err = FieldError;
+
+    /// The renderer spelled `s`, ASCII-case-insensitively.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_word(Key::Wined3d, Self::ALL, Self::as_str, s)
+    }
+}
+
+impl FromStr for OpenGl {
+    type Err = FieldError;
+
+    /// The OpenGL spelled `s`, ASCII-case-insensitively.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_word(Key::OpenGl, Self::ALL, Self::as_str, s)
+    }
+}
+
+impl fmt::Display for Dxgi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Display for D3d9 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Display for Wined3d {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Display for OpenGl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

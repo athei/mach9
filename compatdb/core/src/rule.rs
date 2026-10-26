@@ -1,6 +1,6 @@
 //! A rule: the processes it matches and the settings it applies to them.
 
-use crate::{D3d9, Dxgi, OpenGl, VersionInfo, Wined3d};
+use crate::{D3d9, Dxgi, OpenGl, Scalar, ScalarValue, VersionInfo, Wined3d};
 #[cfg(doc)]
 use crate::{ENV_VAR, Origin, Table};
 
@@ -67,10 +67,10 @@ pub struct Rule {
     /// `env` entry, the value is the process's own: the processes it starts
     /// get their own rules' value.
     pub force_nx: Option<bool>,
-    /// The scalar keys (those of [`SCALAR_KEYS`]) this rule sets to
-    /// `default`: from this rule on the setting is unset again, so upstream
-    /// Wine decides unless a rule folded later sets it. A key is either here
-    /// or has a value in its field, never both.
+    /// The keys of the scalar settings (those of [`Scalar::ALL`]) this rule
+    /// sets to `default`: from this rule on the setting is unset again, so
+    /// upstream Wine decides unless a rule folded later sets it. A key is
+    /// either here or has a value in its field, never both.
     pub resets: Vec<&'static str>,
     /// `WINEDLLOVERRIDES` elements (each a `names=order` string). An entry
     /// whose order is `default` sets no load order: it removes the entries
@@ -101,66 +101,12 @@ pub struct Rule {
     pub source: Source,
 }
 
-/// The keys of the settings that hold one value, which `default` resets (see
-/// [`Rule::resets`]), in the order of the fields.
-pub const SCALAR_KEYS: &[&str] = &[
-    "dxgi",
-    "d3d9",
-    "wined3d",
-    "opengl",
-    "dpi_aware",
-    "large_address_aware",
-    "gcmouse",
-    "force_nx",
-];
-
-/// The value of a scalar key that resets it (see [`Rule::resets`]), and of a
-/// `dll_overrides` entry that removes the overrides of its modules.
-pub const DEFAULT_VALUE: &str = "default";
-
-/// What upstream Wine does for each setting of a [`Rule`] when no rule sets
-/// it, as the log of `compatdb.so` prints it.
+/// The value of a scalar setting that resets it (see [`Rule::resets`]), and
+/// of a `dll_overrides` entry that removes the overrides of its modules.
 ///
-/// One entry per setting key, in the order of the fields. A test checks that
-/// every setting a record can carry has one.
-pub const UPSTREAM: &[(&str, &str)] = &[
-    ("dxgi", "wined3d"),
-    ("d3d9", "wined3d"),
-    (
-        "wined3d",
-        "the OpenGL renderer, unless WINE_D3D_CONFIG or wined3d's registry settings name another",
-    ),
-    ("opengl", "Apple's OpenGL"),
-    (
-        "dpi_aware",
-        "the AppCompatFlags layer, then the manifest, otherwise unaware",
-    ),
-    (
-        "large_address_aware",
-        "the executable's large-address-aware flag",
-    ),
-    ("gcmouse", "off, the cursor's movement"),
-    (
-        "force_nx",
-        "no-execute off when the executable or a DLL lacks the NX_COMPAT flag",
-    ),
-    (
-        "dll_overrides",
-        "WINEDLLOVERRIDES and the registry's DllOverrides decide",
-    ),
-    ("arguments", "the command line the process was started with"),
-    ("env", "the environment the process was started with"),
-];
-
-/// What upstream Wine does for the setting `key` when no rule sets it (see
-/// [`UPSTREAM`]).
-#[must_use]
-pub fn upstream(key: &str) -> &'static str {
-    UPSTREAM
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map_or("unknown", |(_, what)| what)
-}
+/// Like every word of the format it is matched ASCII-case-insensitively and
+/// written in lowercase.
+pub const DEFAULT_VALUE: &str = "default";
 
 impl Default for Rule {
     fn default() -> Self {
@@ -189,6 +135,66 @@ impl Default for Rule {
 }
 
 impl Rule {
+    /// The value this rule sets for the scalar setting `scalar`, or `None`
+    /// when it sets none.
+    #[must_use]
+    pub const fn scalar(&self, scalar: Scalar) -> Option<ScalarValue> {
+        match scalar {
+            Scalar::Dxgi => match self.dxgi {
+                Some(value) => Some(ScalarValue::Dxgi(value)),
+                None => None,
+            },
+            Scalar::D3d9 => match self.d3d9 {
+                Some(value) => Some(ScalarValue::D3d9(value)),
+                None => None,
+            },
+            Scalar::Wined3d => match self.wined3d {
+                Some(value) => Some(ScalarValue::Wined3d(value)),
+                None => None,
+            },
+            Scalar::OpenGl => match self.opengl {
+                Some(value) => Some(ScalarValue::OpenGl(value)),
+                None => None,
+            },
+            Scalar::DpiAware => bool_value(self.dpi_aware),
+            Scalar::LargeAddressAware => bool_value(self.large_address_aware),
+            Scalar::Gcmouse => bool_value(self.gcmouse),
+            Scalar::ForceNx => bool_value(self.force_nx),
+        }
+    }
+
+    /// Set the scalar setting that `value` is a value of, `scalar`, and
+    /// take it out of [`Rule::resets`]; `None` resets it to `default`. A
+    /// value of another setting leaves the rule as it is.
+    pub(crate) fn put_scalar(&mut self, scalar: Scalar, value: Option<ScalarValue>) {
+        match (scalar, value) {
+            (Scalar::Dxgi, Some(ScalarValue::Dxgi(value))) => self.dxgi = Some(value),
+            (Scalar::D3d9, Some(ScalarValue::D3d9(value))) => self.d3d9 = Some(value),
+            (Scalar::Wined3d, Some(ScalarValue::Wined3d(value))) => self.wined3d = Some(value),
+            (Scalar::OpenGl, Some(ScalarValue::OpenGl(value))) => self.opengl = Some(value),
+            (Scalar::DpiAware, Some(ScalarValue::Bool(on))) => self.dpi_aware = Some(on),
+            (Scalar::LargeAddressAware, Some(ScalarValue::Bool(on))) => {
+                self.large_address_aware = Some(on);
+            }
+            (Scalar::Gcmouse, Some(ScalarValue::Bool(on))) => self.gcmouse = Some(on),
+            (Scalar::ForceNx, Some(ScalarValue::Bool(on))) => self.force_nx = Some(on),
+            (_, Some(_)) => return,
+            (Scalar::Dxgi, None) => self.dxgi = None,
+            (Scalar::D3d9, None) => self.d3d9 = None,
+            (Scalar::Wined3d, None) => self.wined3d = None,
+            (Scalar::OpenGl, None) => self.opengl = None,
+            (Scalar::DpiAware, None) => self.dpi_aware = None,
+            (Scalar::LargeAddressAware, None) => self.large_address_aware = None,
+            (Scalar::Gcmouse, None) => self.gcmouse = None,
+            (Scalar::ForceNx, None) => self.force_nx = None,
+        }
+        let key = scalar.as_str();
+        self.resets.retain(|k| *k != key);
+        if value.is_none() {
+            self.resets.push(key);
+        }
+    }
+
     /// Whether this rule applies to a process with the given image basename
     /// and version resource. `exe` matches the basename case-insensitively, or
     /// every basename when it is [`ANY_EXE`]; a fingerprint field, when
@@ -263,6 +269,14 @@ impl Rule {
         } else {
             format!("{} ({})", self.exe, pins.join(", "))
         }
+    }
+}
+
+/// The value of a true-or-false setting a rule sets.
+const fn bool_value(value: Option<bool>) -> Option<ScalarValue> {
+    match value {
+        Some(on) => Some(ScalarValue::Bool(on)),
+        None => None,
     }
 }
 

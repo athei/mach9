@@ -1,12 +1,11 @@
 //! Folding the rules that match a process into the settings it gets, with
 //! where each value came from.
 
-use crate::{
-    D3d9, DEFAULT_VALUE, Dxgi, ENV_VAR, OpenGl, Rule, Source, Table, VersionInfo, Wined3d,
-    wire::scalar_value,
-};
 #[cfg(doc)]
-use crate::{SCALAR_KEYS, basename_of};
+use crate::basename_of;
+use crate::{
+    D3d9, DEFAULT_VALUE, Dxgi, ENV_VAR, OpenGl, Rule, Scalar, Source, Table, VersionInfo, Wined3d,
+};
 
 /// The settings that apply to one process.
 ///
@@ -255,7 +254,7 @@ impl Resolution {
     }
 
     /// Unset the scalar setting `key`, as `rule` sets it to `default`, and
-    /// record that it did. A key that is not one of [`SCALAR_KEYS`] is
+    /// record that it did. A key that is not one of [`Scalar::ALL`] is
     /// ignored.
     fn reset(&mut self, key: &'static str, rule: &Rule) {
         match key {
@@ -465,8 +464,9 @@ impl Table {
             }
             // A key is either reset or set (see Rule::resets); a rule built
             // with both keeps its value, as it serializes.
-            for &key in &rule.resets {
-                if scalar_value(rule, key).is_none() {
+            for &scalar in Scalar::ALL {
+                let key = scalar.as_str();
+                if rule.resets.contains(&key) && rule.scalar(scalar).is_none() {
                     r.reset(key, rule);
                 }
             }

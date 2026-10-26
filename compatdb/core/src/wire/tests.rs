@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ANY_EXE, UPSTREAM, VersionInfo, upstream};
+use crate::{ANY_EXE, D3d9, Dxgi, KeyKind, OpenGl, VersionInfo, Wined3d};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
@@ -122,18 +122,11 @@ fn a_legacy_header_on_the_first_line_is_skipped() {
 
 #[test]
 fn only_a_first_line_of_v_and_digits_is_a_legacy_header() {
-    for header in ["v=6", "v=0", "v=123"] {
+    // The `v` is a key, so its case does not matter.
+    for header in ["v=6", "v=0", "v=123", "V=6"] {
         assert!(is_legacy_header(header), "{header}");
     }
-    for other in [
-        "v=",
-        "v=6a",
-        "v=-1",
-        "V=6",
-        " v=6",
-        "v=6;exe=x",
-        "exe=x;v=6",
-    ] {
+    for other in ["v=", "v=6a", "v=-1", " v=6", "v=6;exe=x", "exe=x;v=6"] {
         assert!(!is_legacy_header(other), "{other}");
     }
     // Anything else on the first line is a record: one with an exe is a
@@ -341,7 +334,7 @@ fn dpi_aware_round_trips_in_both_values_and_is_absent_when_unset() {
 
 #[test]
 fn a_bad_dpi_aware_value_is_ignored() {
-    for bad in ["yes", "1", "TRUE", ""] {
+    for bad in ["yes", "1", "truee", ""] {
         let (table, diagnostics) = Table::parse(&format!("exe=x.exe;dpi_aware={bad}\nexe=ok.exe"));
         assert_eq!(table.rules.len(), 2, "dpi_aware={bad:?}");
         assert_eq!(table.rules.first().map(|r| r.dpi_aware), Some(None));
@@ -385,7 +378,7 @@ fn large_address_aware_round_trips_and_is_absent_when_unset() {
 #[test]
 fn a_bad_large_address_aware_value_is_ignored() {
     let key = "large_address_aware";
-    for bad in ["yes", "1", "False", ""] {
+    for bad in ["yes", "1", "fals", ""] {
         let (table, diagnostics) = Table::parse(&format!(
             "exe=x.exe;dpi_aware=false;{key}={bad}\nexe=ok.exe"
         ));
@@ -437,7 +430,7 @@ fn gcmouse_round_trips_and_is_absent_when_unset() {
 #[test]
 fn a_bad_gcmouse_value_is_ignored() {
     let key = "gcmouse";
-    for bad in ["yes", "1", "False", ""] {
+    for bad in ["yes", "1", "fals", ""] {
         let (table, diagnostics) = Table::parse(&format!(
             "exe=x.exe;dpi_aware=false;{key}={bad}\nexe=ok.exe"
         ));
@@ -489,7 +482,7 @@ fn force_nx_round_trips_and_is_absent_when_unset() {
 #[test]
 fn a_bad_force_nx_value_is_ignored() {
     let key = "force_nx";
-    for bad in ["yes", "1", "False", ""] {
+    for bad in ["yes", "1", "fals", ""] {
         let (table, diagnostics) = Table::parse(&format!(
             "exe=x.exe;dpi_aware=false;{key}={bad}\nexe=ok.exe"
         ));
@@ -558,9 +551,9 @@ fn the_x86_64_wines_x87_sidecar_key_is_an_unknown_key() {
 }
 
 #[test]
-fn every_setting_a_record_can_carry_says_what_upstream_wine_does() {
+fn every_field_a_record_can_carry_is_a_key_in_the_order_of_key_all() -> TestResult {
     // The literal names every field, so a new one does not compile until
-    // it is added here, and with it its entry in UPSTREAM.
+    // it is added here, and with it its key.
     let rule = Rule {
         exe: "all.exe".into(),
         company: Some("c".into()),
@@ -583,24 +576,65 @@ fn every_setting_a_record_can_carry_says_what_upstream_wine_does() {
         debug_channels: Vec::new(),
         source: Source::BuiltIn,
     };
-    let matchers = ["exe", "company", "product", "original_filename"];
-    // `arguments_override` is a way of setting `arguments`, which the
-    // log prints, so it has no line, and no entry, of its own.
-    let modifiers = ["arguments_override"];
     let record = rule_to_record(&rule);
-    let keys: Vec<&str> = record
-        .split(';')
-        .filter_map(|field| field.split_once('=').map(|(key, _)| key))
-        .filter(|key| !matchers.contains(key) && !modifiers.contains(key))
-        .collect();
-    for key in &keys {
-        assert_ne!(upstream(key), "unknown", "{key} has no UPSTREAM entry");
+    let mut keys = Vec::new();
+    for field in record.split(';') {
+        let (key, _) = field.split_once('=').ok_or("a field without '='")?;
+        keys.push(key.parse::<Key>()?);
     }
-    assert_eq!(keys.len(), UPSTREAM.len());
+    assert_eq!(keys, Key::ALL);
+    // Every setting says what upstream Wine does without it; a matcher
+    // is no setting.
+    for key in &keys {
+        assert_eq!(
+            key.upstream().is_none(),
+            key.kind() == KeyKind::Matcher,
+            "{key}"
+        );
+        assert_eq!(key.to_string(), key.as_str());
+    }
     // The scalar keys are the settings that are not lists, in order.
-    let lists = ["dll_overrides", "arguments", "env"];
-    let scalars: Vec<&str> = keys.into_iter().filter(|k| !lists.contains(k)).collect();
-    assert_eq!(scalars, SCALAR_KEYS);
+    let scalars: Vec<Scalar> = keys.iter().filter_map(|key| key.scalar()).collect();
+    assert_eq!(scalars, Scalar::ALL);
+    Ok(())
+}
+
+#[test]
+fn every_word_of_the_format_is_read_in_any_case_and_written_in_lowercase() -> TestResult {
+    // Keys, values, `true`/`false` and `default` alike.
+    let (table, diagnostics) = Table::parse(
+        "EXE=Game.EXE;Company=ACME;DXGI=WineD3D;D3D9=MtlD3D;Wined3d=VULKAN;OpenGL=CGL;\
+         DPI_Aware=TRUE;Large_Address_Aware=False;GCMOUSE=Default;Force_NX=DEFAULT;\
+         DLL_Overrides=D3D12=;Arguments=-X;Env=Name=Value\n\
+         exe=x.exe;opengl=EGL",
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let rule = table.rules.first().ok_or("no rule")?;
+    assert_eq!(rule.dxgi, Some(Dxgi::Wined3d));
+    assert_eq!(rule.d3d9, Some(D3d9::Mtld3d));
+    assert_eq!(rule.wined3d, Some(Wined3d::Vulkan));
+    assert_eq!(rule.opengl, Some(OpenGl::Cgl));
+    assert_eq!(rule.dpi_aware, Some(true));
+    assert_eq!(rule.large_address_aware, Some(false));
+    assert_eq!(rule.resets, ["gcmouse", "force_nx"]);
+    // The user data keeps its case.
+    assert_eq!(
+        table.to_env_value(),
+        "exe=Game.EXE;company=ACME;dxgi=wined3d;d3d9=mtld3d;wined3d=vulkan;opengl=cgl;\
+         dpi_aware=true;large_address_aware=false;gcmouse=default;force_nx=default;\
+         dll_overrides=D3D12=;arguments=-X;env=Name=Value\n\
+         exe=x.exe;opengl=egl"
+    );
+    // An unknown key or value is reported as it was written.
+    let (_, diagnostics) = Table::parse("exe=x.exe;Bogus=1;DXGI=Vulkan");
+    assert_eq!(
+        diagnostics,
+        [
+            "WINE_COMPATDB line 1: ignoring unknown key \"Bogus\"",
+            "WINE_COMPATDB line 1: ignoring unknown dxgi value \"Vulkan\"",
+        ]
+    );
+    Ok(())
 }
 
 #[test]
@@ -644,10 +678,10 @@ fn arguments_override_round_trips_and_an_empty_one_clears() {
 
 #[test]
 fn wined3d_parses_round_trips_and_rejects_other_values() {
-    assert_eq!(Wined3d::parse("GL"), Some(Wined3d::Gl));
-    assert_eq!(Wined3d::parse("Vulkan"), Some(Wined3d::Vulkan));
-    assert_eq!(Wined3d::parse("opengl"), None);
-    assert_eq!(Wined3d::parse("dxmt"), None);
+    assert_eq!("GL".parse(), Ok(Wined3d::Gl));
+    assert_eq!("Vulkan".parse(), Ok(Wined3d::Vulkan));
+    assert!("opengl".parse::<Wined3d>().is_err());
+    assert!("dxmt".parse::<Wined3d>().is_err());
     assert_eq!(Wined3d::Vulkan.as_str(), "vulkan");
     let table = Table {
         rules: vec![
@@ -682,10 +716,10 @@ fn wined3d_parses_round_trips_and_rejects_other_values() {
 
 #[test]
 fn opengl_parses_round_trips_and_rejects_other_values() {
-    assert_eq!(OpenGl::parse("EGL"), Some(OpenGl::Egl));
-    assert_eq!(OpenGl::parse("Cgl"), Some(OpenGl::Cgl));
-    assert_eq!(OpenGl::parse("gl"), None);
-    assert_eq!(OpenGl::parse(""), None);
+    assert_eq!("EGL".parse(), Ok(OpenGl::Egl));
+    assert_eq!("Cgl".parse(), Ok(OpenGl::Cgl));
+    assert!("gl".parse::<OpenGl>().is_err());
+    assert!("".parse::<OpenGl>().is_err());
     assert_eq!(OpenGl::Egl.as_str(), "egl");
     assert_eq!(OpenGl::Egl.hook_value(), 1);
     assert_eq!(OpenGl::Cgl.hook_value(), 0);

@@ -27,7 +27,7 @@ fn wow() -> Origin {
 
 #[test]
 fn the_wined3d_line_names_the_renderer() {
-    let unset = source("wined3d", None, None);
+    let unset = source(Key::Wined3d, None, None);
     let line = Origin::Line(2);
     // A renderer a rule set wins the line over any config, and reads like
     // any other setting.
@@ -70,12 +70,12 @@ fn the_wined3d_line_names_the_renderer() {
     }
     // A reset says so, with or without a config that asks for a
     // renderer.
-    let reset = source("wined3d", None, Some(&line));
+    let reset = source(Key::Wined3d, None, Some(&line));
     assert_eq!(
         wined3d_line(None, &reset, Some(&line), None),
         format!(
             "  wined3d = unset (upstream: {}), reset by WINE_COMPATDB line 2",
-            upstream("wined3d")
+            upstream(Key::Wined3d)
         )
     );
     assert_eq!(
@@ -97,15 +97,15 @@ fn the_wined3d_line_names_the_renderer() {
 #[test]
 fn a_reset_scalar_and_a_default_dll_override_say_which_line_reset_them() {
     assert_eq!(
-        source("dpi_aware", None, Some(&Origin::Line(3))),
+        source(Key::DpiAware, None, Some(&Origin::Line(3))),
         format!(
             "unset (upstream: {}), reset by WINE_COMPATDB line 3",
-            upstream("dpi_aware")
+            upstream(Key::DpiAware)
         )
     );
     // A value set after the reset is what the line shows.
     assert_eq!(
-        source("dpi_aware", Some(&Origin::Line(4)), None),
+        source(Key::DpiAware, Some(&Origin::Line(4)), None),
         "WINE_COMPATDB line 4"
     );
     let reset = |removed: Vec<Origin>| DllOverrideReset {
@@ -132,20 +132,20 @@ fn a_reset_scalar_and_a_default_dll_override_say_which_line_reset_them() {
 #[test]
 fn the_list_and_env_lines_name_the_source_of_each_entry_and_what_happened() {
     assert_eq!(
-        list_line("arguments", &[], &[], Some(&[])),
+        list_line(Key::Arguments, &[], &[], Some(&[])),
         "  arguments = unset (upstream: the command line the process was started with)"
     );
     let args = ["--in-process-gpu".to_string(), "-x".to_string()];
     let from = [wow(), Origin::Line(1)];
     assert_eq!(
-        list_line("arguments", &args, &from, Some(&[false, true])),
+        list_line(Key::Arguments, &args, &from, Some(&[false, true])),
         "  arguments = --in-process-gpu (built-in for WoW.exe (Blizzard Entertainment, \
          World of Warcraft, WoW.exe), already present); -x (WINE_COMPATDB line 1, \
          appended)"
     );
     assert_eq!(
         list_line(
-            "dll_overrides",
+            Key::DllOverrides,
             &["mscoree,mshtml=".into()],
             &[Origin::BuiltIn],
             None
@@ -220,26 +220,34 @@ fn an_arguments_override_line_names_what_it_dropped() {
 #[test]
 fn an_unset_line_says_what_upstream_wine_does() {
     assert_eq!(
-        unset_line("gcmouse"),
+        unset_line(Key::Gcmouse),
         "  gcmouse = unset (upstream: off, the cursor's movement)"
     );
     assert_eq!(
-        unset_line("force_nx"),
+        unset_line(Key::ForceNx),
         "  force_nx = unset (upstream: no-execute off when the executable or a DLL lacks the \
          NX_COMPAT flag)"
     );
     assert_eq!(
-        unset_line("opengl"),
+        unset_line(Key::OpenGl),
         "  opengl = unset (upstream: Apple's OpenGL)"
     );
-    assert_eq!(source("dxgi", None, None), "unset (upstream: wined3d)");
-    assert_eq!(source("dxgi", Some(&Origin::BuiltIn), None), "built-in");
     assert_eq!(
-        source("dxgi", Some(&Origin::Line(4)), None),
+        unset_line(Key::Env),
+        "  env = unset (upstream: the environment the process was started with)"
+    );
+    assert_eq!(source(Key::Dxgi, None, None), "unset (upstream: wined3d)");
+    assert_eq!(source(Key::Dxgi, Some(&Origin::BuiltIn), None), "built-in");
+    assert_eq!(
+        source(Key::Dxgi, Some(&Origin::Line(4)), None),
         "WINE_COMPATDB line 4"
     );
-    for (key, _) in compatdb_core::UPSTREAM {
-        assert!(!unset_line(key).contains("unknown"), "{key}");
+    // Every key the log prints a line for says what upstream Wine does.
+    for scalar in Scalar::ALL {
+        assert!(!upstream(scalar.key()).is_empty(), "{scalar}");
+    }
+    for key in [Key::DllOverrides, Key::Arguments, Key::Env] {
+        assert!(!upstream(key).is_empty(), "{key}");
     }
 }
 
