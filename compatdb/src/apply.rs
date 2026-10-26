@@ -1,4 +1,4 @@
-//! Applying a [`Resolution`](compatdb_table::Resolution) to the current
+//! Applying a [`Resolution`](compatdb_core::Resolution) to the current
 //! process: prepending the Direct3D trees, adding load-order overrides,
 //! setting the DPI awareness, large address awareness and the
 //! `GameController` mouse setting, rewriting the command line and
@@ -12,14 +12,14 @@ use std::{
     ptr,
 };
 
-use compatdb_table::{OpenGl, merge_env};
+use compatdb_core::{OpenGl, merge_env};
 
 use crate::{Process, log, ntdll::Ntdll};
 
 /// Prepend `lib/wine/<family>/<name>` to the builtin search path, where
 /// `family` is `dxgi` or `d3d9` and `name` the implementation's tree. The
 /// tree counts as present when it has the process's builtin directory,
-/// `pe_dir` ([`Arch::pe_dir`](compatdb_table::Arch::pe_dir)).
+/// `pe_dir` ([`Arch::pe_dir`](compatdb_core::Arch::pe_dir)).
 ///
 /// Every process gets one tree per family. The default dirs hold only
 /// fake-module markers for these DLLs, so this is purely additive and nothing

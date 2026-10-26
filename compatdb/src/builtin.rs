@@ -11,7 +11,7 @@
 //! purpose: each is a default that a built-in rule for one program, or any
 //! `WINE_COMPATDB` rule that sets the same key, overrides.
 
-use compatdb_table::{ANY_EXE, D3d9, Dxgi, OpenGl, Rule, Table};
+use compatdb_core::{ANY_EXE, D3d9, Dxgi, OpenGl, Rule, Table};
 
 /// The rules the bundle ships with: the [`defaults`] for every process, then
 /// the rules for one program each.
@@ -278,7 +278,7 @@ fn programs() -> Vec<Rule> {
 
 #[cfg(test)]
 mod tests {
-    use compatdb_table::{
+    use compatdb_core::{
         ArgumentsDropped, DllOverrideReset, Origin, Resolution, Source, VersionInfo, Wined3d,
     };
 
@@ -431,7 +431,7 @@ mod tests {
         let block: Vec<u16> = "FEX_X87REDUCEDPRECISION=1\0OTHER=x\0\0"
             .encode_utf16()
             .collect();
-        let merged = compatdb_table::merge_env(&block, &old.env).ok_or("unchanged")?;
+        let merged = compatdb_core::merge_env(&block, &old.env).ok_or("unchanged")?;
         assert_eq!(String::from_utf16_lossy(&merged), "OTHER=x\0\0");
         // Another process keeps it.
         let other = table.resolve("other.exe", &VersionInfo::default());
@@ -933,7 +933,7 @@ mod tests {
         assert!(game.reset_by.iter().all(|(_, o)| *o == Origin::Line(1)));
         // Then the trees are upstream Wine's.
         assert_eq!(
-            Dxgi::effective(game.dxgi, compatdb_table::Arch::X86_64),
+            Dxgi::effective(game.dxgi, compatdb_core::Arch::X86_64),
             Dxgi::Wined3d
         );
         // A rule folded later sets it again, and the reset is gone.

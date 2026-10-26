@@ -6,12 +6,12 @@ version = 4
 name = "compatdb"
 version = "0.1.0"
 dependencies = [
- "compatdb-table",
+ "compatdb-core",
  "libc",
 ]
 
 [[package]]
-name = "compatdb-table"
+name = "compatdb-core"
 version = "0.1.0"
 
 [[package]]

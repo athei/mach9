@@ -11,7 +11,7 @@
 //! and DXGI trees, the wined3d renderer, DLL load-order overrides, the DPI
 //! awareness, large address awareness, whether the Mac driver reads raw
 //! mouse input from `GameController`, and command-line/environment
-//! rewrites. All the decision logic lives in [`compatdb_table`]; this crate
+//! rewrites. All the decision logic lives in [`compatdb_core`]; this crate
 //! only moves bytes in and out of the running process, so its `unsafe` is
 //! confined to a thin ntdll shell.
 #![deny(
@@ -33,7 +33,7 @@ use std::{
     fmt::Write as _,
 };
 
-use compatdb_table::{
+use compatdb_core::{
     Arch, ArgumentsDropped, D3d9, DllOverrideReset, Dxgi, ENV_VAR, EnvStep, Origin, Resolution,
     Table, VersionInfo, Wined3d, basename_of, upstream,
 };
@@ -121,7 +121,7 @@ extern "C" fn run() {
     let wined3d = resolution.apply_wined3d();
     let config = match resolution.d3d_config() {
         Some(value) => Some((value.to_owned(), resolution.d3d_config_origin())),
-        None => compatdb_table::env_value(&process.env, Wined3d::CONFIG_VAR).map(|v| (v, None)),
+        None => compatdb_core::env_value(&process.env, Wined3d::CONFIG_VAR).map(|v| (v, None)),
     };
     log::line(&wined3d_line(
         wined3d,
@@ -142,7 +142,7 @@ extern "C" fn run() {
     apply::dll_overrides(&nt, &resolution.dll_overrides);
     apply_hooks(&nt, &process, &resolution);
     let (cmd, appended) =
-        compatdb_table::append_cmdline_each(&process.cmdline, &resolution.arguments);
+        compatdb_core::append_cmdline_each(&process.cmdline, &resolution.arguments);
     log::line(&list_line(
         "arguments",
         &resolution.arguments,
@@ -156,7 +156,7 @@ extern "C" fn run() {
     // whether it is in the environment block or only in the unix
     // environment.
     let has = |name: &str| {
-        compatdb_table::env_value(&process.env, name).or_else(|| std::env::var(name).ok())
+        compatdb_core::env_value(&process.env, name).or_else(|| std::env::var(name).ok())
     };
     let steps = resolution.env_steps(|name| has(name).is_some());
     if steps.is_empty() {
@@ -763,7 +763,7 @@ mod tests {
             source("dxgi", Some(&Origin::Line(4)), None),
             "WINE_COMPATDB line 4"
         );
-        for (key, _) in compatdb_table::UPSTREAM {
+        for (key, _) in compatdb_core::UPSTREAM {
             assert!(!unset_line(key).contains("unknown"), "{key}");
         }
     }
