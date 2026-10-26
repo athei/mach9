@@ -650,10 +650,11 @@ check_default_trees() {
 # native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
 # hang rather than an error. The caller's WINE_COMPATDB and WINE_D3D_CONFIG
-# and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, MESA_*, MTL_* and METAL_*
-# variable are dropped so that the built-in rules and the defaults of Wine,
-# FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp and Metal decide; only
-# vkd3d-proton's pipeline cache is moved into the prefix.
+# and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, MESA_*, MTL_*, METAL_* and
+# GST_* variable are dropped so that the built-in rules and the defaults of
+# Wine, FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp, Metal and
+# GStreamer decide; only vkd3d-proton's pipeline cache is moved into the
+# prefix.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
@@ -661,7 +662,7 @@ check_default_trees() {
 smoke_test() {
     local version log arch cc exe marker markers var dlls
     local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG)
-    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|MESA_|MTL_|METAL_)'); do
+    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|MESA_|MTL_|METAL_|GST_)'); do
         wine_env+=(-u "$var")
     done
     wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all)
@@ -714,6 +715,7 @@ smoke_test() {
     fi
     # Outside Wine, so before the prefix boots.
     check_egl_host
+    check_gst_host
 
     # wineboot creates the prefix here, so the limit is generous. The Mono
     # and Gecko installers are kept out so nothing pops a dialog.
@@ -808,6 +810,7 @@ smoke_test() {
     check_vulkan_runs "${wine_env[@]}"
     check_d3d12_runs "${wine_env[@]}"
     check_wined3d_device "${wine_env[@]}"
+    check_wmadec_runs "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
 }
@@ -1149,17 +1152,21 @@ check_d3d12_no_gpu() {
 # needs a KosmicKrisp device, so on a Mac without a Metal 4 GPU
 # (metal4_probe) it is skipped. MESA_GALLIUM comes from check_mesa_build.
 check_egl_host() {
-    local log="$TMP_DIR/egl.log" lib want status=0
+    local log="$TMP_DIR/egl.log" lib want
     if [ "$METAL4" -eq 0 ]; then
         echo "  Skipping the host EGL check: Zink needs a KosmicKrisp device."
         return 0
     fi
     xcrun clang -O2 -o "$TMP_DIR/egl" "$REPO_DIR/smoke/egl.c"
     echo "  Running the host EGL check on lib/external/libEGL.1.dylib..."
-    env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
-        "$TMP_DIR/egl" "$EXT_DIR/libEGL.1.dylib" >"$log" 2>&1 || status=$?
-    if [ "$status" -ne 0 ]; then
-        echo "Error: smoke/egl.c failed on the bundle's EGL (status $status)"
+    run_limited 60 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/egl" "$EXT_DIR/libEGL.1.dylib"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/egl.c did not exit within 60 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/egl.c failed on the bundle's EGL (status $RUN_STATUS)"
         cat "$log"
         exit 1
     fi
@@ -1182,6 +1189,114 @@ check_egl_host() {
         exit 1
     fi
     grep "^egl: GL_" "$log" | sed 's/^egl: /    /'
+}
+
+# The GStreamer elements the host check and Wine need: what winegstreamer
+# creates by name (capsfilter, decodebin, audioconvert, audioresample,
+# videoconvert, deinterlace, videoflip), the demuxers of ASF and MP4, the
+# H.264 parser, and gst-libav's decoders of WMAv2 and H.264.
+GST_SMOKE_ELEMENTS="capsfilter decodebin audioconvert audioresample videoconvert deinterlace
+videoflip asfdemux qtdemux h264parse avdec_wmav2 avdec_h264"
+
+# check_gst_host: build smoke/gst.c for the host and run it on the bundle's
+# lib/external/$GST_LIBGSTREAMER, outside Wine, with nothing in its
+# environment but what ntdll sets for GStreamer: GST_PLUGIN_SYSTEM_PATH_1_0
+# naming lib/external/gstreamer-1.0, and GST_REGISTRY_1_0, here a file in
+# TMP_DIR. Exit unless GStreamer initialized without a scanner process,
+# wrote that registry, registered and loaded every plugin of
+# lib/external/gstreamer-1.0 (a plugin whose initialization fails is left
+# out), created every element of GST_SMOKE_ELEMENTS, and loaded GStreamer,
+# glib and FFmpeg, gst-libav included, from lib/external and from nowhere
+# else. GST_LIBGSTREAMER comes from check_gstreamer_build.
+check_gst_host() {
+    local log="$TMP_DIR/gst.log" registry="$TMP_DIR/gst-registry.bin" e f want
+    xcrun clang -O2 -o "$TMP_DIR/gst" "$REPO_DIR/smoke/gst.c"
+    echo "  Running the host GStreamer check on lib/external/$GST_LIBGSTREAMER..."
+    # shellcheck disable=SC2086 # one word per element
+    run_limited 60 "$log" env -i PATH=/usr/bin:/bin GST_PLUGIN_SYSTEM_PATH_1_0="$EXT_DIR/gstreamer-1.0" \
+        GST_REGISTRY_1_0="$registry" \
+        "$TMP_DIR/gst" "$EXT_DIR/$GST_LIBGSTREAMER" $GST_SMOKE_ELEMENTS
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/gst.c did not exit within 60 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/gst.c failed on the bundle's GStreamer (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    for f in "$EXT_DIR"/gstreamer-1.0/*.dylib; do
+        if ! grep -qxF "gst: registered $(basename "$f")" "$log"; then
+            echo "Error: GStreamer did not register and load the plugin $(basename "$f")"
+            cat "$log"
+            exit 1
+        fi
+    done
+    for e in $GST_SMOKE_ELEMENTS; do
+        if ! grep -qxF "gst: created $e" "$log"; then
+            echo "Error: smoke/gst.c did not create the element $e"
+            cat "$log"
+            exit 1
+        fi
+    done
+    for want in "$EXT_DIR/$GST_LIBGSTREAMER" "$EXT_DIR/gstreamer-1.0/libgstlibav.dylib"; do
+        if ! grep -qxF "gst: loaded $want" "$log"; then
+            echo "Error: smoke/gst.c did not load ${want#"$WINE_DIR"/}"
+            cat "$log"
+            exit 1
+        fi
+    done
+    if grep "^gst: loaded " "$log" | grep -vF "gst: loaded $EXT_DIR/" >/dev/null; then
+        echo "Error: smoke/gst.c loaded a GStreamer, glib or FFmpeg library from outside the bundle"
+        cat "$log"
+        exit 1
+    fi
+    if [ ! -s "$registry" ]; then
+        echo "Error: GStreamer wrote no registry to GST_REGISTRY_1_0 ($registry)"
+        cat "$log"
+        exit 1
+    fi
+    echo "    $(grep -m 1 "^gst: GStreamer" "$log" | sed 's/^gst: //'), $(grep -c "^gst: registered " "$log") plugins registered,"
+    echo "    $(grep -c "^gst: loaded " "$log") libraries and plugins from lib/external, creates: $(tr '\n' ' ' <<< "$GST_SMOKE_ELEMENTS")"
+}
+
+# check_wmadec_runs <env-command>...: build smoke/wmadec.c for x86_64 and
+# i686 and run it in the booted throwaway prefix, and exit unless each
+# decodes its WMAv2 packets to PCM through the WMA decoder DMO, which is
+# winegstreamer on the bundled GStreamer and gst-libav's avdec_wmav2, and
+# winegstreamer did not report that GStreamer cannot decode WMA. The runs get
+# an XDG_CACHE_HOME in TMP_DIR, so the GStreamer registry ntdll points
+# GST_REGISTRY_1_0 at lands there instead of the caller's cache, and must be
+# there afterwards: <env-command> drops the caller's GST_* variables, so only
+# ntdll can have set it.
+check_wmadec_runs() {
+    local arch exe log want registry="$TMP_DIR/xdg-cache/gstreamer-1.0/registry.wine-aarch64.bin"
+    for arch in x86_64 i686; do
+        exe="$TMP_DIR/wmadec-$arch.exe"
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/wmadec.c" -lole32
+        time_mark "smoke: wmadec.exe $arch"
+        echo "  Running wmadec.exe for $arch..."
+        log="$TMP_DIR/wmadec-$arch.log"
+        run_limited 120 "$log" "$@" XDG_CACHE_HOME="$TMP_DIR/xdg-cache" \
+            WINEDEBUG=-all,err+winediag "$WINE_DIR/bin/wine" "$exe"
+        smoke_check "wmadec.exe for $arch" 120 "$log"
+        want="wine-build smoke test: $arch wmadec decoded "
+        if ! grep -q "$want" "$log" || grep -qF "GStreamer doesn't support WMA decoding" "$log"; then
+            echo "Error: wmadec.exe for $arch did not print '$want', or winegstreamer said that"
+            echo "GStreamer cannot decode WMA"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
+        grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+    done
+    if [ ! -s "$registry" ]; then
+        echo "Error: the wmadec.exe runs left no GStreamer registry at $registry;"
+        echo "ntdll did not point GST_REGISTRY_1_0 at XDG_CACHE_HOME"
+        smoke_stop
+        exit 1
+    fi
+    echo "    ntdll put GStreamer's registry under XDG_CACHE_HOME."
 }
 
 # check_wgl_runs <env-command>...: build smoke/wgl.c for each arch of
@@ -1560,6 +1675,123 @@ check_mesa_build() {
     fi
     MESA_GALLIUM=${gallium[0]}
     echo "  Mesa: $built, Vulkan loader $VULKAN_LOADER_GIT_TAG, $MESA_GALLIUM"
+}
+
+# check_gstreamer_build: exit unless build-gstreamer.sh staged GStreamer
+# completely from the commits redist.env pins: the COMMIT it wrote last and
+# its FFMPEG_COMMIT, and the libraries and plugins Wine's media code needs
+# first, and that winegstreamer.so was built against this dist. Set
+# GST_LIBGSTREAMER to the file name of libgstreamer-1.0, which
+# carries its version.
+check_gstreamer_build() {
+    local f built
+    built=$(cat "$GSTREAMER_DIST/COMMIT" 2>/dev/null) || {
+        echo "Error: $GSTREAMER_DIST has no COMMIT; build-gstreamer.sh has not staged it (run build-wine.sh)"
+        exit 1
+    }
+    if [ "$built" != "$GSTREAMER_GIT_COMMIT" ]; then
+        echo "Error: GStreamer was built from $built, but redist.env pins $GSTREAMER_GIT_COMMIT"
+        echo "(run build-gstreamer.sh)"
+        exit 1
+    fi
+    if [ "$(cat "$GSTREAMER_DIST/FFMPEG_COMMIT" 2>/dev/null)" != "$GSTREAMER_FFMPEG_GIT_COMMIT" ]; then
+        echo "Error: GStreamer's FFmpeg in $GSTREAMER_DIST was not built from $GSTREAMER_FFMPEG_GIT_COMMIT"
+        echo "(run build-gstreamer.sh)"
+        exit 1
+    fi
+    if [ ! -L "$GSTREAMER_DIST/lib/libgstreamer-1.0.dylib" ]; then
+        echo "Error: no lib/libgstreamer-1.0.dylib in $GSTREAMER_DIST (run build-gstreamer.sh)"
+        exit 1
+    fi
+    # build-wine.sh records the KEY of the dist winegstreamer.so was last
+    # compiled and linked against; a dist built again on its own since then
+    # does not match the module.
+    if [ "$(cat "$BUILD_DIR/.gstreamer-key" 2>/dev/null)" != "$(cat "$GSTREAMER_DIST/KEY" 2>/dev/null)" ]; then
+        echo "Error: winegstreamer.so in $BUILD_DIR was not built against the GStreamer now in"
+        echo "$GSTREAMER_DIST (run build-wine.sh)"
+        exit 1
+    fi
+    GST_LIBGSTREAMER=$(readlink "$GSTREAMER_DIST/lib/libgstreamer-1.0.dylib")
+    for f in "lib/$GST_LIBGSTREAMER" lib/gstreamer-1.0/libgstcoreelements.dylib \
+             lib/gstreamer-1.0/libgstplayback.dylib lib/gstreamer-1.0/libgstasf.dylib \
+             lib/gstreamer-1.0/libgstlibav.dylib; do
+        if [ ! -f "$GSTREAMER_DIST/$f" ]; then
+            echo "Error: no $f in $GSTREAMER_DIST (run build-gstreamer.sh)"
+            exit 1
+        fi
+    done
+    echo "  GStreamer: $GSTREAMER_GIT_TAG ($built), FFmpeg $GSTREAMER_FFMPEG_GIT_COMMIT"
+}
+
+# macho_deps_in_bundle <file>...: report every dependency of the Mach-O
+# files outside /usr/lib and /System/Library that does not name a file
+# inside the bundle, and set LEAKED=1. An @loader_path dependency is read
+# against the directory of the file, an @rpath one through the file's
+# @loader_path LC_RPATH entries.
+macho_deps_in_bundle() {
+    local f dep rp dir found
+    for f in "$@"; do
+        for dep in $(otool -L "$f" | tail -n +2 | awk '{print $1}'); do
+            found=0
+            case "$dep" in
+                /usr/lib/*|/System/Library/*) continue ;;
+                @loader_path/*)
+                    dir=$(dirname "$f")
+                    if [ -f "$dir/${dep#@loader_path/}" ] && dir_in_bundle "$(dirname "$dir/${dep#@loader_path/}")"; then
+                        found=1
+                    fi
+                    ;;
+                @rpath/*)
+                    [ "${dep#@rpath/}" = "$(basename "$f")" ] && continue
+                    while IFS= read -r rp; do
+                        case "$rp" in
+                            @loader_path|@loader_path/*)
+                                dir="$(dirname "$f")${rp#@loader_path}"
+                                if dir_in_bundle "$dir" && [ -f "$dir/${dep#@rpath/}" ]; then
+                                    found=1
+                                    break
+                                fi
+                                ;;
+                        esac
+                    done < <(rpath_entries "$f")
+                    ;;
+            esac
+            if [ "$found" -eq 0 ]; then
+                echo "  ERROR: ${f#"$WINE_DIR"/} loads $dep, which names no file inside the bundle"
+                LEAKED=1
+            fi
+        done
+    done
+}
+
+# check_gstreamer: exit unless winegstreamer.so, GStreamer's libraries in
+# lib/external and its plugins load only system libraries and files inside
+# the bundle, winegstreamer.so loads libgstreamer-1.0 from lib/external, and
+# every plugin still has a valid signature, which Step 3 does not renew.
+check_gstreamer() {
+    local f bad=0
+    LEAKED=0
+    macho_deps_in_bundle "$unixdir/winegstreamer.so" "$EXT_DIR"/*.dylib "$EXT_DIR"/gstreamer-1.0/*.dylib
+    if [ "$LEAKED" -ne 0 ]; then
+        echo "Error: GStreamer's dependencies do not all resolve inside the bundle"
+        exit 1
+    fi
+    if ! otool -L "$unixdir/winegstreamer.so" | awk '{print $1}' \
+        | grep -xF "@loader_path/../../external/$GST_LIBGSTREAMER" >/dev/null; then
+        echo "Error: $UNIX_DIR/winegstreamer.so does not load @loader_path/../../external/$GST_LIBGSTREAMER"
+        exit 1
+    fi
+    for f in "$EXT_DIR"/gstreamer-1.0/*.dylib; do
+        if ! codesign --verify "$f" 2>/dev/null; then
+            echo "  ERROR: lib/external/gstreamer-1.0/$(basename "$f") has no valid signature"
+            bad=1
+        fi
+    done
+    if [ "$bad" -ne 0 ]; then
+        echo "Error: GStreamer plugins without a valid signature do not load"
+        exit 1
+    fi
+    echo "  winegstreamer.so, GStreamer's libraries and its $(ls "$EXT_DIR"/gstreamer-1.0/*.dylib | wc -l | tr -d ' ') plugins load from the system and the bundle only."
 }
 
 # check_vulkan: exit unless the bundle's Vulkan hangs together: the driver
@@ -2068,6 +2300,7 @@ check_wine_sdk
 check_dxmt_build
 check_vkd3d_proton_build
 check_mesa_build
+check_gstreamer_build
 for arch in $SMOKE_PE_ARCHS x86_64 i686; do
     if [ ! -x "$MINGW_DIR/bin/$arch-w64-mingw32-clang" ]; then
         echo "Error: no $arch-w64-mingw32-clang in $MINGW_DIR/bin (the smoke test needs it)"
@@ -2287,6 +2520,31 @@ if [ $MISSED -ne 0 ]; then
     echo "Error: required libraries are missing, bundle would not be self-contained"
     exit 1
 fi
+
+# GStreamer, which winegstreamer.so links (Wine's configure found it through
+# the .pc files in GSTREAMER_DIST): its libraries and those of glib and
+# FFmpeg go into lib/external, its plugins into lib/external/gstreamer-1.0,
+# where GStreamer looks for them next to libgstreamer-1.0 and where ntdll
+# points GST_PLUGIN_SYSTEM_PATH_1_0. build-gstreamer.sh staged them with
+# their references to each other as @loader_path names and signed, so the
+# walk above does not follow them. The loops below give the libraries
+# @loader_path/<name> as their own install names, in place of the path
+# winegstreamer.so loads them by, and sign them again, like every library in
+# lib/external; the plugins stay as staged. A name that a Homebrew library
+# already took would be two libraries under one name.
+echo "  Copying GStreamer..."
+for lib in "$GSTREAMER_DIST"/lib/*.dylib; do
+    [ -L "$lib" ] && continue
+    name=$(basename "$lib")
+    if [ -e "$EXT_DIR/$name" ]; then
+        echo "Error: GStreamer's $name has the name of a library Step 3 already copied"
+        exit 1
+    fi
+    cp "$lib" "$EXT_DIR/"
+done
+mkdir -p "$EXT_DIR/gstreamer-1.0"
+cp "$GSTREAMER_DIST"/lib/gstreamer-1.0/*.dylib "$EXT_DIR/gstreamer-1.0/"
+echo "    $(ls "$GSTREAMER_DIST"/lib/gstreamer-1.0/*.dylib | wc -l | tr -d ' ') plugins in lib/external/gstreamer-1.0"
 chmod +w "$EXT_DIR"/*.dylib
 
 # Fix install names so bundled dylibs reference each other via @loader_path,
@@ -2327,6 +2585,30 @@ echo "  Re-signing the relinked dylibs ad hoc..."
 for dylib in "$EXT_DIR"/*.dylib; do
     codesign --force --sign - "$dylib" 2>/dev/null
 done
+
+# winegstreamer.so is the one Wine module that links libraries outside the
+# system instead of loading them by soname: GStreamer's and glib's, by the
+# install names GSTREAMER_DIST gave them, @loader_path/../../external/<name>,
+# which from lib/wine/aarch64-unix name the copies above. Wine links its
+# modules without room in their headers for longer names, so the references
+# cannot be rewritten here; one by any other name is a module linked against
+# another GStreamer or an older dist, and stops the step.
+gst_so="$unixdir/winegstreamer.so"
+if [ ! -f "$gst_so" ]; then
+    echo "Error: no $UNIX_DIR/winegstreamer.so; Wine was built without GStreamer (run build-wine.sh,"
+    echo "which asks for --clean when its tree was configured without it)"
+    exit 1
+fi
+for dep in $(otool -L "$gst_so" | tail -n +2 | awk '{print $1}'); do
+    case "$dep" in
+        /usr/lib/*|/System/Library/*|@rpath/*) continue ;;
+        @loader_path/../../external/*) [ -f "$EXT_DIR/${dep#@loader_path/../../external/}" ] && continue ;;
+    esac
+    echo "Error: winegstreamer.so loads $dep, which is not a library of lib/external;"
+    echo "it was linked against another GStreamer than GSTREAMER_DIST's (run build-wine.sh)"
+    exit 1
+done
+echo "  winegstreamer.so loads GStreamer from lib/external."
 
 # ── Step 3b: Remove Wine's D3D12 ────────────────────────────────────────
 # Wine's own D3D12 (d3d12.dll and d3d12core.dll, on vkd3d) is never shipped.
@@ -2684,12 +2966,12 @@ echo "  wine binary: $(file -L "$WINE_DIR/bin/wine" | sed 's|.*/||')"
 # modules in the default unix dir, so this also proves the side-tree links
 # are intact).
 LEAKED=0
-check_no_leaks "$EXT_DIR"/*.dylib
+check_no_leaks "$EXT_DIR"/*.dylib "$EXT_DIR"/gstreamer-1.0/*.dylib
 check_no_leaks "$unixdir"/*.so \
                "$WINE_DIR"/lib/wine/dxgi/*/"$UNIX_DIR"/*.so \
                "$WINE_DIR"/lib/wine/d3d9/*/"$UNIX_DIR"/*.so \
                "$unixdir/wine.app/Contents/MacOS/wine"
-check_rpath_deps "$EXT_DIR"/*.dylib
+check_rpath_deps "$EXT_DIR"/*.dylib "$EXT_DIR"/gstreamer-1.0/*.dylib
 if [ $LEAKED -ne 0 ]; then
     echo "Error: bundle is not self-contained"
     exit 1
@@ -2697,8 +2979,9 @@ fi
 echo "  All binaries clean, no ${LEAK_PREFIXES// / or } references, no @rpath dependency outside the bundle."
 # With nothing left that points outside the bundle, a library that loads
 # has found every dependency inside it.
-check_dylibs_load "$EXT_DIR"/*.dylib
-echo "  Every dylib in lib/external loads."
+check_dylibs_load "$EXT_DIR"/*.dylib "$EXT_DIR"/gstreamer-1.0/*.dylib
+echo "  Every dylib in lib/external and lib/external/gstreamer-1.0 loads."
+check_gstreamer
 
 # The Direct3D backends and everything else copied in rather than built,
 # which nothing the build does would have caught.
@@ -2715,6 +2998,9 @@ WANT=("lib/wine/$UNIX_DIR/compatdb.so"
       "lib/wine/$UNIX_DIR/winevulkan.so"
       "lib/wine/$PE64_DIR/vulkan-1.dll" "lib/wine/$PE64_DIR/winevulkan.dll"
       "lib/wine/i386-windows/vulkan-1.dll" "lib/wine/i386-windows/winevulkan.dll"
+      "lib/wine/$UNIX_DIR/winegstreamer.so"
+      "lib/wine/$PE64_DIR/winegstreamer.dll" "lib/wine/i386-windows/winegstreamer.dll"
+      "lib/external/$GST_LIBGSTREAMER" "lib/external/gstreamer-1.0"
       "lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine"
       "lib/wine/$UNIX_DIR/wine.app/Contents/Info.plist"
       "lib/wine/$UNIX_DIR/wine.app/Contents/embedded.provisionprofile")
