@@ -3,8 +3,15 @@ description: >-
   Installs the formulae of pins/brew-formulae and their runtime dependencies
   at the newest versions Homebrew has, starting from the cache of the kegs an
   earlier run installed (bin/ci/brew.sh), and saves the result when the
-  cache was not for this exact manifest. Expects this repository checked out
-  at scripts/ in the workspace.
+  cache was not for this exact manifest, unless save is 'false'. Expects
+  this repository checked out at scripts/ in the workspace.
+
+inputs:
+  save:
+    description: >-
+      'false' restores the cache but never saves one, for a run whose kegs
+      no later run should read.
+    default: 'true'
 
 # release.yml and brew-cache.yml run these steps. A local composite action
 # and not a reusable workflow, because the release job needs the kegs on its
@@ -50,7 +57,7 @@ runs:
       run: scripts/bin/ci/brew.sh install "$RUNNER_TEMP/brew" "$RUNNER_TEMP/brew-manifest"
 
     - name: Save the Homebrew kegs
-      if: steps.restore.outputs.cache-hit != 'true'
+      if: inputs.save == 'true' && steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:
         path: ${{ runner.temp }}/brew

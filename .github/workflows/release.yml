@@ -2,19 +2,21 @@ name: Release
 
 # Builds the arm64 bundle on a hosted runner, from the Wine branch in
 # pins/wine-src.ref and the pins of this commit, and signs its loader with
-# the identity in the release environment's secrets. An arm64-* tag attaches
-# the bundle and its symbols to a draft release of that tag. A push to main
-# that changes a file the build reads, the schedule and a manual run build
-# and bundle the same, check what packaging needs without packing, and
-# publish nothing.
+# the identity in the secrets of the job's environment. An arm64-* tag
+# attaches the bundle and its symbols to a draft release of that tag. A
+# push to main that changes a file the build reads, the schedule, a manual
+# run and a pull request to main build and bundle the same, check what
+# packaging needs without packing, and publish nothing.
 #
 # The logic lives in bin/ and bin/ci/, which also run on a Mac. The caches
 # a run on a tag writes serve only later runs on that tag. A run on main
 # saves every cache it builds, which every later run can read, so a release
 # finds the components the newest build of main built and its ccache
-# directory. GitHub evicts a cache that no run used for a week; the
-# scheduled runs, twice a week, use the current ones on main, so a release
-# after a quiet week still finds them.
+# directory. A run on a pull request restores the caches of main and saves
+# none, so what a change that is not merged built never reaches another
+# run. GitHub evicts a cache that no run used for a week; the scheduled
+# runs, twice a week, use the current ones on main, so a release after a
+# quiet week still finds them.
 
 on:
   push:
@@ -36,16 +38,23 @@ on:
   schedule:
     - cron: '47 5 * * 1,4'
   workflow_dispatch:
+  # Every pull request to main, without a path filter: merging requires the
+  # check this job reports, and a run that a filter skips reports none, which
+  # blocks the merge.
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 # A push to main cancels the build of main that is still running, which a
-# newer commit makes pointless. A release is never cancelled, and a run on a
-# tag shares its group with nothing but runs on that tag.
+# newer commit makes pointless, and a push to a pull request cancels the run
+# of that pull request the same way; its ref is refs/pull/<number>/merge. A
+# release is never cancelled, and a run on a tag shares its group with
+# nothing but runs on that tag.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request' }}
 
 # bash -eo pipefail, so a failure inside a pipe fails the step.
 defaults:
@@ -56,9 +65,25 @@ jobs:
   build:
     runs-on: macos-26
     timeout-minutes: 360
-    # Holds the secrets MACOS_SIGNING_P12 and MACOS_SIGNING_P12_PASSWORD.
-    environment: release
+    # Holds the secrets MACOS_SIGNING_P12 and MACOS_SIGNING_P12_PASSWORD. A
+    # run on a pull request uses pull-request, which holds a copy of them
+    # and waits for the owner to approve each run. Every other run uses
+    # release, whose deployment policy refuses the ref of a pull request, so
+    # a pull request that changes this line gets no secrets from it. A pull
+    # request from a fork gets no secrets at all, and its run stops at the
+    # first step.
+    environment: ${{ github.event_name == 'pull_request' && 'pull-request' || 'release' }}
     steps:
+      # A pull request from a fork gets no secrets, so the bundle step could
+      # not sign the loader. Stop before the build instead of after it.
+      - name: Refuse a pull request from a fork
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "A pull request from a fork gets no signing secrets, so this run cannot"
+          echo "bundle. Push the branch to this repository and open the pull request"
+          echo "from there."
+          exit 1
+
       # The scripts take the workspace, the parent of scripts/, as the root of
       # their layout: the Wine source in src/, downloads in cache/, the trees
       # under build/ and the bundle in dist/.
@@ -106,7 +131,8 @@ jobs:
       # so it need not ask every Xcode for its SDK again (host.sh, header).
       # The key changes with the image and with host.sh and profile.sh,
       # which decide the choice; a runner that names no image version gets a
-      # key no other run has.
+      # key no other run has. A run on a pull request saves no choice, as it
+      # saves no cache below.
       - name: Compute the Xcode choice key
         id: xcode-key
         run: echo "key=xcode-choice-$RUNNER_OS-$ImageOS-${ImageVersion:-run$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT}-${{ hashFiles('scripts/bin/ci/host.sh', 'scripts/bin/lib/profile.sh') }}" >> "$GITHUB_OUTPUT"
@@ -122,16 +148,19 @@ jobs:
         run: scripts/bin/ci/host.sh --metal --xcode-choice "$RUNNER_TEMP/xcode-choice"
 
       - name: Save the Xcode choice
-        if: steps.xcode-choice.outputs.cache-hit != 'true'
+        if: github.event_name != 'pull_request' && steps.xcode-choice.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/xcode-choice
           key: ${{ steps.xcode-key.outputs.key }}
 
       # The formulae at the newest versions Homebrew has, from and into the
-      # cache brew-cache.yml keeps current on the default branch.
+      # cache brew-cache.yml keeps current on the default branch. A run on a
+      # pull request only reads it.
       - name: Install the Homebrew formulae
         uses: ./scripts/.github/actions/brew
+        with:
+          save: ${{ github.event_name != 'pull_request' }}
 
       # Each key changes with the pins of what its cache holds, not with the
       # rest of redist.env. The ccache key rolls:
@@ -162,8 +191,10 @@ jobs:
 
       # The downloads redist.env pins: llvm-mingw here, mtld3d in the bundle
       # step. Each is checked against its SHA-256 whether it was cached or not.
-      - name: Cache the pinned downloads
-        uses: actions/cache@v6
+      # Saved at the end of the job, after the bundle step.
+      - name: Restore the pinned downloads
+        id: redist
+        uses: actions/cache/restore@v6
         with:
           path: cache
           key: ${{ steps.keys.outputs.redist }}
@@ -176,8 +207,11 @@ jobs:
       - name: Add the Rust target
         run: rustup target add aarch64-apple-darwin
 
-      - name: Cache the cargo registry
-        uses: actions/cache@v6
+      # What cargo fetches for compatdb.so, which the bundle step builds.
+      # Saved at the end of the job, as the pinned downloads.
+      - name: Restore the cargo registry
+        id: cargo
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry
@@ -193,9 +227,9 @@ jobs:
       # under that key is complete with that KEY, and builds it otherwise;
       # the bundle step checks every COMMIT against its ref again. Restored
       # before the build step and saved right after it, even when that fails
-      # later, when the dist was built here: under the hash of the KEY the
-      # build wrote, so a ref that moved in between cannot file a dist under
-      # another commit's key.
+      # later, when the dist was built here and the run is not on a pull
+      # request: under the hash of the KEY the build wrote, so a ref that
+      # moved in between cannot file a dist under another commit's key.
       - name: Compute the dist cache keys
         id: dists
         run: |
@@ -235,7 +269,8 @@ jobs:
 
       # The LLVM 15 libraries DXMT's winemetal.so links, which build-dxmt.sh
       # builds only when this directory holds no build of the pinned commit.
-      # Saved right after the build step, even when that fails later.
+      # Saved right after the build step, even when that fails later, unless
+      # the run is on a pull request.
       - name: Restore DXMT's LLVM
         id: llvm15-cache
         uses: actions/cache/restore@v6
@@ -268,9 +303,10 @@ jobs:
       # Only on main, the default branch: every saved directory is a full
       # one, and a tag run's could only be read by later runs on that tag, so
       # saving them would fill the repository's cache budget for little. Tag
-      # runs restore the newest one main saved. The branch is named here
-      # because the payload of a scheduled run has no repository to read the
-      # default branch from.
+      # runs and runs on a pull request, whose ref is not main either,
+      # restore the newest one main saved. The branch is named here because
+      # the payload of a scheduled run has no repository to read the default
+      # branch from.
       - name: Save the ccache directory
         if: always() && steps.build.conclusion != 'skipped' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
@@ -293,35 +329,35 @@ jobs:
 
       # Saved when the dist was not restored under the key it has now.
       - name: Save Mesa's dist
-        if: always() && steps.saves.outputs.mesa != '' && (steps.mesa-dist.outputs.cache-hit != 'true' || steps.saves.outputs.mesa != steps.dists.outputs.mesa)
+        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.mesa != '' && (steps.mesa-dist.outputs.cache-hit != 'true' || steps.saves.outputs.mesa != steps.dists.outputs.mesa)
         uses: actions/cache/save@v6
         with:
           path: build/mesa/dist
           key: ${{ steps.saves.outputs.mesa }}
 
       - name: Save FEX's dist
-        if: always() && steps.saves.outputs.fex != '' && (steps.fex-dist.outputs.cache-hit != 'true' || steps.saves.outputs.fex != steps.dists.outputs.fex)
+        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.fex != '' && (steps.fex-dist.outputs.cache-hit != 'true' || steps.saves.outputs.fex != steps.dists.outputs.fex)
         uses: actions/cache/save@v6
         with:
           path: build/fex/dist
           key: ${{ steps.saves.outputs.fex }}
 
       - name: Save DXMT's dist
-        if: always() && steps.saves.outputs.dxmt != '' && (steps.dxmt-dist.outputs.cache-hit != 'true' || steps.saves.outputs.dxmt != steps.dists.outputs.dxmt)
+        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.dxmt != '' && (steps.dxmt-dist.outputs.cache-hit != 'true' || steps.saves.outputs.dxmt != steps.dists.outputs.dxmt)
         uses: actions/cache/save@v6
         with:
           path: build/dxmt/dist
           key: ${{ steps.saves.outputs.dxmt }}
 
       - name: Save vkd3d-proton's dist
-        if: always() && steps.saves.outputs.vkd3d != '' && (steps.vkd3d-dist.outputs.cache-hit != 'true' || steps.saves.outputs.vkd3d != steps.dists.outputs.vkd3d)
+        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.vkd3d != '' && (steps.vkd3d-dist.outputs.cache-hit != 'true' || steps.saves.outputs.vkd3d != steps.dists.outputs.vkd3d)
         uses: actions/cache/save@v6
         with:
           path: build/vkd3d-proton/dist
           key: ${{ steps.saves.outputs.vkd3d }}
 
       - name: Save DXMT's LLVM
-        if: always() && steps.llvm15-cache.outputs.cache-hit != 'true' && hashFiles('build/dxmt/llvm15/COMMIT') != ''
+        if: always() && github.event_name != 'pull_request' && steps.llvm15-cache.outputs.cache-hit != 'true' && hashFiles('build/dxmt/llvm15/COMMIT') != ''
         uses: actions/cache/save@v6
         with:
           path: build/dxmt/llvm15
@@ -341,12 +377,19 @@ jobs:
       # Any other run passes --notes-only: package.sh runs every check it
       # makes before packing, writes the notes, and packs only a small part
       # of each tree with the same code, which it lists and deletes. A change
-      # that breaks any of that fails on main before a tag needs it, without
-      # spending the time to pack tarballs that would be kept nowhere.
+      # that breaks any of that fails on main or in its pull request before a
+      # tag needs it, without spending the time to pack tarballs that would
+      # be kept nowhere. A run on a pull request passes its number and
+      # GITHUB_SHA, the commit that merges it into main, which the checkout
+      # holds and the notes name.
       - name: Package
+        env:
+          PR_NUMBER: ${{ github.event.number }}
         run: |
           if [[ "$GITHUB_REF" == refs/tags/arm64-* ]]; then
             scripts/bin/ci/package.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"
+          elif [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            scripts/bin/ci/package.sh --notes-only "pr$PR_NUMBER-${GITHUB_SHA:0:11}" "$RUNNER_TEMP/release"
           else
             scripts/bin/ci/package.sh --notes-only "main-${GITHUB_SHA:0:11}" "$RUNNER_TEMP/release"
           fi
@@ -364,6 +407,27 @@ jobs:
             --notes-file "$RUNNER_TEMP/release/notes.md" \
             "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64.tar.xz" \
             "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64-symbols.tar.xz"
+
+      # The pinned downloads and the cargo registry, which the bundle step
+      # completes, saved when they were not restored under their key. As
+      # actions/cache does in its post step, they are saved at the end of the
+      # job and only when every step before succeeded. A run on a pull
+      # request saves neither.
+      - name: Save the pinned downloads
+        if: github.event_name != 'pull_request' && steps.redist.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: cache
+          key: ${{ steps.keys.outputs.redist }}
+
+      - name: Save the cargo registry
+        if: github.event_name != 'pull_request' && steps.cargo.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cargo.outputs.cache-primary-key }}
 
       - name: Remove the signing identity
         if: always()
