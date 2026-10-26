@@ -318,7 +318,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! # Settings
+//! # Keys
 //!
 //! [`Key`] lists every field. Each variant says what it does and what a
 //! process gets without it, and links to the getter of [`Rule`] with the
@@ -338,7 +338,10 @@
 //! [`Key::kind`] says which of these a key is, [`Key::values`] gives the
 //! spellings of a scalar setting, `default` included, [`Key::label`] its
 //! name for a person, and [`Key::upstream`] what upstream Wine does
-//! without it, as `compatdb.so` logs it.
+//! without it, as `compatdb.so` logs it. For a launcher's templates and
+//! help, [`Key::summary`] says in one line what a key does,
+//! [`Key::example`] gives a value to show and [`Key::docs_url`] links to
+//! its doc; [`DocSection::url`] links to a section of this page.
 //!
 //! # Built-in rules
 //!
@@ -456,7 +459,16 @@
     clippy::arithmetic_side_effects
 )]
 
+/// The text of [`DOCS_URL`] as a literal, so `concat!` can build the links
+/// of [`Key::docs_url`] and [`DocSection::url`] from it.
+macro_rules! docs_url {
+    () => {
+        "https://athei.github.io/wine-build/compatdb_core/"
+    };
+}
+
 pub mod builtin;
+mod docs;
 mod error;
 mod key;
 mod part;
@@ -470,6 +482,7 @@ mod version;
 mod wire;
 
 pub use crate::{
+    docs::DocSection,
     error::{Diagnostic, FieldError, ParseError, Severity},
     key::{Key, KeyKind, Scalar, ScalarValue, ValueKind},
     part::{
@@ -480,7 +493,10 @@ pub use crate::{
         ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution, ScalarState,
     },
     rule::{DEFAULT_VALUE, Rule, Setting},
-    settings::{check_env_name, inherited_conflicts, retired_env},
+    settings::{
+        check_env_name, inherited_conflicts, retired_env, retired_envs, retired_keys,
+        retired_values,
+    },
     table::{Source, Table},
     value::{D3d9, Dxgi, METAL_HUD_ENV, OpenGl, Wined3d, metal_hud_env},
     version::VersionInfo,
@@ -490,3 +506,7 @@ pub use crate::{
 /// never looks at it; it is only the channel from whatever started the process
 /// tree to the library.
 pub const ENV_VAR: &str = "WINE_COMPATDB";
+
+/// Where this crate's rustdoc is published. [`Key::docs_url`] and
+/// [`DocSection::url`] link into it.
+pub const DOCS_URL: &str = docs_url!();

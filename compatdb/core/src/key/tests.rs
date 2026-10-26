@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn every_key_has_a_one_line_plain_summary() {
+    for &key in Key::ALL {
+        let summary = key.summary();
+        assert!(summary.ends_with('.'), "{key}: {summary}");
+        assert!(!summary.contains(['\n', '`', '[', ']']), "{key}: {summary}");
+    }
+    assert_eq!(
+        Key::MetalHud.summary(),
+        "Whether the Metal performance HUD shows."
+    );
+}
+
+#[test]
+fn the_example_of_a_scalar_is_one_of_its_values_but_default() {
+    for &key in Key::ALL {
+        let example = key.example();
+        assert!(!example.is_empty(), "{key}");
+        if key.scalar().is_some() {
+            assert!(key.values().contains(&example), "{key}: {example}");
+            assert_ne!(example, DEFAULT_VALUE, "{key}");
+        }
+    }
+    assert_ne!(Key::Exe.example(), "*");
+}
+
+#[test]
 fn every_key_reads_back_from_its_spelling_in_any_case() {
     for &key in Key::ALL {
         let text = key.to_string();

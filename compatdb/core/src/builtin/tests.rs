@@ -1239,6 +1239,7 @@ fn every_former_name_of_a_builtin_rule_says_what_does_it_now() -> TestResult {
         "nostale",
         "aoe2-hd",
     ];
+    assert_eq!(former_names().collect::<Vec<_>>(), names);
     for name in names {
         let rule = former(name).ok_or(name)?;
         assert_eq!(rule.name(), name);

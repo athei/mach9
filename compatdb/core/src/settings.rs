@@ -61,6 +61,31 @@ const RETIRED_ENV: &[(&str, Key)] = &[
     ("WINE_FORCE_NX", Key::ForceNx),
 ];
 
+/// The setting names that are no longer read, each with how
+/// [`Key::from_setting`] treats it: the names it refuses with
+/// [`FieldError::RetiredKey`] and that severity.
+pub fn retired_keys() -> impl Iterator<Item = (&'static str, Severity)> {
+    RETIRED_KEYS
+        .iter()
+        .map(|&(name, _, severity)| (name, severity))
+}
+
+/// The values that are no longer read, each with its key and how
+/// [`Rule::set`] treats it: the values it refuses with
+/// [`FieldError::RetiredValue`] and that severity.
+pub fn retired_values() -> impl Iterator<Item = (Key, &'static str, Severity)> {
+    RETIRED_VALUES
+        .iter()
+        .map(|&(key, value, _, severity)| (key, value, severity))
+}
+
+/// The environment variables that a setting replaced, each with the key of
+/// that setting: the names for which [`retired_env`] gives that key and
+/// [`check_env_name`] refuses.
+pub fn retired_envs() -> impl Iterator<Item = (&'static str, Key)> {
+    RETIRED_ENV.iter().copied()
+}
+
 /// The setting that replaced the environment variable `name`, if one did.
 ///
 /// The name is compared ASCII-case-insensitively: `compatdb.so` merges a

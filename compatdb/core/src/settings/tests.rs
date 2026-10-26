@@ -492,6 +492,70 @@ fn check_env_name_gives_the_errors_of_set_env() -> TestResult {
 }
 
 #[test]
+fn every_example_is_a_value_set_takes() -> TestResult {
+    let mut rule = game()?;
+    for &key in Key::ALL {
+        rule.set(key, key.example())?;
+    }
+    let (name, value) = Key::Env.example().split_once('=').ok_or("no =")?;
+    check_env_name(name)?;
+    assert_ne!(value, "");
+    Ok(())
+}
+
+#[test]
+fn the_retired_lists_are_what_the_settings_layer_refuses() -> TestResult {
+    let keys: Vec<_> = retired_keys().collect();
+    assert_eq!(
+        keys,
+        [
+            ("x87_sidecar", Severity::Warning),
+            ("cmdline_append", Severity::Error)
+        ]
+    );
+    for (name, severity) in keys {
+        let error = Key::from_setting(name);
+        assert!(
+            matches!(error, Err(FieldError::RetiredKey { .. })),
+            "{name}"
+        );
+        assert_eq!(error.map_err(|e| e.severity()), Err(severity), "{name}");
+    }
+    let values: Vec<_> = retired_values().collect();
+    assert_eq!(values, [(Key::Dxgi, "gptk", Severity::Warning)]);
+    for (key, value, severity) in values {
+        let error = game()?.set(key, value);
+        assert!(
+            matches!(error, Err(FieldError::RetiredValue { .. })),
+            "{key} {value}"
+        );
+        assert_eq!(error.map_err(|e| e.severity()), Err(severity), "{value}");
+    }
+    let envs: Vec<_> = retired_envs().collect();
+    assert_eq!(
+        envs,
+        [
+            ("WINEDEBUG", Key::DebugChannels),
+            ("WINEDLLOVERRIDES", Key::DllOverrides),
+            ("WINE_CMDLINE_APPEND", Key::Arguments),
+            ("WINE_MAC_OPENGL", Key::OpenGl),
+            ("WINE_FORCE_NX", Key::ForceNx),
+        ]
+    );
+    for (name, key) in envs {
+        assert_eq!(retired_env(name), Some(key), "{name}");
+        assert_eq!(
+            check_env_name(name),
+            Err(FieldError::RetiredEnv {
+                name: name.into(),
+                key
+            })
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_rule_the_settings_layer_builds_travels_as_it_is() -> TestResult {
     // Every key, the way a launcher sets it, then through the wire.
     let mut rule = game()?;

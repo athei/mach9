@@ -12,6 +12,66 @@ use crate::{D3d9, DEFAULT_VALUE, Dxgi, FieldError, OpenGl, Wined3d};
 #[cfg(doc)]
 use crate::{Exe, Rule, Setting, Table, metal_hud_env};
 
+/// The one-line summary of each key in plain text: the first paragraph of
+/// the key's variant doc, and what [`Key::summary`] returns.
+macro_rules! summary {
+    (Exe) => {
+        "The image basename a rule matches, in any case, or * for every process."
+    };
+    (Company) => {
+        "A text the company name of the image's version resource must contain."
+    };
+    (Product) => {
+        "A text the product name of the image's version resource must contain."
+    };
+    (OriginalFilename) => {
+        "A text the original file name of the image's version resource must contain."
+    };
+    (Dxgi) => {
+        "The implementation of D3D10 to D3D12 the process loads."
+    };
+    (D3d9) => {
+        "The D3D9 implementation the process loads."
+    };
+    (Wined3d) => {
+        "The renderer wined3d draws with in the process."
+    };
+    (OpenGl) => {
+        "Which OpenGL the Mac driver gives the process."
+    };
+    (DpiAware) => {
+        "Whether the process is DPI-aware."
+    };
+    (LargeAddressAware) => {
+        "Whether a 32-bit process gets the 4 GB address space whatever its executable's flag \
+         says."
+    };
+    (Gcmouse) => {
+        "Whether raw mouse movement comes from GameController instead of the cursor."
+    };
+    (ForceNx) => {
+        "Whether no-execute stays on in a 32-bit process."
+    };
+    (MetalHud) => {
+        "Whether the Metal performance HUD shows."
+    };
+    (DllOverrides) => {
+        "DLL load-order overrides, one WINEDLLOVERRIDES element each."
+    };
+    (ArgumentsOverride) => {
+        "Arguments that replace those the rules folded before give the command line."
+    };
+    (Arguments) => {
+        "Text appended to the command line, one argument string each."
+    };
+    (DebugChannels) => {
+        "WINEDEBUG channels for the process, one entry each."
+    };
+    (Env) => {
+        "Environment variables the process gets; an empty value removes the variable."
+    };
+}
+
 /// The key of a field of a rule, which is also the name of the field on the
 /// wire.
 ///
@@ -21,72 +81,103 @@ use crate::{Exe, Rule, Setting, Table, metal_hud_env};
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
-    /// `exe`: the image basename a rule matches, ASCII-case-insensitively,
-    /// or `*` for every process (see [`Exe`]). Every rule has one.
+    #[doc = summary!(Exe)]
+    ///
+    /// `exe`, see [`Exe`]. Every rule has one.
     Exe,
-    /// `company`: a substring the image's version `CompanyName` must
-    /// contain (see [`Rule::company`]). Without it, any company matches.
+    #[doc = summary!(Company)]
+    ///
+    /// `company`, a substring of the version string `CompanyName`, compared
+    /// ASCII-case-insensitively (see [`Rule::company`]). Without it, any
+    /// company matches.
     Company,
-    /// `product`: a substring the image's version `ProductName` must
-    /// contain (see [`Rule::product`]). Without it, any product matches.
+    #[doc = summary!(Product)]
+    ///
+    /// `product`, a substring of the version string `ProductName`, compared
+    /// ASCII-case-insensitively (see [`Rule::product`]). Without it, any
+    /// product matches.
     Product,
-    /// `original_filename`: a substring the image's version
-    /// `OriginalFilename` must contain (see [`Rule::original_filename`]).
-    /// Without it, any original filename matches.
+    #[doc = summary!(OriginalFilename)]
+    ///
+    /// `original_filename`, a substring of the version string
+    /// `OriginalFilename`, compared ASCII-case-insensitively (see
+    /// [`Rule::original_filename`]). Without it, any original filename
+    /// matches.
     OriginalFilename,
-    /// `dxgi`: the implementation of D3D10 to D3D12, a [`Dxgi`] (see
-    /// [`Rule::dxgi`]). Unset: wined3d, as in upstream Wine.
+    #[doc = summary!(Dxgi)]
+    ///
+    /// `dxgi`, a [`Dxgi`] (see [`Rule::dxgi`]). Unset: wined3d, as in
+    /// upstream Wine.
     Dxgi,
-    /// `d3d9`: the D3D9 implementation, a [`D3d9`] (see [`Rule::d3d9`]).
-    /// Unset: wined3d, as in upstream Wine.
+    #[doc = summary!(D3d9)]
+    ///
+    /// `d3d9`, a [`D3d9`] (see [`Rule::d3d9`]). Unset: wined3d, as in
+    /// upstream Wine.
     D3d9,
-    /// `wined3d`: the renderer of wined3d for the whole process, a
-    /// [`Wined3d`] (see [`Rule::wined3d`]). Unset: `WINE_D3D_CONFIG` or
-    /// wined3d's registry settings decide, and without them OpenGL.
+    #[doc = summary!(Wined3d)]
+    ///
+    /// `wined3d`, a [`Wined3d`] for the whole process (see
+    /// [`Rule::wined3d`]). Unset: `WINE_D3D_CONFIG` or wined3d's registry
+    /// settings decide, and without them OpenGL.
     Wined3d,
-    /// `opengl`: which OpenGL the Mac driver gives, an [`OpenGl`] (see
-    /// [`Rule::opengl`]). Unset: Apple's OpenGL, as in upstream Wine.
+    #[doc = summary!(OpenGl)]
+    ///
+    /// `opengl`, an [`OpenGl`] (see [`Rule::opengl`]). Unset: Apple's
+    /// OpenGL, as in upstream Wine.
     OpenGl,
-    /// `dpi_aware`: whether the process is DPI-aware (see
-    /// [`Rule::dpi_aware`]). Unset: the registry and the manifest decide,
-    /// and without them the process is unaware.
+    #[doc = summary!(DpiAware)]
+    ///
+    /// `dpi_aware` (see [`Rule::dpi_aware`]). Unset: the registry and the
+    /// manifest decide, and without them the process is unaware.
     DpiAware,
-    /// `large_address_aware`: whether a 32-bit process gets 4 GB whatever
-    /// its executable's flag says (see [`Rule::large_address_aware`]).
-    /// Unset: the flag decides.
+    #[doc = summary!(LargeAddressAware)]
+    ///
+    /// `large_address_aware` (see [`Rule::large_address_aware`]). Unset:
+    /// the flag decides.
     LargeAddressAware,
-    /// `gcmouse`: whether raw mouse movement comes from GameController
-    /// (see [`Rule::gcmouse`]). Unset: from the cursor, as in upstream
-    /// Wine.
+    #[doc = summary!(Gcmouse)]
+    ///
+    /// `gcmouse` (see [`Rule::gcmouse`]). Unset: from the cursor, as in
+    /// upstream Wine.
     Gcmouse,
-    /// `force_nx`: whether no-execute stays on in a 32-bit process (see
-    /// [`Rule::force_nx`]). Unset: Wine turns it off for an image without
-    /// `NX_COMPAT`.
+    #[doc = summary!(ForceNx)]
+    ///
+    /// `force_nx` (see [`Rule::force_nx`]). Unset: Wine turns it off for an
+    /// image without `NX_COMPAT`.
     ForceNx,
-    /// `metal_hud`: whether the Metal performance HUD shows, through the
-    /// variables of [`metal_hud_env`] (see [`Rule::metal_hud`]). Unset: the
-    /// process keeps the variables it was started with.
+    #[doc = summary!(MetalHud)]
+    ///
+    /// `metal_hud`, through the variables of [`metal_hud_env`] (see
+    /// [`Rule::metal_hud`]). Unset: the process keeps the variables it was
+    /// started with.
     MetalHud,
-    /// `dll_overrides`: load-order overrides, repeatable (see
-    /// [`Rule::dll_overrides`]). None: `WINEDLLOVERRIDES` and the registry
-    /// decide.
+    #[doc = summary!(DllOverrides)]
+    ///
+    /// `dll_overrides`, repeatable (see [`Rule::dll_overrides`]). None:
+    /// `WINEDLLOVERRIDES` and the registry decide.
     DllOverrides,
-    /// `arguments_override`: the arguments that replace those of the rules
-    /// folded before, repeatable (see [`Rule::arguments_override`]). None:
-    /// the arguments of every rule append.
+    #[doc = summary!(ArgumentsOverride)]
+    ///
+    /// `arguments_override`, repeatable (see [`Rule::arguments_override`]).
+    /// None: the arguments of every rule append.
     ArgumentsOverride,
-    /// `arguments`: text appended to the command line, repeatable (see
-    /// [`Rule::arguments`]). None: the command line stays as it was.
+    #[doc = summary!(Arguments)]
+    ///
+    /// `arguments`, repeatable (see [`Rule::arguments`]). None: the command
+    /// line stays as it was.
     Arguments,
-    /// `debug_channels`: `WINEDEBUG` entries, repeatable (see
-    /// [`Rule::debug_channels`]). Wine reads `WINEDEBUG` before
-    /// `compatdb.so` loads, so the library only logs them; a launcher puts
-    /// them into the variable (see [`Table::winedebug`]). None: the
-    /// `WINEDEBUG` the process was started with.
+    #[doc = summary!(DebugChannels)]
+    ///
+    /// `debug_channels`, repeatable (see [`Rule::debug_channels`]). Wine
+    /// reads `WINEDEBUG` before `compatdb.so` loads, so the library only
+    /// logs them; a launcher puts them into the variable (see
+    /// [`Table::winedebug`]). None: the `WINEDEBUG` the process was started
+    /// with.
     DebugChannels,
-    /// `env`: an environment entry, `NAME=value`, repeatable (see
-    /// [`Rule::env`]). An empty value removes the variable. None: the
-    /// environment the process was started with.
+    #[doc = summary!(Env)]
+    ///
+    /// `env`, one `NAME=value` entry each, repeatable (see [`Rule::env`]).
+    /// None: the environment the process was started with.
     Env,
 }
 
@@ -274,6 +365,59 @@ impl Key {
             | Self::Arguments
             | Self::DebugChannels
             | Self::Env => &[],
+        }
+    }
+
+    /// What the field does, in one line of plain text without markup, such
+    /// as a launcher's template puts above the setting. It is the first
+    /// paragraph of the key's doc, which [`Key::docs_url`] links to.
+    #[must_use]
+    pub const fn summary(self) -> &'static str {
+        match self {
+            Self::Exe => summary!(Exe),
+            Self::Company => summary!(Company),
+            Self::Product => summary!(Product),
+            Self::OriginalFilename => summary!(OriginalFilename),
+            Self::Dxgi => summary!(Dxgi),
+            Self::D3d9 => summary!(D3d9),
+            Self::Wined3d => summary!(Wined3d),
+            Self::OpenGl => summary!(OpenGl),
+            Self::DpiAware => summary!(DpiAware),
+            Self::LargeAddressAware => summary!(LargeAddressAware),
+            Self::Gcmouse => summary!(Gcmouse),
+            Self::ForceNx => summary!(ForceNx),
+            Self::MetalHud => summary!(MetalHud),
+            Self::DllOverrides => summary!(DllOverrides),
+            Self::ArgumentsOverride => summary!(ArgumentsOverride),
+            Self::Arguments => summary!(Arguments),
+            Self::DebugChannels => summary!(DebugChannels),
+            Self::Env => summary!(Env),
+        }
+    }
+
+    /// A value a launcher's template can show for the field, as
+    /// [`Rule::set`] takes it: a matcher's value, one of [`Key::values`]
+    /// other than `default` for a scalar setting, one entry for a list, and
+    /// `NAME=value` for `env`. A launcher that writes `env` as a table of
+    /// names splits it at the first `=`.
+    ///
+    /// The `exe` is a program's, not `*`, since `arguments_override` needs
+    /// one; every example is a value a rule for that program takes.
+    #[must_use]
+    pub const fn example(self) -> &'static str {
+        match self {
+            Self::Exe | Self::OriginalFilename => "Game.exe",
+            Self::Company => "Some Vendor",
+            Self::Product => "Some Game",
+            Self::Dxgi | Self::D3d9 => "wined3d",
+            Self::Wined3d => "vulkan",
+            Self::OpenGl => "cgl",
+            Self::DpiAware | Self::Gcmouse | Self::ForceNx => "false",
+            Self::LargeAddressAware | Self::MetalHud => "true",
+            Self::DllOverrides => "d3dcompiler_47=n",
+            Self::ArgumentsOverride | Self::Arguments => "-windowed",
+            Self::DebugChannels => "+relay",
+            Self::Env => "DXMT_CONFIG=d3d11.preferredMaxFrameRate=60",
         }
     }
 }

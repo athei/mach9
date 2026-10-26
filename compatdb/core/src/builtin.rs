@@ -535,6 +535,12 @@ pub fn former(name: &str) -> Option<Former> {
         .copied()
 }
 
+/// Every former name of a built-in rule, in lowercase: the names for which
+/// [`former`] gives a [`Former`].
+pub fn former_names() -> impl Iterator<Item = &'static str> {
+    FORMER.iter().map(|former| former.name)
+}
+
 impl Former {
     /// The name, in lowercase.
     #[must_use]
