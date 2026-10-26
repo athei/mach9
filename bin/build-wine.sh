@@ -52,8 +52,8 @@ claim_tree "$BUILD_DIR" wine "$CLEAN"
 # ccache links ahead of PATH (ccache_bin_dir in profile.sh): clang, which CC
 # names, and the llvm-mingw compilers configure looks for first. The build
 # scripts called below get the PATH without it: DXMT's and vkd3d-proton's
-# cross files must find llvm-mingw's own compilers, and FEX and Mesa take
-# ccache their own way.
+# cross files must find llvm-mingw's own compilers, and FEX, Mesa and
+# GStreamer take ccache their own way.
 WINE_PATH="$PATH"
 if [ -n "$WINE_CCACHE" ]; then
     ccache_bin_dir "$BUILD_DIR/ccache-bin" clang aarch64-w64-mingw32-clang \
@@ -61,8 +61,9 @@ if [ -n "$WINE_CCACHE" ]; then
     WINE_PATH="$BUILD_DIR/ccache-bin:$PATH"
 fi
 
-# build-fex.sh, build-mesa.sh, build-dxmt.sh and build-vkd3d-proton.sh read
-# the same profile.sh and take --clean the same way.
+# build-fex.sh, build-mesa.sh, build-gstreamer.sh, build-dxmt.sh and
+# build-vkd3d-proton.sh read the same profile.sh and take --clean the same
+# way.
 SUB_FLAGS=()
 if [ "$CLEAN" -eq 1 ]; then
     SUB_FLAGS=(--clean)
@@ -72,6 +73,9 @@ fi
 # loader build-mesa.sh stages (the LDFLAGS in profile.sh name its directory
 # first), and records its soname.
 "$SCRIPT_DIR/build-mesa.sh" "${SUB_FLAGS[@]}"
+# GStreamer, which winegstreamer.so links: configure finds it through the
+# .pc files build-gstreamer.sh stages (PKG_CONFIG_PATH in profile.sh).
+"$SCRIPT_DIR/build-gstreamer.sh" "${SUB_FLAGS[@]}"
 
 # Every optional dependency is switched off unless it is switched back on
 # here, so a package missing from the dependency prefix fails configure
@@ -85,10 +89,12 @@ fi
 # Mesa's, also built by build-mesa.sh and found through its egl.pc: with
 # --without-x the only library --with-opengl makes configure look for is
 # EGL, and the Mac driver links Apple's OpenGL framework on its own.
+# GStreamer is the one build-gstreamer.sh built, found through its .pc files.
 CONFIGURE_ALLOWLIST=(
     --with-coreaudio
     --with-freetype
     --with-gnutls
+    --with-gstreamer
     --with-mingw
     --with-opencl
     --with-opengl
@@ -103,7 +109,6 @@ CONFIGURE_ALLOWLIST=(
     --without-gettext
     --without-gphoto
     --without-gssapi
-    --without-gstreamer
     --without-hwloc
     --without-inotify
     --without-krb5
@@ -142,6 +147,13 @@ if [ "$CLEAN" -eq 1 ] || [ ! -f "$BUILD_DIR/Makefile" ]; then
         "${CONFIGURE_TOOLCHAIN[@]}"
 else
     echo "==> Skipping configure (already configured, use --clean to reconfigure)"
+fi
+# winegstreamer links GStreamer directly, so it has no soname define for the
+# check below; a tree configured without it has empty GSTREAMER_LIBS.
+if ! grep -q '^GSTREAMER_LIBS = .*-lgstreamer-1\.0' "$BUILD_DIR/Makefile"; then
+    echo "Error: $BUILD_DIR was configured without GStreamer, so winegstreamer.so is not"
+    echo "built; rerun with --clean"
+    exit 1
 fi
 
 # Patch sonames for relocatable bundle. config.status regenerates config.h
@@ -208,6 +220,19 @@ if [ -n "$(unpatched_sonames)" ]; then
     patch_sonames
 fi
 
+# winegstreamer.so links GStreamer's libraries, and make does not relink it
+# when GSTREAMER_DIST changes: the Makefiles know nothing of those files.
+# The KEY of the dist it was last linked against is kept in GST_STAMP; when
+# the dist's differs, the module and its unix objects (the PE objects live in
+# the <arch>-windows/ subdirectories) are removed, so make compiles them
+# against the new headers and links them again. The stamp is written after
+# a successful build.
+GST_STAMP="$BUILD_DIR/.gstreamer-key"
+if [ "$(cat "$GST_STAMP" 2>/dev/null)" != "$(cat "$GSTREAMER_DIST/KEY")" ]; then
+    echo "==> GStreamer in $GSTREAMER_DIST is not the one winegstreamer.so was linked against; relinking it"
+    rm -f "$BUILD_DIR/dlls/winegstreamer/winegstreamer.so" "$BUILD_DIR"/dlls/winegstreamer/*.o
+fi
+
 echo "==> Building Wine..."
 PATH="$WINE_PATH" make -j$(sysctl -n hw.ncpu)
 
@@ -217,6 +242,7 @@ if [ -n "$(unpatched_sonames)" ]; then
     patch_sonames
     PATH="$WINE_PATH" make -j$(sysctl -n hw.ncpu)
 fi
+cp "$GSTREAMER_DIST/KEY" "$GST_STAMP"
 
 # Verify
 echo "==> Build complete."
