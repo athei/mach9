@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # The settings build-wine.sh, bundle-wine.sh, build-fex.sh, build-mesa.sh,
-# build-dxmt.sh, build-vkd3d-proton.sh and the CI scripts in ci/ share, and
-# the helpers they use.
+# build-gstreamer.sh, build-dxmt.sh, build-vkd3d-proton.sh and the CI scripts
+# in ci/ share, and the helpers they use.
 # Source it with SCRIPT_DIR set to bin/ of this repository; it sets
 # everything as it is sourced. REPO_DIR is the repository itself, PINS_DIR
 # its pins/ (redist.env and the *-src.ref files).
@@ -60,6 +60,12 @@ MESA_REPO="${MESA_REPO:-https://github.com/athei/mesa}"
 MESA_SRC="${MESA_SRC:-$ROOT/src-mesa}"
 MESA_BUILD_DIR="${MESA_BUILD_DIR:-$BUILD_TOP/mesa}"
 MESA_DIST="${MESA_DIST:-$MESA_BUILD_DIR/dist}"
+# GStreamer's tree (the monorepo clone at the tag redist.env pins, with its
+# wraps, and the meson tree) and GStreamer with glib and FFmpeg as
+# build-gstreamer.sh stages them for winegstreamer.so and the bundle. Set
+# ahead of the configure flags, which name GSTREAMER_DIST.
+GSTREAMER_BUILD_DIR="${GSTREAMER_BUILD_DIR:-$BUILD_TOP/gstreamer}"
+GSTREAMER_DIST="${GSTREAMER_DIST:-$GSTREAMER_BUILD_DIR/dist}"
 # WINE_BUILD_CCACHE: the absolute path of a ccache to run the compilers
 # through. Unset, the default, no compiler goes through ccache. Set,
 # WINE_CCACHE is that path, and the scripts run through it Wine's unix and
@@ -123,14 +129,17 @@ ccache_bin_dir() {
 # it is installed. The soname define is the bare file name either way; that
 # the bundle carries this loader is the bundle step's doing. Mesa's EGL is
 # found the same way, through the egl.pc build-mesa.sh stages in
-# $MESA_DIST/lib/pkgconfig, ahead of Homebrew's search path.
+# $MESA_DIST/lib/pkgconfig, ahead of Homebrew's search path. GStreamer
+# comes first of all, from the .pc files build-gstreamer.sh stages in
+# $GSTREAMER_DIST/lib/pkgconfig, and its libraries from $GSTREAMER_DIST/lib,
+# so configure takes neither from Homebrew, which may have its own.
 CONFIGURE_TOOLCHAIN=(CC="clang -arch arm64"
                      --host="$HOST_TRIPLE"
                      --disable-tests
                      BISON="$DEPS_PREFIX/opt/bison/bin/bison"
-                     PKG_CONFIG_PATH="$MESA_DIST/lib/pkgconfig:$DEPS_PREFIX/lib/pkgconfig"
+                     PKG_CONFIG_PATH="$GSTREAMER_DIST/lib/pkgconfig:$MESA_DIST/lib/pkgconfig:$DEPS_PREFIX/lib/pkgconfig"
                      CPPFLAGS="-I$DEPS_PREFIX/include"
-                     LDFLAGS="-L$MESA_DIST/lib -L$DEPS_PREFIX/lib")
+                     LDFLAGS="-L$GSTREAMER_DIST/lib -L$MESA_DIST/lib -L$DEPS_PREFIX/lib")
 # Path prefixes no bundled Mach-O may still load from. An x86_64 library
 # from /usr/local cannot load into an arm64 process, so a reference to it is
 # as much a leak as one to the arm64 Homebrew.
@@ -503,14 +512,15 @@ src_ref_commit() {
         END { if (peeled != "") print peeled; else if (tag != "") print tag; else if (head != "") print head }'
 }
 
-# The staged dists. build-mesa.sh, build-fex.sh, build-dxmt.sh and
-# build-vkd3d-proton.sh each stage what the bundle takes from them in a
-# directory of its own (MESA_DIST, FEX_DIST, DXMT_DIST, VKD3D_PROTON_DIST)
-# with two records: KEY, one line naming everything the dist was built from
-# (dist_key), and COMMIT, the source commit, written last, so a dist without
-# it is incomplete. Before it fetches anything, each script asks the
-# repository what its ref names now (src_ref_commit) and builds nothing when
-# its dist is complete and has the KEY it would write for that commit
+# The staged dists. build-mesa.sh, build-gstreamer.sh, build-fex.sh,
+# build-dxmt.sh and build-vkd3d-proton.sh each stage what the bundle takes
+# from them in a directory of its own (MESA_DIST, GSTREAMER_DIST, FEX_DIST,
+# DXMT_DIST, VKD3D_PROTON_DIST) with two records: KEY, one line naming
+# everything the dist was built from (dist_key), and COMMIT, the source
+# commit, written last, so a dist without it is incomplete. Before it
+# fetches anything, each script asks the repository what its ref names now
+# (src_ref_commit; GStreamer's commit is pinned) and builds nothing when its
+# dist is complete and has the KEY it would write for that commit
 # (skip_current_dist). --clean deletes the dist, so it always builds. With
 # --print-key, each prints that KEY and exits instead (print_dist_key), and
 # release.yml keys its cache of the dist on it.
@@ -597,12 +607,13 @@ skip_current_dist() {
     exit 0
 }
 
-# pinned_clone <url> <tag> <commit> <dir>: make <dir> a shallow clone of
-# <tag> with its submodules, and exit unless the tag is at <commit>. An
-# existing clone at another commit (a bumped pin) is replaced; it is the
-# calling script's own scratch copy, never somebody's work tree. The
-# submodules are brought to the recorded commits every time, so an
-# interrupted earlier run cannot leave them missing.
+# pinned_clone <url> <tag> <commit> <dir> [--no-submodules]: make <dir> a
+# shallow clone of <tag> with its submodules, and exit unless the tag is at
+# <commit>. An existing clone at another commit (a bumped pin) is replaced;
+# it is the calling script's own scratch copy, never somebody's work tree.
+# The submodules are brought to the recorded commits every time, so an
+# interrupted earlier run cannot leave them missing; --no-submodules leaves
+# them out, for a repository whose submodules the build does not use.
 pinned_clone() {
     local url="$1" tag="$2" commit="$3" dir="$4" head
     if [ -e "$dir/.git" ]; then
@@ -621,7 +632,9 @@ pinned_clone() {
             exit 1
         fi
     fi
-    git -C "$dir" submodule update --quiet --init --recursive --depth 1
+    if [ "${5:-}" != --no-submodules ]; then
+        git -C "$dir" submodule update --quiet --init --recursive --depth 1
+    fi
 }
 
 # check_deps_formulae: exit unless every formula in DEPS_FORMULAE is

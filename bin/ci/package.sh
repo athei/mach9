@@ -17,9 +17,10 @@ set -e
 #
 # The notes are one bullet per source the bundle was built from: the Wine
 # source, as the ref in pins/wine-src.ref with the commit and `git describe`
-# of WINE_SRC, this repository's commit, and the commits FEX, Mesa, DXMT and
-# vkd3d-proton were built from, whose refs are branches. The rest is pinned
-# by this repository's commit, except the Homebrew libraries in
+# of WINE_SRC, this repository's commit, the commits FEX, Mesa, DXMT and
+# vkd3d-proton were built from, whose refs are branches, and GStreamer's tag
+# and commit, which redist.env pins. The rest is pinned by this repository's
+# commit, except the Homebrew libraries in
 # lib/external, which the notes do not name. The Wine source and this
 # repository must have no uncommitted changes, and the Wine SDK must be
 # staged from that Wine commit, or the notes would name something the bundle
@@ -33,10 +34,13 @@ set -e
 # packing code, without spending the time to pack the whole trees.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# BUNDLE_DEST, WINE_SRC, WINE_SDK_DIR, FEX_DIST, MESA_DIST, DXMT_DIST,
-# VKD3D_PROTON_DIST, the repositories and wine_src_commit.
+# BUNDLE_DEST, WINE_SRC, WINE_SDK_DIR, FEX_DIST, MESA_DIST, GSTREAMER_DIST,
+# DXMT_DIST, VKD3D_PROTON_DIST, the repositories and wine_src_commit.
 # shellcheck source=../lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
+# GStreamer's tag and repository.
+# shellcheck source=../../pins/redist.env
+. "$PINS_DIR/redist.env"
 
 usage() {
     echo "Usage: $0 [--notes-only] <tag> <outdir>"
@@ -187,7 +191,7 @@ describe=${describe%-g*}
 wine_ref=$(tr -d '[:space:]' < "$PINS_DIR/wine-src.ref")
 wine_repo=$(github_name "$(git -C "$WINE_SRC" remote get-url origin)")
 for f in "$FEX_DIST/COMMIT" "$MESA_DIST/COMMIT" "$DXMT_DIST/COMMIT" \
-         "$VKD3D_PROTON_DIST/COMMIT"; do
+         "$VKD3D_PROTON_DIST/COMMIT" "$GSTREAMER_DIST/COMMIT"; do
     if [ ! -s "$f" ]; then
         echo "Error: no $f (run build-wine.sh)"
         exit 1
@@ -214,6 +218,7 @@ fi
     echo "- Mesa: $(github_name "$MESA_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref") ($(short "$(cat "$MESA_DIST/COMMIT")"))"
     echo "- DXMT: $(github_name "$DXMT_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref") ($(short "$(cat "$DXMT_DIST/COMMIT")"))"
     echo "- vkd3d-proton: $(github_name "$VKD3D_PROTON_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/vkd3d-proton-src.ref") ($(short "$(cat "$VKD3D_PROTON_DIST/COMMIT")"))"
+    echo "- GStreamer: $(github_name "$GSTREAMER_GIT_URL")@$GSTREAMER_GIT_TAG ($(short "$(cat "$GSTREAMER_DIST/COMMIT")"))"
 } > "$NOTES"
 
 echo "==> Notes ($NOTES)"

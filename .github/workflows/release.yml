@@ -219,21 +219,22 @@ jobs:
           key: cargo-${{ hashFiles('scripts/compatdb/Cargo.lock') }}
 
       # One cache per staged dist (docs/arm64.md, commands): Mesa with the
-      # Vulkan loader, FEX, DXMT and vkd3d-proton. Its key is the hash of the
-      # KEY line the dist's build script would write into it now
-      # (--print-key): the commit its ref names, the hash of the script and
-      # profile.sh, and the versions of the compilers, SDK and tools the
-      # script records. The script builds nothing when the dist restored
-      # under that key is complete with that KEY, and builds it otherwise;
-      # the bundle step checks every COMMIT against its ref again. Restored
-      # before the build step and saved right after it, even when that fails
-      # later, when the dist was built here and the run is not on a pull
-      # request: under the hash of the KEY the build wrote, so a ref that
-      # moved in between cannot file a dist under another commit's key.
+      # Vulkan loader, GStreamer, FEX, DXMT and vkd3d-proton. Its key is the
+      # hash of the KEY line the dist's build script would write into it now
+      # (--print-key): the commit its ref names (GStreamer's pin), the hash
+      # of the script and profile.sh, and the versions of the compilers, SDK
+      # and tools the script records. The script builds nothing when the
+      # dist restored under that key is complete with that KEY, and builds
+      # it otherwise; the bundle step checks every COMMIT against its ref
+      # again. Restored before the build step and saved right after it, even
+      # when that fails later, when the dist was built here and the run is
+      # not on a pull request: under the hash of the KEY the build wrote, so
+      # a ref that moved in between cannot file a dist under another
+      # commit's key.
       - name: Compute the dist cache keys
         id: dists
         run: |
-          for c in mesa fex dxmt vkd3d-proton; do
+          for c in mesa gstreamer fex dxmt vkd3d-proton; do
             key=$(scripts/bin/build-$c.sh --print-key)
             echo "$c: $key"
             echo "${c%%-*}=dist-$c-$ImageOS-$(printf '%s\n' "$key" | shasum -a 256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
@@ -245,6 +246,13 @@ jobs:
         with:
           path: build/mesa/dist
           key: ${{ steps.dists.outputs.mesa }}
+
+      - name: Restore GStreamer's dist
+        id: gstreamer-dist
+        uses: actions/cache/restore@v6
+        with:
+          path: build/gstreamer/dist
+          key: ${{ steps.dists.outputs.gstreamer }}
 
       - name: Restore FEX's dist
         id: fex-dist
@@ -320,7 +328,7 @@ jobs:
         id: saves
         if: always() && steps.build.conclusion != 'skipped'
         run: |
-          for c in mesa fex dxmt vkd3d-proton; do
+          for c in mesa gstreamer fex dxmt vkd3d-proton; do
             dist=build/$c/dist
             if [ -f "$dist/COMMIT" ] && [ -f "$dist/KEY" ]; then
               echo "${c%%-*}=dist-$c-$ImageOS-$(shasum -a 256 < "$dist/KEY" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
@@ -334,6 +342,13 @@ jobs:
         with:
           path: build/mesa/dist
           key: ${{ steps.saves.outputs.mesa }}
+
+      - name: Save GStreamer's dist
+        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.gstreamer != '' && (steps.gstreamer-dist.outputs.cache-hit != 'true' || steps.saves.outputs.gstreamer != steps.dists.outputs.gstreamer)
+        uses: actions/cache/save@v6
+        with:
+          path: build/gstreamer/dist
+          key: ${{ steps.saves.outputs.gstreamer }}
 
       - name: Save FEX's dist
         if: always() && github.event_name != 'pull_request' && steps.saves.outputs.fex != '' && (steps.fex-dist.outputs.cache-hit != 'true' || steps.saves.outputs.fex != steps.dists.outputs.fex)
