@@ -153,6 +153,15 @@ which says in its header what it does.
   its caches for the tag builds and publishes nothing. A newer push to
   `main` cancels the run of `main` still in progress; a run on a tag is
   never cancelled.
+- `release.yml` also runs on every pull request to `main`, with no `paths`
+  filter, since its check is required for merging and a filtered run would
+  never report it. Such a run does what a run on `main` does, in the
+  environment `pull-request` ([signing identity](#signing-identity)), and
+  waits until the owner approves it there. It restores the caches of
+  `main` and saves none. A newer push to the pull request cancels its run
+  still in progress. A pull request from a fork gets no secrets, so its run
+  fails at its first step, before the build; push the branch to this
+  repository instead.
 - A release's notes start with one bullet per source it was built from,
   with its ref and commit (`package.sh` in [`bin/ci/`](../bin/ci)). The
   changes are added by hand below them, as short bullets, before the draft
@@ -187,8 +196,10 @@ commands and the manifest are described in the header of
 - [`brew-cache.yml`](../.github/workflows/brew-cache.yml) runs the same
   steps on the default branch every day, on demand, and on a push to
   `main` that changes the scripts the key hashes. Caches made there can be
-  read by the runs on every tag, so a release build usually finds the kegs
-  of its own manifest, or of a recent one, and downloads little.
+  read by the runs on every tag and pull request, so a release build usually
+  finds the kegs of its own manifest, or of a recent one, and downloads
+  little. A run of `release.yml` on a pull request passes the action's
+  `save` input as false, so it saves no kegs.
 - GitHub disables the scheduled workflows of a public repository after 60
   days without activity in it; re-enable `brew-cache.yml` in the Actions
   tab then.
@@ -256,35 +267,47 @@ after which GitHub disables the scheduled workflows of a public
 repository; re-enable `release.yml` in the Actions tab then, as
 `brew-cache.yml`.
 
+A run on a pull request reads the caches of `main` and writes none, not
+even the Xcode choice or the Homebrew kegs, so what a change that is not
+merged built never reaches another run, and a pull request cannot fill the
+repository's cache budget.
+
 ### Signing identity
 
 The loader is signed in `release.yml`, by the identity of the
 [provisioning profile](arm64.md#loader-app)'s team, from the secrets of the
-GitHub environment `release`. `bin/ci/keychain.sh` imports it into a
-keychain of its own for the bundle step and deletes that keychain at the end
-of the job.
+GitHub environment `release`, or of the environment `pull-request` in a run
+on a pull request. `bin/ci/keychain.sh` imports it into a keychain of its
+own for the bundle step and deletes that keychain at the end of the job.
 
 - Create the environment `release` in the repository settings, and limit its
   deployments to the tag pattern `arm64-*` and the branch `main`, whose
   builds sign the loader too. A run from any other ref cannot use the
-  secrets.
+  secrets, so a pull request that edits the job's `environment` line to
+  name `release` gets none.
+- Create the environment `pull-request` with the owner as its required
+  reviewer, so each pull request run waits for an approval before it gets
+  the secrets. It holds a copy of the same two secrets. A pull request from
+  a fork gets no secrets from either environment.
 - Export the identity: in Keychain Access, under My Certificates, select the
   "Developer ID Application" certificate of the profile's team with its
   private key (it must be one of the certificates the profile lists, which
   the bundle step checks), choose File > Export Items, save it as a `.p12`
   file and give it a password.
-- Store both as secrets of the environment, and delete the file:
+- Store both as secrets of both environments, and delete the file:
 
   ```bash
   base64 -i identity.p12 | gh secret set MACOS_SIGNING_P12 --env release
   gh secret set MACOS_SIGNING_P12_PASSWORD --env release
+  base64 -i identity.p12 | gh secret set MACOS_SIGNING_P12 --env pull-request
+  gh secret set MACOS_SIGNING_P12_PASSWORD --env pull-request
   rm identity.p12
   ```
 
-  The second command asks for the password.
+  The commands that set the password ask for it.
 - When the certificate is renewed, or the profile replaced with one that
-  lists another certificate, export and store the new identity the same
-  way.
+  lists another certificate, export and store the new identity in both
+  environments the same way.
 
 ## Wine-side contract
 

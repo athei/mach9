@@ -28,9 +28,9 @@ set -e
 # --notes-only runs every check that comes before packing and writes and
 # prints the notes, but packs only a small part of each tree into a
 # temporary directory, which it lists with macOS's tar and deletes
-# (trial_pack). A run that publishes nothing (release.yml on main) still
-# fails where a release would, and runs the same packing code, without
-# spending the time to pack the whole trees.
+# (trial_pack). A run that publishes nothing (release.yml on main or on a
+# pull request) still fails where a release would, and runs the same
+# packing code, without spending the time to pack the whole trees.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # BUNDLE_DEST, WINE_SRC, WINE_SDK_DIR, FEX_DIST, MESA_DIST, DXMT_DIST,
