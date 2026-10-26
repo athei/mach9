@@ -1,0 +1,95 @@
+name: Docs
+
+# Checks the compatdb crates and publishes the rustdoc of compatdb-core,
+# which is the spec of WINE_COMPATDB, to GitHub Pages at
+# <owner>.github.io/<repo>/compatdb_core/.
+#
+# Pages must be set to "GitHub Actions" as its source in the repository
+# settings (Settings, Pages, Build and deployment), or the deploy job
+# fails.
+#
+# The checks run on Linux for compatdb-core alone. It is pure Rust with no
+# platform code. compatdb itself is a macOS cdylib that runs from a Mach-O
+# initializer inside Wine's ntdll, so its tests stay on a Mac, and
+# release.yml builds it on every push to main that changes compatdb/.
+# rustfmt checks both crates, since formatting does not depend on the
+# target.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'compatdb/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time, and a newer push waits for a running one
+# instead of cancelling it halfway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      MANIFEST: compatdb/Cargo.toml
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # rustfmt.toml uses options that only nightly rustfmt applies.
+      - name: Install the toolchains
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup toolchain install nightly --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Check the formatting
+        run: cargo +nightly fmt --manifest-path "$MANIFEST" --all --check
+
+      - name: Test
+        run: cargo test --locked --manifest-path "$MANIFEST" -p compatdb-core
+
+      - name: Clippy
+        run: cargo clippy --locked --manifest-path "$MANIFEST" -p compatdb-core --all-targets -- -D warnings
+
+      - name: Build the docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --locked --manifest-path "$MANIFEST" -p compatdb-core --no-deps
+          printf '%s\n' '<!doctype html>' \
+            '<meta http-equiv="refresh" content="0; url=compatdb_core/">' \
+            '<a href="compatdb_core/">compatdb_core</a>' > compatdb/target/doc/index.html
+
+      - name: Upload the docs
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: compatdb/target/doc
+
+  deploy:
+    needs: docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}compatdb_core/
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
