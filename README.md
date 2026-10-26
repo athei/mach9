@@ -43,7 +43,8 @@ The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](bin/lib/profile.sh).
 | `lib/wine/x86_64-windows/` | Full bundle only: the x86_64 link libraries of the [Wine SDK](docs/arm64.md#wine-sdk). Nothing reads the directory at run time |
 | `lib/wine/tests/i386-windows/`, `lib/wine/tests/x86_64-windows/` | Full bundle only: Wine's graphics conformance tests as `<name>_test.exe`, for testing the bundle's Direct3D, OpenGL and Vulkan stack ([graphics tests](docs/arm64.md#graphics-tests)) |
 | `lib/wine/tests/VERSION` | Full bundle only: one line, the `wine --version` string of the Wine the tests were built from, the same as the bundle's own `bin/wine --version` |
-| `lib/external/` | Bundled dylibs, the Vulkan loader, KosmicKrisp, and Mesa's EGL with Zink ([OpenGL](docs/arm64.md#opengl)) |
+| `lib/external/` | Bundled dylibs, the Vulkan loader, KosmicKrisp, Mesa's EGL with Zink ([OpenGL](docs/arm64.md#opengl)), and GStreamer with glib and FFmpeg, which `winegstreamer.so` links ([GStreamer](docs/arm64.md#gstreamer)) |
+| `lib/external/gstreamer-1.0/` | GStreamer's plugins, gst-libav with FFmpeg's decoders among them ([GStreamer](docs/arm64.md#gstreamer)) |
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
 
 An x64 process runs as ARM64EC, and Wine looks up its builtins in
@@ -66,6 +67,7 @@ directory that an x64 process would load but not run natively
 | `WINENCPU` | Limits the number of processors Wine reports to programs, for those that misbehave with many. A value of 0, one that is not a number, or one above the real count is ignored ([runtime](docs/arm64.md#runtime)) |
 | `FEX_HARDWARE_TSO` | Unset or `1`: FEX runs x86 code with the hardware x86 memory ordering (TSO) instead of emulating it with ordered loads and stores. The ordering is a per-thread mode: FEX switches a thread to it whenever the thread enters x86 code and back at the syscalls and unix calls of x86 code, since native code runs slower in it. `0`: FEX emulates the ordering. Any other value logs an error and FEX emulates the ordering |
 | `FEX_HOSTFEATURES` | FEX's host feature overrides. x86_64 programs, which run as ARM64EC, run without AFP (the Arm floating-point behaviour FEX uses to match x86) by default, because the floating-point mode would have to change on every call between x86 code and native code, which costs more than AFP saves. `enableafp` turns it back on. i386 programs keep AFP |
+| `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_REGISTRY_1_0` | Unset, with or without `_1_0`: ntdll points GStreamer at the bundle's `lib/external/gstreamer-1.0`, unsets `GST_PLUGIN_PATH` and `GST_PLUGIN_PATH_1_0`, and puts GStreamer's plugin registry into a file of its own under `XDG_CACHE_HOME`, or `~/.cache` without it, so `winegstreamer` uses the bundled plugins only. Set: GStreamer uses what the caller names; a caller that sets only the registry still gets the bundled plugins ([GStreamer](docs/arm64.md#gstreamer)) |
 | `VK_DRIVER_FILES` | Unset: ntdll sets it to the bundle's `share/vulkan/icd.d`, so the Vulkan loader uses the bundled KosmicKrisp and no driver installed elsewhere on the Mac. Set: the loader uses the manifests it names instead. ntdll also leaves it unset when the caller sets `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES`; the loader then uses those, and the bundled driver is not added to them ([Vulkan](docs/arm64.md#vulkan)) |
 | `MESA_KK_EXPERIMENTAL` | Which of Mesa's own experimental features KosmicKrisp advertises. The features Direct3D 12 and OpenGL through Zink need are always on in this build, whatever it says ([Vulkan](docs/arm64.md#vulkan)) |
 | `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | vkd3d-proton's settings, as [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) describes them. A compatdb `env` rule sets one for one game ([recipes](docs/compatdb.md#recipes)) |
@@ -160,14 +162,14 @@ provisioning profile.
 ### Commands
 
 ```bash
-bin/build-wine.sh    # Mesa and the Vulkan loader, Wine, the SDK, then FEX, DXMT and vkd3d-proton
+bin/build-wine.sh    # Mesa and the Vulkan loader, GStreamer, Wine, the SDK, then FEX, DXMT and vkd3d-proton
 bin/bundle-wine.sh   # assemble the bundle (see Layout)
 ```
 
 | Script | Flag | Effect |
 |--------|------|--------|
-| `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile, and in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk) also when its configure arguments or `WINE_SRC` (the source path) changed. Mesa, FEX, DXMT and vkd3d-proton are not built at all while what they staged is current ([commands](docs/arm64.md#commands)) |
-| `build-wine.sh` | `--clean` | Wipes the build directories and what they staged first, and is passed on to `build-mesa.sh`, `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; the only way to pick up changed configure flags or deployment target, except in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk), which is configured again whenever its flags or `WINE_SRC` change |
+| `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile, and in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk) also when its configure arguments or `WINE_SRC` (the source path) changed. Mesa, GStreamer, FEX, DXMT and vkd3d-proton are not built at all while what they staged is current ([commands](docs/arm64.md#commands)) |
+| `build-wine.sh` | `--clean` | Wipes the build directories and what they staged first, and is passed on to `build-mesa.sh`, `build-gstreamer.sh`, `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; the only way to pick up changed configure flags or deployment target, except in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk), which is configured again whenever its flags or `WINE_SRC` change |
 | `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the bundle in the [layout](#layout). Either way it asks before it deletes an existing one, unless `--yes` |
 | `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking, for an unattended run. A directory that is not empty and has no `bin/wine` is still refused |
 | `bundle-wine.sh` | `--runtime-only` | No development files; the flavor to put into an application |
@@ -177,7 +179,7 @@ bin/bundle-wine.sh   # assemble the bundle (see Layout)
 `usage()` and the argument parsing in
 [`build-wine.sh`](bin/build-wine.sh) and
 [`bundle-wine.sh`](bin/bundle-wine.sh) are authoritative.
-`build-mesa.sh`, `build-fex.sh`, `build-dxmt.sh` and
+`build-mesa.sh`, `build-gstreamer.sh`, `build-fex.sh`, `build-dxmt.sh` and
 `build-vkd3d-proton.sh` also run alone
 ([commands](docs/arm64.md#commands)).
 
@@ -205,7 +207,7 @@ Everything lives beside this repository, in the directory that holds it
 | `src-fex/` | The FEX checkout |
 | `src-mesa/` | The Mesa checkout, for the Vulkan driver |
 | `cache/` | Downloaded redistributables |
-| `build/<component>/` | One tree per intermediate: the Wine build, its SDK and the x86 tree for its link libraries and tests, FEX, DXMT, vkd3d-proton and Mesa with the Vulkan loader. DXMT's and vkd3d-proton's trees hold their own clones of the source |
+| `build/<component>/` | One tree per intermediate: the Wine build, its SDK and the x86 tree for its link libraries and tests, FEX, DXMT, vkd3d-proton, Mesa with the Vulkan loader, and GStreamer. DXMT's, vkd3d-proton's and GStreamer's trees hold their own clones of the source |
 | `dist/wine` | The bundle |
 | `dist/wine-symbols` | With `--symbols`, the bundle's PE files before their symbols were stripped (Step 4e of [`bundle-wine.sh`](bin/bundle-wine.sh)); not part of the bundle |
 
@@ -232,3 +234,7 @@ tree from before markers existed, which is adopted when its parent is
 - Wine's Vulkan is on, on the loader and KosmicKrisp `build-mesa.sh` builds
   ([Vulkan](docs/arm64.md#vulkan)). The bundle does not ship Wine's own
   D3D12 modules; D3D12 is vkd3d-proton's.
+- `--with-gstreamer` makes configure require GStreamer for
+  `winegstreamer`, Wine's media decoding. It finds the GStreamer
+  `build-gstreamer.sh` builds from source, through the `.pc` files that
+  script stages, not Homebrew's ([GStreamer](docs/arm64.md#gstreamer)).

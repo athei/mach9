@@ -39,6 +39,19 @@ check when something upstream changes.
   `share/vulkan/icd.d/`, whose `library_path` is relative to the manifest,
   and ntdll points the loader at that directory
   ([arm64.md](arm64.md#vulkan)).
+- `winegstreamer.so` is the one unix module that links libraries outside
+  the system: GStreamer's, which `build-gstreamer.sh` staged in
+  `GSTREAMER_DIST` under the install names
+  `@loader_path/../../external/<name>`, so the linker records the path the
+  module loads each by in the bundle. Wine links its modules without room
+  in their headers for longer names, so `install_name_tool` cannot rewrite
+  their references afterwards. The bundle step copies the libraries and
+  plugins, as they are, into `lib/external/` and
+  `lib/external/gstreamer-1.0/`, gives the libraries `@loader_path/<name>`
+  as their own install names like every bundled dylib, and stops on a
+  reference of `winegstreamer.so` by any other name, or on a GStreamer
+  library with the name of one Step 3 already copied from Homebrew
+  ([GStreamer](arm64.md#gstreamer)).
 - There is no `DYLD_*` variable. The loader app is the only entry point
   ([loader app](arm64.md#loader-app)).
 
@@ -89,7 +102,7 @@ What the bundle step checks is in
 
 | Setting | Defined in | Applies to | Constraint |
 |---------|------------|------------|------------|
-| `MACOS_FLOOR` | [`profile.sh`](../bin/lib/profile.sh) | Exported as `MACOSX_DEPLOYMENT_TARGET` for everything the scripts build (Wine, `compatdb.so`, FEX, DXMT, KosmicKrisp and the Vulkan loader, though not KosmicKrisp's build tools, which only run on the build host), and the floor every Mach-O in the bundle is checked against | The loader's cross-architecture entitlement needs it; equals the `.cargo/config.toml` row |
+| `MACOS_FLOOR` | [`profile.sh`](../bin/lib/profile.sh) | Exported as `MACOSX_DEPLOYMENT_TARGET` for everything the scripts build (Wine, `compatdb.so`, FEX, DXMT, KosmicKrisp and the Vulkan loader, GStreamer, though not KosmicKrisp's build tools, which only run on the build host), and the floor every Mach-O in the bundle is checked against | The loader's cross-architecture entitlement needs it; equals the `.cargo/config.toml` row |
 | `MACOSX_DEPLOYMENT_TARGET` | [`.cargo/config.toml`](../compatdb/.cargo/config.toml) | `compatdb.so` built by a plain `cargo build` in `compatdb/`, where cargo finds the file; the scripts override it | Same as `MACOS_FLOOR` |
 
 - Without the pin, clang takes the deployment target from the build host.
@@ -105,7 +118,9 @@ What the bundle step checks is in
   missing while the floor is below its version; a change takes effect on
   the next `build-wine.sh --clean`, and until then the bundle step fails on
   a module that still imports one. After a new SDK, search a clean build's
-  log for that warning.
+  log for that warning. `build-gstreamer.sh` turns the same functions off
+  in the `config.h` files of its meson tree, compiles with that warning as
+  an error, and fails on a library that imports one.
 - Wine picks up a changed pin on the next `build-wine.sh --clean`.
 - A `MACOSX_DEPLOYMENT_TARGET` in the environment may raise `MACOS_FLOOR`
   but not lower it, and overrides the `.cargo/config.toml` value.
@@ -206,16 +221,18 @@ commands and the manifest are described in the header of
 
 ### Other caches
 
-The runner also caches the staged directories of Mesa, FEX, DXMT and
-vkd3d-proton, the compiler output of ccache, DXMT's LLVM libraries, the
-downloads `redist.env` pins, cargo's registry and the Xcode `host.sh` chose.
+The runner also caches the staged directories of Mesa, GStreamer, FEX,
+DXMT and vkd3d-proton, the compiler output of ccache, DXMT's LLVM
+libraries, the downloads `redist.env` pins, cargo's registry and the Xcode
+`host.sh` chose.
 Each key changes only with what its cache was made from:
 
 - Each staged directory: the runner image and the hash of the `KEY` line
   its build script would write into it, which the script prints with
   `--print-key` ([commands](arm64.md#commands)). That line names the commit
-  the component's ref resolves to now, the hash of the build script and of
-  [`profile.sh`](../bin/lib/profile.sh), the versions of the compilers,
+  the component's ref resolves to now (for GStreamer the pinned one), the
+  hash of the build script and of [`profile.sh`](../bin/lib/profile.sh),
+  the versions of the compilers,
   the macOS SDK and the tools the script records, and for DXMT the Wine
   commit and the hash of `build-wine.sh`. A directory restored under its
   key is complete and current, so the script builds nothing; any change of
@@ -223,8 +240,9 @@ Each key changes only with what its cache was made from:
   under the hash of the `KEY` that build wrote. The script compares the
   whole `KEY` before it skips anything, so a directory built by another
   script or toolchain is built again; the bundle step compares each
-  directory's commits (`COMMIT`, and Mesa's `LOADER_COMMIT` and DXMT's
-  `WINE_COMMIT`) with the pins and the Wine source once more.
+  directory's commits (`COMMIT`, and Mesa's `LOADER_COMMIT`, GStreamer's
+  `FFMPEG_COMMIT` and DXMT's `WINE_COMMIT`) with the pins and the Wine
+  source once more.
 - ccache's directory: the runner image, then the run's ID and attempt.
   Every run restores the newest directory a run on the default branch saved
   (the key's prefix), so the objects of every source file that did not
@@ -346,6 +364,12 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
 - ntdll sets `VK_DRIVER_FILES` to the bundle's `share/vulkan/icd.d` unless
   the caller chose the Vulkan drivers ([Vulkan](arm64.md#vulkan)); the
   bundle step checks that `ntdll.so` names the variable.
+- ntdll points GStreamer at the bundle's `lib/external/gstreamer-1.0` and
+  its registry at a file of its own unless the caller chose them
+  ([GStreamer](arm64.md#gstreamer)); the smoke test checks that the
+  registry lands there.
+- The WMA decoder DMO's stream info and input status calls return `S_OK`;
+  the smoke test's `wmadec.c` checks them.
 - The wineserver runs CrossOver's msync and prints the lines the smoke test
   looks for ([runtime](arm64.md#runtime)).
 - The loader checks for its entitlement and re-execs itself with 4K pages
@@ -430,6 +454,39 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
 - A Wine build tree configured without Vulkan has no `SONAME_LIBVULKAN`,
   and one configured before EGL was built has no `SONAME_LIBEGL`;
   `build-wine.sh` stops and asks for `--clean`.
+
+### GStreamer
+
+GStreamer, with glib and FFmpeg, is pinned in
+[`redist.env`](../pins/redist.env) ([GStreamer](arm64.md#gstreamer)). On
+a bump of the tag:
+
+- Pin the commit of the FFmpeg port branch that the new tag's
+  `subprojects/FFmpeg.wrap` names, branch and commit together;
+  `build-gstreamer.sh` refuses a wrap that names another branch.
+- Check that every meson option the script sets still exists under its
+  name: the monorepo's and each module's `meson.options`, and FFmpeg's
+  `meson_options.txt` for the decoders, parsers and bitstream filters.
+  The script fails on a decoder, parser or filter missing from FFmpeg's
+  `config_components.h` and on a plugin set that differs from its list,
+  but an option that disappeared in a module meson accepts silently.
+- A new optional dependency in the meson log that auto_features does not
+  turn off gets disabled in the script too, and a new decoder an
+  existing one builds on (FFmpeg's `configure`, `*_select`) goes into its
+  list.
+- Search the build's output for `pipe2` and the other functions of
+  `FLOOR_NEWER_FUNCS`: a module whose `config.h` names one under another
+  define than `HAVE_<FUNCTION>` fails the build with the availability
+  error, and needs that define turned off as well.
+- Rebuild with `build-gstreamer.sh` and run a full bundle step; its smoke
+  test creates the elements `winegstreamer` needs and decodes WMA through
+  Wine's DMO.
+- A Wine build tree configured without GStreamer has an empty
+  `GSTREAMER_LIBS` in its `Makefile`; `build-wine.sh` stops and asks for
+  `--clean`.
+- `build-wine.sh` compiles and links `winegstreamer` again whenever the
+  dist's `KEY` differs from the one it was last built against, and the
+  bundle step refuses a `winegstreamer.so` built against another dist.
 
 ### DXMT and vkd3d-proton
 

@@ -36,6 +36,8 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
   `D3D9_IMPLS` in `profile.sh`.
 - Wine's Vulkan is on, on KosmicKrisp, Mesa's Vulkan driver on Metal, and
   a Vulkan loader built for the floor (see [Vulkan](#vulkan)).
+- Wine's media decoding, `winegstreamer`, runs on a GStreamer built here
+  from source with LGPL FFmpeg decoders (see [GStreamer](#gstreamer)).
 - A [Wine SDK](#wine-sdk) is staged for the PE code built outside Wine.
 - The loader is wrapped in a signed app bundle, and Wine processes run with
   4K pages (see [Loader app](#loader-app)).
@@ -72,24 +74,28 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
   come from their upstream repositories. `build-mesa.sh` also needs it
   whenever it builds the Vulkan loader or the Python environment of Mesa's
   build scripts anew (a first run, or changed pins), to clone the loader
-  and headers and install the Python modules.
+  and headers and install the Python modules. `build-gstreamer.sh` needs
+  it whenever it builds, unless its clone and the wraps it downloaded into
+  it are already there.
 
 ## Commands
 
 | Script | What it does |
 |--------|--------------|
-| `build-wine.sh` | Runs `build-mesa.sh`, builds Wine against the loader it staged, stages the [Wine SDK](#wine-sdk), then runs `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; `--clean` is passed on to all four |
+| `build-wine.sh` | Runs `build-mesa.sh` and `build-gstreamer.sh`, builds Wine against the loader and GStreamer they staged, stages the [Wine SDK](#wine-sdk), then runs `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; `--clean` is passed on to all five |
 | [`build-mesa.sh`](../bin/build-mesa.sh) | Checks out the ref in [`mesa-src.ref`](../pins/mesa-src.ref) in `MESA_SRC` (refusing a tree with local changes), builds the Vulkan loader from the tags pinned in [`redist.env`](../pins/redist.env), KosmicKrisp, and Mesa's EGL with Zink, and stages them with the driver's manifest, an `egl.pc` for Wine's configure and their commits in `MESA_DIST` (see [Vulkan](#vulkan) and [OpenGL](#opengl)). Runs alone too |
+| [`build-gstreamer.sh`](../bin/build-gstreamer.sh) | Clones GStreamer's monorepo at the tag pinned in [`redist.env`](../pins/redist.env), builds GStreamer, its plugins, glib and FFmpeg from it for the floor, and stages them with `.pc` files for Wine's configure and their commits in `GSTREAMER_DIST` (see [GStreamer](#gstreamer)). Runs alone too |
 | [`build-fex.sh`](../bin/build-fex.sh) | Checks out the ref in [`fex-src.ref`](../pins/fex-src.ref) in `FEX_SRC` (refusing a tree with local changes), builds FEX's emulator DLLs and their unix halves, and stages them with their commit in `FEX_DIST`. Runs alone too |
 | [`build-dxmt.sh`](../bin/build-dxmt.sh) | Checks out the ref in [`dxmt-src.ref`](../pins/dxmt-src.ref) in its own clone, builds DXMT against the Wine build and SDK, and stages it with its commit and `git describe` in `DXMT_DIST`. Runs alone too, after a Wine build |
 | [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | Checks out the ref in [`vkd3d-proton-src.ref`](../pins/vkd3d-proton-src.ref) in its own clone, builds vkd3d-proton's D3D12 DLLs, marks them as builtins with the Wine build's and the SDK's `winebuild`, and stages them with their commit and `git describe` in `VKD3D_PROTON_DIST`. Runs alone too, after a Wine build |
-| `bundle-wine.sh` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT, vkd3d-proton, the Vulkan loader, KosmicKrisp and EGL, and the mtld3d release, signs the loader and runs the smoke test |
+| `bundle-wine.sh` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT, vkd3d-proton, the Vulkan loader, KosmicKrisp and EGL, GStreamer, and the mtld3d release, signs the loader and runs the smoke test |
 
 The flags are in the [README](../README.md#commands).
 
-- Each staged directory, `MESA_DIST`, `FEX_DIST`, `DXMT_DIST` and
-  `VKD3D_PROTON_DIST`, holds a `KEY` file next to its `COMMIT`: one line
-  naming what it was built from, the source commit, the hash of the script
+- Each staged directory, `MESA_DIST`, `GSTREAMER_DIST`, `FEX_DIST`,
+  `DXMT_DIST` and `VKD3D_PROTON_DIST`, holds a `KEY` file next to its
+  `COMMIT`: one line naming what it was built from, the source commit
+  (for GStreamer the pinned one), the hash of the script
   that built it and of [`profile.sh`](../bin/lib/profile.sh) (for DXMT also
   of `build-wine.sh`, whose Wine build it links against), and the versions
   of the compilers, SDK and tools that script records (each script's key
@@ -99,7 +105,7 @@ The flags are in the [README](../README.md#commands).
   commit; it says so in a line of its own. `--clean` deletes the staged
   directory, so the script builds. DXMT is also built whenever the Wine
   source has uncommitted changes.
-- `--print-key` makes each of the four scripts print that key and exit.
+- `--print-key` makes each of the five scripts print that key and exit.
   The release workflow keys its caches of the staged directories on it
   ([other caches](maintenance.md#other-caches)).
 - `WINE_BUILD_CCACHE`, the absolute path of a ccache, runs the compilers of
@@ -139,6 +145,8 @@ of the same name; the defaults are set in
 | `MESA_REPO`, `MESA_SRC` | Mesa repository and the local clone `build-mesa.sh` checks out |
 | `MESA_BUILD_DIR` | The Vulkan loader's and headers' clones and trees, Mesa's two meson trees (the host tools, and KosmicKrisp with EGL and Zink), the Python environment and, by default, `MESA_DIST` |
 | `MESA_DIST` | The Vulkan loader, KosmicKrisp and its manifest, EGL and the gallium library with Zink as the bundle installs them, the `egl.pc` Wine's configure reads, and the commits they were built from |
+| `GSTREAMER_BUILD_DIR` | GStreamer's monorepo clone with the wraps meson downloaded into it, its meson tree and install, and, by default, `GSTREAMER_DIST` |
+| `GSTREAMER_DIST` | GStreamer's, glib's and FFmpeg's libraries and GStreamer's plugins as the bundle installs them, the headers and `.pc` files Wine's configure reads, and the commits they were built from |
 | `LOADER_PROFILE` | The provisioning profile the loader is signed for |
 | `MINGW_DIR` | llvm-mingw |
 | `CACHE_DIR` | Downloaded redistributables |
@@ -461,6 +469,58 @@ which stops at 4.1 core and 2.1 compatibility.
   the smoke test gives the programs that need OpenGL such a rule there
   ([what the bundle step checks](#what-the-bundle-step-checks)).
 
+## GStreamer
+
+Wine decodes audio and video for DirectShow, Media Foundation and the DMOs
+games use (the WMA decoder of `wmadmod.dll` among them) in `winegstreamer`,
+on GStreamer. The bundle carries a GStreamer of its own, so no GStreamer
+needs to be installed on the Mac.
+
+- [`build-gstreamer.sh`](../bin/build-gstreamer.sh) builds it from
+  GStreamer's monorepo at the tag pinned in
+  [`redist.env`](../pins/redist.env), with glib, its dependencies and FFmpeg
+  as meson subprojects from the monorepo's wraps, for the floor. FFmpeg's
+  meson port is pinned by commit there as well, since the wrap names a
+  branch. Homebrew's GStreamer and FFmpeg are not used: their builds are GPL
+  and link a large part of Homebrew.
+- Everything is LGPL: GPL code is off in GStreamer and FFmpeg. The plugins
+  are the ones `winegstreamer` creates or that decodebin finds for the
+  formats games ship, and FFmpeg has the decoders and parsers gst-libav
+  needs for them and nothing else; both lists are in the script. Every
+  other feature option is disabled, and pkg-config searches nowhere, so a
+  library the host has installed does not turn a feature on. A plain
+  library check can still find one, since Apple's clang searches
+  `/usr/local`; the checks below keep such a find out of what is staged.
+- The script checks that every library and plugin is arm64, held to the
+  floor, loads only system libraries and its siblings by `@loader_path`,
+  has no `LC_RPATH` and no flat-namespace import, and imports no function
+  of `FLOOR_NEWER_FUNCS` (see
+  [macOS floors](maintenance.md#macos-floors)), and that no object was
+  compiled with a header from `/usr/local` or the Homebrew prefix.
+- Wine's configure finds it through the `.pc` files in `GSTREAMER_DIST`,
+  which come first in `PKG_CONFIG_PATH` (`profile.sh`), and
+  `build-wine.sh` passes `--with-gstreamer`, so a build without it fails.
+  Unlike Wine's other unix modules, `winegstreamer.so` links its libraries
+  directly, by the paths under `lib/external/` that the staged libraries
+  carry as their install names ([relocation](maintenance.md#relocation)).
+- The libraries go into `lib/external/`, the plugins into
+  `lib/external/gstreamer-1.0/`, where GStreamer looks for plugins next to
+  `libgstreamer-1.0`.
+- ntdll sets `GST_PLUGIN_SYSTEM_PATH_1_0` to that directory and unsets
+  `GST_PLUGIN_PATH` and `GST_PLUGIN_PATH_1_0` unless the caller set
+  `GST_PLUGIN_SYSTEM_PATH` or `GST_PLUGIN_SYSTEM_PATH_1_0`, so a process
+  loads the bundled plugins only, and not those of a GStreamer installed
+  elsewhere, whose libraries would be a second GStreamer in the process.
+  In that case it also points `GST_REGISTRY_1_0` at a file of its own
+  under `XDG_CACHE_HOME` (or `~/.cache`), unless the caller set
+  `GST_REGISTRY` or `GST_REGISTRY_1_0`, so the registry is not the one
+  another GStreamer writes
+  ([environment variables](../README.md#environment-variables)).
+- There is no `gst-plugin-scanner`: `winegstreamer` initializes GStreamer
+  with `--gst-disable-registry-fork`, so GStreamer reads the plugins in the
+  process itself when the registry is missing or out of date, the first
+  time a process of a new bundle uses it.
+
 ## Loader app
 
 The loader needs `com.apple.developer.cross-architecture-support`. With it,
@@ -535,23 +595,30 @@ from the commit `vkd3d-proton-src.ref` names now, asked of
 `VKD3D_PROTON_REPO`), the staged Vulkan loader, KosmicKrisp, EGL and one
 gallium library (complete, Mesa built from the commit `mesa-src.ref` names
 now, asked of `MESA_REPO` the same way, and the loader from the pinned
-commit), the llvm-mingw compilers and tools the smoke test, the markers of
-Step 4 and Step 4e use, and the provisioning profile (not expired,
-granting the entitlement, with an identity of its team in the keychain).
+commit), the staged GStreamer (complete, and built from the commits
+`redist.env` pins), the llvm-mingw compilers and tools the smoke test,
+the markers of Step 4 and Step 4e use, and the provisioning profile (not
+expired, granting the entitlement, with an identity of its team in the
+keychain).
 
 After assembly:
 
 - Inherited `com.apple.quarantine` is removed from the tree (and nothing
   else), so macOS does not block a copied library; a failure stops the
   bundle step.
-- No dylib in `lib/external/`, no `.so` module, the tree unix modules
-  included, and not the loader references any of the `LEAK_PREFIXES` in
-  `profile.sh`.
-- No dylib in `lib/external/` has an `@rpath/` dependency that does not
-  resolve inside the bundle, and each of them loads with `dlopen` in a
+- No dylib in `lib/external/` or `lib/external/gstreamer-1.0/`, no `.so`
+  module, the tree unix modules included, and not the loader references
+  any of the `LEAK_PREFIXES` in `profile.sh`.
+- No dylib in those two directories has an `@rpath/` dependency that does
+  not resolve inside the bundle, and each of them loads with `dlopen` in a
   process of its own, built from [`smoke/dlopen.c`](../smoke/dlopen.c)
   ([relocation](maintenance.md#relocation)).
-- The Direct3D trees, FEX, the Vulkan files, the loader app and, in a full
+- Every dependency outside the system of `winegstreamer.so`, of
+  GStreamer's libraries and of its plugins names a file inside the bundle,
+  `winegstreamer.so` loads `libgstreamer-1.0` from `lib/external/`, and
+  every plugin has a valid signature ([GStreamer](#gstreamer)).
+- The Direct3D trees, FEX, the Vulkan files, `winegstreamer` (its `.so`
+  and both DLLs) with GStreamer, the loader app and, in a full
   bundle, the x86_64 link libraries and every graphics test are in place,
   with a tests `VERSION` equal to `bin/wine --version`; the mtld3d tree's
   `d3d9.dll` and `mtld3d.dll` are byte-identical to the release's, and
@@ -593,9 +660,9 @@ After assembly:
   [macOS floors](maintenance.md#macos-floors)). That catches a Wine build
   tree configured before the override, which `minos` does not show.
 - The smoke test, with the caller's `WINE_COMPATDB` and `WINE_D3D_CONFIG`
-  and every `WINEMSYNC*`, `FEX_*`, `VK_*`, `VKD3D_*`, `MESA_*`, `MTL_*` and
-  `METAL_*` variable dropped and vkd3d-proton's pipeline cache in the
-  throwaway prefix, not the working directory
+  and every `WINEMSYNC*`, `FEX_*`, `VK_*`, `VKD3D_*`, `MESA_*`, `MTL_*`,
+  `METAL_*` and `GST_*` variable dropped and vkd3d-proton's pipeline
+  cache in the throwaway prefix, not the working directory
   (`VKD3D_SHADER_CACHE_PATH`): `wine --version`; a
   fresh prefix boots (`cmd /c exit`), with `compatdb:` lines and the
   wineserver's `msync: up and running.` line and no `msync: error:` line;
@@ -618,6 +685,14 @@ After assembly:
   host program, makes an OpenGL context current through the bundle's EGL
   without Wine, with only `VK_DRIVER_FILES` set, and must get Zink on
   KosmicKrisp with every EGL, gallium and Vulkan library loaded from
+  `lib/external/`. [`smoke/gst.c`](../smoke/gst.c), another host program,
+  initializes the bundle's GStreamer without Wine and without a scanner
+  process, with only the two variables ntdll sets, the registry in a
+  throwaway file, and must write that registry, register and load every
+  plugin of `lib/external/gstreamer-1.0/`, create the elements
+  `winegstreamer` needs (`GST_SMOKE_ELEMENTS` in
+  [`bundle-wine.sh`](../bin/bundle-wine.sh), gst-libav's decoders among
+  them) and load every GStreamer, glib and FFmpeg library from
   `lib/external/`. After the tree loads, [`smoke/wgl.c`](../smoke/wgl.c),
   compiled for each architecture in `SMOKE_PE_ARCHS`, opens a window,
   creates a legacy, a 4.x core and a compatibility context, each of which
@@ -645,7 +720,13 @@ After assembly:
   for the program, where wined3d must report it. The i686 program uses
   Direct3D 8. Wine builds no 64-bit `d3d8.dll`, so the x86_64 one uses
   Direct3D 9, with a rule giving
-  it the `wined3d` d3d9 tree in both runs. KosmicKrisp only uses a GPU of
+  it the `wined3d` d3d9 tree in both runs. After that,
+  [`smoke/wmadec.c`](../smoke/wmadec.c), compiled for x86_64 and i686,
+  decodes a few WMAv2 packets to PCM through the WMA decoder DMO, which is
+  `winegstreamer` with gst-libav, checking its stream info and input status
+  on the way; the log must not say that GStreamer cannot decode WMA, and
+  the GStreamer registry must be where ntdll puts it, under an
+  `XDG_CACHE_HOME` in the throwaway directory. KosmicKrisp only uses a GPU of
   the Metal 4 family, and a Mac without one, such as the virtual machine of
   a hosted CI runner, gives it no device. There, `vulkan.exe` has to fail
   creating its instance after the Vulkan loader read the bundled manifest
@@ -674,7 +755,8 @@ After assembly:
 ## Homebrew libraries and the floor
 
 The libraries in `lib/external/` other than Mesa's (the Vulkan loader,
-KosmicKrisp, EGL and the gallium library) are Homebrew's: the formulae in
+KosmicKrisp, EGL and the gallium library) and GStreamer's
+([GStreamer](#gstreamer)) are Homebrew's: the formulae in
 `DEPS_FORMULAE` and their runtime closure, copied from `DEPS_PREFIX`.
 Homebrew builds each bottle for one macOS major version, the bottle tag,
 with the deployment target at that version's `.0` release, and pours the
@@ -702,7 +784,11 @@ libraries meet the floor:
 
 Nothing from Homebrew is linked statically into a file the bundle ships.
 Wine's unix modules load the libraries above by soname and link none of
-them. Mesa's second stage is built with pkg-config searching nowhere and
+them; the one module that links libraries outside the system,
+`winegstreamer.so`, links GStreamer's, which are built here, with
+pkg-config searching nowhere and Homebrew off `PATH`, as Mesa's are, and
+`build-gstreamer.sh` checks that they load system libraries and each other
+only. Mesa's second stage is built with pkg-config searching nowhere and
 Homebrew off `PATH`, and `build-mesa.sh` checks that the driver, EGL, the
 gallium library and the loader load system libraries only, besides EGL
 loading the gallium library next to it.
@@ -741,6 +827,7 @@ dependency, search a clean build's log for it.
 | Mesa (KosmicKrisp) | [`mesa-src.ref`](../pins/mesa-src.ref): a branch, tag or commit of `MESA_REPO` |
 | Vulkan loader and headers | [`redist.env`](../pins/redist.env), tag and commit of each, from one SDK release; `build-mesa.sh` fails when a tag is not at its commit |
 | Python modules of Mesa's build scripts | [`redist.env`](../pins/redist.env), as pip requirements with exact versions |
+| GStreamer, with glib and FFmpeg | [`redist.env`](../pins/redist.env), the monorepo's tag and commit, and the commit of the FFmpeg port's branch its FFmpeg wrap names; the monorepo's other wraps pin their tarballs by checksum. `build-gstreamer.sh` fails when the tag is not at its commit or the wrap names another branch |
 | Wine | Whatever `WINE_SRC` has checked out, normally [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched); nothing pins a commit. A CI build checks out the branch [`wine-src.ref`](../pins/wine-src.ref) names. The SDK and DXMT record the commit they were built against (with `-dirty` when tracked files differ, which counts all uncommitted states as one), and the bundle step refuses either when it is not the current one |
 | Homebrew libraries | Not pinned: whatever the host's Homebrew has ([Homebrew libraries and the floor](#homebrew-libraries-and-the-floor)). A CI build installs the formulae in [`brew-formulae`](../pins/brew-formulae) at the newest versions Homebrew has when it runs ([Homebrew formulae](maintenance.md#homebrew-formulae)) |
 | llvm-mingw | Of a CI build: [`redist.env`](../pins/redist.env), version and SHA-256 of the release archive. A local build uses `MINGW_DIR` |
