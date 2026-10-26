@@ -94,14 +94,23 @@ pub enum Origin {
 }
 
 impl Origin {
-    /// Where the values of `rule` come from.
+    /// Where the values of `rule` come from, a rule of a table with the
+    /// source `source`.
     #[must_use]
-    pub fn of(rule: &Rule) -> Self {
-        match rule.source {
+    pub fn of(source: Source, rule: &Rule) -> Self {
+        match source {
             Source::Line(n) => Self::Line(n),
             Source::BuiltIn if rule.specificity() == Specificity::Any => Self::BuiltIn,
             Source::BuiltIn => Self::BuiltInFor(rule.matchers()),
         }
+    }
+
+    /// Whether the `env` entries of a rule from here are defaults, which
+    /// leave a variable the process already has alone: those of a built-in
+    /// rule that matches every process (see [`Rule::env`]).
+    #[must_use]
+    pub const fn env_is_default(&self) -> bool {
+        matches!(self, Self::BuiltIn)
     }
 
     /// How the log names it: `built-in`, `built-in for <matchers>` or
@@ -131,7 +140,7 @@ pub struct ArgumentsDropped {
 pub struct EnvFrom {
     /// The rule that set it.
     pub origin: Origin,
-    /// Whether it is a default (see [`Rule::env_is_default`]), which leaves
+    /// Whether it is a default (see [`Origin::env_is_default`]), which leaves
     /// a variable the process already has alone.
     pub default: bool,
 }
@@ -321,8 +330,7 @@ impl Resolution {
     /// whose order is `default` takes its modules out of the entries before
     /// it, dropping an entry left without one, and every other entry is
     /// appended.
-    fn fold_dll_overrides(&mut self, rule: &Rule) {
-        let origin = Origin::of(rule);
+    fn fold_dll_overrides(&mut self, rule: &Rule, origin: &Origin) {
         for entry in &rule.dll_overrides {
             if !entry.is_default() {
                 self.dll_overrides.push(entry.clone());
@@ -360,8 +368,7 @@ impl Resolution {
     /// Fold the arguments of `rule` into the list: its `arguments_override`,
     /// when set, replaces what the rules folded before it accumulated, and
     /// its `arguments` append.
-    fn fold_arguments(&mut self, rule: &Rule) {
-        let origin = Origin::of(rule);
+    fn fold_arguments(&mut self, rule: &Rule, origin: &Origin) {
         if let Some(over) = &rule.arguments_override {
             let entries: Vec<(Argument, Origin)> = std::mem::take(&mut self.arguments)
                 .into_iter()
@@ -473,21 +480,20 @@ impl Table {
     /// still apply.
     #[must_use]
     pub fn resolve(&self, exe: &str, version: &VersionInfo) -> Resolution {
-        let mut matching: Vec<&Rule> = self
-            .rules
-            .iter()
-            .filter(|rule| rule.matches(exe, version))
+        let mut matching: Vec<(Source, &Rule)> = self
+            .entries()
+            .filter(|(_, rule)| rule.matches(exe, version))
             .collect();
-        matching.sort_by_key(|rule| (rule.source != Source::BuiltIn, rule.specificity()));
+        matching.sort_by_key(|(source, rule)| (*source != Source::BuiltIn, rule.specificity()));
         let mut r = Resolution::default();
-        for rule in matching {
-            let origin = Origin::of(rule);
+        for (source, rule) in matching {
+            let origin = Origin::of(source, rule);
             for &scalar in Scalar::ALL {
                 r.fold_scalar(scalar, rule.scalar(scalar), &origin);
             }
-            r.fold_dll_overrides(rule);
-            r.fold_arguments(rule);
-            let default = rule.env_is_default();
+            r.fold_dll_overrides(rule, &origin);
+            r.fold_arguments(rule, &origin);
+            let default = origin.env_is_default();
             r.env.extend(rule.env.iter().cloned());
             r.env_from.extend(rule.env.iter().map(|_| EnvFrom {
                 origin: origin.clone(),

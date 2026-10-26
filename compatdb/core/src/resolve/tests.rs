@@ -9,13 +9,20 @@ fn u16s(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
+/// [`Table::parse_lenient`], with the diagnostics as `compatdb.so` logs
+/// them.
+fn parse(text: &str) -> (Table, Vec<String>) {
+    let (table, diagnostics) = Table::parse_lenient(text);
+    (table, diagnostics.iter().map(ToString::to_string).collect())
+}
+
 /// The built-in-looking `table` with `text` parsed and appended, as
 /// `compatdb.so` builds its table; `text` must parse cleanly.
 fn with_lines(table: &Table, text: &str) -> Table {
-    let (parsed, diagnostics) = Table::parse(text);
+    let (parsed, diagnostics) = parse(text);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let mut table = table.clone();
-    table.rules.extend(parsed.rules);
+    table.append(parsed);
     table
 }
 
@@ -28,21 +35,19 @@ fn pair(name: &str, value: &str) -> EnvEntry {
 /// The built-in-looking rules of the `arguments_override` tests: a `*`
 /// rule and a rule for `game.exe`, each with one argument.
 fn argument_rules() -> Table {
-    Table {
-        rules: vec![
-            Rule {
-                exe: Exe::Any,
-                arguments: vec![Argument::literal("-all")],
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("game.exe"),
-                company: Some(Fingerprint::literal("Acme")),
-                arguments: vec![Argument::literal("-game")],
-                ..Rule::default()
-            },
-        ],
-    }
+    Table::of_builtin(vec![
+        Rule {
+            exe: Exe::Any,
+            arguments: vec![Argument::literal("-all")],
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("game.exe"),
+            company: Some(Fingerprint::literal("Acme")),
+            arguments: vec![Argument::literal("-game")],
+            ..Rule::default()
+        },
+    ])
 }
 
 /// The version resource the `game.exe` rule of [`argument_rules`] pins.
@@ -55,31 +60,29 @@ fn acme() -> VersionInfo {
 
 #[test]
 fn dpi_aware_resolves_to_the_most_specific_rule_and_unset_inherits() {
-    let table = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("game.exe"),
-                company: Some(Fingerprint::literal("Acme")),
-                dpi_aware: Setting::Set(true),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("game.exe"),
-                dpi_aware: Setting::Set(false),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                dpi_aware: Setting::Set(true),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("quiet.exe"),
-                arguments: vec![Argument::literal("-x")],
-                ..Rule::default()
-            },
-        ],
-    };
+    let table = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("game.exe"),
+            company: Some(Fingerprint::literal("Acme")),
+            dpi_aware: Setting::Set(true),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("game.exe"),
+            dpi_aware: Setting::Set(false),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            dpi_aware: Setting::Set(true),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("quiet.exe"),
+            arguments: vec![Argument::literal("-x")],
+            ..Rule::default()
+        },
+    ]);
     let acme = VersionInfo {
         company: "Acme".into(),
         ..VersionInfo::default()
@@ -116,16 +119,14 @@ fn dpi_aware_resolves_to_the_most_specific_rule_and_unset_inherits() {
 
 #[test]
 fn a_later_star_rule_changes_a_builtin_value_only_when_it_sets_the_key() {
-    let base = Table {
-        rules: vec![Rule {
-            exe: Exe::Any,
-            dpi_aware: Setting::Set(true),
-            large_address_aware: Setting::Set(true),
-            gcmouse: Setting::Set(true),
-            force_nx: Setting::Set(true),
-            ..Rule::default()
-        }],
-    };
+    let base = Table::of_builtin(vec![Rule {
+        exe: Exe::Any,
+        dpi_aware: Setting::Set(true),
+        large_address_aware: Setting::Set(true),
+        gcmouse: Setting::Set(true),
+        force_nx: Setting::Set(true),
+        ..Rule::default()
+    }]);
     // A rule that does not mention them leaves the values alone.
     let table = with_lines(&base, "exe=*;dll_overrides=a=");
     let r = table.resolve("x.exe", &VersionInfo::default());
@@ -162,26 +163,24 @@ fn a_later_star_rule_changes_a_builtin_value_only_when_it_sets_the_key() {
 
 #[test]
 fn large_address_aware_resolves_to_the_most_specific_rule() {
-    let table = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("game.exe"),
-                company: Some(Fingerprint::literal("Acme")),
-                dpi_aware: Setting::Set(false),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("game.exe"),
-                large_address_aware: Setting::Set(false),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                large_address_aware: Setting::Set(true),
-                ..Rule::default()
-            },
-        ],
-    };
+    let table = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("game.exe"),
+            company: Some(Fingerprint::literal("Acme")),
+            dpi_aware: Setting::Set(false),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("game.exe"),
+            large_address_aware: Setting::Set(false),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            large_address_aware: Setting::Set(true),
+            ..Rule::default()
+        },
+    ]);
     let acme = VersionInfo {
         company: "Acme".into(),
         ..VersionInfo::default()
@@ -202,38 +201,34 @@ fn large_address_aware_resolves_to_the_most_specific_rule() {
     assert_eq!(none.large_address_aware(), None);
     assert!(none.is_empty());
     // It alone makes a resolution non-empty.
-    let table = Table {
-        rules: vec![Rule {
-            exe: Exe::Any,
-            large_address_aware: Setting::Set(false),
-            ..Rule::default()
-        }],
-    };
+    let table = Table::of_builtin(vec![Rule {
+        exe: Exe::Any,
+        large_address_aware: Setting::Set(false),
+        ..Rule::default()
+    }]);
     assert!(!table.resolve("x.exe", &acme).is_empty());
 }
 
 #[test]
 fn gcmouse_resolves_to_the_most_specific_rule() {
-    let table = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("game.exe"),
-                company: Some(Fingerprint::literal("Acme")),
-                dpi_aware: Setting::Set(false),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("game.exe"),
-                gcmouse: Setting::Set(false),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                gcmouse: Setting::Set(true),
-                ..Rule::default()
-            },
-        ],
-    };
+    let table = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("game.exe"),
+            company: Some(Fingerprint::literal("Acme")),
+            dpi_aware: Setting::Set(false),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("game.exe"),
+            gcmouse: Setting::Set(false),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            gcmouse: Setting::Set(true),
+            ..Rule::default()
+        },
+    ]);
     let acme = VersionInfo {
         company: "Acme".into(),
         ..VersionInfo::default()
@@ -254,32 +249,28 @@ fn gcmouse_resolves_to_the_most_specific_rule() {
     assert_eq!(none.gcmouse(), None);
     assert!(none.is_empty());
     // It alone makes a resolution non-empty.
-    let table = Table {
-        rules: vec![Rule {
-            exe: Exe::Any,
-            gcmouse: Setting::Set(false),
-            ..Rule::default()
-        }],
-    };
+    let table = Table::of_builtin(vec![Rule {
+        exe: Exe::Any,
+        gcmouse: Setting::Set(false),
+        ..Rule::default()
+    }]);
     assert!(!table.resolve("x.exe", &acme).is_empty());
 }
 
 #[test]
 fn force_nx_resolves_to_the_most_specific_rule() {
-    let base = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("game.exe"),
-                force_nx: Setting::Set(false),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                force_nx: Setting::Set(true),
-                ..Rule::default()
-            },
-        ],
-    };
+    let base = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("game.exe"),
+            force_nx: Setting::Set(false),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            force_nx: Setting::Set(true),
+            ..Rule::default()
+        },
+    ]);
     let other = base.resolve("other.exe", &VersionInfo::default());
     assert_eq!(other.force_nx(), Some(true));
     assert_eq!(
@@ -315,23 +306,21 @@ fn force_nx_resolves_to_the_most_specific_rule() {
 
 #[test]
 fn the_rules_of_wine_compatdb_fold_after_every_builtin_rule() {
-    let base = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("game.exe"),
-                company: Some(Fingerprint::literal("Acme")),
-                dpi_aware: Setting::Set(false),
-                gcmouse: Setting::Set(false),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                dpi_aware: Setting::Set(true),
-                gcmouse: Setting::Set(true),
-                ..Rule::default()
-            },
-        ],
-    };
+    let base = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("game.exe"),
+            company: Some(Fingerprint::literal("Acme")),
+            dpi_aware: Setting::Set(false),
+            gcmouse: Setting::Set(false),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            dpi_aware: Setting::Set(true),
+            gcmouse: Setting::Set(true),
+            ..Rule::default()
+        },
+    ]);
     let acme = VersionInfo {
         company: "Acme".into(),
         ..VersionInfo::default()
@@ -361,15 +350,13 @@ fn the_rules_of_wine_compatdb_fold_after_every_builtin_rule() {
 
 #[test]
 fn default_resets_a_scalar_from_that_rule_on() -> TestResult {
-    let base = Table {
-        rules: vec![Rule {
-            exe: Exe::Any,
-            dxgi: Setting::Set(Dxgi::Dxmt),
-            wined3d: Setting::Set(Wined3d::Vulkan),
-            dpi_aware: Setting::Set(true),
-            ..Rule::default()
-        }],
-    };
+    let base = Table::of_builtin(vec![Rule {
+        exe: Exe::Any,
+        dxgi: Setting::Set(Dxgi::Dxmt),
+        wined3d: Setting::Set(Wined3d::Vulkan),
+        dpi_aware: Setting::Set(true),
+        ..Rule::default()
+    }]);
     let table = with_lines(
         &base,
         "exe=*;dxgi=default;wined3d=default;dpi_aware=default",
@@ -386,11 +373,17 @@ fn default_resets_a_scalar_from_that_rule_on() -> TestResult {
     let r = table.resolve("x.exe", &VersionInfo::default());
     assert_eq!(r.dpi_aware(), Some(false));
     assert_eq!(r.scalar(Scalar::DpiAware).reset_by.as_ref(), None);
-    // Within one line the last field for a key wins.
-    let (parsed, diagnostics) = Table::parse(
+    // Within one line the last field for a key wins, with a warning.
+    let (parsed, diagnostics) = parse(
         "exe=a.exe;dpi_aware=default;dpi_aware=true\nexe=b.exe;gcmouse=false;gcmouse=default",
     );
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert_eq!(
+        diagnostics,
+        [
+            "WINE_COMPATDB line 1: dpi_aware given more than once, the last one applies",
+            "WINE_COMPATDB line 2: gcmouse given more than once, the last one applies",
+        ]
+    );
     let a = parsed.rules.first().ok_or("no a")?;
     assert_eq!(a.dpi_aware, Setting::Set(true));
     let b = parsed.rules.get(1).ok_or("no b")?;
@@ -399,7 +392,7 @@ fn default_resets_a_scalar_from_that_rule_on() -> TestResult {
     // of the format, read in any case like the booleans, while `env` and
     // `arguments` take it as text.
     for &scalar in Scalar::ALL {
-        let (parsed, diagnostics) = Table::parse(&format!("exe=a.exe;{scalar}=default"));
+        let (parsed, diagnostics) = parse(&format!("exe=a.exe;{scalar}=default"));
         assert!(diagnostics.is_empty(), "{scalar}: {diagnostics:?}");
         let rule = parsed.rules.first().ok_or("no rule")?;
         for &other in Scalar::ALL {
@@ -412,7 +405,7 @@ fn default_resets_a_scalar_from_that_rule_on() -> TestResult {
         }
     }
     let (parsed, diagnostics) =
-        Table::parse("exe=a.exe;dpi_aware=Default;env=A=default;arguments=DEFAULT");
+        parse("exe=a.exe;dpi_aware=Default;env=A=default;arguments=DEFAULT");
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let a = parsed.rules.first().ok_or("no a")?;
     assert_eq!(a.dpi_aware, Setting::Reset);
@@ -423,23 +416,21 @@ fn default_resets_a_scalar_from_that_rule_on() -> TestResult {
 
 #[test]
 fn a_default_dll_override_takes_its_modules_out_of_the_entries_before_it() {
-    let base = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::Any,
-                dll_overrides: vec![
-                    DllOverride::literal("mscoree,mshtml="),
-                    DllOverride::literal("d3d12="),
-                ],
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("game.exe"),
-                dll_overrides: vec![DllOverride::literal("D3D12.DLL=n")],
-                ..Rule::default()
-            },
-        ],
-    };
+    let base = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::Any,
+            dll_overrides: vec![
+                DllOverride::literal("mscoree,mshtml="),
+                DllOverride::literal("d3d12="),
+            ],
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("game.exe"),
+            dll_overrides: vec![DllOverride::literal("D3D12.DLL=n")],
+            ..Rule::default()
+        },
+    ]);
     let table = with_lines(
         &base,
         "exe=*;dll_overrides=d3d12=default;dll_overrides=mshtml=b",
@@ -472,22 +463,20 @@ fn a_default_dll_override_takes_its_modules_out_of_the_entries_before_it() {
 
 #[test]
 fn resolve_matches_case_insensitively_and_folds_in_order() {
-    let table = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("game.exe"),
-                dxgi: Setting::Set(Dxgi::Dxmt),
-                dll_overrides: vec![DllOverride::literal("a=")],
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("GAME.EXE"),
-                dxgi: Setting::Set(Dxgi::Wined3d),
-                dll_overrides: vec![DllOverride::literal("b=")],
-                ..Rule::default()
-            },
-        ],
-    };
+    let table = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("game.exe"),
+            dxgi: Setting::Set(Dxgi::Dxmt),
+            dll_overrides: vec![DllOverride::literal("a=")],
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("GAME.EXE"),
+            dxgi: Setting::Set(Dxgi::Wined3d),
+            dll_overrides: vec![DllOverride::literal("b=")],
+            ..Rule::default()
+        },
+    ]);
     let r = table.resolve("Game.exe", &VersionInfo::default());
     assert_eq!(r.dxgi(), Some(Dxgi::Wined3d));
     assert_eq!(r.dll_overrides, ["a=", "b="]);
@@ -495,27 +484,25 @@ fn resolve_matches_case_insensitively_and_folds_in_order() {
 
 #[test]
 fn the_resolution_says_where_every_value_came_from() {
-    let table = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("game.exe"),
-                company: Some(Fingerprint::literal("Acme")),
-                product: Some(Fingerprint::literal("Game")),
-                dpi_aware: Setting::Set(false),
-                arguments: vec![Argument::literal("-b")],
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                dxgi: Setting::Set(Dxgi::Dxmt),
-                dpi_aware: Setting::Set(true),
-                dll_overrides: vec![DllOverride::literal("a=")],
-                arguments: vec![Argument::literal("-a")],
-                env: vec![EnvEntry::literal("A", "1"), EnvEntry::literal("B", "2")],
-                ..Rule::default()
-            },
-        ],
-    };
+    let table = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("game.exe"),
+            company: Some(Fingerprint::literal("Acme")),
+            product: Some(Fingerprint::literal("Game")),
+            dpi_aware: Setting::Set(false),
+            arguments: vec![Argument::literal("-b")],
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            dxgi: Setting::Set(Dxgi::Dxmt),
+            dpi_aware: Setting::Set(true),
+            dll_overrides: vec![DllOverride::literal("a=")],
+            arguments: vec![Argument::literal("-a")],
+            env: vec![EnvEntry::literal("A", "1"), EnvEntry::literal("B", "2")],
+            ..Rule::default()
+        },
+    ]);
     let acme = VersionInfo {
         company: "Acme".into(),
         product: "Game".into(),
@@ -554,28 +541,29 @@ fn the_resolution_says_where_every_value_came_from() {
 
 #[test]
 fn only_the_env_entries_of_a_builtin_star_rule_are_defaults() {
-    let base = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::Any,
-                env: vec![EnvEntry::literal("A", "1")],
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                company: Some(Fingerprint::literal("Acme")),
-                env: vec![EnvEntry::literal("B", "1")],
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("game.exe"),
-                env: vec![EnvEntry::literal("C", "1")],
-                ..Rule::default()
-            },
-        ],
-    };
+    let base = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::Any,
+            env: vec![EnvEntry::literal("A", "1")],
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            company: Some(Fingerprint::literal("Acme")),
+            env: vec![EnvEntry::literal("B", "1")],
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("game.exe"),
+            env: vec![EnvEntry::literal("C", "1")],
+            ..Rule::default()
+        },
+    ]);
     let table = with_lines(&base, "exe=*;env=D=1");
-    let defaults: Vec<bool> = table.rules.iter().map(Rule::env_is_default).collect();
+    let defaults: Vec<bool> = table
+        .entries()
+        .map(|(source, rule)| Origin::of(source, rule).env_is_default())
+        .collect();
     assert_eq!(defaults, [true, false, false, false]);
     let acme = VersionInfo {
         company: "Acme".into(),
@@ -603,16 +591,14 @@ fn only_the_env_entries_of_a_builtin_star_rule_are_defaults() {
 
 #[test]
 fn a_rule_from_wine_compatdb_is_named_by_its_line() -> TestResult {
-    let base = Table {
-        rules: vec![Rule {
-            exe: Exe::Any,
-            dpi_aware: Setting::Set(true),
-            gcmouse: Setting::Set(true),
-            dll_overrides: vec![DllOverride::literal("a=")],
-            env: vec![EnvEntry::literal("A", "1")],
-            ..Rule::default()
-        }],
-    };
+    let base = Table::of_builtin(vec![Rule {
+        exe: Exe::Any,
+        dpi_aware: Setting::Set(true),
+        gcmouse: Setting::Set(true),
+        dll_overrides: vec![DllOverride::literal("a=")],
+        env: vec![EnvEntry::literal("A", "1")],
+        ..Rule::default()
+    }]);
     let table = with_lines(&base, "v=7\nexe=*;dpi_aware=false;dll_overrides=b=;env=A=2");
     let r = table.resolve("x.exe", &VersionInfo::default());
     // The scalar the line set says so; the one it left does not.
@@ -651,20 +637,18 @@ fn a_rule_from_wine_compatdb_is_named_by_its_line() -> TestResult {
 
 #[test]
 fn a_removal_names_the_value_it_undoes() {
-    let table = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("game.exe"),
-                env: vec![EnvEntry::literal("A", ""), EnvEntry::literal("B", "")],
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                env: vec![EnvEntry::literal("A", "1")],
-                ..Rule::default()
-            },
-        ],
-    };
+    let table = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("game.exe"),
+            env: vec![EnvEntry::literal("A", ""), EnvEntry::literal("B", "")],
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            env: vec![EnvEntry::literal("A", "1")],
+            ..Rule::default()
+        },
+    ]);
     let r = table.resolve("game.exe", &VersionInfo::default());
     let steps = r.env_steps(|_| false);
     let removes = |name: &str| {
@@ -692,14 +676,12 @@ fn a_rule_for_the_same_exe_does_not_take_another_rules_fingerprint() {
     // Each rule stands on its own matchers. A rule from WINE_COMPATDB
     // for a common basename does not inherit the fingerprint of a
     // built-in rule for it, and the built-in rule is unchanged.
-    let base = Table {
-        rules: vec![Rule {
-            exe: Exe::literal("Launcher.exe"),
-            company: Some(Fingerprint::literal("Rockstar Games")),
-            dxgi: Setting::Set(Dxgi::Wined3d),
-            ..Rule::default()
-        }],
-    };
+    let base = Table::of_builtin(vec![Rule {
+        exe: Exe::literal("Launcher.exe"),
+        company: Some(Fingerprint::literal("Rockstar Games")),
+        dxgi: Setting::Set(Dxgi::Wined3d),
+        ..Rule::default()
+    }]);
     let table = with_lines(&base, "exe=Launcher.exe;dxgi=dxmt;dll_overrides=b=");
     assert_eq!(table.rules.first(), base.rules.first());
     let rockstar = VersionInfo {
@@ -863,22 +845,20 @@ fn an_overridden_list_is_appended_unless_already_present() -> TestResult {
 
 #[test]
 fn a_wildcard_rule_is_the_least_specific_and_a_process_rule_beats_it() {
-    let table = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::Any,
-                dxgi: Setting::Set(Dxgi::Dxmt),
-                dll_overrides: vec![DllOverride::literal("global=")],
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("Launcher.exe"),
-                dxgi: Setting::Set(Dxgi::Wined3d),
-                dll_overrides: vec![DllOverride::literal("specific=")],
-                ..Rule::default()
-            },
-        ],
-    };
+    let table = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::Any,
+            dxgi: Setting::Set(Dxgi::Dxmt),
+            dll_overrides: vec![DllOverride::literal("global=")],
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("Launcher.exe"),
+            dxgi: Setting::Set(Dxgi::Wined3d),
+            dll_overrides: vec![DllOverride::literal("specific=")],
+            ..Rule::default()
+        },
+    ]);
     // The wildcard alone reaches an unrelated process.
     let other = table.resolve("Other.exe", &VersionInfo::default());
     assert_eq!(other.dxgi(), Some(Dxgi::Dxmt));
@@ -908,9 +888,7 @@ fn a_process_rule_wins_however_the_rules_are_ordered() {
         dxgi: Setting::Set(Dxgi::Dxmt),
         ..Rule::default()
     };
-    let table = Table {
-        rules: vec![specific, wildcard],
-    };
+    let table = Table::of_builtin(vec![specific, wildcard]);
     assert_eq!(
         table
             .resolve("Launcher.exe", &VersionInfo::default())
@@ -921,22 +899,20 @@ fn a_process_rule_wins_however_the_rules_are_ordered() {
 
 #[test]
 fn two_rules_for_one_basename_resolve_independently() {
-    let table = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("Launcher.exe"),
-                company: Some(Fingerprint::literal("Rockstar Games")),
-                dxgi: Setting::Set(Dxgi::Wined3d),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("Launcher.exe"),
-                company: Some(Fingerprint::literal("Acme")),
-                dxgi: Setting::Set(Dxgi::Dxmt),
-                ..Rule::default()
-            },
-        ],
-    };
+    let table = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("Launcher.exe"),
+            company: Some(Fingerprint::literal("Rockstar Games")),
+            dxgi: Setting::Set(Dxgi::Wined3d),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("Launcher.exe"),
+            company: Some(Fingerprint::literal("Acme")),
+            dxgi: Setting::Set(Dxgi::Dxmt),
+            ..Rule::default()
+        },
+    ]);
     let rockstar = VersionInfo {
         company: "Rockstar Games".into(),
         ..VersionInfo::default()
@@ -965,20 +941,18 @@ fn two_rules_for_one_basename_resolve_independently() {
 
 #[test]
 fn the_two_implementations_resolve_independently() {
-    let table = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::Any,
-                dxgi: Setting::Set(Dxgi::Wined3d),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::literal("game.exe"),
-                d3d9: Setting::Set(D3d9::Wined3d),
-                ..Rule::default()
-            },
-        ],
-    };
+    let table = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::Any,
+            dxgi: Setting::Set(Dxgi::Wined3d),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("game.exe"),
+            d3d9: Setting::Set(D3d9::Wined3d),
+            ..Rule::default()
+        },
+    ]);
     let r = table.resolve("game.exe", &VersionInfo::default());
     assert_eq!(r.dxgi(), Some(Dxgi::Wined3d));
     assert_eq!(r.d3d9(), Some(D3d9::Wined3d));
@@ -989,20 +963,18 @@ fn the_two_implementations_resolve_independently() {
 
 #[test]
 fn wined3d_resolves_to_the_most_specific_rule() {
-    let base = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("game.exe"),
-                wined3d: Setting::Set(Wined3d::Gl),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                wined3d: Setting::Set(Wined3d::Vulkan),
-                ..Rule::default()
-            },
-        ],
-    };
+    let base = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("game.exe"),
+            wined3d: Setting::Set(Wined3d::Gl),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            wined3d: Setting::Set(Wined3d::Vulkan),
+            ..Rule::default()
+        },
+    ]);
     let none = VersionInfo::default();
     assert_eq!(base.resolve("game.exe", &none).wined3d(), Some(Wined3d::Gl));
     assert_eq!(
@@ -1030,20 +1002,18 @@ fn wined3d_resolves_to_the_most_specific_rule() {
 
 #[test]
 fn opengl_resolves_to_the_most_specific_rule() {
-    let base = Table {
-        rules: vec![
-            Rule {
-                exe: Exe::literal("apple.exe"),
-                opengl: Setting::Set(OpenGl::Cgl),
-                ..Rule::default()
-            },
-            Rule {
-                exe: Exe::Any,
-                opengl: Setting::Set(OpenGl::Egl),
-                ..Rule::default()
-            },
-        ],
-    };
+    let base = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::literal("apple.exe"),
+            opengl: Setting::Set(OpenGl::Cgl),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::Any,
+            opengl: Setting::Set(OpenGl::Egl),
+            ..Rule::default()
+        },
+    ]);
     let none = VersionInfo::default();
     let apple = base.resolve("Apple.exe", &none);
     assert_eq!(apple.opengl(), Some(OpenGl::Cgl));

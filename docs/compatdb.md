@@ -168,9 +168,10 @@ exe=*;gcmouse=false
 ### Format
 
 - One rule per line, as `key=value` fields joined by `;`. Blank lines are
-  ignored. `Table::to_env_value` in
+  ignored. `Table`'s `to_string()` in
   [`compatdb/core/src/wire.rs`](../compatdb/core/src/wire.rs) writes the
-  value this way, for a launcher that uses the crate.
+  value this way, for a launcher that uses the crate, and
+  `Table::parse_strict` reads it back as the same table.
 - The log names a rule by its line, counted from 1, blank lines included.
 - There is no version header. A first line of `v=` and digits, the header
   launchers wrote for an older format, is ignored, so their tables still
@@ -180,8 +181,13 @@ exe=*;gcmouse=false
   [`compatdb/core/src/key.rs`](../compatdb/core/src/key.rs) is the
   authoritative list.
 - Inside a value, `%`, `;`, CR, LF and other control characters are
-  percent-encoded (`%3B` for `;`, `%25` for `%`). Everything else, including
-  `=` and `,`, passes through.
+  percent-encoded (`%3B` for `;`, `%25` for `%`). Everything else,
+  including `=`, `,` and non-ASCII, passes through as UTF-8. Each `%XX`
+  decodes to one byte, and the bytes of a value must be UTF-8 without a
+  NUL.
+- An `env` field is `env=NAME=value`: the name ends at the first `=`, and
+  an env name cannot contain `=`. A `%3D` in a name is refused like any
+  other invalid name.
 
 ### Errors
 
@@ -192,7 +198,11 @@ Errors never abort a process.
   `1` or `yes`), or no `=` is ignored with a warning naming the line and
   the field. So is an empty `arguments` value, a `dll_overrides` entry
   without `=`, an `env` name that is empty or holds `=`, and any value
-  with a NUL. The rest of its line still applies.
+  whose escapes are not UTF-8 or decode to a NUL. The rest of its line
+  still applies.
+- A second field for a matcher or a key that holds one value replaces the
+  first, with a warning. A `%` that two hex digits do not follow is kept as
+  it is, with a warning.
 - `name` and `enabled`, which launchers wrote for an older format where a
   rule named a built-in rule to change or drop it, are unknown keys like
   any other. A line with them and an `exe` is a rule of its own;

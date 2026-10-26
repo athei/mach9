@@ -34,8 +34,8 @@ use std::{
 };
 
 use compatdb_core::{
-    Arch, ArgumentsDropped, D3d9, DllOverrideReset, Dxgi, ENV_VAR, EnvEntry, EnvStep, Key, Origin,
-    Resolution, Scalar, Table, VersionInfo, Wined3d, basename_of,
+    Arch, ArgumentsDropped, D3d9, Diagnostic, DllOverrideReset, Dxgi, ENV_VAR, EnvEntry, EnvStep,
+    Key, Origin, Resolution, Scalar, Table, VersionInfo, Wined3d, basename_of,
 };
 
 use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TEB_PEB_OFFSET};
@@ -47,18 +47,15 @@ static INIT: extern "C" fn() = run;
 
 /// The built-in rules followed by the rules from [`ENV_VAR`], plus what
 /// could not be read from that variable, for the log.
-fn load_table() -> (Table, Vec<String>) {
+fn load_table() -> (Table, Vec<Diagnostic>) {
     // The built-in rules are compiled in; only the caller's rules travel in
     // the environment (absent unless something set it). They come after the
     // built-in ones, so within a tier they fold later.
-    let mut table = Table::builtin();
-    let mut messages = Vec::new();
-    if let Some(text) = read_env() {
-        let (rules, diagnostics) = Table::parse(&text);
-        messages.extend(diagnostics);
-        table.rules.extend(rules.rules);
-    }
-    (table, messages)
+    let Some(text) = read_env() else {
+        return (Table::builtin(), Vec::new());
+    };
+    let (rules, diagnostics) = Table::parse_lenient(&text);
+    (rules.with_builtin(), diagnostics)
 }
 
 extern "C" fn run() {
@@ -332,9 +329,9 @@ fn env_line(step: &EnvStep, has: Option<&str>) -> String {
     format!("  env {}, {}: {what}", step.entry, step.origin.label())
 }
 
-/// Log each message about the rules from [`ENV_VAR`] as a warning: a field
+/// Log each problem with the rules from [`ENV_VAR`] as a warning: a field
 /// or a line that was ignored.
-fn log_warnings(messages: &[String]) {
+fn log_warnings(messages: &[Diagnostic]) {
     for m in messages {
         log::line(&format!("  warning: {m}"));
     }

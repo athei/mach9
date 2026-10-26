@@ -1,8 +1,11 @@
-//! What can be wrong with one field of a rule.
+//! What can be wrong with one field of a rule, and with a line of
+//! [`ENV_VAR`].
 
 use std::fmt;
 
-use crate::Key;
+#[cfg(doc)]
+use crate::Table;
+use crate::{ENV_VAR, Key};
 
 /// Why a field of a rule cannot be read, or a value cannot be set.
 ///
@@ -41,6 +44,15 @@ pub enum FieldError {
     /// A DLL override without the `=` between its modules and its load
     /// order, as it was written.
     InvalidDllOverride(String),
+    /// A `%` in a value that two hex digits do not follow.
+    BadEscape,
+    /// A value whose escapes decode to bytes that are not UTF-8.
+    InvalidUtf8,
+    /// A field without the `=` between its key and its value.
+    MissingEquals,
+    /// A second field for a key that holds one value: a matcher or a scalar
+    /// setting.
+    Duplicate(Key),
 }
 
 impl fmt::Display for FieldError {
@@ -55,8 +67,89 @@ impl fmt::Display for FieldError {
             Self::InvalidDllOverride(text) => {
                 write!(f, "DLL override {text:?} without '=' before its load order")
             }
+            Self::BadEscape => f.write_str("a '%' without two hex digits after it"),
+            Self::InvalidUtf8 => f.write_str("escapes that are not UTF-8"),
+            Self::MissingEquals => f.write_str("a field without '='"),
+            Self::Duplicate(key) => write!(f, "{key} given more than once"),
         }
     }
 }
 
 impl std::error::Error for FieldError {}
+
+/// One problem with the value of [`ENV_VAR`]: the line, the field as it was
+/// written, if the problem is with one, and what is wrong.
+///
+/// Its [`Display`](fmt::Display) form is the warning `compatdb.so` logs, for
+/// example `WINE_COMPATDB line 2: ignoring unknown key "bogus"`, which also
+/// says what [`Table::parse_lenient`] did about it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// The line, counted from 1, blank lines and a legacy header included.
+    pub line: usize,
+    /// The field as it was written, or `None` for a problem with the whole
+    /// line.
+    pub field: Option<String>,
+    /// What is wrong.
+    pub error: FieldError,
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let field = self.field.as_deref().unwrap_or_default();
+        write!(f, "{ENV_VAR} line {}: ", self.line)?;
+        match &self.error {
+            FieldError::MissingExe => f.write_str("ignoring the line, it has no exe"),
+            FieldError::MissingEquals => write!(f, "ignoring field {field:?} without '='"),
+            FieldError::Duplicate(key) => {
+                write!(f, "{key} given more than once, the last one applies")
+            }
+            FieldError::BadEscape => write!(
+                f,
+                "field {field:?} has {}, which is kept as written",
+                self.error
+            ),
+            FieldError::Nul | FieldError::InvalidUtf8 | FieldError::EmptyArgument => {
+                write!(f, "ignoring field {field:?}: {}", self.error)
+            }
+            error => write!(f, "ignoring {error}"),
+        }
+    }
+}
+
+impl std::error::Error for Diagnostic {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+/// Why [`Table::parse_strict`] refused a value of [`ENV_VAR`]: every
+/// problem it found, in line order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseError(pub(crate) Vec<Diagnostic>);
+
+impl ParseError {
+    /// Every problem, in line order; never empty.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.0
+    }
+}
+
+impl fmt::Display for ParseError {
+    /// The diagnostics, one per line.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, diagnostic) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str("\n")?;
+            }
+            write!(f, "{diagnostic}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+#[cfg(test)]
+mod tests;

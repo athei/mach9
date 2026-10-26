@@ -41,7 +41,7 @@ mod version;
 mod wire;
 
 pub use crate::{
-    error::FieldError,
+    error::{Diagnostic, FieldError, ParseError},
     key::{Key, KeyKind, Scalar, ScalarValue, ValueKind},
     part::{Argument, DllOverride, EnvEntry, EnvName, Exe, ExeName, Fingerprint, Specificity},
     process::{
@@ -51,8 +51,8 @@ pub use crate::{
     resolve::{
         ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution, ScalarState,
     },
-    rule::{DEFAULT_VALUE, Rule, Setting, Source},
-    table::Table,
+    rule::{DEFAULT_VALUE, Rule, Setting},
+    table::{Source, Table},
     value::{D3d9, Dxgi, OpenGl, Wined3d},
     version::VersionInfo,
 };

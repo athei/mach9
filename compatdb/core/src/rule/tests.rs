@@ -7,15 +7,13 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
 fn a_fingerprint_constraint_is_an_optional_extra_filter() {
-    let table = Table {
-        rules: vec![Rule {
-            exe: Exe::literal("Launcher.exe"),
-            company: Some(Fingerprint::literal("Rockstar Games")),
-            product: Some(Fingerprint::literal("Rockstar Games Launcher")),
-            dxgi: Setting::Set(Dxgi::Wined3d),
-            ..Rule::default()
-        }],
-    };
+    let table = Table::of_builtin(vec![Rule {
+        exe: Exe::literal("Launcher.exe"),
+        company: Some(Fingerprint::literal("Rockstar Games")),
+        product: Some(Fingerprint::literal("Rockstar Games Launcher")),
+        dxgi: Setting::Set(Dxgi::Wined3d),
+        ..Rule::default()
+    }]);
     let rockstar = VersionInfo {
         company: "Rockstar Games".into(),
         product: "Rockstar Games Launcher".into(),
@@ -38,13 +36,11 @@ fn a_fingerprint_constraint_is_an_optional_extra_filter() {
 
 #[test]
 fn a_bare_basename_rule_needs_no_fingerprint() {
-    let table = Table {
-        rules: vec![Rule {
-            exe: Exe::literal("steamwebhelper.exe"),
-            arguments: vec![Argument::literal("--in-process-gpu")],
-            ..Rule::default()
-        }],
-    };
+    let table = Table::of_builtin(vec![Rule {
+        exe: Exe::literal("steamwebhelper.exe"),
+        arguments: vec![Argument::literal("--in-process-gpu")],
+        ..Rule::default()
+    }]);
     let r = table.resolve("steamwebhelper.exe", &VersionInfo::default());
     assert_eq!(r.arguments, ["--in-process-gpu"]);
 }
@@ -115,7 +111,6 @@ fn the_builder_sets_what_the_getters_read() -> TestResult {
     assert_eq!(rule.arguments(), ["-a", "-b"]);
     assert_eq!(rule.arguments_override(), Some(&[Argument::new("-c")?][..]));
     assert_eq!(rule.env().len(), 1);
-    assert_eq!(rule.source(), Source::BuiltIn);
     assert_eq!(rule.specificity(), Specificity::ExeWithFingerprint);
     assert_eq!(rule.matchers(), "Game.exe (Acme, Game, game.exe)");
     // An empty override clears, and is not the same as none.
@@ -123,6 +118,23 @@ fn the_builder_sets_what_the_getters_read() -> TestResult {
     assert_eq!(cleared.arguments_override(), Some(&[][..]));
     assert_eq!(Rule::new(Exe::Any).arguments_override(), None);
     assert_eq!(Rule::default(), Rule::new(Exe::Any));
+    Ok(())
+}
+
+#[test]
+fn a_built_rule_equals_the_same_rule_read_from_text() -> TestResult {
+    // A rule is its content: where it came from is the table's.
+    let built = Rule::new(Exe::new("Game.exe")?)
+        .with_company(Fingerprint::new("Acme")?)
+        .with_dpi_aware(false)
+        .with_argument(Argument::new("-x")?);
+    let parsed = Table::parse_strict("exe=Game.exe;company=Acme;dpi_aware=false;arguments=-x")?;
+    assert_eq!(parsed.rules(), std::slice::from_ref(&built));
+    assert_eq!(parsed.sources(), [crate::Source::Line(1)]);
+    // The same rule read from another line, or built in, is still equal.
+    let later = Table::parse_strict("\n\nexe=Game.exe;company=Acme;dpi_aware=false;arguments=-x")?;
+    assert_eq!(later.rules(), [built]);
+    assert_eq!(later.sources(), [crate::Source::Line(3)]);
     Ok(())
 }
 

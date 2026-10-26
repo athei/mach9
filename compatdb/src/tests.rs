@@ -281,5 +281,5 @@ fn without_wine_compatdb_the_table_is_the_builtin_one() {
     }
     let (table, messages) = load_table();
     assert_eq!(table, Table::builtin());
-    assert_eq!(messages, [] as [String; 0]);
+    assert_eq!(messages, []);
 }

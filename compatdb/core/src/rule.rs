@@ -5,27 +5,15 @@ use crate::{
     Specificity, VersionInfo, Wined3d,
 };
 #[cfg(doc)]
-use crate::{ENV_VAR, Origin, Table};
-
-/// Where a rule comes from. It decides how the log names the rule's values
-/// (see [`Origin`]) and whether its `env` entries are defaults (see
-/// [`Rule::env`]). Never serialized.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Source {
-    /// Compiled into `compatdb.so`, which is what [`Rule::new`] gives.
-    #[default]
-    BuiltIn,
-    /// Line `n` of [`ENV_VAR`], counted from 1 as [`Table::parse`] reads
-    /// the value, blank lines and a legacy header included.
-    Line(usize),
-}
+use crate::{Origin, Source, Table};
 
 /// One rule of the table: what it matches, and the settings it applies to a
 /// process that matches. A rule has no name; `exe` is its only required
 /// matcher, and everything else is optional.
 ///
 /// [`Rule::new`] makes one for an `exe`, and the `with_` methods add what it
-/// matches on and sets.
+/// matches on and sets. A rule is its content alone: where it comes from is
+/// the [`Source`] the [`Table`] keeps beside it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
     /// The executable it matches.
@@ -60,8 +48,6 @@ pub struct Rule {
     pub(crate) arguments_override: Option<Vec<Argument>>,
     /// See [`Rule::env`].
     pub(crate) env: Vec<EnvEntry>,
-    /// See [`Rule::source`].
-    pub(crate) source: Source,
 }
 
 /// The value of a scalar setting that resets it (see [`Setting::Reset`]),
@@ -128,8 +114,7 @@ impl Default for Rule {
 
 impl Rule {
     /// The rule for the processes `exe` matches, with no fingerprint and no
-    /// setting. Its [`Source`] is [`Source::BuiltIn`] until a table reads
-    /// or takes it as a rule of [`ENV_VAR`].
+    /// setting.
     #[must_use]
     pub const fn new(exe: Exe) -> Self {
         Self {
@@ -149,7 +134,6 @@ impl Rule {
             arguments: Vec::new(),
             arguments_override: None,
             env: Vec::new(),
-            source: Source::BuiltIn,
         }
     }
 
@@ -381,17 +365,11 @@ impl Rule {
     /// code runs. The entries of a built-in rule that matches every process
     /// (`exe` `*`, no fingerprint) are defaults: such an entry sets its
     /// variable only where the process does not have it, so a value the
-    /// caller exported wins. Every other entry replaces the variable.
+    /// caller exported wins (see [`Origin::env_is_default`]). Every other
+    /// entry replaces the variable.
     #[must_use]
     pub fn env(&self) -> &[EnvEntry] {
         &self.env
-    }
-
-    /// Where the rule comes from. Never serialized: [`Table::parse`] sets
-    /// it to the line it read the rule from.
-    #[must_use]
-    pub const fn source(&self) -> Source {
-        self.source
     }
 
     /// What this rule says about the scalar setting `scalar`.
@@ -504,14 +482,6 @@ impl Rule {
             && self.company == other.company
             && self.product == other.product
             && self.original_filename == other.original_filename
-    }
-
-    /// Whether this rule's `env` entries are defaults, which leave a variable
-    /// the process already has alone: those of a built-in rule that matches
-    /// every process (see [`Rule::env`]).
-    #[must_use]
-    pub fn env_is_default(&self) -> bool {
-        self.source == Source::BuiltIn && self.specificity() == Specificity::Any
     }
 
     /// The matchers of this rule as the log prints them: the `exe`, then the

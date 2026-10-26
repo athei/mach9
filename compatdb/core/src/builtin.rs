@@ -11,24 +11,16 @@
 //! purpose: each is a default that a built-in rule for one program, or any
 //! `WINE_COMPATDB` rule that sets the same key, overrides.
 
-use crate::{
-    Argument, D3d9, DllOverride, Dxgi, EnvEntry, Exe, Fingerprint, OpenGl, Rule, Setting, Table,
-};
+#[cfg(doc)]
+use crate::Table;
+use crate::{Argument, D3d9, DllOverride, Dxgi, EnvEntry, Exe, Fingerprint, OpenGl, Rule, Setting};
 
 /// The rules the bundle ships with: the [`defaults`] for every process, then
-/// the rules for one program each ([`programs`]).
+/// the rules for one program each ([`programs`]). [`Table::builtin`] is the
+/// table of them.
 #[must_use]
 pub fn rules() -> Vec<Rule> {
     defaults().into_iter().chain(programs()).collect()
-}
-
-impl Table {
-    /// The table of the built-in rules ([`rules`]), which `compatdb.so`
-    /// appends the rules of [`ENV_VAR`](crate::ENV_VAR) to.
-    #[must_use]
-    pub fn builtin() -> Self {
-        Self { rules: rules() }
-    }
 }
 
 /// The rules that match every process, each turning on one behaviour that

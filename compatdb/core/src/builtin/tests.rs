@@ -1,12 +1,19 @@
 use super::*;
 use crate::{
     ArgumentsDropped, DllOverrideReset, EnvName, Origin, Resolution, Scalar, ScalarValue, Source,
-    VersionInfo, Wined3d,
+    Table, VersionInfo, Wined3d,
 };
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+/// [`Table::parse_lenient`], with the diagnostics as `compatdb.so` logs
+/// them.
+fn parse(text: &str) -> (Table, Vec<String>) {
+    let (table, diagnostics) = Table::parse_lenient(text);
+    (table, diagnostics.iter().map(ToString::to_string).collect())
+}
 
 /// Record in `resolution` that the rule `origin` names set `scalar` to
 /// `value`, as resolving a more specific rule does.
@@ -63,9 +70,9 @@ fn wildcard_env_and(more: &[EnvEntry]) -> Vec<EnvEntry> {
 /// builds it from `WINE_COMPATDB`; `text` must parse cleanly.
 fn with_lines(text: &str) -> Table {
     let mut table = Table::builtin();
-    let (rules, diagnostics) = Table::parse(text);
+    let (rules, diagnostics) = parse(text);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    table.rules.extend(rules.rules);
+    table.append(rules);
     table
 }
 
@@ -127,9 +134,14 @@ fn a_rule_for_one_game_or_from_the_launcher_replaces_what_the_caller_set() {
     }
     // Only the built-in `*` rules' own entries are defaults.
     let table = with_lines("exe=*;env=A=1");
-    for r in &table.rules {
-        let builtin_star = r.source == Source::BuiltIn && r.exe.is_any();
-        assert_eq!(r.env_is_default(), builtin_star, "{}", r.matchers());
+    for (source, r) in table.entries() {
+        let builtin_star = source == Source::BuiltIn && r.exe.is_any();
+        assert_eq!(
+            Origin::of(source, r).env_is_default(),
+            builtin_star,
+            "{}",
+            r.matchers()
+        );
     }
 }
 
@@ -292,15 +304,15 @@ fn the_builtin_table_pins_the_launcher_and_round_trips() -> TestResult {
     // The D3D9 quirks are mtld3d's, not ours.
     assert_eq!(gta.env, []);
 
-    // Everything but the source travels, and the parser gives each rule
-    // its line.
-    let (parsed, diagnostics) = Table::parse(&table.to_env_value());
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    let mut sent = table;
-    for (i, rule) in sent.rules.iter_mut().enumerate() {
-        rule.source = Source::Line(i.saturating_add(1));
+    // Every rule could travel as a rule of WINE_COMPATDB: everything but
+    // the source does, and the parser gives each rule its line.
+    let mut sent = Table::new();
+    for rule in table.rules() {
+        sent.push(rule.clone());
     }
-    assert_eq!(parsed, sent);
+    assert_eq!(Table::parse_strict(&sent.to_string()), Ok(sent));
+    // The built-in rules themselves never travel.
+    assert_eq!(table.to_string(), "");
     Ok(())
 }
 
@@ -399,8 +411,8 @@ fn every_builtin_rule_has_an_exe_and_none_matches_a_bare_basename() -> TestResul
             "{} matches on its executable alone",
             rule.matchers()
         );
-        assert_eq!(rule.source, Source::BuiltIn, "{}", rule.matchers());
     }
+    assert!(table.sources().iter().all(|s| *s == Source::BuiltIn));
     assert_eq!(table.duplicate_matchers(), []);
     Ok(())
 }
@@ -595,7 +607,7 @@ fn a_line_of_the_old_format_changes_nothing() {
         "name=world-of-warcraft;large_address_aware=false",
     ] {
         let mut table = Table::builtin();
-        let (rules, diagnostics) = Table::parse(text);
+        let (rules, diagnostics) = parse(text);
         assert!(
             diagnostics
                 .last()
@@ -608,17 +620,17 @@ fn a_line_of_the_old_format_changes_nothing() {
                 .is_some_and(|d| d == "WINE_COMPATDB line 1: ignoring unknown key \"name\""),
             "{text}: {diagnostics:?}"
         );
-        table.rules.extend(rules.rules);
+        table.append(rules);
         assert_eq!(table, Table::builtin(), "{text}");
     }
     // With an exe, the rest of the line applies as a rule of its own.
-    let (rules, diagnostics) = Table::parse("name=my-game;exe=game.exe;dpi_aware=false");
+    let (rules, diagnostics) = parse("name=my-game;exe=game.exe;dpi_aware=false");
     assert_eq!(
         diagnostics,
         ["WINE_COMPATDB line 1: ignoring unknown key \"name\""]
     );
     let mut table = Table::builtin();
-    table.rules.extend(rules.rules);
+    table.append(rules);
     let game = table.resolve("game.exe", &VersionInfo::default());
     assert_eq!(game.dpi_aware(), Some(false));
 }
