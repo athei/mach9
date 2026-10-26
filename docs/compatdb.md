@@ -167,7 +167,7 @@ exe=*;gcmouse=false
 
 - One rule per line, as `key=value` fields joined by `;`. Blank lines are
   ignored. `Table::to_env_value` in
-  [`compatdb/core/src/lib.rs`](../compatdb/core/src/lib.rs) writes the
+  [`compatdb/core/src/wire.rs`](../compatdb/core/src/wire.rs) writes the
   value this way, for a launcher that uses the crate.
 - The log names a rule by its line, counted from 1, blank lines included.
 - There is no version header. A first line of `v=` and digits, the header
@@ -176,7 +176,7 @@ exe=*;gcmouse=false
 - Keys: the matching keys (`exe`, required, and `company`, `product`,
   `original_filename`) and the [settings](#settings). The parser,
   `record_to_rule` in
-  [`compatdb/core/src/lib.rs`](../compatdb/core/src/lib.rs), is the
+  [`compatdb/core/src/wire.rs`](../compatdb/core/src/wire.rs), is the
   authoritative list.
 - Inside a value, `%`, `;`, CR, LF and other control characters are
   percent-encoded (`%3B` for `;`, `%25` for `%`). Everything else, including
@@ -384,7 +384,7 @@ executable.
   marker, which is hybrid while every tree of its family holds an ARM64X
   build ([arm64.md](arm64.md#limitations)).
 - `default_for` and `effective` of `Dxgi` and `D3d9` in
-  [`compatdb/core/src/lib.rs`](../compatdb/core/src/lib.rs) decide the
+  [`compatdb/core/src/value.rs`](../compatdb/core/src/value.rs) decide the
   tree when no rule names one.
 - A 64-bit process loads the Direct3D trees from `aarch64-windows`, as Wine
   on an arm64 host loads its builtins from there. An i386 process uses
@@ -404,7 +404,7 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
   it, `unset (upstream: ...)` with what upstream Wine does instead, followed
   by `reset by <source>` when the last rule for it set it to `default`.
   Those descriptions are `UPSTREAM` in
-  [`compatdb/core/src/lib.rs`](../compatdb/core/src/lib.rs).
+  [`compatdb/core/src/rule.rs`](../compatdb/core/src/rule.rs).
 - A source is `built-in` for a built-in rule that matches every process,
   `built-in for <exe> (<fingerprint values>)` for a built-in rule for one
   program, with the values it pins, and `WINE_COMPATDB line <n>` for a
