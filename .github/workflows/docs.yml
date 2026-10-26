@@ -10,10 +10,10 @@ name: Docs
 #
 # The checks run on Linux for compatdb-core alone. It is pure Rust with no
 # platform code. compatdb itself is a macOS cdylib that runs from a Mach-O
-# initializer inside Wine's ntdll, so its tests stay on a Mac, and
-# release.yml builds it on every push to main that changes compatdb/.
-# rustfmt checks both crates, since formatting does not depend on the
-# target.
+# initializer inside Wine's ntdll: release.yml tests and lints both crates
+# on its macOS runner before it builds, on every push to main that changes
+# compatdb/ and on every pull request. rustfmt checks both crates here,
+# since formatting does not depend on the target.
 
 on:
   push:

@@ -218,6 +218,18 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ hashFiles('scripts/compatdb/Cargo.lock') }}
 
+      # The tests and lints of both compatdb crates. compatdb.so runs from a
+      # Mach-O initializer inside Wine's ntdll, so its tests run here and
+      # not in docs.yml. From compatdb/, as bundle-wine.sh builds it, so
+      # cargo reads compatdb/.cargo/config.toml. Before the build, so a
+      # failure costs minutes, not the whole build.
+      - name: Test and lint compatdb
+        working-directory: scripts/compatdb
+        run: |
+          rustup component add clippy
+          cargo test --locked --manifest-path Cargo.toml --workspace
+          cargo clippy --locked --manifest-path Cargo.toml --workspace --all-targets -- -D warnings
+
       # One cache per staged dist (docs/arm64.md, commands): Mesa with the
       # Vulkan loader, GStreamer, FEX, DXMT and vkd3d-proton. Its key is the
       # hash of the KEY line the dist's build script would write into it now
