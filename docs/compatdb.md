@@ -2,7 +2,7 @@
 
 - Built from the crates in [`compatdb/`](../compatdb):
   `compatdb-core` ([`compatdb/core`](../compatdb/core)) holds the pure
-  rule logic, `compatdb` the cdylib around it.
+  rule logic and the built-in rules, `compatdb` the cdylib around it.
 - Installed as `lib/wine/aarch64-unix/compatdb.so`, next to ntdll's unix
   half. Wine's ntdll dlopens `<ntdll_dir>/compatdb.so` in every process
   before any PE code runs, the slot CrossOver's own compat database uses.
@@ -96,8 +96,8 @@ and `arguments_override=` clears the arguments.
 ## Built-in rules
 
 - The built-in rules are compiled in from
-  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs), each with a
-  comment giving the reason it exists.
+  [`compatdb/core/src/builtin.rs`](../compatdb/core/src/builtin.rs), each
+  with a doc comment giving the reason it exists.
 - The rules that match every process (`exe` is `*`) set the defaults listed
   in [the README](../README.md#defaults-that-differ-from-wine).
 - A behaviour of this Wine that differs from upstream Wine and that a rule
@@ -122,7 +122,7 @@ and `arguments_override=` clears the arguments.
   config files, but the variable exported where the process starts does
   ([environment defaults](#environment-defaults)).
 - The entry and the reasoning for this rule are in
-  [`compatdb/src/builtin.rs`](../compatdb/src/builtin.rs). Its
+  [`compatdb/core/src/builtin.rs`](../compatdb/core/src/builtin.rs). Its
   [recipes](#recipes) turn it off or change it.
 - KosmicKrisp's features need no rule: our Mesa fork advertises the ones
   Direct3D 12 and OpenGL through Zink need without `MESA_KK_EXPERIMENTAL`
@@ -246,7 +246,7 @@ executable.
 
 - A `*` rule from `WINE_COMPATDB` folds after every built-in rule, so it
   also changes the programs that the built-in rules for one program set up
-  ([`builtin.rs`](../compatdb/src/builtin.rs)), in both directions:
+  ([`builtin.rs`](../compatdb/core/src/builtin.rs)), in both directions:
   `exe=*;dxgi=dxmt` moves the Rockstar Games Launcher onto DXMT, which
   lacks the D3D10.1 device it needs, `exe=*;dxgi=wined3d` moves the Steam
   and Social Club web helpers (CEF) off DXMT, and

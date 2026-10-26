@@ -4,7 +4,7 @@ use super::*;
 fn a_native_arm64_program_gets_dxmt_and_mtld3d_and_either_tree_a_rule_asks_for() {
     let native = Arch::Aarch64;
     // The built-in rules give it dxmt and mtld3d, as an x86 program.
-    let game = builtin::table().resolve("game.exe", &VersionInfo::default());
+    let game = Table::builtin().resolve("game.exe", &VersionInfo::default());
     assert_eq!(Dxgi::effective(game.dxgi, native), Dxgi::Dxmt);
     assert_eq!(D3d9::effective(game.d3d9, native), D3d9::Mtld3d);
     // Without a rule, wined3d, as in upstream Wine.
@@ -258,6 +258,6 @@ fn without_wine_compatdb_the_table_is_the_builtin_one() {
         return;
     }
     let (table, messages) = load_table();
-    assert_eq!(table, builtin::table());
+    assert_eq!(table, Table::builtin());
     assert_eq!(messages, [] as [String; 0]);
 }

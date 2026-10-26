@@ -10,9 +10,9 @@
 //! values.
 //!
 //! Shared by `compatdb.so`, the unix library wine's ntdll loads into every
-//! process (it holds the built-in rules, parses [`ENV_VAR`], appends the
-//! result to them and applies whatever matches the process), and by any
-//! launcher that wants to feed it extra rules through that variable.
+//! process (it takes the built-in rules of [`builtin`], parses [`ENV_VAR`],
+//! appends the result to them and applies whatever matches the process), and
+//! by any launcher that wants to feed it extra rules through that variable.
 //!
 //! Everything here is pure: it works on `&str`, `&[u16]` (UTF-16 as wine hands
 //! it over) and owned values, with no unsafe and no I/O, so the library's
@@ -28,6 +28,7 @@
     clippy::arithmetic_side_effects
 )]
 
+pub mod builtin;
 mod process;
 mod resolve;
 mod rule;

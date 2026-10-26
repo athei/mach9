@@ -769,7 +769,7 @@ smoke_test() {
     # prints a marker naming the architecture it was compiled for, then loads
     # the DLLs it is given and says whether all of them loaded. Its compatdb
     # lines say which trees it got: the ones the built-in dxgi and d3d9
-    # rules give every arch (compatdb/src/builtin.rs). An x86
+    # rules give every arch (compatdb/core/src/builtin.rs). An x86
     # program loads dxgi.dll and d3d9.dll. A native ARM64 program also loads
     # winemetal.dll and mtld3d.dll, which only the dxmt and mtld3d trees
     # have, so the loads show that the ARM64 halves of DXMT's and mtld3d's

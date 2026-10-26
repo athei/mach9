@@ -6,14 +6,15 @@
 //! It is built for the arm64 Wine, which runs x86 programs under emulation
 //! and native ARM64 ones.
 //!
-//! It holds the built-in rules, appends the ones passed in [`ENV_VAR`],
-//! resolves the rules that match this process and applies them: the D3D9
-//! and DXGI trees, the wined3d renderer, DLL load-order overrides, the DPI
-//! awareness, large address awareness, whether the Mac driver reads raw
-//! mouse input from `GameController`, and command-line/environment
-//! rewrites. All the decision logic lives in [`compatdb_core`]; this crate
-//! only moves bytes in and out of the running process, so its `unsafe` is
-//! confined to a thin ntdll shell.
+//! It takes the built-in rules of [`compatdb_core::builtin`], which are
+//! compiled in, appends the ones passed in [`ENV_VAR`], resolves the rules
+//! that match this process and applies them: the D3D9 and DXGI trees, the
+//! wined3d renderer, DLL load-order overrides, the DPI awareness, large
+//! address awareness, whether the Mac driver reads raw mouse input from
+//! GameController, and command-line/environment rewrites. All the decision
+//! logic lives in [`compatdb_core`]; this crate only moves bytes in and out
+//! of the running process, so its `unsafe` is confined to a thin ntdll
+//! shell.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -23,7 +24,6 @@
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
 mod apply;
-mod builtin;
 mod log;
 mod ntdll;
 mod version;
@@ -51,7 +51,7 @@ fn load_table() -> (Table, Vec<String>) {
     // The built-in rules are compiled in; only the caller's rules travel in
     // the environment (absent unless something set it). They come after the
     // built-in ones, so within a tier they fold later.
-    let mut table = builtin::table();
+    let mut table = Table::builtin();
     let mut messages = Vec::new();
     if let Some(text) = read_env() {
         let (rules, diagnostics) = Table::parse(&text);

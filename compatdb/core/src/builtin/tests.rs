@@ -1,8 +1,5 @@
-use compatdb_core::{
-    ArgumentsDropped, DllOverrideReset, Origin, Resolution, Source, VersionInfo, Wined3d,
-};
-
 use super::*;
+use crate::{ArgumentsDropped, DllOverrideReset, Origin, Resolution, Source, VersionInfo, Wined3d};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
@@ -57,7 +54,7 @@ fn wildcard_env_and(more: &[(String, String)]) -> Vec<(String, String)> {
 /// The built-in table with the lines of `text` appended, as compatdb.so
 /// builds it from `WINE_COMPATDB`; `text` must parse cleanly.
 fn with_lines(text: &str) -> Table {
-    let mut table = table();
+    let mut table = Table::builtin();
     let (rules, diagnostics) = Table::parse(text);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     table.rules.extend(rules.rules);
@@ -66,7 +63,7 @@ fn with_lines(text: &str) -> Table {
 
 /// What a process without a rule of its own gets: the `*` rules alone.
 fn plain() -> Resolution {
-    table().resolve("game.exe", &VersionInfo::default())
+    Table::builtin().resolve("game.exe", &VersionInfo::default())
 }
 
 /// The built-in rule for the executable `exe`.
@@ -129,7 +126,7 @@ fn a_rule_for_one_game_or_from_the_launcher_replaces_what_the_caller_set() {
 
 #[test]
 fn the_table_asks_fex_for_reduced_x87_precision() {
-    let table = table();
+    let table = Table::builtin();
     let fex: Vec<&Rule> = table.rules.iter().filter(|r| !r.env.is_empty()).collect();
     // One `*` rule sets it; the other env rules are the CEF helpers'.
     let star: Vec<&&Rule> = fex.iter().filter(|r| r.exe == ANY_EXE).collect();
@@ -151,7 +148,7 @@ fn a_rule_turns_reduced_x87_precision_off_for_one_game_or_every_process() -> Tes
     let block: Vec<u16> = "FEX_X87REDUCEDPRECISION=1\0OTHER=x\0\0"
         .encode_utf16()
         .collect();
-    let merged = compatdb_core::merge_env(&block, &old.env).ok_or("unchanged")?;
+    let merged = crate::merge_env(&block, &old.env).ok_or("unchanged")?;
     assert_eq!(String::from_utf16_lossy(&merged), "OTHER=x\0\0");
     // Another process keeps it.
     let other = table.resolve("other.exe", &VersionInfo::default());
@@ -195,7 +192,7 @@ fn the_table_keeps_no_execute_on_unless_a_rule_opts_out() {
     // Any process gets it, whatever its name or version resource. It is
     // a setting, not an env entry, so nothing a process starts inherits
     // it.
-    let game = table().resolve("Some Game.exe", &VersionInfo::default());
+    let game = Table::builtin().resolve("Some Game.exe", &VersionInfo::default());
     assert_eq!(game.force_nx, Some(true));
     assert_eq!(game.origin("force_nx"), Some(&Origin::BuiltIn));
     assert_eq!(game.env, wildcard_env());
@@ -220,7 +217,7 @@ fn wined3d_on_vulkan_is_a_setting_for_one_game_and_never_a_default() {
     // process's renderer, so no built-in rule sets the wined3d setting or
     // WINE_D3D_CONFIG. A game rule opts in, and only that game gets it.
     assert!(
-        !table()
+        !Table::builtin()
             .rules
             .iter()
             .any(|r| r.wined3d.is_some() || r.env.iter().any(|(n, _)| n == "WINE_D3D_CONFIG"))
@@ -247,7 +244,7 @@ fn the_table_leaves_vulkan_1_alone() {
     // The bundle ships Wine's Vulkan, so no built-in rule disables the
     // loader.
     assert!(
-        !table()
+        !Table::builtin()
             .rules
             .iter()
             .any(|r| r.dll_overrides.iter().any(|o| o.contains("vulkan")))
@@ -257,7 +254,7 @@ fn the_table_leaves_vulkan_1_alone() {
 
 #[test]
 fn the_builtin_table_pins_the_launcher_and_round_trips() -> TestResult {
-    let table = table();
+    let table = Table::builtin();
     let launcher = rule(&table, "Launcher.exe")?;
     assert_eq!(launcher.dxgi, Some(Dxgi::Wined3d));
     assert_eq!(launcher.company.as_deref(), Some("Rockstar Games"));
@@ -284,7 +281,7 @@ fn the_builtin_table_pins_the_launcher_and_round_trips() -> TestResult {
 
 #[test]
 fn the_builtin_table_pins_the_cef_helpers_to_dxmt() -> TestResult {
-    let table = table();
+    let table = Table::builtin();
     for exe in ["steamwebhelper.exe", "SocialClubHelper.exe"] {
         let helper = rule(&table, exe)?;
         assert_eq!(helper.dxgi, Some(Dxgi::Dxmt), "{exe}");
@@ -302,7 +299,7 @@ fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
     // anyway.
     let hud_off = vec![("MTL_HUD_ENABLED".to_string(), "0".to_string())];
     let helpers = ["steamwebhelper.exe", "SocialClubHelper.exe"];
-    let table = table();
+    let table = Table::builtin();
     for rule in &table.rules {
         if helpers.contains(&rule.exe.as_str()) {
             assert_eq!(rule.env, hud_off, "{}", rule.matchers());
@@ -350,7 +347,7 @@ fn every_builtin_rule_has_an_exe_and_none_matches_a_bare_basename() {
     // it would catch every program of that name. The `*` rules are a
     // different case: they are meant for every process, and several of
     // them are not duplicates of each other.
-    let table = table();
+    let table = Table::builtin();
     for rule in &table.rules {
         assert!(!rule.exe.is_empty(), "a rule has no exe");
         assert!(
@@ -400,7 +397,7 @@ fn every_process_gets_the_wildcard_defaults() {
 fn the_pins_for_one_program_beat_the_builtin_direct3d_rules() -> TestResult {
     // Every built-in rule for one program that names a tree keeps it
     // over the built-in `*` rules.
-    let table = table();
+    let table = Table::builtin();
     let pins: Vec<&Rule> = table
         .rules
         .iter()
@@ -517,7 +514,7 @@ fn a_line_of_the_old_format_changes_nothing() {
         "name=large-address-aware;large_address_aware=false",
         "name=world-of-warcraft;large_address_aware=false",
     ] {
-        let mut table = table();
+        let mut table = Table::builtin();
         let (rules, diagnostics) = Table::parse(text);
         assert!(
             diagnostics
@@ -532,7 +529,7 @@ fn a_line_of_the_old_format_changes_nothing() {
             "{text}: {diagnostics:?}"
         );
         table.rules.extend(rules.rules);
-        assert_eq!(table, super::table(), "{text}");
+        assert_eq!(table, Table::builtin(), "{text}");
     }
     // With an exe, the rest of the line applies as a rule of its own.
     let (rules, diagnostics) = Table::parse("name=my-game;exe=game.exe;dpi_aware=false");
@@ -540,7 +537,7 @@ fn a_line_of_the_old_format_changes_nothing() {
         diagnostics,
         ["WINE_COMPATDB line 1: ignoring unknown key \"name\""]
     );
-    let mut table = table();
+    let mut table = Table::builtin();
     table.rules.extend(rules.rules);
     let game = table.resolve("game.exe", &VersionInfo::default());
     assert_eq!(game.dpi_aware, Some(false));
@@ -566,7 +563,7 @@ fn wow() -> Origin {
 
 #[test]
 fn world_of_warcraft_gets_4_gb_and_nothing_else_changes() {
-    let table = table();
+    let table = Table::builtin();
     let mut expected = plain();
     expected.large_address_aware = Some(true);
     set_by(&mut expected, "large_address_aware", wow());
@@ -653,7 +650,7 @@ fn default_hands_a_setting_back_to_upstream_wine() {
     assert!(game.reset_by.iter().all(|(_, o)| *o == Origin::Line(1)));
     // Then the trees are upstream Wine's.
     assert_eq!(
-        Dxgi::effective(game.dxgi, compatdb_core::Arch::X86_64),
+        Dxgi::effective(game.dxgi, crate::Arch::X86_64),
         Dxgi::Wined3d
     );
     // A rule folded later sets it again, and the reset is gone.
@@ -754,7 +751,7 @@ fn a_launch_wide_rule_re_enables_mono_after_the_builtins() {
 
 #[test]
 fn an_arguments_override_drops_a_builtin_helpers_switch() -> TestResult {
-    let table = table();
+    let table = Table::builtin();
     let steam = rule(&table, "steamwebhelper.exe")?;
     let version = version_of(steam);
     let from = Origin::BuiltInFor(steam.matchers());
@@ -807,7 +804,7 @@ fn the_rules_for_one_program_match_the_real_binaries_resources() {
         company: "Entwell".into(),
         ..VersionInfo::default()
     };
-    let table = table();
+    let table = Table::builtin();
     let builtin = |m: &str| Origin::BuiltInFor(m.into());
     let r = table.resolve("steamwebhelper.exe", &steam);
     assert_eq!(
@@ -866,7 +863,7 @@ fn the_nostale_client_is_dpi_unaware_and_nothing_else_changes() {
         company: "Entwell".into(),
         ..VersionInfo::default()
     };
-    let table = table();
+    let table = Table::builtin();
     let mut expected = plain();
     expected.dpi_aware = Some(false);
     set_by(
@@ -897,7 +894,7 @@ fn aoe2_hd_version() -> VersionInfo {
 fn age_of_empires_ii_hd_is_dpi_unaware_and_nothing_else_changes() {
     // The fingerprinted rule beats the DPI default for the game alone;
     // every other setting stays the wildcards'.
-    let table = table();
+    let table = Table::builtin();
     let mut expected = plain();
     expected.dpi_aware = Some(false);
     set_by(

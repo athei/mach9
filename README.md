@@ -77,9 +77,9 @@ directory that an x64 process would load but not run natively
 
 | Family | APIs | Rule value | Tree | Chosen by |
 |--------|------|------------|------|-----------|
-| `dxgi` | D3D10, D3D11, D3D12 | `dxmt` ([DXMT](https://github.com/athei/dxmt), D3D12 from [vkd3d-proton](https://github.com/athei/vkd3d-proton)) | `lib/wine/dxgi/dxmt/` | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs)) |
+| `dxgi` | D3D10, D3D11, D3D12 | `dxmt` ([DXMT](https://github.com/athei/dxmt), D3D12 from [vkd3d-proton](https://github.com/athei/vkd3d-proton)) | `lib/wine/dxgi/dxmt/` | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs)) |
 | `dxgi` | D3D10, D3D10.1, D3D11 | `wined3d` | `lib/wine/dxgi/wined3d/` | A rule that asks for it, or no rule at all, as in upstream Wine |
-| `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs)) |
+| `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs)) |
 | `d3d9` | D3D9 | `wined3d` | `lib/wine/d3d9/wined3d/` | A rule that asks for it, or no rule at all, as in upstream Wine |
 
 - compatdb.so prepends one tree per family to every process's builtin search
@@ -133,20 +133,20 @@ any rule.
 
 | Behavior | Default in this bundle | Decided by |
 |----------|------------------------|------------|
-| D3D10, D3D11 and D3D12 | DXMT, and vkd3d-proton for D3D12, instead of wined3d, which has no D3D12 here | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs), [Direct3D backends](#direct3d-backends)) |
-| D3D9 | mtld3d instead of wined3d | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs), [Direct3D backends](#direct3d-backends)) |
-| DPI awareness | Every process is system-aware | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs), [recipes](docs/compatdb.md#recipes)) |
-| Raw mouse input | Raw input and DirectInput take mouse movement from GameController, in the device's own counts, instead of from the cursor, which macOS accelerates and scales for retina: mouselook is linear | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs), [GameController mice](docs/compatdb.md#gamecontroller-mice)) |
-| x87 precision under FEX | FEX emulates every program's x87 code with reduced precision | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs), [built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
-| No-execute | Permanently on in every 32-bit process, even when its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine would turn it off | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs), [no-execute](docs/compatdb.md#no-execute)) |
+| D3D10, D3D11 and D3D12 | DXMT, and vkd3d-proton for D3D12, instead of wined3d, which has no D3D12 here | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [Direct3D backends](#direct3d-backends)) |
+| D3D9 | mtld3d instead of wined3d | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [Direct3D backends](#direct3d-backends)) |
+| DPI awareness | Every process is system-aware | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [recipes](docs/compatdb.md#recipes)) |
+| Raw mouse input | Raw input and DirectInput take mouse movement from GameController, in the device's own counts, instead of from the cursor, which macOS accelerates and scales for retina: mouselook is linear | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [GameController mice](docs/compatdb.md#gamecontroller-mice)) |
+| x87 precision under FEX | FEX emulates every program's x87 code with reduced precision | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
+| No-execute | Permanently on in every 32-bit process, even when its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine would turn it off | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [no-execute](docs/compatdb.md#no-execute)) |
 | Synchronization | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | The wineserver of [our Wine](https://github.com/athei/wine) at [`wine-src.ref`](pins/wine-src.ref); `WINEMSYNC=0` where the session starts turns it off ([runtime](docs/arm64.md#runtime)) |
 | x86 memory ordering | FEX runs a thread's x86 code with the hardware x86 memory ordering (TSO), switching per thread | [Our FEX](https://github.com/athei/FEX) at [`fex-src.ref`](pins/fex-src.ref); `FEX_HARDWARE_TSO` ([environment variables](#environment-variables)) |
 | AFP in x86_64 programs | FEX runs x86_64 programs, which run as ARM64EC, without AFP | [Our FEX](https://github.com/athei/FEX) at [`fex-src.ref`](pins/fex-src.ref); `FEX_HOSTFEATURES` ([environment variables](#environment-variables)) |
 | KosmicKrisp's experimental features | Advertised whatever `MESA_KK_EXPERIMENTAL` says | [Our Mesa](https://github.com/athei/mesa) at [`mesa-src.ref`](pins/mesa-src.ref) ([Vulkan](docs/arm64.md#vulkan)) |
 | Vulkan driver | Only the bundled KosmicKrisp: ntdll points `VK_DRIVER_FILES` at the bundle's manifest unless the caller sets `VK_DRIVER_FILES`, `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES` | ntdll of [our Wine](https://github.com/athei/wine) at [`wine-src.ref`](pins/wine-src.ref) ([environment variables](#environment-variables), [Vulkan](docs/arm64.md#vulkan)) |
-| OpenGL | Mesa's EGL with Zink on KosmicKrisp instead of Apple's OpenGL; no OpenGL on a Mac without a Metal 4 GPU unless a rule gives the program `opengl=cgl` | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs), [OpenGL](docs/arm64.md#opengl), [recipes](docs/compatdb.md#recipes)) |
+| OpenGL | Mesa's EGL with Zink on KosmicKrisp instead of Apple's OpenGL; no OpenGL on a Mac without a Metal 4 GPU unless a rule gives the program `opengl=cgl` | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [OpenGL](docs/arm64.md#opengl), [recipes](docs/compatdb.md#recipes)) |
 | D3D12 frame latency handles | Signalled once the GPU has finished a frame instead of once it is on screen, so a game that waits on one keeps the GPU busy; how far it gets ahead of the display stays bounded | [Our vkd3d-proton](https://github.com/athei/vkd3d-proton) at [`vkd3d-proton-src.ref`](pins/vkd3d-proton-src.ref) ([vkd3d-proton](docs/arm64.md#vkd3d-proton)) |
-| Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | A built-in rule for every process ([`builtin.rs`](compatdb/src/builtin.rs), [recipes](docs/compatdb.md#recipes)) |
+| Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [recipes](docs/compatdb.md#recipes)) |
 
 ## Building
 
