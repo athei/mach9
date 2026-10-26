@@ -259,10 +259,15 @@ pub fn rockstar_games_launcher() -> Rule {
 /// window owned by another process under winemac, so the sign-in page stays
 /// blank. Keeping the drawing in-process fixes it; the child --type=
 /// processes inherit the switches. It is pinned to DXMT to match Steam's CEF
-/// helper ([`steam_web_helper`]), which embeds the browser the same way. The
-/// Metal HUD is for games and is noise on the launcher UI; it is turned off
-/// here and not on Launcher.exe because games started from the launcher
-/// would inherit the variable.
+/// helper ([`steam_web_helper`]), which embeds the browser the same way.
+///
+/// The Metal HUD is for games and is noise on the launcher UI. It is turned
+/// off here and not on Launcher.exe because games started from the launcher
+/// would inherit the variables. `metal_hud=false` removes the `MTL_HUD_`
+/// variables, a launcher `*` rule's `metal_hud=true` included, so the
+/// resolution reports the HUD off; the `env` entry `MTL_HUD_ENABLED=0` after
+/// it then turns the HUD off explicitly rather than leaving the variable
+/// unset.
 #[must_use]
 pub fn social_club_helper() -> Rule {
     Rule {
@@ -270,6 +275,7 @@ pub fn social_club_helper() -> Rule {
         company: Some(Fingerprint::literal("Take-Two Interactive Software")),
         product: Some(Fingerprint::literal("Social Club UI")),
         dxgi: Setting::Set(Dxgi::Dxmt),
+        metal_hud: Setting::Set(false),
         arguments: vec![Argument::literal("--in-process-gpu")],
         env: vec![EnvEntry::literal("MTL_HUD_ENABLED", "0")],
         ..Rule::default()
@@ -283,9 +289,12 @@ pub fn social_club_helper() -> Rule {
 /// stays on and goes through DXMT, which the Steam client runs well on; the
 /// dxgi pin keeps it there over the `*` rules, built-in or from
 /// `WINE_COMPATDB`, while a `WINE_COMPATDB` rule for the helper that
-/// selects another tree moves it. The Metal HUD is off for the same reason
-/// as on the Social Club helper ([`social_club_helper`]); steam.exe, which
-/// starts the games, has no rule.
+/// selects another tree moves it.
+///
+/// The Metal HUD is off, through `metal_hud=false` and the `env` entry
+/// `MTL_HUD_ENABLED=0`, for the same reason and in the same way as on the
+/// Social Club helper ([`social_club_helper`]); steam.exe, which starts the
+/// games, has no rule.
 #[must_use]
 pub fn steam_web_helper() -> Rule {
     Rule {
@@ -293,6 +302,7 @@ pub fn steam_web_helper() -> Rule {
         company: Some(Fingerprint::literal("Valve Corporation")),
         product: Some(Fingerprint::literal("Steam Client WebHelper")),
         dxgi: Setting::Set(Dxgi::Dxmt),
+        metal_hud: Setting::Set(false),
         arguments: vec![Argument::literal("--in-process-gpu")],
         env: vec![EnvEntry::literal("MTL_HUD_ENABLED", "0")],
         ..Rule::default()

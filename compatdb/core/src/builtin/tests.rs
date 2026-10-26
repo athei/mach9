@@ -580,11 +580,16 @@ fn the_cef_helpers_keep_the_metal_hud_off_under_a_launcher_star_metal_hud() -> T
     let helper = rule(&table, "steamwebhelper.exe")?.clone();
     let mut resolution = table.resolve("steamwebhelper.exe", &version_of(&helper));
     resolution.fold_derived_env();
-    assert_eq!(resolution.metal_hud(), Some(true));
-    // The HUD's entries go where the `*` rule folded, and the helper's own
-    // MTL_HUD_ENABLED=0, folded after it, is the value the process gets.
+    assert_eq!(resolution.metal_hud(), Some(false));
+    assert_eq!(
+        resolution.scalar(Scalar::MetalHud).set_by,
+        Some(Origin::BuiltInFor(helper.matchers()))
+    );
+    // The helper's `metal_hud=false` is the last setter, so its removals
+    // take the place of the `*` rule's entries, and its own
+    // MTL_HUD_ENABLED=0 after them is the value the process gets.
     let mut want = wildcard_env();
-    want.extend(crate::metal_hud_env(true));
+    want.extend(crate::metal_hud_env(false));
     want.push(env("MTL_HUD_ENABLED", "0"));
     assert_eq!(resolution.env, want);
     let steps = resolution.env_steps(|_| false);
@@ -597,7 +602,7 @@ fn the_cef_helpers_keep_the_metal_hud_off_under_a_launcher_star_metal_hud() -> T
         enabled,
         [
             (
-                String::from("MTL_HUD_ENABLED=1"),
+                String::from("MTL_HUD_ENABLED="),
                 Some(Origin::BuiltInFor(helper.matchers()))
             ),
             (String::from("MTL_HUD_ENABLED=0"), None),
@@ -609,6 +614,52 @@ fn the_cef_helpers_keep_the_metal_hud_off_under_a_launcher_star_metal_hud() -> T
     let mut want = wildcard_env();
     want.extend(crate::metal_hud_env(true));
     assert_eq!(game.env, want);
+    Ok(())
+}
+
+/// The value each `MTL_HUD_` variable ends up with after the env entries
+/// of `resolution` apply in a process that has none of them, as
+/// `NAME=value`, `NAME=` for one that is removed, sorted by name.
+fn final_hud_env(resolution: &Resolution) -> Vec<String> {
+    let mut last = std::collections::BTreeMap::new();
+    for step in resolution.env_steps(|_| false) {
+        let name = step.entry.name().as_str().to_owned();
+        if step.applied && name.starts_with("MTL_HUD_") {
+            last.insert(name, step.entry.to_string());
+        }
+    }
+    last.into_values().collect()
+}
+
+#[test]
+fn the_preview_of_a_cef_helper_reports_the_metal_hud_its_env_gives() -> TestResult {
+    let builtin = Table::builtin();
+    let mut star = Table::new();
+    star.push(Rule::new(Exe::Any).with_metal_hud(true));
+    let off = [
+        "MTL_HUD_ALIGNMENT=",
+        "MTL_HUD_ELEMENTS=",
+        "MTL_HUD_ENABLED=0",
+    ];
+    for exe in ["steamwebhelper.exe", "SocialClubHelper.exe"] {
+        let version = version_of(rule(&builtin, exe)?);
+        // With or without a launcher `*` rule that shows the HUD, the
+        // helper's preview says the HUD is off, and so does its env.
+        for table in [Table::new(), star.clone()] {
+            let preview = table.preview(exe, &version);
+            assert_eq!(preview.metal_hud(), Some(false), "{exe}");
+            assert_eq!(final_hud_env(&preview), off, "{exe}");
+        }
+    }
+    // A game under the same `*` rule shows it, and its env agrees.
+    let game = star.preview("game.exe", &VersionInfo::default());
+    assert_eq!(game.metal_hud(), Some(true));
+    let mut on: Vec<String> = crate::metal_hud_env(true)
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    on.sort();
+    assert_eq!(final_hud_env(&game), on);
     Ok(())
 }
 
@@ -867,7 +918,7 @@ fn default_hands_a_setting_back_to_upstream_wine() {
     assert_eq!(game.gcmouse(), None);
     assert_eq!(game.force_nx(), None);
     // Each says which rule reset it; wined3d, large_address_aware and
-    // metal_hud, which no built-in rule sets, the line leaves alone.
+    // metal_hud, which no built-in `*` rule sets, the line leaves alone.
     for &scalar in Scalar::ALL {
         let state = game.scalar(scalar);
         assert_eq!(state.set_by, None, "{scalar}");
