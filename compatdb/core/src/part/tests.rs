@@ -42,6 +42,31 @@ fn an_argument_is_not_empty() -> TestResult {
 }
 
 #[test]
+fn a_debug_channel_is_not_empty_and_keeps_its_text() -> TestResult {
+    assert_eq!(DebugChannel::new("+relay")?.as_str(), "+relay");
+    assert_eq!(
+        "warn-heap".parse::<DebugChannel>()?.to_string(),
+        "warn-heap"
+    );
+    assert_eq!(DebugChannel::new(""), Err(FieldError::EmptyDebugChannel));
+    assert_eq!(DebugChannel::new("+seh\0"), Err(FieldError::Nul));
+    // A `,` would start an entry that an `<exe>:` scope does not reach.
+    assert_eq!(
+        DebugChannel::new("+relay,+seh"),
+        Err(FieldError::CommaInDebugChannel("+relay,+seh".into()))
+    );
+    assert_eq!(
+        FieldError::CommaInDebugChannel("a,b".into()).to_string(),
+        "debug channel \"a,b\" with a ','"
+    );
+    assert_eq!(
+        FieldError::EmptyDebugChannel.to_string(),
+        "an empty debug channel"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_dll_override_needs_an_equals_and_keeps_its_text() -> TestResult {
     let entry = DllOverride::new(" d3d12 , d3d12core = n,b")?;
     assert_eq!(entry.to_string(), " d3d12 , d3d12core = n,b");

@@ -65,9 +65,11 @@ fn each_key_has_its_kind() {
             (Key::LargeAddressAware, bool),
             (Key::Gcmouse, bool),
             (Key::ForceNx, bool),
+            (Key::MetalHud, bool),
             (Key::DllOverrides, KeyKind::List),
             (Key::ArgumentsOverride, KeyKind::List),
             (Key::Arguments, KeyKind::List),
+            (Key::DebugChannels, KeyKind::List),
             (Key::Env, KeyKind::Env),
         ]
     );
@@ -168,6 +170,7 @@ fn the_labels_are_the_ones_a_launcher_shows() {
             "Large-address-aware",
             "GameController mouse",
             "Force no-execute",
+            "Metal HUD",
         ]
     );
     for &key in Key::ALL {

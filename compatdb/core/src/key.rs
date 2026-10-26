@@ -8,9 +8,9 @@
 
 use std::{fmt, str::FromStr};
 
-#[cfg(doc)]
-use crate::Setting;
 use crate::{D3d9, DEFAULT_VALUE, Dxgi, FieldError, OpenGl, Wined3d};
+#[cfg(doc)]
+use crate::{Setting, Table, metal_hud_env};
 
 /// The key of a field of a rule, which is also the name of the field on the
 /// wire.
@@ -42,6 +42,9 @@ pub enum Key {
     Gcmouse,
     /// `force_nx`: whether no-execute stays on in a 32-bit process.
     ForceNx,
+    /// `metal_hud`: whether the Metal performance HUD shows, through the
+    /// variables of [`metal_hud_env`].
+    MetalHud,
     /// `dll_overrides`: load-order overrides, repeatable.
     DllOverrides,
     /// `arguments_override`: the arguments that replace those of the rules
@@ -49,6 +52,11 @@ pub enum Key {
     ArgumentsOverride,
     /// `arguments`: text appended to the command line, repeatable.
     Arguments,
+    /// `debug_channels`: `WINEDEBUG` entries, repeatable. Wine reads
+    /// `WINEDEBUG` before `compatdb.so` loads, so the library only logs
+    /// them; a launcher puts them into the variable (see
+    /// [`Table::winedebug`]).
+    DebugChannels,
     /// `env`: an environment entry, repeatable.
     Env,
 }
@@ -92,9 +100,11 @@ impl Key {
         Self::LargeAddressAware,
         Self::Gcmouse,
         Self::ForceNx,
+        Self::MetalHud,
         Self::DllOverrides,
         Self::ArgumentsOverride,
         Self::Arguments,
+        Self::DebugChannels,
         Self::Env,
     ];
 
@@ -114,9 +124,11 @@ impl Key {
             Self::LargeAddressAware => "large_address_aware",
             Self::Gcmouse => "gcmouse",
             Self::ForceNx => "force_nx",
+            Self::MetalHud => "metal_hud",
             Self::DllOverrides => "dll_overrides",
             Self::ArgumentsOverride => "arguments_override",
             Self::Arguments => "arguments",
+            Self::DebugChannels => "debug_channels",
             Self::Env => "env",
         }
     }
@@ -134,6 +146,7 @@ impl Key {
             Self::LargeAddressAware => Some(Scalar::LargeAddressAware),
             Self::Gcmouse => Some(Scalar::Gcmouse),
             Self::ForceNx => Some(Scalar::ForceNx),
+            Self::MetalHud => Some(Scalar::MetalHud),
             Self::Exe
             | Self::Company
             | Self::Product
@@ -141,6 +154,7 @@ impl Key {
             | Self::DllOverrides
             | Self::ArgumentsOverride
             | Self::Arguments
+            | Self::DebugChannels
             | Self::Env => None,
         }
     }
@@ -152,7 +166,10 @@ impl Key {
             return KeyKind::Scalar(scalar.value_kind());
         }
         match self {
-            Self::DllOverrides | Self::ArgumentsOverride | Self::Arguments => KeyKind::List,
+            Self::DllOverrides
+            | Self::ArgumentsOverride
+            | Self::Arguments
+            | Self::DebugChannels => KeyKind::List,
             Self::Env => KeyKind::Env,
             _ => KeyKind::Matcher,
         }
@@ -175,9 +192,11 @@ impl Key {
             Self::LargeAddressAware => "Large-address-aware",
             Self::Gcmouse => "GameController mouse",
             Self::ForceNx => "Force no-execute",
+            Self::MetalHud => "Metal HUD",
             Self::DllOverrides => "DLL overrides",
             Self::ArgumentsOverride => "Arguments override",
             Self::Arguments => "Arguments",
+            Self::DebugChannels => "Debug channels",
             Self::Env => "Environment",
         }
     }
@@ -196,6 +215,7 @@ impl Key {
             Self::ArgumentsOverride | Self::Arguments => {
                 Some("the command line the process was started with")
             }
+            Self::DebugChannels => Some("the WINEDEBUG the process was started with"),
             Self::Env => Some("the environment the process was started with"),
             _ => None,
         }
@@ -211,9 +231,11 @@ impl Key {
             Self::D3d9 => &["mtld3d", "wined3d", DEFAULT_VALUE],
             Self::Wined3d => &["gl", "vulkan", DEFAULT_VALUE],
             Self::OpenGl => &["egl", "cgl", DEFAULT_VALUE],
-            Self::DpiAware | Self::LargeAddressAware | Self::Gcmouse | Self::ForceNx => {
-                &["true", "false", DEFAULT_VALUE]
-            }
+            Self::DpiAware
+            | Self::LargeAddressAware
+            | Self::Gcmouse
+            | Self::ForceNx
+            | Self::MetalHud => &["true", "false", DEFAULT_VALUE],
             Self::Exe
             | Self::Company
             | Self::Product
@@ -221,6 +243,7 @@ impl Key {
             | Self::DllOverrides
             | Self::ArgumentsOverride
             | Self::Arguments
+            | Self::DebugChannels
             | Self::Env => &[],
         }
     }
@@ -265,6 +288,8 @@ pub enum Scalar {
     Gcmouse,
     /// [`Key::ForceNx`].
     ForceNx,
+    /// [`Key::MetalHud`].
+    MetalHud,
 }
 
 impl Scalar {
@@ -278,6 +303,7 @@ impl Scalar {
         Self::LargeAddressAware,
         Self::Gcmouse,
         Self::ForceNx,
+        Self::MetalHud,
     ];
 
     /// The key of this setting.
@@ -292,6 +318,7 @@ impl Scalar {
             Self::LargeAddressAware => Key::LargeAddressAware,
             Self::Gcmouse => Key::Gcmouse,
             Self::ForceNx => Key::ForceNx,
+            Self::MetalHud => Key::MetalHud,
         }
     }
 
@@ -306,9 +333,11 @@ impl Scalar {
     pub const fn value_kind(self) -> ValueKind {
         match self {
             Self::Dxgi | Self::D3d9 | Self::Wined3d | Self::OpenGl => ValueKind::Word,
-            Self::DpiAware | Self::LargeAddressAware | Self::Gcmouse | Self::ForceNx => {
-                ValueKind::Bool
-            }
+            Self::DpiAware
+            | Self::LargeAddressAware
+            | Self::Gcmouse
+            | Self::ForceNx
+            | Self::MetalHud => ValueKind::Bool,
         }
     }
 
@@ -327,6 +356,9 @@ impl Scalar {
             Self::LargeAddressAware => "the executable's large-address-aware flag",
             Self::Gcmouse => "off, the cursor's movement",
             Self::ForceNx => "no-execute off when the executable or a DLL lacks the NX_COMPAT flag",
+            Self::MetalHud => {
+                "the MTL_HUD_ variables of the environment the process was started with"
+            }
         }
     }
 
@@ -345,9 +377,11 @@ impl Scalar {
             Self::D3d9 => text.parse().ok().map(ScalarValue::D3d9),
             Self::Wined3d => text.parse().ok().map(ScalarValue::Wined3d),
             Self::OpenGl => text.parse().ok().map(ScalarValue::OpenGl),
-            Self::DpiAware | Self::LargeAddressAware | Self::Gcmouse | Self::ForceNx => {
-                parse_bool(text).map(ScalarValue::Bool)
-            }
+            Self::DpiAware
+            | Self::LargeAddressAware
+            | Self::Gcmouse
+            | Self::ForceNx
+            | Self::MetalHud => parse_bool(text).map(ScalarValue::Bool),
         };
         value.ok_or_else(|| FieldError::BadValue {
             key: self.key(),

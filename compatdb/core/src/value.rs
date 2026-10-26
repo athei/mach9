@@ -3,7 +3,7 @@
 
 use std::{fmt, str::FromStr};
 
-use crate::{Arch, FieldError, Key};
+use crate::{Arch, EnvEntry, FieldError, Key};
 
 /// Which implementation of the DXGI family a process loads.
 ///
@@ -199,6 +199,31 @@ impl OpenGl {
             Self::Cgl => 0,
         }
     }
+}
+
+/// The variables that show the Metal performance HUD, each with the value
+/// that `metal_hud` set to `true` gives it.
+pub const METAL_HUD_ENV: [(&str, &str); 3] = [
+    ("MTL_HUD_ENABLED", "1"),
+    ("MTL_HUD_ALIGNMENT", "28"),
+    (
+        "MTL_HUD_ELEMENTS",
+        "device,rosetta,layersize,memory,fps,frameinterval,shaders,frameintervalgraph,gputime,\
+         thermal,layerscale,refreshrate,gamemode,client",
+    ),
+];
+
+/// The environment entries `metal_hud` stands for.
+///
+/// With `on`, each variable of [`METAL_HUD_ENV`] is set to its value, and
+/// otherwise each of them is removed, so a process does not show the HUD
+/// that the process which started it asked for.
+#[must_use]
+pub fn metal_hud_env(on: bool) -> Vec<EnvEntry> {
+    METAL_HUD_ENV
+        .iter()
+        .map(|&(name, value)| EnvEntry::literal(name, if on { value } else { "" }))
+        .collect()
 }
 
 /// The value of `all` that `name` spells `s`, ASCII-case-insensitively, or

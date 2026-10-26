@@ -1069,12 +1069,15 @@ fn a_set_renderer_is_always_named_and_unset_sets_nothing() {
         (Wined3d::Gl, "renderer=gl"),
     ] {
         let mut r = resolved(Some(wined3d));
-        assert_eq!(r.apply_wined3d(), Some(wined3d));
+        r.fold_derived_env();
         assert_eq!(r.env, [pair("A", "1"), pair("WINE_D3D_CONFIG", value)]);
+        // A second call adds nothing.
+        r.fold_derived_env();
+        assert_eq!(r.env.len(), 2);
     }
     // No rule sets it: nothing changes.
     let mut r = resolved(None);
-    assert_eq!(r.apply_wined3d(), None);
+    r.fold_derived_env();
     assert_eq!(r.env, [pair("A", "1")]);
 }
 
@@ -1093,7 +1096,7 @@ fn the_setting_decides_the_renderer_and_keeps_the_other_options_of_an_env_rule()
                 ),
             ],
         );
-        assert_eq!(r.apply_wined3d(), Some(wined3d));
+        r.fold_derived_env();
         let want = format!("renderer={renderer},csmt=0x1,MaxVersionGL=0x40001");
         assert_eq!(r.env.last(), Some(&pair("WINE_D3D_CONFIG", &want)));
         let block: Vec<u16> = "WINE_D3D_CONFIG=shader_backend=glsl\0OTHER=x\0\0"
@@ -1107,7 +1110,7 @@ fn the_setting_decides_the_renderer_and_keeps_the_other_options_of_an_env_rule()
     }
     // A rule that removes the variable leaves just the renderer.
     let mut r = with_renderer(Some(Wined3d::Vulkan), vec![pair("WINE_D3D_CONFIG", "")]);
-    r.apply_wined3d();
+    r.fold_derived_env();
     assert_eq!(
         r.env.last(),
         Some(&pair("WINE_D3D_CONFIG", "renderer=vulkan"))
@@ -1118,8 +1121,126 @@ fn the_setting_decides_the_renderer_and_keeps_the_other_options_of_an_env_rule()
         None,
         vec![pair("WINE_D3D_CONFIG", "renderer=vulkan,csmt=0")],
     );
-    assert_eq!(r.apply_wined3d(), None);
+    r.fold_derived_env();
     assert_eq!(r.env, [pair("WINE_D3D_CONFIG", "renderer=vulkan,csmt=0")]);
     assert_eq!(r.d3d_config(), Some("renderer=vulkan,csmt=0"));
+    Ok(())
+}
+
+#[test]
+fn metal_hud_resolves_to_the_most_specific_rule_and_becomes_env_entries() {
+    let table = with_lines(
+        &Table::default(),
+        "exe=game.exe;metal_hud=true;env=A=1;wined3d=vulkan\nexe=*;metal_hud=false\n\
+         exe=tool.exe;metal_hud=default",
+    );
+    let none = VersionInfo::default();
+    let mut game = table.resolve("Game.exe", &none);
+    assert_eq!(game.metal_hud(), Some(true));
+    game.fold_derived_env();
+    // Where the rule that set it folded, before its own env; wined3d's
+    // after every rule's. Each from the rule that set the setting, none a
+    // default.
+    let mut want = metal_hud_env(true);
+    want.extend([pair("A", "1"), pair("WINE_D3D_CONFIG", "renderer=vulkan")]);
+    assert_eq!(game.env, want);
+    assert!(
+        game.env_from
+            .iter()
+            .all(|from| from.origin == Origin::Line(1) && !from.default)
+    );
+    // The `*` rule removes the variables everywhere else.
+    let mut other = table.resolve("other.exe", &none);
+    other.fold_derived_env();
+    assert_eq!(other.metal_hud(), Some(false));
+    assert_eq!(other.env, metal_hud_env(false));
+    assert!(
+        other
+            .env_from
+            .iter()
+            .all(|from| from.origin == Origin::Line(2))
+    );
+    let steps = other.env_steps(|name| name == "MTL_HUD_ENABLED");
+    assert!(steps.iter().all(|step| step.applied));
+    // `default` hands it back to the environment: no entry at all.
+    let mut tool = table.resolve("tool.exe", &none);
+    tool.fold_derived_env();
+    assert_eq!(tool.metal_hud(), None);
+    assert_eq!(
+        tool.scalar(Scalar::MetalHud).reset_by,
+        Some(Origin::Line(3))
+    );
+    assert_eq!(tool.env, []);
+}
+
+#[test]
+fn an_env_entry_of_the_rule_that_sets_metal_hud_or_a_later_rule_wins() {
+    let table = with_lines(
+        &Table::default(),
+        "exe=*;metal_hud=true;env=A=1\n\
+         exe=game.exe;env=MTL_HUD_ALIGNMENT=4\n\
+         exe=tool.exe;metal_hud=true;env=MTL_HUD_ENABLED=0",
+    );
+    let none = VersionInfo::default();
+    let mut game = table.resolve("game.exe", &none);
+    game.fold_derived_env();
+    let mut want = metal_hud_env(true);
+    want.extend([pair("A", "1"), pair("MTL_HUD_ALIGNMENT", "4")]);
+    assert_eq!(game.env, want);
+    let steps = game.env_steps(|_| false);
+    let alignment = steps
+        .iter()
+        .find(|step| step.entry == pair("MTL_HUD_ALIGNMENT", "28"));
+    assert_eq!(
+        alignment.and_then(|step| step.replaced_by.clone()),
+        Some(Origin::Line(2))
+    );
+    // The rule's own entry comes after the setting's.
+    let mut tool = table.resolve("tool.exe", &none);
+    tool.fold_derived_env();
+    let mut want = vec![pair("A", "1")];
+    want.extend(metal_hud_env(true));
+    want.push(pair("MTL_HUD_ENABLED", "0"));
+    assert_eq!(tool.env, want);
+    let origins: Vec<Origin> = tool.env_from.iter().map(|f| f.origin.clone()).collect();
+    assert_eq!(
+        origins,
+        [
+            Origin::Line(1),
+            Origin::Line(3),
+            Origin::Line(3),
+            Origin::Line(3),
+            Origin::Line(3)
+        ]
+    );
+}
+
+#[test]
+fn debug_channels_accumulate_in_fold_order_with_their_origin() -> TestResult {
+    let only_channels = Table::of_builtin(vec![
+        Rule::new(Exe::Any).with_debug_channel(DebugChannel::new("+tid")?),
+    ]);
+    let table = with_lines(
+        &only_channels,
+        "exe=game.exe;debug_channels=+relay;debug_channels=-heap\nexe=*;debug_channels=+seh\n\
+         exe=other.exe;debug_channels=+x",
+    );
+    let game = table.resolve("game.exe", &VersionInfo::default());
+    assert_eq!(game.debug_channels, ["+tid", "+seh", "+relay", "-heap"]);
+    assert_eq!(
+        game.debug_channels_from,
+        [
+            Origin::BuiltIn,
+            Origin::Line(2),
+            Origin::Line(1),
+            Origin::Line(1)
+        ]
+    );
+    // A resolution with channels alone is not empty: the log has them.
+    assert!(
+        !only_channels
+            .resolve("x.exe", &VersionInfo::default())
+            .is_empty()
+    );
     Ok(())
 }

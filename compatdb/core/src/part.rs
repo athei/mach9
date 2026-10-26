@@ -211,6 +211,42 @@ impl Argument {
     }
 }
 
+/// One `WINEDEBUG` entry of a rule, such as `+relay` or `warn-heap`: not
+/// empty, without `,` and without a NUL. The text is kept as written; Wine
+/// reads it.
+///
+/// A `,` separates the entries of `WINEDEBUG`, so the text after one would
+/// be an entry of its own, which the `<exe>:` scope of
+/// [`Table::winedebug`](crate::Table::winedebug) does not reach.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DebugChannel(String);
+
+impl DebugChannel {
+    /// `text` as a `WINEDEBUG` entry.
+    ///
+    /// # Errors
+    ///
+    /// [`FieldError::EmptyDebugChannel`] for an empty `text`,
+    /// [`FieldError::CommaInDebugChannel`] for one with a `,`,
+    /// [`FieldError::Nul`] for one with a NUL.
+    pub fn new(text: impl Into<String>) -> Result<Self, FieldError> {
+        let text = without_nul(text.into())?;
+        if text.is_empty() {
+            Err(FieldError::EmptyDebugChannel)
+        } else if text.contains(',') {
+            Err(FieldError::CommaInDebugChannel(text))
+        } else {
+            Ok(Self(text))
+        }
+    }
+
+    /// The entry as written.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// One `WINEDLLOVERRIDES` element, `<modules>=<order>`.
 ///
 /// That is comma-separated module names, `=`, and a load order such as
@@ -384,6 +420,15 @@ impl FromStr for Argument {
     }
 }
 
+impl FromStr for DebugChannel {
+    type Err = FieldError;
+
+    /// See [`DebugChannel::new`].
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s)
+    }
+}
+
 impl FromStr for DllOverride {
     type Err = FieldError;
 
@@ -414,6 +459,12 @@ impl fmt::Display for Argument {
     }
 }
 
+impl fmt::Display for DebugChannel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl fmt::Display for DllOverride {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
@@ -439,6 +490,12 @@ impl PartialEq<&str> for Fingerprint {
 }
 
 impl PartialEq<&str> for Argument {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<&str> for DebugChannel {
     fn eq(&self, other: &&str) -> bool {
         self.0 == *other
     }

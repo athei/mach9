@@ -19,8 +19,8 @@ use std::{
 #[cfg(doc)]
 use crate::ENV_VAR;
 use crate::{
-    Argument, DEFAULT_VALUE, Diagnostic, DllOverride, EnvEntry, EnvName, Exe, FieldError,
-    Fingerprint, Key, KeyKind, ParseError, Rule, Scalar, Setting, Source, Table,
+    Argument, DEFAULT_VALUE, DebugChannel, Diagnostic, DllOverride, EnvEntry, EnvName, Exe,
+    FieldError, Fingerprint, Key, KeyKind, ParseError, Rule, Scalar, Setting, Source, Table,
 };
 
 /// Whether `line` is a version header of the old format, `v=` and nothing
@@ -173,6 +173,9 @@ fn rule_to_record(rule: &Rule) -> String {
     for text in &rule.arguments {
         fields.push(field(Key::Arguments, text.as_str()));
     }
+    for channel in &rule.debug_channels {
+        fields.push(field(Key::DebugChannels, channel.as_str()));
+    }
     for entry in &rule.env {
         // The name has no `=`, so the first `=` of the value ends it.
         let mut value = String::new();
@@ -285,6 +288,10 @@ fn read_field(
             rule.dll_overrides.push(entry);
         }
         Key::Arguments => rule.arguments.push(Argument::new(decoder.decode(value)?)?),
+        Key::DebugChannels => {
+            let channel = DebugChannel::new(decoder.decode(value)?)?;
+            rule.debug_channels.push(channel);
+        }
         // Present at all, the override is set; an empty value adds no entry,
         // so `arguments_override=` alone clears the list.
         Key::ArgumentsOverride => {
@@ -313,7 +320,8 @@ fn read_field(
         | Key::DpiAware
         | Key::LargeAddressAware
         | Key::Gcmouse
-        | Key::ForceNx => {}
+        | Key::ForceNx
+        | Key::MetalHud => {}
     }
     Ok(())
 }

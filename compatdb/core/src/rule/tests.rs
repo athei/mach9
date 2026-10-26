@@ -1,5 +1,5 @@
 use super::*;
-use crate::{EnvName, Table};
+use crate::{DebugChannel, EnvName, Table};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
@@ -87,6 +87,8 @@ fn the_builder_sets_what_the_getters_read() -> TestResult {
         .with_large_address_aware(true)
         .with_gcmouse(Setting::Reset)
         .with_force_nx(false)
+        .with_metal_hud(true)
+        .with_debug_channel(DebugChannel::new("+relay")?)
         .with_dll_override(DllOverride::new("d3d12=")?)
         .with_argument(Argument::new("-a")?)
         .with_argument(Argument::new("-b")?)
@@ -107,6 +109,12 @@ fn the_builder_sets_what_the_getters_read() -> TestResult {
     assert_eq!(rule.large_address_aware(), Setting::Set(true));
     assert_eq!(rule.gcmouse(), Setting::Reset);
     assert_eq!(rule.force_nx(), Setting::Set(false));
+    assert_eq!(rule.metal_hud(), Setting::Set(true));
+    assert_eq!(
+        rule.scalar(Scalar::MetalHud),
+        Setting::Set(ScalarValue::Bool(true))
+    );
+    assert_eq!(rule.debug_channels(), ["+relay"]);
     assert_eq!(rule.dll_overrides(), ["d3d12="]);
     assert_eq!(rule.arguments(), ["-a", "-b"]);
     assert_eq!(rule.arguments_override(), Some(&[Argument::new("-c")?][..]));
@@ -162,6 +170,7 @@ fn a_rule_reads_and_writes_each_scalar_by_its_key() {
         (Scalar::LargeAddressAware, ScalarValue::Bool(true)),
         (Scalar::Gcmouse, ScalarValue::Bool(false)),
         (Scalar::ForceNx, ScalarValue::Bool(true)),
+        (Scalar::MetalHud, ScalarValue::Bool(false)),
     ];
     for (scalar, value) in values {
         assert_eq!(rule.scalar(scalar), Setting::Unset, "{scalar}");

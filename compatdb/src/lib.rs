@@ -11,10 +11,11 @@
 //! that match this process and applies them: the D3D9 and DXGI trees, the
 //! wined3d renderer, DLL load-order overrides, the DPI awareness, large
 //! address awareness, whether the Mac driver reads raw mouse input from
-//! GameController, and command-line/environment rewrites. All the decision
-//! logic lives in [`compatdb_core`]; this crate only moves bytes in and out
-//! of the running process, so its `unsafe` is confined to a thin ntdll
-//! shell.
+//! GameController, the Metal HUD, and command-line/environment rewrites. It
+//! logs a rule's `WINEDEBUG` channels, which Wine has read already. All the
+//! decision logic lives in [`compatdb_core`]; this crate only moves bytes in
+//! and out of the running process, so its `unsafe` is confined to a thin
+//! ntdll shell.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -114,8 +115,10 @@ extern "C" fn run() {
     // API brought wined3d in. A renderer a rule sets travels as an env
     // entry, applied with the rest below, whose line shows it. Without one,
     // the log names the renderer the WINE_D3D_CONFIG the process ends up
-    // with asks for: a rule's env, or else the one it inherited.
-    let wined3d = resolution.apply_wined3d();
+    // with asks for: a rule's env, or else the one it inherited. The Metal
+    // HUD setting travels as env entries the same way.
+    resolution.fold_derived_env();
+    let wined3d = resolution.wined3d();
     let config = match resolution.d3d_config() {
         Some(value) => Some((value.to_owned(), resolution.d3d_config_origin())),
         None => compatdb_core::env_value(&process.env, Wined3d::CONFIG_VAR).map(|v| (v, None)),
@@ -126,6 +129,7 @@ extern "C" fn run() {
         resolution.scalar(Scalar::Wined3d).reset_by.as_ref(),
         config.as_ref().map(|(value, rule)| (value.as_str(), *rule)),
     ));
+    log::line(&metal_hud_line(&resolution));
 
     log::line(&list_line(
         Key::DllOverrides,
@@ -149,6 +153,7 @@ extern "C" fn run() {
     for dropped in &resolution.arguments_dropped {
         log::line(&dropped_line(dropped));
     }
+    log::line(&debug_channels_line(&resolution));
     // A default env entry leaves a variable the process already has alone,
     // whether it is in the environment block or only in the unix
     // environment.
@@ -306,6 +311,35 @@ fn dropped_line(dropped: &ArgumentsDropped) -> String {
         dropped.by.label(),
         items.join("; ")
     )
+}
+
+/// The log line of the Metal HUD setting: its value and where it came from,
+/// like the other scalars. Its env lines show the variables it sets or
+/// removes.
+fn metal_hud_line(resolution: &Resolution) -> String {
+    let key = Scalar::MetalHud;
+    let source = scalar_source(resolution, key);
+    resolution.metal_hud().map_or_else(
+        || format!("  {key} = {source}"),
+        |on| format!("  {key} = {on}, {source}"),
+    )
+}
+
+/// The log line of the `debug_channels` of the matching rules, each with
+/// where it came from. Wine read `WINEDEBUG` before this library loaded, so
+/// the line says they are not applied here.
+fn debug_channels_line(resolution: &Resolution) -> String {
+    let line = list_line(
+        Key::DebugChannels,
+        &resolution.debug_channels,
+        &resolution.debug_channels_from,
+        None,
+    );
+    if resolution.debug_channels.is_empty() {
+        line
+    } else {
+        format!("{line}; logged only: Wine reads WINEDEBUG before compatdb.so loads")
+    }
 }
 
 /// The log line of an env entry: its value, where it came from and what it

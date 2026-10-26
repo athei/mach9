@@ -61,6 +61,31 @@ fn every_value_reads_back_from_its_lowercase_spelling_in_any_case() {
 }
 
 #[test]
+fn metal_hud_sets_its_three_variables_or_removes_them() {
+    let shown: Vec<String> = metal_hud_env(true)
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "MTL_HUD_ENABLED=1",
+            "MTL_HUD_ALIGNMENT=28",
+            "MTL_HUD_ELEMENTS=device,rosetta,layersize,memory,fps,frameinterval,shaders,\
+             frameintervalgraph,gputime,thermal,layerscale,refreshrate,gamemode,client",
+        ]
+    );
+    // Off removes the same variables, so a process does not inherit the
+    // HUD of the process that started it.
+    let off = metal_hud_env(false);
+    assert_eq!(off.len(), METAL_HUD_ENV.len());
+    for (entry, (name, _)) in off.iter().zip(METAL_HUD_ENV) {
+        assert_eq!(entry.name().as_str(), name);
+        assert_eq!(entry.value(), None, "{name}");
+    }
+}
+
+#[test]
 fn the_renderer_of_a_config_and_a_variable_of_a_block_read_as_wined3d_reads_them() {
     assert_eq!(
         Wined3d::renderer_in("csmt=0,renderer=vulkan"),

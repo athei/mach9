@@ -61,6 +61,10 @@ fn a_diagnostic_says_what_lenient_parsing_did() {
             "WINE_COMPATDB line 3: ignoring field \"arguments=\": an empty argument",
         ),
         (
+            at("debug_channels=", FieldError::EmptyDebugChannel),
+            "WINE_COMPATDB line 3: ignoring field \"debug_channels=\": an empty debug channel",
+        ),
+        (
             at("env==1", FieldError::InvalidEnvName(String::new())),
             "WINE_COMPATDB line 3: ignoring invalid variable name \"\"",
         ),

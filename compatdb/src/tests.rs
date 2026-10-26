@@ -266,6 +266,43 @@ fn an_unset_line_says_what_upstream_wine_does() {
 }
 
 #[test]
+fn the_metal_hud_and_debug_channels_lines_name_value_and_source() -> TestResult {
+    let table = Table::parse_strict(
+        "exe=game.exe;metal_hud=true;debug_channels=+relay;debug_channels=-heap\n\
+         exe=tool.exe;metal_hud=default",
+    )?
+    .with_builtin();
+    let none = VersionInfo::default();
+    let game = table.resolve("game.exe", &none);
+    assert_eq!(
+        metal_hud_line(&game),
+        "  metal_hud = true, WINE_COMPATDB line 1"
+    );
+    assert_eq!(
+        debug_channels_line(&game),
+        "  debug_channels = +relay (WINE_COMPATDB line 1); -heap (WINE_COMPATDB line 1); \
+         logged only: Wine reads WINEDEBUG before compatdb.so loads"
+    );
+    let other = table.resolve("other.exe", &none);
+    assert_eq!(
+        metal_hud_line(&other),
+        "  metal_hud = unset (upstream: the MTL_HUD_ variables of the environment the process \
+         was started with)"
+    );
+    assert_eq!(
+        debug_channels_line(&other),
+        "  debug_channels = unset (upstream: the WINEDEBUG the process was started with)"
+    );
+    let tool = table.resolve("tool.exe", &none);
+    assert_eq!(
+        metal_hud_line(&tool),
+        "  metal_hud = unset (upstream: the MTL_HUD_ variables of the environment the process \
+         was started with), reset by WINE_COMPATDB line 2"
+    );
+    Ok(())
+}
+
+#[test]
 fn the_log_labels_each_arch() {
     assert_eq!(arch_name(Arch::X86_64), "x86_64 (arm64ec)");
     assert_eq!(arch_name(Arch::I386), "i386");

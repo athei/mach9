@@ -39,6 +39,11 @@ pub enum FieldError {
     MissingExe,
     /// An empty argument, which would append nothing.
     EmptyArgument,
+    /// An empty `debug_channels` entry, which names no channel.
+    EmptyDebugChannel,
+    /// A `debug_channels` entry with a `,`, as it was written, which
+    /// `WINEDEBUG` would read as more than one entry.
+    CommaInDebugChannel(String),
     /// A variable name that is empty or holds a `=`, as it was written.
     InvalidEnvName(String),
     /// A DLL override without the `=` between its modules and its load
@@ -63,6 +68,8 @@ impl fmt::Display for FieldError {
             Self::Nul => f.write_str("a NUL in its value"),
             Self::MissingExe => f.write_str("no exe"),
             Self::EmptyArgument => f.write_str("an empty argument"),
+            Self::EmptyDebugChannel => f.write_str("an empty debug channel"),
+            Self::CommaInDebugChannel(text) => write!(f, "debug channel {text:?} with a ','"),
             Self::InvalidEnvName(name) => write!(f, "invalid variable name {name:?}"),
             Self::InvalidDllOverride(text) => {
                 write!(f, "DLL override {text:?} without '=' before its load order")
@@ -109,7 +116,10 @@ impl fmt::Display for Diagnostic {
                 "field {field:?} has {}, which is kept as written",
                 self.error
             ),
-            FieldError::Nul | FieldError::InvalidUtf8 | FieldError::EmptyArgument => {
+            FieldError::Nul
+            | FieldError::InvalidUtf8
+            | FieldError::EmptyArgument
+            | FieldError::EmptyDebugChannel => {
                 write!(f, "ignoring field {field:?}: {}", self.error)
             }
             error => write!(f, "ignoring {error}"),

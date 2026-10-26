@@ -26,6 +26,8 @@ A setting a rule leaves unset is no opinion: a rule folded earlier decides
 | `large_address_aware` | `true`, `false` | `true`: a 32-bit process gets 4 GB even without the large-address-aware flag. `false` is the same as unset: the executable's large-address-aware flag decides, as in upstream Wine. No built-in `*` rule sets it. No effect on 64-bit | At load; ntdll applies it after the library returns |
 | `gcmouse` | `true`, `false` | `true`: the Mac driver takes the mouse movement of raw input (`WM_INPUT`) and DirectInput from GameController's `GCMouse`, in the device's own counts, so mouselook is linear. `false`: that movement is the cursor's, which macOS accelerates and scales for retina. Unset: the same as `false`, as in upstream Wine ([GameController mice](#gamecontroller-mice)) | At load, read by winemac.drv |
 | `force_nx` | `true`, `false` | `true`: no-execute stays permanently on in a 32-bit process, even when its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine turns it off, and the process cannot turn it off. `false` is the same as unset: Wine's behaviour. No effect on 64-bit, which always has no-execute on. The value is the process's own; the programs it starts get their own rules' value ([no-execute](#no-execute)) | At load, read by ntdll |
+| `metal_hud` | `true`, `false` | `true`: the `MTL_HUD_` variables that show the Metal performance HUD are set; `false`: they are removed. Unset: the process keeps the ones it was started with. They go in as `env` entries where the rule that set `metal_hud` folds, before that rule's own `env`, so an `env` entry for one of them from that rule or a rule folded later wins, and the programs the process starts inherit them. `Key::MetalHud` and `METAL_HUD_ENV` in [`compatdb/core/src`](../compatdb/core/src) hold the variables | At load, as `env` |
+| `debug_channels` | `WINEDEBUG` entries, repeatable | Only logged: Wine reads `WINEDEBUG` before compatdb.so loads. A launcher puts them into `WINEDEBUG` with `Table::winedebug`, as `<exe>:<entry>` for a rule with an `exe` and unscoped for `*`. An entry that is empty or holds `,` is refused, since Wine would read a `,` as the start of an entry that the `<exe>:` scope does not reach | Logged only |
 | `arguments` | text, repeatable | Appended to the command line unless already present (case-sensitive), which leaves a Chromium child that inherited its parent's switches alone | At load |
 | `arguments_override` | text, repeatable; an empty value alone clears | Replaces the `arguments` that the rules folded before this one gathered with its own values, which then go in the same way. The rule's own `arguments` and those of the rules folded after it still append ([merging](#merging)) | At load, as `arguments` |
 | `env` | `NAME=value`, repeatable; an empty value removes the variable | Written into the environment block and the unix environment, before any PE code runs. Processes the program starts inherit it. An entry of a built-in `*` rule is a default and leaves a variable the process already has alone; every other entry replaces it ([environment defaults](#environment-defaults)) | At load |
@@ -36,7 +38,8 @@ and written in lowercase. User data, the `exe`, the fingerprint values,
 env names and values, arguments and DLL override text, is kept as written.
 
 Each key above that holds one value, `dxgi`, `d3d9`, `wined3d`, `opengl`,
-`dpi_aware`, `large_address_aware`, `gcmouse` and `force_nx`, also takes
+`dpi_aware`, `large_address_aware`, `gcmouse`, `force_nx` and `metal_hud`,
+also takes
 `default`: the setting is unset again from that rule on, so
 upstream Wine decides, unless a rule folded later sets it. `env` and
 `arguments` take no `default`: an empty `env` value removes the variable,
@@ -196,10 +199,10 @@ Errors never abort a process.
 - A field with an unknown key, an unknown `dxgi`, `d3d9`, `wined3d` or
   `opengl` value, a boolean other than `true` or `false` in any case (so
   `1` or `yes`), or no `=` is ignored with a warning naming the line and
-  the field. So is an empty `arguments` value, a `dll_overrides` entry
-  without `=`, an `env` name that is empty or holds `=`, and any value
-  whose escapes are not UTF-8 or decode to a NUL. The rest of its line
-  still applies.
+  the field. So is an empty `arguments` or `debug_channels` value, a
+  `dll_overrides` entry without `=`, an `env` name that is empty or holds
+  `=`, and any value whose escapes are not UTF-8 or decode to a NUL. The
+  rest of its line still applies.
 - A second field for a matcher or a key that holds one value replaces the
   first, with a warning. A `%` that two hex digits do not follow is kept as
   it is, with a warning.
@@ -432,8 +435,11 @@ The library writes to Wine's stderr; every line starts with `compatdb:`.
     renderer a `WINE_D3D_CONFIG` the process has asks for, from a rule's
     `env` or inherited, as the line says, or unset, where wined3d's
     registry settings or its default decide;
+  - `metal_hud = <value>, <source>`, whose variables the `env` lines show;
   - `dll_overrides` and `arguments`, each entry with its source, and for an
     argument whether it was appended or already present;
+  - `debug_channels`, each entry with its source, which the library only
+    logs;
   - one `dll_overrides <module>=default, <source>: ...` line for each
     module an entry with the order `default` names, with the sources of
     the overrides it removed, or saying there was none to remove;

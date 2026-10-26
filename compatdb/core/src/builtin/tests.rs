@@ -258,11 +258,13 @@ fn wined3d_on_vulkan_is_a_setting_for_one_game_and_never_a_default() {
             .any(|r| !r.wined3d.is_unset() || r.env.iter().any(|e| *e.name() == "WINE_D3D_CONFIG"))
     );
     let mut game = plain();
-    assert_eq!(game.apply_wined3d(), None);
+    game.fold_derived_env();
+    assert_eq!(game.wined3d(), None);
     assert_eq!(game.env, wildcard_env());
     let table = with_lines("exe=game.exe;wined3d=vulkan");
     let mut game = table.resolve("Game.exe", &VersionInfo::default());
-    assert_eq!(game.apply_wined3d(), Some(Wined3d::Vulkan));
+    game.fold_derived_env();
+    assert_eq!(game.wined3d(), Some(Wined3d::Vulkan));
     let vulkan = env("WINE_D3D_CONFIG", "renderer=vulkan");
     assert_eq!(game.env, wildcard_env_and(&[vulkan]));
     assert_eq!(
@@ -270,7 +272,8 @@ fn wined3d_on_vulkan_is_a_setting_for_one_game_and_never_a_default() {
         Some(&Origin::Line(1))
     );
     let mut other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.apply_wined3d(), None);
+    other.fold_derived_env();
+    assert_eq!(other.wined3d(), None);
     assert_eq!(other.env, wildcard_env());
 }
 
@@ -744,12 +747,15 @@ fn default_hands_a_setting_back_to_upstream_wine() {
     assert_eq!(game.dpi_aware(), None);
     assert_eq!(game.gcmouse(), None);
     assert_eq!(game.force_nx(), None);
-    // Each says which rule reset it; wined3d and large_address_aware, which
-    // no built-in rule sets, the line leaves alone.
+    // Each says which rule reset it; wined3d, large_address_aware and
+    // metal_hud, which no built-in rule sets, the line leaves alone.
     for &scalar in Scalar::ALL {
         let state = game.scalar(scalar);
         assert_eq!(state.set_by, None, "{scalar}");
-        let reset = !matches!(scalar, Scalar::Wined3d | Scalar::LargeAddressAware);
+        let reset = !matches!(
+            scalar,
+            Scalar::Wined3d | Scalar::LargeAddressAware | Scalar::MetalHud
+        );
         assert_eq!(state.reset_by, reset.then_some(Origin::Line(1)), "{scalar}");
     }
     // Then the trees are upstream Wine's.

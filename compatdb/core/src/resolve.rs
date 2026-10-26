@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 #[cfg(doc)]
 use crate::basename_of;
 use crate::{
-    Argument, D3d9, DllOverride, Dxgi, ENV_VAR, EnvEntry, OpenGl, Rule, Scalar, ScalarValue,
-    Setting, Source, Specificity, Table, VersionInfo, Wined3d,
+    Argument, D3d9, DebugChannel, DllOverride, Dxgi, ENV_VAR, EnvEntry, OpenGl, Rule, Scalar,
+    ScalarValue, Setting, Source, Specificity, Table, VersionInfo, Wined3d, metal_hud_env,
 };
 
 /// The settings that apply to one process.
@@ -39,11 +39,24 @@ pub struct Resolution {
     /// Each `arguments_override` that dropped entries from the argument
     /// list, in fold order.
     pub arguments_dropped: Vec<ArgumentsDropped>,
-    /// The `env` entries of every matching rule in fold order.
+    /// The `debug_channels` entries of every matching rule in fold order,
+    /// which `compatdb.so` only logs (see [`Rule::debug_channels`]).
+    pub debug_channels: Vec<DebugChannel>,
+    /// Where each entry of [`Resolution::debug_channels`] came from, at the
+    /// same index.
+    pub debug_channels_from: Vec<Origin>,
+    /// The `env` entries of every matching rule in fold order, followed by
+    /// those [`Resolution::fold_derived_env`] adds.
     /// [`Resolution::env_steps`] says which of them apply in a process.
     pub env: Vec<EnvEntry>,
     /// Where each entry of [`Resolution::env`] came from, at the same index.
     pub env_from: Vec<EnvFrom>,
+    /// Whether [`Resolution::fold_derived_env`] has run.
+    derived_env: bool,
+    /// Where in [`Resolution::env`] the rule that set `metal_hud` started
+    /// its entries, which is where [`Resolution::fold_derived_env`] puts
+    /// the entries of the setting.
+    metal_hud_at: Option<usize>,
 }
 
 /// Where a scalar setting of a [`Resolution`] ended up.
@@ -165,12 +178,14 @@ pub struct EnvStep {
 }
 
 impl Resolution {
-    /// Whether there is nothing to apply.
+    /// Whether there is nothing to apply or log: no value of a scalar
+    /// setting and no entry of a list.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.scalars.values().all(|state| state.value.is_none())
             && self.dll_overrides.is_empty()
             && self.arguments.is_empty()
+            && self.debug_channels.is_empty()
             && self.env.is_empty()
     }
 
@@ -249,6 +264,13 @@ impl Resolution {
         self.switch(Scalar::ForceNx)
     }
 
+    /// Whether the Metal performance HUD shows (see [`Rule::metal_hud`]),
+    /// `None` when no rule sets it.
+    #[must_use]
+    pub fn metal_hud(&self) -> Option<bool> {
+        self.switch(Scalar::MetalHud)
+    }
+
     /// The value of the true-or-false setting `scalar`.
     fn switch(&self, scalar: Scalar) -> Option<bool> {
         match self.scalar(scalar).value {
@@ -269,28 +291,65 @@ impl Resolution {
             .map(|entry| entry.value().unwrap_or_default())
     }
 
-    /// When a rule sets [`Resolution::wined3d`], that renderer, with the
-    /// `WINE_D3D_CONFIG` that names it folded into [`Resolution::env`]. That
-    /// entry goes after the rules' own entries, so it is the value the
-    /// variable ends up with when the env is applied, and it keeps the other
-    /// options a rule's `WINE_D3D_CONFIG` set (see [`Wined3d::config`]).
-    /// `None`, with nothing changed, when no rule sets it: then the process
-    /// keeps whatever `WINE_D3D_CONFIG` it has, from a rule's `env` or
-    /// inherited, and without one wined3d uses OpenGL. Call it once, after
-    /// [`Table::resolve`], which records where the setting came from; a
-    /// resolution without that record is left as it is.
-    pub fn apply_wined3d(&mut self) -> Option<Wined3d> {
-        let wined3d = self.wined3d()?;
-        let origin = self.scalar(Scalar::Wined3d).set_by.clone()?;
-        let value = wined3d.config(self.d3d_config().filter(|value| !value.is_empty()));
-        // The value is the renderer and the options of a checked one.
-        self.env
-            .push(EnvEntry::literal(Wined3d::CONFIG_VAR, &value));
+    /// Fold the settings that `compatdb.so` applies as environment entries
+    /// into [`Resolution::env`], each with the rule that set the setting as
+    /// its origin and none of them a default:
+    ///
+    /// - [`Resolution::wined3d`], when a rule sets it: the `WINE_D3D_CONFIG`
+    ///   that names the renderer, after the rules' own entries. It is the
+    ///   value the variable ends up with, and it keeps the other options a
+    ///   rule's `WINE_D3D_CONFIG` set (see [`Wined3d::config`]). Unset, the
+    ///   process keeps whatever `WINE_D3D_CONFIG` it has, from a rule's
+    ///   `env` or inherited, and without one wined3d uses OpenGL.
+    /// - [`Resolution::metal_hud`], when a rule sets it: the entries of
+    ///   [`metal_hud_env`], which set or remove the `MTL_HUD_` variables.
+    ///   They go where the rule that set it folded, before that rule's own
+    ///   `env` entries, so an `env` entry for one of the variables from that
+    ///   rule or from any rule folded after it wins. Unset, the process keeps
+    ///   the ones it was started with.
+    ///
+    /// Call it after [`Table::resolve`], which records where each setting
+    /// came from; a setting without that record adds nothing. A second call
+    /// changes nothing.
+    pub fn fold_derived_env(&mut self) {
+        if std::mem::replace(&mut self.derived_env, true) {
+            return;
+        }
+        if let (Some(wined3d), Some(origin)) =
+            (self.wined3d(), self.scalar(Scalar::Wined3d).set_by.clone())
+        {
+            let value = wined3d.config(self.d3d_config().filter(|value| !value.is_empty()));
+            // The value is the renderer and the options of a checked one.
+            self.push_derived(EnvEntry::literal(Wined3d::CONFIG_VAR, &value), origin);
+        }
+        if let (Some(on), Some(origin)) = (
+            self.metal_hud(),
+            self.scalar(Scalar::MetalHud).set_by.clone(),
+        ) {
+            let at = self
+                .metal_hud_at
+                .map_or(self.env.len(), |at| at.min(self.env.len()));
+            let entries = metal_hud_env(on);
+            let from: Vec<EnvFrom> = entries
+                .iter()
+                .map(|_| EnvFrom {
+                    origin: origin.clone(),
+                    default: false,
+                })
+                .collect();
+            self.env.splice(at..at, entries);
+            self.env_from.splice(at..at, from);
+        }
+    }
+
+    /// Add `entry`, which a setting from `origin` stands for, after the
+    /// other env entries.
+    fn push_derived(&mut self, entry: EnvEntry, origin: Origin) {
+        self.env.push(entry);
         self.env_from.push(EnvFrom {
             origin,
             default: false,
         });
-        Some(wined3d)
     }
 
     /// Where the env entry that leaves `WINE_D3D_CONFIG` at
@@ -398,7 +457,7 @@ impl Resolution {
     /// says where that entry came from.
     ///
     /// [`Resolution::env_from`] has one entry per env entry, as
-    /// [`Table::resolve`] and [`Resolution::apply_wined3d`] keep it.
+    /// [`Table::resolve`] and [`Resolution::fold_derived_env`] keep it.
     #[must_use]
     pub fn env_steps(&self, has: impl Fn(&str) -> bool) -> Vec<EnvStep> {
         let mut steps: Vec<EnvStep> = self
@@ -493,6 +552,14 @@ impl Table {
             }
             r.fold_dll_overrides(rule, &origin);
             r.fold_arguments(rule, &origin);
+            r.debug_channels.extend(rule.debug_channels.iter().cloned());
+            r.debug_channels_from
+                .extend(rule.debug_channels.iter().map(|_| origin.clone()));
+            match rule.metal_hud {
+                Setting::Set(_) => r.metal_hud_at = Some(r.env.len()),
+                Setting::Reset => r.metal_hud_at = None,
+                Setting::Unset => {}
+            }
             let default = origin.env_is_default();
             r.env.extend(rule.env.iter().cloned());
             r.env_from.extend(rule.env.iter().map(|_| EnvFrom {

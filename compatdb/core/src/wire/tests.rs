@@ -1,5 +1,5 @@
 use super::*;
-use crate::{D3d9, Dxgi, KeyKind, OpenGl, Origin, VersionInfo, Wined3d};
+use crate::{D3d9, DebugChannel, Dxgi, KeyKind, OpenGl, Origin, VersionInfo, Wined3d};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
@@ -591,9 +591,11 @@ fn every_field_a_record_can_carry_is_a_key_in_the_order_of_key_all() -> TestResu
         large_address_aware: Setting::Set(true),
         gcmouse: Setting::Set(true),
         force_nx: Setting::Set(true),
+        metal_hud: Setting::Set(true),
         dll_overrides: vec![DllOverride::literal("a=")],
         arguments: vec![Argument::literal("-a")],
         arguments_override: Some(vec![Argument::literal("-b")]),
+        debug_channels: vec![DebugChannel::new("+relay")?],
         env: vec![EnvEntry::literal("A", "1")],
     };
     let record = rule_to_record(&rule);
@@ -616,6 +618,51 @@ fn every_field_a_record_can_carry_is_a_key_in_the_order_of_key_all() -> TestResu
     // The scalar keys are the settings that are not lists, in order.
     let scalars: Vec<Scalar> = keys.iter().filter_map(|key| key.scalar()).collect();
     assert_eq!(scalars, Scalar::ALL);
+    Ok(())
+}
+
+#[test]
+fn metal_hud_and_debug_channels_round_trip() -> TestResult {
+    let table = sent(vec![
+        Rule::new(Exe::new("Game.exe")?)
+            .with_metal_hud(true)
+            .with_argument(Argument::new("-x")?)
+            .with_debug_channel(DebugChannel::new("+relay")?)
+            .with_debug_channel(DebugChannel::new("warn+heap;x%")?)
+            .with_env(EnvEntry::new(EnvName::new("A")?, "1")?),
+        Rule::new(Exe::Any).with_metal_hud(false),
+        Rule::new(Exe::new("Tool.exe")?).with_metal_hud(Setting::Reset),
+    ]);
+    let text = table.to_string();
+    assert_eq!(
+        text,
+        "exe=Game.exe;metal_hud=true;arguments=-x;debug_channels=+relay;\
+         debug_channels=warn+heap%3Bx%25;env=A=1\n\
+         exe=*;metal_hud=false\n\
+         exe=Tool.exe;metal_hud=default"
+    );
+    assert_eq!(Table::parse_strict(&text)?, table);
+    // Read in any case, like every word of the format.
+    let (parsed, diagnostics) = parse("exe=a.exe;METAL_HUD=True;Debug_Channels=+seh");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let rule = parsed.rules.first().ok_or("no rule")?;
+    assert_eq!(rule.metal_hud(), Setting::Set(true));
+    assert_eq!(rule.debug_channels(), ["+seh"]);
+    // A bad value or an empty channel costs only its field.
+    let (parsed, diagnostics) =
+        parse("exe=a.exe;metal_hud=1;debug_channels=;debug_channels=+relay,+seh;dpi_aware=false");
+    assert_eq!(
+        diagnostics,
+        [
+            "WINE_COMPATDB line 1: ignoring unknown metal_hud value \"1\"",
+            "WINE_COMPATDB line 1: ignoring field \"debug_channels=\": an empty debug channel",
+            "WINE_COMPATDB line 1: ignoring debug channel \"+relay,+seh\" with a ','",
+        ]
+    );
+    let rule = parsed.rules.first().ok_or("no rule")?;
+    assert_eq!(rule.metal_hud(), Setting::Unset);
+    assert_eq!(rule.debug_channels(), [] as [&str; 0]);
+    assert_eq!(rule.dpi_aware(), Setting::Set(false));
     Ok(())
 }
 

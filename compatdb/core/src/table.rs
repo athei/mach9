@@ -2,7 +2,7 @@
 
 #[cfg(doc)]
 use crate::{ENV_VAR, Origin};
-use crate::{Rule, Specificity, builtin};
+use crate::{Exe, Rule, Specificity, builtin};
 
 /// Where a rule of a [`Table`] comes from. It decides how the log names the
 /// rule's values (see [`Origin`]) and whether its `env` entries are defaults
@@ -110,6 +110,32 @@ impl Table {
     /// Each rule with its source, in the order they were declared.
     pub(crate) fn entries(&self) -> impl Iterator<Item = (Source, &Rule)> {
         self.sources.iter().copied().zip(&self.rules)
+    }
+
+    /// The `WINEDEBUG` entries the `debug_channels` of this table's rules
+    /// stand for, in table order. A launcher joins them with `,` after its
+    /// own entries and starts Wine with the result, since Wine reads the
+    /// variable before `compatdb.so` loads.
+    ///
+    /// An entry of a rule for an executable is scoped to it as
+    /// `<exe>:<entry>`, which is Wine's own syntax: Wine compares the prefix
+    /// with the image file name ASCII-case-insensitively and knows nothing
+    /// of fingerprints, so the entry reaches every program of that name. An
+    /// entry of a rule with `exe` `*` is unscoped. Wine lets a later entry
+    /// win for the same channel.
+    #[must_use]
+    pub fn winedebug(&self) -> Vec<String> {
+        self.rules
+            .iter()
+            .flat_map(|rule| {
+                rule.debug_channels
+                    .iter()
+                    .map(move |channel| match &rule.exe {
+                        Exe::Any => channel.to_string(),
+                        Exe::Name(name) => format!("{name}:{channel}"),
+                    })
+            })
+            .collect()
     }
 
     /// Every pair of rules that matches exactly the same processes, by their

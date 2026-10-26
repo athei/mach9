@@ -5,9 +5,9 @@
 //! family) and the renderer of wined3d, which OpenGL the Mac driver gives,
 //! DLL load-order overrides, the DPI awareness, large address awareness,
 //! whether the Mac driver reads raw mouse input from `GameController`,
-//! whether no-execute stays permanently on, command-line switches and
-//! environment entries. A rule has no name: it is its matchers and its
-//! values.
+//! whether no-execute stays permanently on, whether the Metal performance HUD
+//! shows, command-line switches, `WINEDEBUG` channels and environment
+//! entries. A rule has no name: it is its matchers and its values.
 //!
 //! Shared by `compatdb.so`, the unix library wine's ntdll loads into every
 //! process (it takes the built-in rules of [`builtin`], parses [`ENV_VAR`],
@@ -43,7 +43,10 @@ mod wire;
 pub use crate::{
     error::{Diagnostic, FieldError, ParseError},
     key::{Key, KeyKind, Scalar, ScalarValue, ValueKind},
-    part::{Argument, DllOverride, EnvEntry, EnvName, Exe, ExeName, Fingerprint, Specificity},
+    part::{
+        Argument, DebugChannel, DllOverride, EnvEntry, EnvName, Exe, ExeName, Fingerprint,
+        Specificity,
+    },
     process::{
         Arch, IMAGE_FILE_MACHINE_ARM64, append_cmdline, append_cmdline_each, basename_of,
         env_value, merge_env,
@@ -53,7 +56,7 @@ pub use crate::{
     },
     rule::{DEFAULT_VALUE, Rule, Setting},
     table::{Source, Table},
-    value::{D3d9, Dxgi, OpenGl, Wined3d},
+    value::{D3d9, Dxgi, METAL_HUD_ENV, OpenGl, Wined3d, metal_hud_env},
     version::VersionInfo,
 };
 

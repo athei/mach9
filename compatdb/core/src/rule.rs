@@ -1,11 +1,11 @@
 //! A rule: the processes it matches and the settings it applies to them.
 
 use crate::{
-    Argument, D3d9, DllOverride, Dxgi, EnvEntry, Exe, Fingerprint, OpenGl, Scalar, ScalarValue,
-    Specificity, VersionInfo, Wined3d,
+    Argument, D3d9, DebugChannel, DllOverride, Dxgi, EnvEntry, Exe, Fingerprint, OpenGl, Scalar,
+    ScalarValue, Specificity, VersionInfo, Wined3d,
 };
 #[cfg(doc)]
-use crate::{Origin, Source, Table};
+use crate::{Origin, Resolution, Source, Table, metal_hud_env};
 
 /// One rule of the table: what it matches, and the settings it applies to a
 /// process that matches. A rule has no name; `exe` is its only required
@@ -40,12 +40,16 @@ pub struct Rule {
     pub(crate) gcmouse: Setting<bool>,
     /// See [`Rule::force_nx`].
     pub(crate) force_nx: Setting<bool>,
+    /// See [`Rule::metal_hud`].
+    pub(crate) metal_hud: Setting<bool>,
     /// See [`Rule::dll_overrides`].
     pub(crate) dll_overrides: Vec<DllOverride>,
     /// See [`Rule::arguments`].
     pub(crate) arguments: Vec<Argument>,
     /// See [`Rule::arguments_override`].
     pub(crate) arguments_override: Option<Vec<Argument>>,
+    /// See [`Rule::debug_channels`].
+    pub(crate) debug_channels: Vec<DebugChannel>,
     /// See [`Rule::env`].
     pub(crate) env: Vec<EnvEntry>,
 }
@@ -130,9 +134,11 @@ impl Rule {
             large_address_aware: Setting::Unset,
             gcmouse: Setting::Unset,
             force_nx: Setting::Unset,
+            metal_hud: Setting::Unset,
             dll_overrides: Vec::new(),
             arguments: Vec::new(),
             arguments_override: None,
+            debug_channels: Vec::new(),
             env: Vec::new(),
         }
     }
@@ -212,6 +218,20 @@ impl Rule {
     #[must_use]
     pub fn with_force_nx(mut self, on: impl Into<Setting<bool>>) -> Self {
         self.force_nx = on.into();
+        self
+    }
+
+    /// The rule with `on` for [`Rule::metal_hud`].
+    #[must_use]
+    pub fn with_metal_hud(mut self, on: impl Into<Setting<bool>>) -> Self {
+        self.metal_hud = on.into();
+        self
+    }
+
+    /// The rule with `entry` after its other [`Rule::debug_channels`].
+    #[must_use]
+    pub fn with_debug_channel(mut self, entry: DebugChannel) -> Self {
+        self.debug_channels.push(entry);
         self
     }
 
@@ -336,6 +356,29 @@ impl Rule {
         self.force_nx
     }
 
+    /// Whether the Metal performance HUD shows in the process. `compatdb.so`
+    /// turns the value into the environment entries of [`metal_hud_env`],
+    /// before this rule's own `env` entries (see
+    /// [`Resolution::fold_derived_env`]), so an `env` entry for one of the
+    /// variables wins: `true` sets the variables that show the HUD, `false`
+    /// removes them. Like [`Rule::wined3d`] and unlike the other scalar
+    /// settings it reaches the programs the process starts, which inherit
+    /// the variables. With no rule setting it, the process keeps the
+    /// variables it was started with.
+    #[must_use]
+    pub const fn metal_hud(&self) -> Setting<bool> {
+        self.metal_hud
+    }
+
+    /// `WINEDEBUG` entries for the processes the rule names. Wine reads
+    /// `WINEDEBUG` before `compatdb.so` loads, so the library only logs
+    /// them; a launcher puts them into the variable it starts Wine with
+    /// (see [`Table::winedebug`]).
+    #[must_use]
+    pub fn debug_channels(&self) -> &[DebugChannel] {
+        &self.debug_channels
+    }
+
     /// `WINEDLLOVERRIDES` elements. An entry whose order is `default` sets no
     /// load order: it removes the entries that the rules folded before it
     /// gave its modules, so the registry and `WINEDLLOVERRIDES` decide for
@@ -384,6 +427,7 @@ impl Rule {
             Scalar::LargeAddressAware => self.large_address_aware.map(ScalarValue::Bool),
             Scalar::Gcmouse => self.gcmouse.map(ScalarValue::Bool),
             Scalar::ForceNx => self.force_nx.map(ScalarValue::Bool),
+            Scalar::MetalHud => self.metal_hud.map(ScalarValue::Bool),
         }
     }
 
@@ -431,6 +475,7 @@ impl Rule {
             Scalar::LargeAddressAware => put(&mut self.large_address_aware, setting, on),
             Scalar::Gcmouse => put(&mut self.gcmouse, setting, on),
             Scalar::ForceNx => put(&mut self.force_nx, setting, on),
+            Scalar::MetalHud => put(&mut self.metal_hud, setting, on),
         }
     }
 
