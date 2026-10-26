@@ -181,6 +181,11 @@ which says in its header what it does.
   with its ref and commit (`package.sh` in [`bin/ci/`](../bin/ci)). The
   changes are added by hand below them, as short bullets, before the draft
   is published.
+- [`docs.yml`](../.github/workflows/docs.yml) publishes the rustdoc of
+  `compatdb-core` to
+  [GitHub Pages](https://athei.github.io/wine-build/compatdb_core/); its
+  header says when it runs, what it checks and the repository setting
+  Pages needs.
 
 ### Homebrew formulae
 
@@ -345,14 +350,15 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
   - `set_compat_gcmouse`, which only stores the value; winemac reads it
     through `ntdll_get_compat_gcmouse` when it reads its settings, to decide
     whether raw mouse input comes from GameController
-    ([GameController mice](compatdb.md#gamecontroller-mice)).
+    ([`Rule::gcmouse`](https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.gcmouse)).
   - `set_compat_force_nx`, which only stores the value; ntdll reads it when
     the process asks for or changes its execute flags and, for 1, keeps
-    no-execute permanently on ([no-execute](compatdb.md#no-execute)).
+    no-execute permanently on
+    ([`Rule::force_nx`](https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.force_nx)).
   - `set_compat_opengl`, which only stores the value; winemac reads it
     through `ntdll_get_compat_opengl` when the process first uses OpenGL,
     and uses Mesa's EGL for 1 and Apple's OpenGL otherwise
-    ([OpenGL](compatdb.md#opengl)).
+    ([`Rule::opengl`](https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.opengl)).
   - On an ntdll without one of them, compatdb.so logs that and skips the
     setting. The bundle step checks that `ntdll.so` exports
     `set_compat_force_nx` and `set_compat_opengl`

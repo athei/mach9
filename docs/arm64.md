@@ -14,21 +14,15 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
   [macOS floors](maintenance.md#macos-floors)).
 - `WINE_ARCHS` in `profile.sh` names the PE architectures: aarch64 with
   arm64ec, so that x64 code runs as ARM64EC, and i386 for WoW64.
-- Upstream Wine turns no-execute off for a 32-bit process whose executable
-  or one of its DLLs lacks the `NX_COMPAT` flag. With no-execute off, every
-  readable page is executable, so FEX has to treat all writable memory as
-  possible code and translates it again whenever it changes. compatdb's
-  `force_nx` setting keeps no-execute permanently on, so the process cannot
-  turn it off, and a built-in rule sets it for every process
-  ([no-execute](compatdb.md#no-execute)). For a game that needs no-execute
-  off, a compatdb rule gives it Wine's behaviour again
-  ([recipes](compatdb.md#recipes)).
+- A built-in compatdb rule keeps no-execute on in every 32-bit process,
+  so FEX does not have to treat all writable memory as possible code
+  ([`builtin::force_nx`](https://athei.github.io/wine-build/compatdb_core/builtin/fn.force_nx.html)).
 - FEX is upstream FEX with our own commits on top, from
   [athei/FEX](https://github.com/athei/FEX) at the ref
-  [`fex-src.ref`](../pins/fex-src.ref) names. A built-in compatdb rule
-  asks FEX for faster x87 emulation in every process
-  ([defaults](../README.md#defaults-that-differ-from-wine),
-  [built-in environment rules](compatdb.md#built-in-environment-rules)).
+  [`fex-src.ref`](../pins/fex-src.ref) names (see [FEX](#fex)). A
+  built-in compatdb rule asks FEX for faster x87 emulation in every
+  process
+  ([`builtin::fex_reduced_x87_precision`](https://athei.github.io/wine-build/compatdb_core/builtin/fn.fex_reduced_x87_precision.html)).
 - DXMT is built from our fork against this Wine (see [DXMT](#dxmt)), and
   vkd3d-proton, the D3D12 in DXMT's tree, from ours (see
   [vkd3d-proton](#vkd3d-proton)); mtld3d comes from its release (see
@@ -90,7 +84,7 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
 | [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | Checks out the ref in [`vkd3d-proton-src.ref`](../pins/vkd3d-proton-src.ref) in its own clone, builds vkd3d-proton's D3D12 DLLs, marks them as builtins with the Wine build's and the SDK's `winebuild`, and stages them with their commit and `git describe` in `VKD3D_PROTON_DIST`. Runs alone too, after a Wine build |
 | `bundle-wine.sh` | Assembles the bundle from the Wine build, the SDK, FEX, DXMT, vkd3d-proton, the Vulkan loader, KosmicKrisp and EGL, GStreamer, and the mtld3d release, signs the loader and runs the smoke test |
 
-The flags are in the [README](../README.md#commands).
+The flags are in [building.md](building.md#commands).
 
 - Each staged directory, `MESA_DIST`, `GSTREAMER_DIST`, `FEX_DIST`,
   `DXMT_DIST` and `VKD3D_PROTON_DIST`, holds a `KEY` file next to its
@@ -120,7 +114,7 @@ The flags are in the [README](../README.md#commands).
 ## Paths
 
 Every tree lives under `build/` and the bundle in `dist/wine`, in the
-[layout](../README.md#layout). Each variable below overrides the default
+[layout](building.md#layout). Each variable below overrides the default
 of the same name; the defaults are set in
 [`profile.sh`](../bin/lib/profile.sh), except `MINGW_DIR` and
 `CACHE_DIR`, which are set at the top of the scripts that use them. A
@@ -159,6 +153,9 @@ The variables are listed in the
 - msync is CrossOver's implementation of Windows synchronization objects
   for macOS, built on Mach semaphores and shared memory, which saves
   wineserver round trips.
+- Only the wineserver reads `WINEMSYNC`. Unset or a non-zero number, msync
+  is on. Any other value, `0`, empty or not a number, turns it off, and
+  Wine synchronizes through wineserver requests as upstream Wine does.
 - `WINEMSYNC=0` has to be in the environment of whatever starts the
   wineserver session, normally the launcher's first Wine process, and
   takes effect only for a new session. Every process of the session follows
@@ -175,11 +172,40 @@ The variables are listed in the
   session without msync. `msync: up and running.` then does not appear.
   The messages are in
   [`server/msync.c`](https://github.com/athei/wine/blob/arm64-patched/server/msync.c).
-- `WINENCPU` belongs on the process that starts the session as well. Each
-  process limits the count it reports itself, but the `CentralProcessor`
+- `WINENCPU` limits the number of processors Wine reports to programs,
+  for those that misbehave with many. It belongs on the process that
+  starts the session as well. Each process limits the count it reports
+  itself, but the `CentralProcessor`
   registry keys and `NUMBER_OF_PROCESSORS` are written once per session,
   and FEX's emulated CPUID reads those keys, so a value set later for one
-  game leaves them at the session's count.
+  game leaves them at the session's count. A value of 0, one that is not
+  a number, or one above the real count is ignored.
+
+## FEX
+
+FEX runs the x86 code of a process; Wine loads it as the emulator DLLs
+of `aarch64-windows` and `i386-windows`. Two of its modes differ from
+upstream FEX and are emulator settings, not compatdb settings, so they
+are changed with FEX's own variables
+([environment variables](../README.md#environment-variables)).
+
+- Memory ordering. With `FEX_HARDWARE_TSO` unset or `1`, FEX runs x86
+  code with the hardware x86 memory ordering (TSO) instead of emulating
+  it with ordered loads and stores. The ordering is a per-thread mode: FEX
+  switches a thread to it whenever the thread enters x86 code and back at
+  the syscalls and unix calls of x86 code, since native code runs slower
+  in it. `0` makes FEX emulate the ordering, and any other value logs an
+  error and does the same. The [loader app](#loader-app)'s entitlement
+  gates the mode.
+- AFP. x86_64 programs, which run as ARM64EC, run without AFP (the Arm
+  floating-point behaviour FEX uses to match x86) by default: the
+  floating-point mode would have to change on every call between x86 code
+  and native code, which costs more than AFP saves. `enableafp` in
+  `FEX_HOSTFEATURES` turns it back on. i386 programs keep AFP.
+- FEX reads its options from the Windows environment block when it
+  starts, which compatdb.so has already rewritten, so a compatdb `env`
+  entry sets one for one program. A FEX config file does not override
+  such an entry, since FEX's environment layer outranks its config files.
 
 ## Wine SDK
 
@@ -255,8 +281,9 @@ WINEPREFIX=/tmp/gfx-prefix dist/wine/bin/wine \
 
 The test picks its Direct3D tree as a game does, through compatdb, so a
 `WINE_COMPATDB` rule for `d3d9_test.exe` puts it on another tree
-([recipes](compatdb.md#recipes)). It prints a summary line per part and
-exits with the number of failed checks, at most 255.
+([recipes](https://athei.github.io/wine-build/compatdb_core/#recipes)).
+It prints a summary line per part and exits with the number of failed
+checks, at most 255.
 
 ## DXMT
 
@@ -427,10 +454,8 @@ and wined3d can, per game (see below).
   feature level. wined3d's Vulkan renderer runs on KosmicKrisp directly. It
   is not the default because wined3d on KosmicKrisp still crashes in many
   of Wine's conformance tests, and wined3d does not fall back to OpenGL
-  when Vulkan fails. A compatdb rule with `wined3d=vulkan` turns it on for
-  one game, for every wined3d user in that process, D3D8 and DirectDraw
-  included
-  ([wined3d on Vulkan](compatdb.md#wined3d-on-vulkan)).
+  when Vulkan fails. A compatdb rule turns it on for one game
+  ([`Rule::wined3d`](https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.wined3d)).
 - Wine's own `d3d12.dll` and `d3d12core.dll` are left out of the bundle;
   D3D12 is vkd3d-proton's.
 - Not covered yet: DXVK. A program that wants Vulkan itself gets it.
@@ -456,17 +481,13 @@ which stops at 4.1 core and 2.1 compatibility.
 - Zink reports OpenGL above 2.1 only with transform feedback, which our
   KosmicKrisp always advertises ([Vulkan](#vulkan)).
 - The Mac driver's EGL driver, part of our Wine series, takes the choice
-  from compatdb's `opengl` setting, which ntdll stores for the process,
-  when the process first uses OpenGL: `egl` for EGL, `cgl` for Apple's
-  OpenGL, and Apple's OpenGL unset, as in upstream Wine. A built-in
-  compatdb rule sets `egl` for every process
-  ([OpenGL](compatdb.md#opengl)).
+  from compatdb's `opengl` setting
+  ([`Rule::opengl`](https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.opengl)).
 - With `egl` the Mac driver does not fall back: where EGL does not start,
   as on a Mac without a GPU of the Metal 4 family, where KosmicKrisp has no
   device, it logs a `winediag` message saying why and the process gets no
-  OpenGL. There, a rule with `opengl=cgl` gives a program Apple's OpenGL
-  ([recipes](compatdb.md#recipes)). A hosted CI runner is such a Mac, and
-  the smoke test gives the programs that need OpenGL such a rule there
+  OpenGL. A hosted CI runner is such a Mac, and the smoke test gives the
+  programs that need OpenGL a rule with `opengl=cgl` there
   ([what the bundle step checks](#what-the-bundle-step-checks)).
 
 ## GStreamer
@@ -531,8 +552,7 @@ and covers the space between 4 GB and the loader the same way, and the
 loader reserves that area for Wine too, so that an x64 executable built for
 0x100000000 without relocations can load there. The entitlement also lets a
 process run with 4K pages instead of the host's 16K pages, and gates the
-hardware x86 memory ordering FEX runs x86 code with (`FEX_HARDWARE_TSO`,
-[environment variables](../README.md#environment-variables)). That
+hardware x86 memory ordering FEX runs x86 code with ([FEX](#fex)). That
 entitlement is honoured only through a provisioning profile embedded in an
 app bundle and a signature by a certificate of the profile's team. Wine
 does not run without it.
@@ -579,6 +599,11 @@ does not run without it.
   verification require. The timestamp needs Apple's timestamp server;
   `LOADER_TIMESTAMP=0` signs without one for an offline local build, and the
   bundle step reports which was used. Such a bundle cannot be notarized.
+- An app that embeds the bundle leaves `wine.app` as it is: re-signing it
+  or editing its `Info.plist` loses the profile or breaks the signature.
+  Entitlements take effect only on a main executable, and every Wine
+  process runs as this one, so the other Mach-O files of the bundle need
+  none: the app signs them for notarization with the hardened runtime.
 
 ## What the bundle step checks
 

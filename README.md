@@ -1,240 +1,78 @@
 # wine-build
 
-Builds a native arm64 Wine for macOS from
-[athei/wine](https://github.com/athei/wine), upstream Wine with our own
-series, and bundles it into a self-contained, relocatable `wine/` tree. x86
-programs, i386 and x86_64, run under [FEX](https://github.com/FEX-Emu/FEX)
-in the same process. Direct3D goes through per-process selectable
-implementations (DXMT, mtld3d, wined3d), chosen by `compatdb.so`, a library
-built from [`compatdb/`](compatdb). Direct3D 12 is vkd3d-proton on Vulkan.
+A relocatable, signed Wine for macOS on Apple Silicon, made to be embedded
+in a launcher, and [`compatdb-core`](compatdb/core), the Rust crate that
+writes its per-program configuration. What it is built from:
+[the arm64 build](docs/arm64.md).
 
-- [docs/arm64.md](docs/arm64.md): how the build works: the sources, FEX,
-  DXMT, vkd3d-proton, Vulkan, the signed loader app, what the bundle step
-  checks.
-- [docs/compatdb.md](docs/compatdb.md): rules, `WINE_COMPATDB`, recipes,
-  logging.
-- [docs/maintenance.md](docs/maintenance.md): internals, floors, pins,
-  upgrade checklist.
+## Using it from a launcher
 
-## Getting a build
+- Get a bundle from the `arm64-*`
+  [releases](https://github.com/athei/wine-build/releases)
+  ([releases](docs/maintenance.md#releases)), or from a local build
+  ([building](docs/building.md)). The `cx-*` releases are the frozen
+  x86_64 Wine this repository built before, run under Rosetta.
+- Copy the `wine/` tree into the app
+  ([bundle layout](docs/building.md#bundle-layout)).
+- Signing an app that embeds the bundle:
+  [loader app](docs/arm64.md#loader-app).
+- The minimum macOS: [macOS floors](docs/maintenance.md#macos-floors).
+- Prefixes after an upgrade:
+  [upgrade checklist](docs/maintenance.md#upgrade-checklist).
 
-The `arm64-*` [releases](https://github.com/athei/wine-build/releases)
-carry the bundle and, in a second archive, its PE files before their
-symbols were stripped. The [release workflow](.github/workflows/release.yml)
-builds them ([releases](docs/maintenance.md#releases)). The loader is
-signed by a certificate of the team that the provisioning profile in
-[`signing/`](signing) belongs to ([loader app](docs/arm64.md#loader-app)).
-To build the bundle locally, see [Building](#building).
+## Per-program configuration
 
-The `cx-*` releases are the x86_64 Wine this repository built before, run
-under Rosetta. They are frozen and kept for comparison.
+A launcher passes per-program rules to the bundle's `compatdb.so` in
+`WINE_COMPATDB`, written with the `compatdb-core` crate. The crate and
+the bundle are used at the same release:
 
-The minimum macOS is `MACOS_FLOOR` in [`profile.sh`](bin/lib/profile.sh).
+```toml
+[dependencies]
+compatdb-core = { git = "https://github.com/athei/wine-build", tag = "<the bundle's arm64-* tag>" }
+```
 
-## Bundle layout
+The [crate documentation][spec] is the spec. A complete example is in
+the [Quick start][quick-start]. What a launcher must do is in
+[launcher responsibilities][launcher]; each process logs its
+configuration ([logging](docs/compatdb.md#logging-and-verification)).
 
-| Path | Contents |
-|------|----------|
-| `bin/` | What `make install` creates; `bin/wine` is a symlink to the loader in `wine.app` |
-| `lib/wine/aarch64-windows/`, `lib/wine/i386-windows/` | Wine's PE modules, FEX's emulator DLLs (also as `xtajit.dll` and `xtajit64.dll`, the names Wine loads), and fake-module markers for the Direct3D DLLs |
-| `lib/wine/aarch64-unix/` | Wine's unix modules, `compatdb.so`, DXMT's `winemetal.so` and FEX's unix halves |
-| `lib/wine/aarch64-unix/wine.app/` | The loader, its `Info.plist` and the embedded provisioning profile ([loader app](docs/arm64.md#loader-app)) |
-| `lib/wine/dxgi/<impl>/`, `lib/wine/d3d9/<impl>/` | One tree per Direct3D implementation (see [Direct3D backends](#direct3d-backends)) |
-| `lib/wine/x86_64-windows/` | Full bundle only: the x86_64 link libraries of the [Wine SDK](docs/arm64.md#wine-sdk). Nothing reads the directory at run time |
-| `lib/wine/tests/i386-windows/`, `lib/wine/tests/x86_64-windows/` | Full bundle only: Wine's graphics conformance tests as `<name>_test.exe`, for testing the bundle's Direct3D, OpenGL and Vulkan stack ([graphics tests](docs/arm64.md#graphics-tests)) |
-| `lib/wine/tests/VERSION` | Full bundle only: one line, the `wine --version` string of the Wine the tests were built from, the same as the bundle's own `bin/wine --version` |
-| `lib/external/` | Bundled dylibs, the Vulkan loader, KosmicKrisp, Mesa's EGL with Zink ([OpenGL](docs/arm64.md#opengl)), and GStreamer with glib and FFmpeg, which `winegstreamer.so` links ([GStreamer](docs/arm64.md#gstreamer)) |
-| `lib/external/gstreamer-1.0/` | GStreamer's plugins, gst-libav with FFmpeg's decoders among them ([GStreamer](docs/arm64.md#gstreamer)) |
-| `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
+The crate has only a Rust API.
 
-An x64 process runs as ARM64EC, and Wine looks up its builtins in
-`aarch64-windows`, so the 64-bit modules of every Direct3D tree live under
-`<impl>/aarch64-windows/`. They are all ARM64X, so the default-dir markers
-of their names are hybrid ones, which x64 and native ARM64 processes both
-accept, and the bundle step fails on any file in an `aarch64-windows`
-directory that an x64 process would load but not run natively
-([Direct3D trees](docs/maintenance.md#direct3d-trees)).
+## Environment variables
 
-## Runtime configuration
+Variables the bundle reads besides `WINE_COMPATDB`:
 
-### Environment variables
+| Variable | Explained in |
+|----------|--------------|
+| `WINEMSYNC`, `WINENCPU` | [runtime](docs/arm64.md#runtime) |
+| `FEX_HARDWARE_TSO`, `FEX_HOSTFEATURES` | [FEX](docs/arm64.md#fex) |
+| `VK_DRIVER_FILES`, `VK_ICD_FILENAMES`, `VK_ADD_DRIVER_FILES`, `MESA_KK_EXPERIMENTAL` | [Vulkan](docs/arm64.md#vulkan) |
+| `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_REGISTRY_1_0`, each also without `_1_0` | [GStreamer](docs/arm64.md#gstreamer) |
+| `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) |
+| `WINE_D3D_CONFIG` | [`Rule::wined3d`][wined3d] |
 
-| Variable | Effect |
-|----------|--------|
-| `WINE_COMPATDB` | Extra or changed compatdb rules for the whole process tree. Format: [docs/compatdb.md](docs/compatdb.md#wine_compatdb) |
-| `WINEDLLOVERRIDES` | Works as in Wine, but cannot undo an override compatdb adds; use a rule ([recipes](docs/compatdb.md#recipes)) |
-| `WINEMSYNC` | Unset or a non-zero number: msync is on. Any other value (`0`, empty, not a number): off, and Wine synchronizes through wineserver requests as upstream Wine does. Only the wineserver reads it ([runtime](docs/arm64.md#runtime)) |
-| `WINENCPU` | Limits the number of processors Wine reports to programs, for those that misbehave with many. A value of 0, one that is not a number, or one above the real count is ignored ([runtime](docs/arm64.md#runtime)) |
-| `FEX_HARDWARE_TSO` | Unset or `1`: FEX runs x86 code with the hardware x86 memory ordering (TSO) instead of emulating it with ordered loads and stores. The ordering is a per-thread mode: FEX switches a thread to it whenever the thread enters x86 code and back at the syscalls and unix calls of x86 code, since native code runs slower in it. `0`: FEX emulates the ordering. Any other value logs an error and FEX emulates the ordering |
-| `FEX_HOSTFEATURES` | FEX's host feature overrides. x86_64 programs, which run as ARM64EC, run without AFP (the Arm floating-point behaviour FEX uses to match x86) by default, because the floating-point mode would have to change on every call between x86 code and native code, which costs more than AFP saves. `enableafp` turns it back on. i386 programs keep AFP |
-| `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_REGISTRY_1_0` | Unset, with or without `_1_0`: ntdll points GStreamer at the bundle's `lib/external/gstreamer-1.0`, unsets `GST_PLUGIN_PATH` and `GST_PLUGIN_PATH_1_0`, and puts GStreamer's plugin registry into a file of its own under `XDG_CACHE_HOME`, or `~/.cache` without it, so `winegstreamer` uses the bundled plugins only. Set: GStreamer uses what the caller names; a caller that sets only the registry still gets the bundled plugins ([GStreamer](docs/arm64.md#gstreamer)) |
-| `VK_DRIVER_FILES` | Unset: ntdll sets it to the bundle's `share/vulkan/icd.d`, so the Vulkan loader uses the bundled KosmicKrisp and no driver installed elsewhere on the Mac. Set: the loader uses the manifests it names instead. ntdll also leaves it unset when the caller sets `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES`; the loader then uses those, and the bundled driver is not added to them ([Vulkan](docs/arm64.md#vulkan)) |
-| `MESA_KK_EXPERIMENTAL` | Which of Mesa's own experimental features KosmicKrisp advertises. The features Direct3D 12 and OpenGL through Zink need are always on in this build, whatever it says ([Vulkan](docs/arm64.md#vulkan)) |
-| `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | vkd3d-proton's settings, as [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) describes them. A compatdb `env` rule sets one for one game ([recipes](docs/compatdb.md#recipes)) |
-| `WINE_D3D_CONFIG` | wined3d's settings, as in Wine. `renderer=vulkan` puts wined3d on KosmicKrisp. compatdb's `wined3d=vulkan` sets it for one game, keeping the variable's other options; the programs that game starts inherit it unless a rule for them sets `wined3d` ([wined3d on Vulkan](docs/compatdb.md#wined3d-on-vulkan)) |
+## Defaults that differ from Wine
 
-### Direct3D backends
+[`builtin::defaults`][defaults] lists the built-in rules for every
+process. The defaults that are not compatdb rules:
 
-| Family | APIs | Rule value | Tree | Chosen by |
-|--------|------|------------|------|-----------|
-| `dxgi` | D3D10, D3D11, D3D12 | `dxmt` ([DXMT](https://github.com/athei/dxmt), D3D12 from [vkd3d-proton](https://github.com/athei/vkd3d-proton)) | `lib/wine/dxgi/dxmt/` | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs)) |
-| `dxgi` | D3D10, D3D10.1, D3D11 | `wined3d` | `lib/wine/dxgi/wined3d/` | A rule that asks for it, or no rule at all, as in upstream Wine |
-| `d3d9` | D3D9 | `mtld3d` ([mtld3d](https://github.com/athei/mtld3d)) | `lib/wine/d3d9/mtld3d/` | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs)) |
-| `d3d9` | D3D9 | `wined3d` | `lib/wine/d3d9/wined3d/` | A rule that asks for it, or no rule at all, as in upstream Wine |
-
-- compatdb.so prepends one tree per family to every process's builtin search
-  path, so a process sees one coherent set of modules. To pick a tree per
-  game, see [recipes](docs/compatdb.md#recipes).
-- The default directories hold only fake-module markers for the Direct3D
-  DLLs, so a process gets Direct3D only through the tree compatdb.so
-  prepends. The bundle always ships `compatdb.so`; a process without it has
-  no Direct3D.
-- D3D10, D3D11 and D3D12 form one family because they create their device
-  or swapchain through one `dxgi.dll` and only work with their own
-  implementation's copy.
-- D3D12 is vkd3d-proton, which runs on Vulkan, on KosmicKrisp. Its DLLs sit
-  in the `dxmt` tree, and DXMT's `dxgi.dll` presents its swapchains
-  ([vkd3d-proton](docs/arm64.md#vkd3d-proton)). The `wined3d` tree has no
-  D3D12: a game that a rule gives `dxgi=wined3d` cannot load `d3d12.dll`.
-  Wine's own D3D12 is left out of the bundle.
-- A game that can use both D3D12 and D3D11 and prefers D3D12 gets
-  vkd3d-proton instead of DXMT's D3D11. A rule can hide D3D12 from one
-  game and keep DXMT ([recipes](docs/compatdb.md#recipes)).
-- DXMT's, vkd3d-proton's and mtld3d's 64-bit modules are ARM64X: an x64
-  game loads their ARM64EC half and a native ARM64 program their ARM64
-  half, so they run natively in either, and only their i386 modules run
-  under FEX with the game ([DXMT](docs/arm64.md#dxmt),
-  [vkd3d-proton](docs/arm64.md#vkd3d-proton),
-  [mtld3d](docs/arm64.md#mtld3d)).
-- A native ARM64 program gets the same trees, DXMT for `dxgi` and mtld3d
-  for `d3d9`, and a rule can give it either tree of each family
-  ([native ARM64 programs](docs/compatdb.md#native-arm64-programs)). It
-  can load a Direct3D name only where its marker is a hybrid one, which
-  every name has while every tree is ARM64X
-  ([limitations](docs/arm64.md#limitations)).
-- D3D8 and DirectDraw stay on wined3d. Which modules each tree holds is in
-  Step 4 of [`bundle-wine.sh`](bin/bundle-wine.sh).
-- wined3d draws through OpenGL. The compatdb setting `wined3d` can put it
-  on Vulkan for one game; it applies to every wined3d user in the process
-  ([wined3d on Vulkan](docs/compatdb.md#wined3d-on-vulkan)).
-
-### Defaults that differ from Wine
-
-Each row decided by a rule is a built-in compatdb rule that matches every
-process and can be changed per game or globally. The other rows are not
-compatdb rules, on purpose: msync is the wineserver's, which starts before
-compatdb.so loads in any process; FEX's memory ordering and AFP are
-emulator settings, not compatibility settings; KosmicKrisp's features are
-what Direct3D 12 and OpenGL through Zink need, so nothing turns them off;
-D3D12's frame latency handles are signalled about when Windows signals
-them, a fix rather than a setting to choose per game; and the Vulkan
-driver choice keeps the bundle self-contained, so it is ntdll's, before
-any rule.
-
-| Behavior | Default in this bundle | Decided by |
-|----------|------------------------|------------|
-| D3D10, D3D11 and D3D12 | DXMT, and vkd3d-proton for D3D12, instead of wined3d, which has no D3D12 here | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [Direct3D backends](#direct3d-backends)) |
-| D3D9 | mtld3d instead of wined3d | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [Direct3D backends](#direct3d-backends)) |
-| DPI awareness | Every process is system-aware | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [recipes](docs/compatdb.md#recipes)) |
-| Raw mouse input | Raw input and DirectInput take mouse movement from GameController, in the device's own counts, instead of from the cursor, which macOS accelerates and scales for retina: mouselook is linear | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [GameController mice](docs/compatdb.md#gamecontroller-mice)) |
-| x87 precision under FEX | FEX emulates every program's x87 code with reduced precision | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [built-in environment rules](docs/compatdb.md#built-in-environment-rules)) |
-| No-execute | Permanently on in every 32-bit process, even when its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine would turn it off | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [no-execute](docs/compatdb.md#no-execute)) |
-| Synchronization | CrossOver's msync is on: synchronization objects use Mach semaphores and shared memory | The wineserver of [our Wine](https://github.com/athei/wine) at [`wine-src.ref`](pins/wine-src.ref); `WINEMSYNC=0` where the session starts turns it off ([runtime](docs/arm64.md#runtime)) |
-| x86 memory ordering | FEX runs a thread's x86 code with the hardware x86 memory ordering (TSO), switching per thread | [Our FEX](https://github.com/athei/FEX) at [`fex-src.ref`](pins/fex-src.ref); `FEX_HARDWARE_TSO` ([environment variables](#environment-variables)) |
-| AFP in x86_64 programs | FEX runs x86_64 programs, which run as ARM64EC, without AFP | [Our FEX](https://github.com/athei/FEX) at [`fex-src.ref`](pins/fex-src.ref); `FEX_HOSTFEATURES` ([environment variables](#environment-variables)) |
-| KosmicKrisp's experimental features | Advertised whatever `MESA_KK_EXPERIMENTAL` says | [Our Mesa](https://github.com/athei/mesa) at [`mesa-src.ref`](pins/mesa-src.ref) ([Vulkan](docs/arm64.md#vulkan)) |
-| Vulkan driver | Only the bundled KosmicKrisp: ntdll points `VK_DRIVER_FILES` at the bundle's manifest unless the caller sets `VK_DRIVER_FILES`, `VK_ICD_FILENAMES` or `VK_ADD_DRIVER_FILES` | ntdll of [our Wine](https://github.com/athei/wine) at [`wine-src.ref`](pins/wine-src.ref) ([environment variables](#environment-variables), [Vulkan](docs/arm64.md#vulkan)) |
-| OpenGL | Mesa's EGL with Zink on KosmicKrisp instead of Apple's OpenGL; no OpenGL on a Mac without a Metal 4 GPU unless a rule gives the program `opengl=cgl` | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [OpenGL](docs/arm64.md#opengl), [recipes](docs/compatdb.md#recipes)) |
-| D3D12 frame latency handles | Signalled once the GPU has finished a frame instead of once it is on screen, so a game that waits on one keeps the GPU busy; how far it gets ahead of the display stays bounded | [Our vkd3d-proton](https://github.com/athei/vkd3d-proton) at [`vkd3d-proton-src.ref`](pins/vkd3d-proton-src.ref) ([vkd3d-proton](docs/arm64.md#vkd3d-proton)) |
-| Mono and Gecko | Disabled (`mscoree,mshtml=`): no install prompt, and an installed wine-mono, Gecko or native .NET stays disabled too | A built-in rule for every process ([`builtin.rs`](compatdb/core/src/builtin.rs), [recipes](docs/compatdb.md#recipes)) |
+- msync: [runtime](docs/arm64.md#runtime)
+- the hardware x86 memory ordering, and no AFP in x86_64 programs:
+  [FEX](docs/arm64.md#fex)
+- KosmicKrisp's features, and the bundled Vulkan driver:
+  [Vulkan](docs/arm64.md#vulkan)
+- D3D12 frame latency handles: [vkd3d-proton](docs/arm64.md#vkd3d-proton)
 
 ## Building
 
-### Requirements
+- [docs/building.md](docs/building.md): building the bundle locally.
+- [docs/arm64.md](docs/arm64.md): how the build works.
+- [docs/compatdb.md](docs/compatdb.md): how `compatdb.so` applies the
+  rules.
+- [docs/maintenance.md](docs/maintenance.md): maintaining the build.
 
-What the build needs is in [docs/arm64.md](docs/arm64.md#requirements): an
-Apple Silicon Mac, the arm64 Homebrew with the formulae in
-[`pins/brew-formulae`](pins/brew-formulae), Xcode's Metal toolchain,
-llvm-mingw, Rust with the `aarch64-apple-darwin` target, for
-`compatdb.so`, and the signing identity of the loader's
-provisioning profile.
-
-### Commands
-
-```bash
-bin/build-wine.sh    # Mesa and the Vulkan loader, GStreamer, Wine, the SDK, then FEX, DXMT and vkd3d-proton
-bin/bundle-wine.sh   # assemble the bundle (see Layout)
-```
-
-| Script | Flag | Effect |
-|--------|------|--------|
-| `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile, and in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk) also when its configure arguments or `WINE_SRC` (the source path) changed. Mesa, GStreamer, FEX, DXMT and vkd3d-proton are not built at all while what they staged is current ([commands](docs/arm64.md#commands)) |
-| `build-wine.sh` | `--clean` | Wipes the build directories and what they staged first, and is passed on to `build-mesa.sh`, `build-gstreamer.sh`, `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; the only way to pick up changed configure flags or deployment target, except in the x86 tree of the [Wine SDK](docs/arm64.md#wine-sdk), which is configured again whenever its flags or `WINE_SRC` change |
-| `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the bundle in the [layout](#layout). Either way it asks before it deletes an existing one, unless `--yes` |
-| `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking, for an unattended run. A directory that is not empty and has no `bin/wine` is still refused |
-| `bundle-wine.sh` | `--runtime-only` | No development files; the flavor to put into an application |
-| `bundle-wine.sh` | `--strict-floor` | A Mach-O that needs a newer macOS than the floor is an error instead of a warning ([Homebrew libraries and the floor](docs/arm64.md#homebrew-libraries-and-the-floor)) |
-| `bundle-wine.sh` | `--symbols` | Also keeps the PE files as they were before their symbols were stripped, in `wine-symbols` next to the bundle |
-
-`usage()` and the argument parsing in
-[`build-wine.sh`](bin/build-wine.sh) and
-[`bundle-wine.sh`](bin/bundle-wine.sh) are authoritative.
-`build-mesa.sh`, `build-gstreamer.sh`, `build-fex.sh`, `build-dxmt.sh` and
-`build-vkd3d-proton.sh` also run alone
-([commands](docs/arm64.md#commands)).
-
-### Repository
-
-| Path | What it holds |
-|------|---------------|
-| [`bin/`](bin) | The build and bundle scripts; [`bin/lib/profile.sh`](bin/lib/profile.sh) holds the settings and helpers they share, [`bin/ci/`](bin/ci) what the workflows run besides them |
-| [`pins/`](pins) | The pinned inputs: [`redist.env`](pins/redist.env), the refs of the sources the build checks out, and the Homebrew formulae a CI build installs |
-| [`.github/workflows/`](.github/workflows) | The CI workflows ([releases](docs/maintenance.md#releases)) |
-| [`compatdb/`](compatdb) | The Cargo workspace of `compatdb.so` and the `compatdb-core` crate ([docs/compatdb.md](docs/compatdb.md)); run cargo there |
-| [`smoke/`](smoke) | The programs the bundle step builds and runs to check the bundle |
-| [`signing/`](signing) | The loader's provisioning profile |
-| [`docs/`](docs) | The documentation this README links to |
-
-### Layout
-
-Everything lives beside this repository, in the directory that holds it
-(the root; `WINE_BUILD_ROOT` names another, for a checkout kept elsewhere):
-
-| Path | What it is |
-|------|------------|
-| `scripts/` | The checkout of this repository, [wine-build](https://github.com/athei/wine-build), named `scripts` locally |
-| `src/` | The Wine source, a checkout of athei/wine |
-| `src-fex/` | The FEX checkout |
-| `src-mesa/` | The Mesa checkout, for the Vulkan driver |
-| `cache/` | Downloaded redistributables |
-| `build/<component>/` | One tree per intermediate: the Wine build, its SDK and the x86 tree for its link libraries and tests, FEX, DXMT, vkd3d-proton, Mesa with the Vulkan loader, and GStreamer. DXMT's, vkd3d-proton's and GStreamer's trees hold their own clones of the source |
-| `dist/wine` | The bundle |
-| `dist/wine-symbols` | With `--symbols`, the bundle's PE files before their symbols were stripped (Step 4e of [`bundle-wine.sh`](bin/bundle-wine.sh)); not part of the bundle |
-
-The name of each tree is set in [`profile.sh`](bin/lib/profile.sh),
-with the variable that overrides it ([paths](docs/arm64.md#paths)). The
-scripts mark each build tree they make with a `.wine-build-tree` file and
-refuse to fill or delete a directory that is not empty and has no such
-marker, so an override cannot point them at something else (`claim_tree`
-in [`profile.sh`](bin/lib/profile.sh)). The exception is an unmarked
-tree from before markers existed, which is adopted when its parent is
-`build/` or another tree and it is not a git checkout.
-
-### Configure policy
-
-- Every optional dependency is `--without-*` unless re-enabled with
-  `--with-*` in [`build-wine.sh`](bin/build-wine.sh), so a missing
-  package fails configure instead of silently changing the feature set.
-- `--with-opengl` makes configure require EGL, the one OpenGL library it
-  looks for without X11. It finds Mesa's, which `build-mesa.sh` builds with
-  Zink, through the `egl.pc` that script stages; the Mac driver links
-  Apple's OpenGL framework on its own. Zink is only used through the Mac
-  driver's EGL driver, which our Wine series adds
-  ([OpenGL](docs/arm64.md#opengl)).
-- Wine's Vulkan is on, on the loader and KosmicKrisp `build-mesa.sh` builds
-  ([Vulkan](docs/arm64.md#vulkan)). The bundle does not ship Wine's own
-  D3D12 modules; D3D12 is vkd3d-proton's.
-- `--with-gstreamer` makes configure require GStreamer for
-  `winegstreamer`, Wine's media decoding. It finds the GStreamer
-  `build-gstreamer.sh` builds from source, through the `.pc` files that
-  script stages, not Homebrew's ([GStreamer](docs/arm64.md#gstreamer)).
+[spec]: https://athei.github.io/wine-build/compatdb_core/
+[quick-start]: https://athei.github.io/wine-build/compatdb_core/#quick-start
+[launcher]: https://athei.github.io/wine-build/compatdb_core/#launcher-responsibilities
+[defaults]: https://athei.github.io/wine-build/compatdb_core/builtin/fn.defaults.html
+[wined3d]: https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.wined3d

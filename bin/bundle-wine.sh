@@ -1564,7 +1564,7 @@ check_tree_loads() {
             # vkd3d-proton's in another tree: the default dir has only the
             # marker of d3d12.dll, which Wine does not load as a module. On a
             # tree with D3D12, the recipe that hides it from one game
-            # (docs/compatdb.md) must disable it through compatdb's
+            # (compatdb-core's recipes) must disable it through compatdb's
             # load-order hook and leave the tree's dxgi.dll alone.
             [ "$family" = dxgi ] && [ -f "$WINE_DIR/lib/wine/$dir/d3d12.dll" ] || continue
             if [ -f "$WINE_DIR/lib/wine/$family/$impl/$dir/d3d12.dll" ]; then
