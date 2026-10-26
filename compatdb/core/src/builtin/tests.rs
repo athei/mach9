@@ -1,15 +1,17 @@
 use super::*;
-use crate::{ArgumentsDropped, DllOverrideReset, Origin, Resolution, Source, VersionInfo, Wined3d};
+use crate::{
+    ArgumentsDropped, DllOverrideReset, Origin, Resolution, Scalar, ScalarValue, Source,
+    VersionInfo, Wined3d,
+};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-/// Record in `resolution` that the rule `origin` names set `key`, as
-/// resolving a more specific rule does.
-fn set_by(resolution: &mut Resolution, key: &'static str, origin: Origin) {
-    resolution.set_by.retain(|(k, _)| *k != key);
-    resolution.set_by.push((key, origin));
+/// Record in `resolution` that the rule `origin` names set `scalar` to
+/// `value`, as resolving a more specific rule does.
+fn set_by(resolution: &mut Resolution, scalar: Scalar, value: ScalarValue, origin: &Origin) {
+    resolution.fold_scalar(scalar, Setting::Set(value), origin);
 }
 
 /// The env entries a process gets applied when it already has the
@@ -168,22 +170,29 @@ fn the_table_asks_the_mac_driver_for_mesas_egl_unless_a_rule_opts_out() {
     // It is a setting, not an env entry, so nothing a process starts
     // inherits it.
     let game = plain();
-    assert_eq!(game.opengl, Some(OpenGl::Egl));
-    assert_eq!(game.origin("opengl"), Some(&Origin::BuiltIn));
+    assert_eq!(game.opengl(), Some(OpenGl::Egl));
+    assert_eq!(
+        game.scalar(Scalar::OpenGl).set_by.as_ref(),
+        Some(&Origin::BuiltIn)
+    );
     assert_eq!(game.env, wildcard_env());
     // A rule for one game gives it Apple's OpenGL and changes nothing else
     // for it; another process keeps the default.
     let table = with_lines("exe=game.exe;opengl=cgl");
     let game = table.resolve("Game.exe", &VersionInfo::default());
     let mut expected = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(expected.opengl, Some(OpenGl::Egl));
-    expected.opengl = Some(OpenGl::Cgl);
-    set_by(&mut expected, "opengl", Origin::Line(1));
+    assert_eq!(expected.opengl(), Some(OpenGl::Egl));
+    set_by(
+        &mut expected,
+        Scalar::OpenGl,
+        ScalarValue::OpenGl(OpenGl::Cgl),
+        &Origin::Line(1),
+    );
     assert_eq!(game, expected);
     // A `*` rule gives every process Apple's OpenGL.
     let table = with_lines("exe=*;opengl=cgl");
     let game = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(game.opengl, Some(OpenGl::Cgl));
+    assert_eq!(game.opengl(), Some(OpenGl::Cgl));
     assert_eq!(game.env, wildcard_env());
 }
 
@@ -193,22 +202,29 @@ fn the_table_keeps_no_execute_on_unless_a_rule_opts_out() {
     // a setting, not an env entry, so nothing a process starts inherits
     // it.
     let game = Table::builtin().resolve("Some Game.exe", &VersionInfo::default());
-    assert_eq!(game.force_nx, Some(true));
-    assert_eq!(game.origin("force_nx"), Some(&Origin::BuiltIn));
+    assert_eq!(game.force_nx(), Some(true));
+    assert_eq!(
+        game.scalar(Scalar::ForceNx).set_by.as_ref(),
+        Some(&Origin::BuiltIn)
+    );
     assert_eq!(game.env, wildcard_env());
     // A rule for one game opts that game out and nothing else changes for
     // it; another process keeps the default.
     let table = with_lines("exe=game.exe;force_nx=false");
     let game = table.resolve("Game.exe", &VersionInfo::default());
     let mut expected = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(expected.force_nx, Some(true));
-    expected.force_nx = Some(false);
-    set_by(&mut expected, "force_nx", Origin::Line(1));
+    assert_eq!(expected.force_nx(), Some(true));
+    set_by(
+        &mut expected,
+        Scalar::ForceNx,
+        ScalarValue::Bool(false),
+        &Origin::Line(1),
+    );
     assert_eq!(game, expected);
     // A `*` rule gives every process Wine's behaviour.
     let table = with_lines("exe=*;force_nx=false");
     let game = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(game.force_nx, Some(false));
+    assert_eq!(game.force_nx(), Some(false));
 }
 
 #[test]
@@ -220,7 +236,7 @@ fn wined3d_on_vulkan_is_a_setting_for_one_game_and_never_a_default() {
         !Table::builtin()
             .rules
             .iter()
-            .any(|r| r.wined3d.is_some() || r.env.iter().any(|(n, _)| n == "WINE_D3D_CONFIG"))
+            .any(|r| !r.wined3d.is_unset() || r.env.iter().any(|(n, _)| n == "WINE_D3D_CONFIG"))
     );
     let mut game = plain();
     assert_eq!(game.apply_wined3d(), None);
@@ -256,7 +272,7 @@ fn the_table_leaves_vulkan_1_alone() {
 fn the_builtin_table_pins_the_launcher_and_round_trips() -> TestResult {
     let table = Table::builtin();
     let launcher = rule(&table, "Launcher.exe")?;
-    assert_eq!(launcher.dxgi, Some(Dxgi::Wined3d));
+    assert_eq!(launcher.dxgi, Setting::Set(Dxgi::Wined3d));
     assert_eq!(launcher.company.as_deref(), Some("Rockstar Games"));
     let gta = rule(&table, "GTAIV.exe")?;
     assert!(
@@ -284,7 +300,7 @@ fn the_builtin_table_pins_the_cef_helpers_to_dxmt() -> TestResult {
     let table = Table::builtin();
     for exe in ["steamwebhelper.exe", "SocialClubHelper.exe"] {
         let helper = rule(&table, exe)?;
-        assert_eq!(helper.dxgi, Some(Dxgi::Dxmt), "{exe}");
+        assert_eq!(helper.dxgi, Setting::Set(Dxgi::Dxmt), "{exe}");
         assert_eq!(helper.arguments, vec!["--in-process-gpu".to_string()]);
     }
     Ok(())
@@ -332,7 +348,7 @@ fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
     };
     let resolution = table.resolve("Launcher.exe", &launcher_version);
     assert_eq!(
-        resolution.origin("dxgi"),
+        resolution.scalar(Scalar::Dxgi).set_by.as_ref(),
         Some(&Origin::BuiltInFor(
             "Launcher.exe (Rockstar Games, Rockstar Games Launcher)".into()
         ))
@@ -364,26 +380,35 @@ fn every_builtin_rule_has_an_exe_and_none_matches_a_bare_basename() {
 fn every_process_gets_the_wildcard_defaults() {
     let resolution = plain();
     assert_eq!(resolution.dll_overrides, wildcard_overrides());
-    assert_eq!(resolution.dpi_aware, Some(true));
+    assert_eq!(resolution.dpi_aware(), Some(true));
     // No `*` rule forces large address awareness: the executable's flag
     // decides, as in upstream Wine.
-    assert_eq!(resolution.large_address_aware, None);
-    assert_eq!(resolution.origin("large_address_aware"), None);
-    assert_eq!(resolution.gcmouse, Some(true));
-    assert_eq!(resolution.force_nx, Some(true));
-    assert_eq!(resolution.opengl, Some(OpenGl::Egl));
+    assert_eq!(resolution.large_address_aware(), None);
+    assert_eq!(
+        resolution.scalar(Scalar::LargeAddressAware).set_by.as_ref(),
+        None
+    );
+    assert_eq!(resolution.gcmouse(), Some(true));
+    assert_eq!(resolution.force_nx(), Some(true));
+    assert_eq!(resolution.opengl(), Some(OpenGl::Egl));
     assert_eq!(resolution.env, wildcard_env());
-    assert_eq!(resolution.dxgi, Some(Dxgi::Dxmt));
-    assert_eq!(resolution.d3d9, Some(D3d9::Mtld3d));
+    assert_eq!(resolution.dxgi(), Some(Dxgi::Dxmt));
+    assert_eq!(resolution.d3d9(), Some(D3d9::Mtld3d));
     assert_eq!(resolution.arguments, [] as [String; 0]);
     // Every value comes from a built-in `*` rule.
-    assert!(
-        resolution
-            .set_by
-            .iter()
-            .all(|(_, origin)| *origin == Origin::BuiltIn)
-    );
-    assert_eq!(resolution.set_by.len(), 6);
+    let set: Vec<Scalar> = Scalar::ALL
+        .iter()
+        .copied()
+        .filter(|&scalar| resolution.scalar(scalar).value.is_some())
+        .collect();
+    assert_eq!(set.len(), 6);
+    for scalar in set {
+        assert_eq!(
+            resolution.scalar(scalar).set_by,
+            Some(Origin::BuiltIn),
+            "{scalar}"
+        );
+    }
     assert!(
         resolution
             .dll_overrides_from
@@ -401,19 +426,19 @@ fn the_pins_for_one_program_beat_the_builtin_direct3d_rules() -> TestResult {
     let pins: Vec<&Rule> = table
         .rules
         .iter()
-        .filter(|r| r.exe != ANY_EXE && (r.dxgi.is_some() || r.d3d9.is_some()))
+        .filter(|r| r.exe != ANY_EXE && (!r.dxgi.is_unset() || !r.d3d9.is_unset()))
         .collect();
     assert_ne!(pins.len(), 0);
     for pin in &pins {
         let resolution = table.resolve(&pin.exe, &version_of(pin));
         let from = Origin::BuiltInFor(pin.matchers());
-        if let Some(dxgi) = pin.dxgi {
-            assert_eq!(resolution.dxgi, Some(dxgi), "{}", pin.matchers());
-            assert_eq!(resolution.origin("dxgi"), Some(&from));
+        if let Setting::Set(dxgi) = pin.dxgi {
+            assert_eq!(resolution.dxgi(), Some(dxgi), "{}", pin.matchers());
+            assert_eq!(resolution.scalar(Scalar::Dxgi).set_by.as_ref(), Some(&from));
         }
-        if let Some(d3d9) = pin.d3d9 {
-            assert_eq!(resolution.d3d9, Some(d3d9), "{}", pin.matchers());
-            assert_eq!(resolution.origin("d3d9"), Some(&from));
+        if let Setting::Set(d3d9) = pin.d3d9 {
+            assert_eq!(resolution.d3d9(), Some(d3d9), "{}", pin.matchers());
+            assert_eq!(resolution.scalar(Scalar::D3d9).set_by.as_ref(), Some(&from));
         }
     }
     // A `*` rule from WINE_COMPATDB folds after every built-in rule, so
@@ -421,11 +446,17 @@ fn the_pins_for_one_program_beat_the_builtin_direct3d_rules() -> TestResult {
     let star = with_lines("exe=*;dxgi=dxmt;d3d9=wined3d");
     for pin in pins {
         let resolution = star.resolve(&pin.exe, &version_of(pin));
-        assert_eq!(resolution.dxgi, Some(Dxgi::Dxmt), "{}", pin.matchers());
-        assert_eq!(resolution.d3d9, Some(D3d9::Wined3d), "{}", pin.matchers());
-        assert_eq!(resolution.origin("dxgi"), Some(&Origin::Line(1)));
+        assert_eq!(resolution.dxgi(), Some(Dxgi::Dxmt), "{}", pin.matchers());
+        assert_eq!(resolution.d3d9(), Some(D3d9::Wined3d), "{}", pin.matchers());
+        assert_eq!(
+            resolution.scalar(Scalar::Dxgi).set_by.as_ref(),
+            Some(&Origin::Line(1))
+        );
     }
-    assert_eq!(rule(&table, "Launcher.exe")?.dxgi, Some(Dxgi::Wined3d));
+    assert_eq!(
+        rule(&table, "Launcher.exe")?.dxgi,
+        Setting::Set(Dxgi::Wined3d)
+    );
     Ok(())
 }
 
@@ -434,32 +465,39 @@ fn a_star_rule_gives_every_process_wined3d() {
     // For each family on its own.
     let table = with_lines("exe=*;dxgi=wined3d");
     let game = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(game.dxgi, Some(Dxgi::Wined3d));
-    assert_eq!(game.origin("dxgi"), Some(&Origin::Line(1)));
-    assert_eq!(game.d3d9, Some(D3d9::Mtld3d));
+    assert_eq!(game.dxgi(), Some(Dxgi::Wined3d));
+    assert_eq!(
+        game.scalar(Scalar::Dxgi).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
+    assert_eq!(game.d3d9(), Some(D3d9::Mtld3d));
     let table = with_lines("exe=*;d3d9=wined3d");
     let game = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(game.dxgi, Some(Dxgi::Dxmt));
-    assert_eq!(game.d3d9, Some(D3d9::Wined3d));
+    assert_eq!(game.dxgi(), Some(Dxgi::Dxmt));
+    assert_eq!(game.d3d9(), Some(D3d9::Wined3d));
     // A rule for one game gives it wined3d and leaves the others alone.
     let table = with_lines("exe=game.exe;dxgi=wined3d;d3d9=wined3d");
     let game = table.resolve("Game.exe", &VersionInfo::default());
-    assert_eq!(game.dxgi, Some(Dxgi::Wined3d));
-    assert_eq!(game.d3d9, Some(D3d9::Wined3d));
+    assert_eq!(game.dxgi(), Some(Dxgi::Wined3d));
+    assert_eq!(game.d3d9(), Some(D3d9::Wined3d));
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.dxgi, Some(Dxgi::Dxmt));
+    assert_eq!(other.dxgi(), Some(Dxgi::Dxmt));
 }
 
 #[test]
 fn a_game_rule_turns_gcmouse_off() {
     let table = with_lines("exe=Game.exe;gcmouse=false");
     let game = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(game.gcmouse, Some(false));
+    assert_eq!(game.gcmouse(), Some(false));
     // Nothing else changes for that game.
     let mut expected = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(expected.gcmouse, Some(true));
-    expected.gcmouse = Some(false);
-    set_by(&mut expected, "gcmouse", Origin::Line(1));
+    assert_eq!(expected.gcmouse(), Some(true));
+    set_by(
+        &mut expected,
+        Scalar::Gcmouse,
+        ScalarValue::Bool(false),
+        &Origin::Line(1),
+    );
     assert_eq!(game, expected);
 }
 
@@ -468,29 +506,42 @@ fn a_launch_wide_rule_turns_gcmouse_off_and_a_game_rule_back_on() {
     // Off for every process is what upstream Wine does without a value.
     let table = with_lines("exe=*;gcmouse=false\nexe=Game.exe;gcmouse=true");
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.gcmouse, Some(false));
-    assert_eq!(other.origin("gcmouse"), Some(&Origin::Line(1)));
-    assert_eq!(other.force_nx, Some(true));
-    assert_eq!(other.dpi_aware, Some(true));
+    assert_eq!(other.gcmouse(), Some(false));
+    assert_eq!(
+        other.scalar(Scalar::Gcmouse).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
+    assert_eq!(other.force_nx(), Some(true));
+    assert_eq!(other.dpi_aware(), Some(true));
     let game = table.resolve("Game.exe", &VersionInfo::default());
-    assert_eq!(game.gcmouse, Some(true));
-    assert_eq!(game.origin("gcmouse"), Some(&Origin::Line(2)));
+    assert_eq!(game.gcmouse(), Some(true));
+    assert_eq!(
+        game.scalar(Scalar::Gcmouse).set_by.as_ref(),
+        Some(&Origin::Line(2))
+    );
 }
 
 #[test]
 fn a_game_rule_gives_one_game_4_gb() {
     let table = with_lines("exe=old.exe;large_address_aware=true");
     let old = table.resolve("Old.exe", &VersionInfo::default());
-    assert_eq!(old.large_address_aware, Some(true));
-    assert_eq!(old.origin("large_address_aware"), Some(&Origin::Line(1)));
+    assert_eq!(old.large_address_aware(), Some(true));
+    assert_eq!(
+        old.scalar(Scalar::LargeAddressAware).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
     // Nothing else changes for that game.
     let mut expected = table.resolve("other.exe", &VersionInfo::default());
-    expected.large_address_aware = Some(true);
-    set_by(&mut expected, "large_address_aware", Origin::Line(1));
+    set_by(
+        &mut expected,
+        Scalar::LargeAddressAware,
+        ScalarValue::Bool(true),
+        &Origin::Line(1),
+    );
     assert_eq!(old, expected);
     // Another process keeps the executable's flag.
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.large_address_aware, None);
+    assert_eq!(other.large_address_aware(), None);
     // A launch-wide rule gives every process 4 GB, and a rule for one
     // game takes it back to the executable's flag.
     let table = with_lines(
@@ -498,9 +549,9 @@ fn a_game_rule_gives_one_game_4_gb() {
          exe=old.exe;large_address_aware=false",
     );
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.large_address_aware, Some(true));
+    assert_eq!(other.large_address_aware(), Some(true));
     let old = table.resolve("Old.exe", &VersionInfo::default());
-    assert_eq!(old.large_address_aware, Some(false));
+    assert_eq!(old.large_address_aware(), Some(false));
 }
 
 #[test]
@@ -540,7 +591,7 @@ fn a_line_of_the_old_format_changes_nothing() {
     let mut table = Table::builtin();
     table.rules.extend(rules.rules);
     let game = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(game.dpi_aware, Some(false));
+    assert_eq!(game.dpi_aware(), Some(false));
 }
 
 /// The version resource of World of Warcraft's `WoW.exe`, as compatdb.so
@@ -565,8 +616,12 @@ fn wow() -> Origin {
 fn world_of_warcraft_gets_4_gb_and_nothing_else_changes() {
     let table = Table::builtin();
     let mut expected = plain();
-    expected.large_address_aware = Some(true);
-    set_by(&mut expected, "large_address_aware", wow());
+    set_by(
+        &mut expected,
+        Scalar::LargeAddressAware,
+        ScalarValue::Bool(true),
+        &wow(),
+    );
     assert_eq!(table.resolve("WoW.exe", &wow_version()), expected);
     // The 3.3.5a client spells its file Wow.exe; the basename matches
     // case-insensitively.
@@ -597,9 +652,9 @@ fn a_rule_from_wine_compatdb_leaves_world_of_warcraft_to_its_flag() {
     ] {
         let table = with_lines(text);
         let client = table.resolve("WoW.exe", &wow_version());
-        assert_eq!(client.large_address_aware, Some(false), "{text}");
+        assert_eq!(client.large_address_aware(), Some(false), "{text}");
         assert_eq!(
-            client.origin("large_address_aware"),
+            client.scalar(Scalar::LargeAddressAware).set_by.as_ref(),
             Some(&Origin::Line(1)),
             "{text}"
         );
@@ -607,10 +662,13 @@ fn a_rule_from_wine_compatdb_leaves_world_of_warcraft_to_its_flag() {
     // `default` hands it back to the executable's flag, as unset.
     let table = with_lines("exe=WoW.exe;large_address_aware=default");
     let client = table.resolve("WoW.exe", &wow_version());
-    assert_eq!(client.large_address_aware, None);
-    assert_eq!(client.origin("large_address_aware"), None);
+    assert_eq!(client.large_address_aware(), None);
     assert_eq!(
-        client.reset_origin("large_address_aware"),
+        client.scalar(Scalar::LargeAddressAware).set_by.as_ref(),
+        None
+    );
+    assert_eq!(
+        client.scalar(Scalar::LargeAddressAware).reset_by.as_ref(),
         Some(&Origin::Line(1))
     );
 }
@@ -625,9 +683,9 @@ fn within_wine_compatdb_a_more_specific_rule_still_wins() {
     ] {
         let table = with_lines(text);
         let game = table.resolve("game.exe", &VersionInfo::default());
-        assert_eq!(game.dpi_aware, Some(true), "{text}");
+        assert_eq!(game.dpi_aware(), Some(true), "{text}");
         let other = table.resolve("other.exe", &VersionInfo::default());
-        assert_eq!(other.dpi_aware, Some(false), "{text}");
+        assert_eq!(other.dpi_aware(), Some(false), "{text}");
     }
 }
 
@@ -639,29 +697,40 @@ fn default_hands_a_setting_back_to_upstream_wine() {
          force_nx=default",
     );
     let game = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(game.dxgi, None);
-    assert_eq!(game.d3d9, None);
-    assert_eq!(game.opengl, None);
-    assert_eq!(game.dpi_aware, None);
-    assert_eq!(game.gcmouse, None);
-    assert_eq!(game.force_nx, None);
-    assert_eq!(game.set_by, []);
-    assert_eq!(game.reset_by.len(), 6);
-    assert!(game.reset_by.iter().all(|(_, o)| *o == Origin::Line(1)));
+    assert_eq!(game.dxgi(), None);
+    assert_eq!(game.d3d9(), None);
+    assert_eq!(game.opengl(), None);
+    assert_eq!(game.dpi_aware(), None);
+    assert_eq!(game.gcmouse(), None);
+    assert_eq!(game.force_nx(), None);
+    // Each says which rule reset it; wined3d and large_address_aware, which
+    // no built-in rule sets, the line leaves alone.
+    for &scalar in Scalar::ALL {
+        let state = game.scalar(scalar);
+        assert_eq!(state.set_by, None, "{scalar}");
+        let reset = !matches!(scalar, Scalar::Wined3d | Scalar::LargeAddressAware);
+        assert_eq!(state.reset_by, reset.then_some(Origin::Line(1)), "{scalar}");
+    }
     // Then the trees are upstream Wine's.
     assert_eq!(
-        Dxgi::effective(game.dxgi, crate::Arch::X86_64),
+        Dxgi::effective(game.dxgi(), crate::Arch::X86_64),
         Dxgi::Wined3d
     );
     // A rule folded later sets it again, and the reset is gone.
     let table = with_lines("exe=*;dpi_aware=default\nexe=game.exe;dpi_aware=false");
     let game = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(game.dpi_aware, Some(false));
-    assert_eq!(game.reset_origin("dpi_aware"), None);
-    assert_eq!(game.origin("dpi_aware"), Some(&Origin::Line(2)));
+    assert_eq!(game.dpi_aware(), Some(false));
+    assert_eq!(game.scalar(Scalar::DpiAware).reset_by.as_ref(), None);
+    assert_eq!(
+        game.scalar(Scalar::DpiAware).set_by.as_ref(),
+        Some(&Origin::Line(2))
+    );
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.dpi_aware, None);
-    assert_eq!(other.reset_origin("dpi_aware"), Some(&Origin::Line(1)));
+    assert_eq!(other.dpi_aware(), None);
+    assert_eq!(
+        other.scalar(Scalar::DpiAware).reset_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
 }
 
 #[test]
@@ -711,21 +780,26 @@ fn a_launch_wide_rule_beats_the_builtin_dpi_default() {
     // the stable sort in `resolve` keeps that order.
     let table = with_lines("exe=*;dpi_aware=false");
     let resolution = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(resolution.dpi_aware, Some(false));
-    assert_eq!(resolution.origin("dpi_aware"), Some(&Origin::Line(1)));
+    assert_eq!(resolution.dpi_aware(), Some(false));
+    assert_eq!(
+        resolution.scalar(Scalar::DpiAware).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
 }
 
 #[test]
 fn a_rule_for_one_program_makes_it_unaware() {
     let table = with_lines("exe=old.exe;dpi_aware=false");
     assert_eq!(
-        table.resolve("Old.exe", &VersionInfo::default()).dpi_aware,
+        table
+            .resolve("Old.exe", &VersionInfo::default())
+            .dpi_aware(),
         Some(false)
     );
     assert_eq!(
         table
             .resolve("other.exe", &VersionInfo::default())
-            .dpi_aware,
+            .dpi_aware(),
         Some(true)
     );
 }
@@ -827,16 +901,19 @@ fn the_rules_for_one_program_match_the_real_binaries_resources() {
     );
     let r = table.resolve("NostaleClientX.exe", &nostale);
     assert_eq!(
-        r.origin("dpi_aware"),
+        r.scalar(Scalar::DpiAware).set_by.as_ref(),
         Some(&builtin("NostaleClientX.exe (Entwell)"))
     );
     let r = table.resolve("AoK HD.exe", &aoe2_hd_version());
     assert_eq!(
-        r.origin("dpi_aware"),
+        r.scalar(Scalar::DpiAware).set_by.as_ref(),
         Some(&builtin("AoK HD.exe (Microsoft Corporation)"))
     );
     let r = table.resolve("WoW.exe", &wow_version());
-    assert_eq!(r.origin("large_address_aware"), Some(&wow()));
+    assert_eq!(
+        r.scalar(Scalar::LargeAddressAware).set_by.as_ref(),
+        Some(&wow())
+    );
     // An unrelated program of the same name gets only the `*` rules.
     for exe in [
         "steamwebhelper.exe",
@@ -865,17 +942,17 @@ fn the_nostale_client_is_dpi_unaware_and_nothing_else_changes() {
     };
     let table = Table::builtin();
     let mut expected = plain();
-    expected.dpi_aware = Some(false);
     set_by(
         &mut expected,
-        "dpi_aware",
-        Origin::BuiltInFor("NostaleClientX.exe (Entwell)".into()),
+        Scalar::DpiAware,
+        ScalarValue::Bool(false),
+        &Origin::BuiltInFor("NostaleClientX.exe (Entwell)".into()),
     );
     assert_eq!(table.resolve("NostaleClientX.exe", &nostale), expected);
     assert_eq!(
         table
             .resolve("NostaleClientX.exe", &VersionInfo::default())
-            .dpi_aware,
+            .dpi_aware(),
         Some(true)
     );
 }
@@ -896,11 +973,11 @@ fn age_of_empires_ii_hd_is_dpi_unaware_and_nothing_else_changes() {
     // every other setting stays the wildcards'.
     let table = Table::builtin();
     let mut expected = plain();
-    expected.dpi_aware = Some(false);
     set_by(
         &mut expected,
-        "dpi_aware",
-        Origin::BuiltInFor("AoK HD.exe (Microsoft Corporation)".into()),
+        Scalar::DpiAware,
+        ScalarValue::Bool(false),
+        &Origin::BuiltInFor("AoK HD.exe (Microsoft Corporation)".into()),
     );
     assert_eq!(table.resolve("AoK HD.exe", &aoe2_hd_version()), expected);
     // Only the company is pinned, so a build with another product name
@@ -909,11 +986,11 @@ fn age_of_empires_ii_hd_is_dpi_unaware_and_nothing_else_changes() {
         product: "Age of Empires II HD".into(),
         ..aoe2_hd_version()
     };
-    assert_eq!(table.resolve("AoK HD.exe", &newer).dpi_aware, Some(false));
+    assert_eq!(table.resolve("AoK HD.exe", &newer).dpi_aware(), Some(false));
     // An executable of another name with the same version resource keeps
     // the default, and so does one of the same name from another company.
     assert_eq!(
-        table.resolve("age2_x1.exe", &aoe2_hd_version()).dpi_aware,
+        table.resolve("age2_x1.exe", &aoe2_hd_version()).dpi_aware(),
         Some(true)
     );
     let other = VersionInfo {

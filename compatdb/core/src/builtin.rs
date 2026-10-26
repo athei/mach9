@@ -11,7 +11,7 @@
 //! purpose: each is a default that a built-in rule for one program, or any
 //! `WINE_COMPATDB` rule that sets the same key, overrides.
 
-use crate::{ANY_EXE, D3d9, Dxgi, OpenGl, Rule, Table};
+use crate::{ANY_EXE, D3d9, Dxgi, OpenGl, Rule, Setting, Table};
 
 /// The rules the bundle ships with: the [`defaults`] for every process, then
 /// the rules for one program each ([`programs`]).
@@ -72,7 +72,7 @@ pub fn programs() -> Vec<Rule> {
 pub fn dxgi_dxmt() -> Rule {
     Rule {
         exe: ANY_EXE.into(),
-        dxgi: Some(Dxgi::Dxmt),
+        dxgi: Setting::Set(Dxgi::Dxmt),
         ..Rule::default()
     }
 }
@@ -87,7 +87,7 @@ pub fn dxgi_dxmt() -> Rule {
 pub fn d3d9_mtld3d() -> Rule {
     Rule {
         exe: ANY_EXE.into(),
-        d3d9: Some(D3d9::Mtld3d),
+        d3d9: Setting::Set(D3d9::Mtld3d),
         ..Rule::default()
     }
 }
@@ -103,7 +103,7 @@ pub fn d3d9_mtld3d() -> Rule {
 pub fn dpi_aware() -> Rule {
     Rule {
         exe: ANY_EXE.into(),
-        dpi_aware: Some(true),
+        dpi_aware: Setting::Set(true),
         ..Rule::default()
     }
 }
@@ -128,7 +128,7 @@ pub fn dpi_aware() -> Rule {
 pub fn gcmouse() -> Rule {
     Rule {
         exe: ANY_EXE.into(),
-        gcmouse: Some(true),
+        gcmouse: Setting::Set(true),
         ..Rule::default()
     }
 }
@@ -179,7 +179,7 @@ pub fn fex_reduced_x87_precision() -> Rule {
 pub fn opengl_egl() -> Rule {
     Rule {
         exe: ANY_EXE.into(),
-        opengl: Some(OpenGl::Egl),
+        opengl: Setting::Set(OpenGl::Egl),
         ..Rule::default()
     }
 }
@@ -210,7 +210,7 @@ pub fn opengl_egl() -> Rule {
 pub fn force_nx() -> Rule {
     Rule {
         exe: ANY_EXE.into(),
-        force_nx: Some(true),
+        force_nx: Setting::Set(true),
         ..Rule::default()
     }
 }
@@ -245,7 +245,7 @@ pub fn rockstar_games_launcher() -> Rule {
         exe: "Launcher.exe".into(),
         company: Some("Rockstar Games".into()),
         product: Some("Rockstar Games Launcher".into()),
-        dxgi: Some(Dxgi::Wined3d),
+        dxgi: Setting::Set(Dxgi::Wined3d),
         ..Rule::default()
     }
 }
@@ -267,7 +267,7 @@ pub fn social_club_helper() -> Rule {
         exe: "SocialClubHelper.exe".into(),
         company: Some("Take-Two Interactive Software".into()),
         product: Some("Social Club UI".into()),
-        dxgi: Some(Dxgi::Dxmt),
+        dxgi: Setting::Set(Dxgi::Dxmt),
         arguments: vec!["--in-process-gpu".into()],
         env: vec![("MTL_HUD_ENABLED".into(), "0".into())],
         ..Rule::default()
@@ -289,7 +289,7 @@ pub fn steam_web_helper() -> Rule {
         exe: "steamwebhelper.exe".into(),
         company: Some("Valve Corporation".into()),
         product: Some("Steam Client WebHelper".into()),
-        dxgi: Some(Dxgi::Dxmt),
+        dxgi: Setting::Set(Dxgi::Dxmt),
         arguments: vec!["--in-process-gpu".into()],
         env: vec![("MTL_HUD_ENABLED".into(), "0".into())],
         ..Rule::default()
@@ -329,7 +329,7 @@ pub fn nostale() -> Rule {
     Rule {
         exe: "NostaleClientX.exe".into(),
         company: Some("Entwell".into()),
-        dpi_aware: Some(false),
+        dpi_aware: Setting::Set(false),
         ..Rule::default()
     }
 }
@@ -351,7 +351,7 @@ pub fn age_of_empires_ii_hd() -> Rule {
     Rule {
         exe: "AoK HD.exe".into(),
         company: Some("Microsoft Corporation".into()),
-        dpi_aware: Some(false),
+        dpi_aware: Setting::Set(false),
         ..Rule::default()
     }
 }
@@ -374,7 +374,7 @@ pub fn world_of_warcraft() -> Rule {
         company: Some("Blizzard Entertainment".into()),
         product: Some("World of Warcraft".into()),
         original_filename: Some("WoW.exe".into()),
-        large_address_aware: Some(true),
+        large_address_aware: Setting::Set(true),
         ..Rule::default()
     }
 }

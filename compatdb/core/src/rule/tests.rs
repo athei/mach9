@@ -1,5 +1,5 @@
 use super::*;
-use crate::Table;
+use crate::{Setting, Table};
 
 #[test]
 fn a_fingerprint_constraint_is_an_optional_extra_filter() {
@@ -8,7 +8,7 @@ fn a_fingerprint_constraint_is_an_optional_extra_filter() {
             exe: "Launcher.exe".into(),
             company: Some("Rockstar Games".into()),
             product: Some("Rockstar Games Launcher".into()),
-            dxgi: Some(Dxgi::Wined3d),
+            dxgi: Setting::Set(Dxgi::Wined3d),
             ..Rule::default()
         }],
     };
@@ -19,7 +19,7 @@ fn a_fingerprint_constraint_is_an_optional_extra_filter() {
     };
     // Matches by basename + fingerprint regardless of where it is installed.
     assert_eq!(
-        table.resolve("Launcher.exe", &rockstar).dxgi,
+        table.resolve("Launcher.exe", &rockstar).dxgi(),
         Some(Dxgi::Wined3d)
     );
     // A different program that happens to be called Launcher.exe: same
@@ -71,4 +71,49 @@ fn specificity_orders_wildcard_then_exe_then_fingerprint() {
     assert!(named.is_unfingerprinted());
     assert!(!named_pinned.is_unfingerprinted());
     assert!(!wildcard.is_unfingerprinted());
+}
+
+#[test]
+fn a_setting_is_unset_a_value_or_a_reset() {
+    assert_eq!(Setting::<bool>::default(), Setting::Unset);
+    assert_eq!(Setting::from(Dxgi::Dxmt), Setting::Set(Dxgi::Dxmt));
+    assert_eq!(Setting::Set(true).value(), Some(true));
+    assert_eq!(Setting::<bool>::Reset.value(), None);
+    assert!(Setting::<bool>::Unset.is_unset());
+    assert!(!Setting::<bool>::Reset.is_unset());
+    assert_eq!(Setting::Set(2).map(|n| n * 2), Setting::Set(4));
+    assert_eq!(Setting::<u8>::Reset.map(|n| n * 2), Setting::Reset);
+}
+
+#[test]
+fn a_rule_reads_and_writes_each_scalar_by_its_key() {
+    let mut rule = Rule::default();
+    let values = [
+        (Scalar::Dxgi, ScalarValue::Dxgi(Dxgi::Wined3d)),
+        (Scalar::D3d9, ScalarValue::D3d9(D3d9::Mtld3d)),
+        (Scalar::Wined3d, ScalarValue::Wined3d(Wined3d::Vulkan)),
+        (Scalar::OpenGl, ScalarValue::OpenGl(OpenGl::Cgl)),
+        (Scalar::DpiAware, ScalarValue::Bool(false)),
+        (Scalar::LargeAddressAware, ScalarValue::Bool(true)),
+        (Scalar::Gcmouse, ScalarValue::Bool(false)),
+        (Scalar::ForceNx, ScalarValue::Bool(true)),
+    ];
+    for (scalar, value) in values {
+        assert_eq!(rule.scalar(scalar), Setting::Unset, "{scalar}");
+        rule.put_scalar(scalar, Setting::Set(value));
+        assert_eq!(rule.scalar(scalar), Setting::Set(value), "{scalar}");
+        // A value of another setting changes nothing.
+        let other = if matches!(value, ScalarValue::Bool(_)) {
+            ScalarValue::Dxgi(Dxgi::Dxmt)
+        } else {
+            ScalarValue::Bool(true)
+        };
+        rule.put_scalar(scalar, Setting::Set(other));
+        assert_eq!(rule.scalar(scalar), Setting::Set(value), "{scalar}");
+    }
+    assert_eq!(rule.dpi_aware, Setting::Set(false));
+    rule.put_scalar(Scalar::DpiAware, Setting::Reset);
+    assert_eq!(rule.dpi_aware, Setting::Reset);
+    rule.put_scalar(Scalar::DpiAware, Setting::Unset);
+    assert_eq!(rule.dpi_aware, Setting::Unset);
 }

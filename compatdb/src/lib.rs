@@ -97,7 +97,7 @@ extern "C" fn run() {
     // upstream Wine does instead, so the block is the whole configuration of
     // the process.
     let pe_dir = process.arch.pe_dir();
-    let dxgi = Dxgi::effective(resolution.dxgi, process.arch);
+    let dxgi = Dxgi::effective(resolution.dxgi(), process.arch);
     apply::tree(
         &nt,
         pe_dir,
@@ -105,7 +105,7 @@ extern "C" fn run() {
         dxgi.as_str(),
         &scalar_source(&resolution, Scalar::Dxgi),
     );
-    let d3d9 = D3d9::effective(resolution.d3d9, process.arch);
+    let d3d9 = D3d9::effective(resolution.d3d9(), process.arch);
     apply::tree(
         &nt,
         pe_dir,
@@ -126,7 +126,7 @@ extern "C" fn run() {
     log::line(&wined3d_line(
         wined3d,
         &scalar_source(&resolution, Scalar::Wined3d),
-        resolution.reset_origin(Scalar::Wined3d.as_str()),
+        resolution.scalar(Scalar::Wined3d).reset_by.as_ref(),
         config.as_ref().map(|(value, rule)| (value.as_str(), *rule)),
     ));
 
@@ -183,13 +183,13 @@ extern "C" fn run() {
 /// `GameController` mouse setting, whether no-execute stays on and which
 /// OpenGL the Mac driver gives.
 fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &Resolution) {
-    match resolution.dpi_aware {
+    match resolution.dpi_aware() {
         Some(aware) => {
             apply::dpi_awareness(nt, aware, &scalar_source(resolution, Scalar::DpiAware));
         }
         None => log::line(&scalar_unset_line(resolution, Scalar::DpiAware)),
     }
-    match resolution.large_address_aware {
+    match resolution.large_address_aware() {
         Some(laa) => apply::large_address_aware(
             nt,
             laa,
@@ -198,11 +198,11 @@ fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &Resolution) {
         ),
         None => log::line(&scalar_unset_line(resolution, Scalar::LargeAddressAware)),
     }
-    match resolution.gcmouse {
+    match resolution.gcmouse() {
         Some(on) => apply::gcmouse(nt, on, &scalar_source(resolution, Scalar::Gcmouse)),
         None => log::line(&scalar_unset_line(resolution, Scalar::Gcmouse)),
     }
-    match resolution.force_nx {
+    match resolution.force_nx() {
         Some(on) => apply::force_nx(
             nt,
             on,
@@ -211,7 +211,7 @@ fn apply_hooks(nt: &Ntdll, process: &Process, resolution: &Resolution) {
         ),
         None => log::line(&scalar_unset_line(resolution, Scalar::ForceNx)),
     }
-    match resolution.opengl {
+    match resolution.opengl() {
         Some(opengl) => apply::opengl(nt, opengl, &scalar_source(resolution, Scalar::OpenGl)),
         None => log::line(&scalar_unset_line(resolution, Scalar::OpenGl)),
     }
@@ -239,12 +239,8 @@ fn source(key: Key, origin: Option<&Origin>, reset: Option<&Origin>) -> String {
 
 /// [`source`] of the scalar setting `scalar` of `resolution`.
 fn scalar_source(resolution: &Resolution, scalar: Scalar) -> String {
-    let key = scalar.as_str();
-    source(
-        scalar.key(),
-        resolution.origin(key),
-        resolution.reset_origin(key),
-    )
+    let state = resolution.scalar(scalar);
+    source(scalar.key(), state.set_by.as_ref(), state.reset_by.as_ref())
 }
 
 /// The log line of the scalar setting `scalar` of `resolution`, which no

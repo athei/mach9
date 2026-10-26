@@ -1,5 +1,5 @@
 use super::*;
-use crate::ANY_EXE;
+use crate::{ANY_EXE, Setting};
 
 #[test]
 fn duplicate_matchers_finds_rules_that_cannot_be_told_apart() {
@@ -37,7 +37,7 @@ fn wildcard_rules_are_not_duplicates_of_each_other() {
             },
             Rule {
                 exe: ANY_EXE.into(),
-                dpi_aware: Some(true),
+                dpi_aware: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {

@@ -46,8 +46,10 @@ pub use crate::{
         Arch, IMAGE_FILE_MACHINE_ARM64, append_cmdline, append_cmdline_each, basename_of,
         env_value, merge_env,
     },
-    resolve::{ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution},
-    rule::{ANY_EXE, DEFAULT_VALUE, Rule, Source},
+    resolve::{
+        ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution, ScalarState,
+    },
+    rule::{ANY_EXE, DEFAULT_VALUE, Rule, Setting, Source},
     table::Table,
     value::{D3d9, Dxgi, OpenGl, Wined3d},
     version::VersionInfo,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ANY_EXE, D3d9, Dxgi, KeyKind, OpenGl, VersionInfo, Wined3d};
+use crate::{ANY_EXE, D3d9, Dxgi, KeyKind, OpenGl, Origin, VersionInfo, Wined3d};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
@@ -59,7 +59,7 @@ fn table_round_trips_through_the_env_value() {
                 exe: "Launcher.exe".into(),
                 company: Some("Rockstar Games".into()),
                 product: Some("Rockstar Games Launcher".into()),
-                dxgi: Some(Dxgi::Wined3d),
+                dxgi: Setting::Set(Dxgi::Wined3d),
                 ..Rule::default()
             },
             Rule {
@@ -70,7 +70,7 @@ fn table_round_trips_through_the_env_value() {
             },
             Rule {
                 exe: "WoW.exe".into(),
-                d3d9: Some(D3d9::Wined3d),
+                d3d9: Setting::Set(D3d9::Wined3d),
                 dll_overrides: vec!["d3d12,vulkan-1=".into()],
                 env: vec![("DXMT_CONFIG".into(), "d3d11.maxFrameRate=60".into())],
                 ..Rule::default()
@@ -157,15 +157,15 @@ fn the_env_value_is_the_records_alone() {
         rules: vec![
             Rule {
                 exe: "game.exe".into(),
-                dxgi: Some(Dxgi::Wined3d),
-                wined3d: Some(Wined3d::Vulkan),
+                dxgi: Setting::Set(Dxgi::Wined3d),
+                wined3d: Setting::Set(Wined3d::Vulkan),
                 env: vec![("A".into(), "1".into())],
                 ..Rule::default()
             },
             // Neither the source nor the debug channels travel.
             Rule {
                 exe: ANY_EXE.into(),
-                gcmouse: Some(false),
+                gcmouse: Setting::Set(false),
                 debug_channels: vec!["+loaddll".into()],
                 source: Source::Line(7),
                 ..Rule::default()
@@ -236,13 +236,13 @@ fn the_name_and_enabled_of_the_old_format_are_unknown_keys() {
         [
             Rule {
                 exe: "Game.exe".into(),
-                dpi_aware: Some(false),
+                dpi_aware: Setting::Set(false),
                 source: Source::Line(1),
                 ..Rule::default()
             },
             Rule {
                 exe: ANY_EXE.into(),
-                gcmouse: Some(false),
+                gcmouse: Setting::Set(false),
                 source: Source::Line(2),
                 ..Rule::default()
             },
@@ -265,7 +265,7 @@ fn a_field_that_cannot_be_read_is_ignored_and_the_rest_applies() -> TestResult {
     // and the field. The record before and after it still applies.
     let want = Rule {
         exe: "x.exe".into(),
-        d3d9: Some(D3d9::Wined3d),
+        d3d9: Setting::Set(D3d9::Wined3d),
         env: vec![("A".into(), "1".into())],
         source: Source::Line(1),
         ..Rule::default()
@@ -304,13 +304,13 @@ fn dpi_aware_round_trips_in_both_values_and_is_absent_when_unset() {
         rules: vec![
             Rule {
                 exe: ANY_EXE.into(),
-                dpi_aware: Some(true),
+                dpi_aware: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
                 exe: "old.exe".into(),
-                d3d9: Some(D3d9::Wined3d),
-                dpi_aware: Some(false),
+                d3d9: Setting::Set(D3d9::Wined3d),
+                dpi_aware: Setting::Set(false),
                 dll_overrides: vec!["a=".into()],
                 ..Rule::default()
             },
@@ -337,7 +337,10 @@ fn a_bad_dpi_aware_value_is_ignored() {
     for bad in ["yes", "1", "truee", ""] {
         let (table, diagnostics) = Table::parse(&format!("exe=x.exe;dpi_aware={bad}\nexe=ok.exe"));
         assert_eq!(table.rules.len(), 2, "dpi_aware={bad:?}");
-        assert_eq!(table.rules.first().map(|r| r.dpi_aware), Some(None));
+        assert_eq!(
+            table.rules.first().map(|r| r.dpi_aware),
+            Some(Setting::Unset)
+        );
         assert_eq!(diagnostics.len(), 1, "dpi_aware={bad:?}");
     }
 }
@@ -348,13 +351,13 @@ fn large_address_aware_round_trips_and_is_absent_when_unset() {
         rules: vec![
             Rule {
                 exe: ANY_EXE.into(),
-                large_address_aware: Some(true),
+                large_address_aware: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
                 exe: "old.exe".into(),
-                dpi_aware: Some(false),
-                large_address_aware: Some(false),
+                dpi_aware: Setting::Set(false),
+                large_address_aware: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
@@ -384,8 +387,8 @@ fn a_bad_large_address_aware_value_is_ignored() {
         ));
         assert_eq!(table.rules.len(), 2, "{key}={bad:?}");
         let x = table.rules.first();
-        assert_eq!(x.map(|r| r.large_address_aware), Some(None));
-        assert_eq!(x.map(|r| r.dpi_aware), Some(Some(false)));
+        assert_eq!(x.map(|r| r.large_address_aware), Some(Setting::Unset));
+        assert_eq!(x.map(|r| r.dpi_aware), Some(Setting::Set(false)));
         assert_eq!(diagnostics.len(), 1, "{key}={bad:?}");
         assert!(
             diagnostics.first().is_some_and(|d| d.contains(key)),
@@ -400,13 +403,13 @@ fn gcmouse_round_trips_and_is_absent_when_unset() {
         rules: vec![
             Rule {
                 exe: ANY_EXE.into(),
-                gcmouse: Some(true),
+                gcmouse: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
                 exe: "old.exe".into(),
-                large_address_aware: Some(false),
-                gcmouse: Some(false),
+                large_address_aware: Setting::Set(false),
+                gcmouse: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
@@ -436,8 +439,8 @@ fn a_bad_gcmouse_value_is_ignored() {
         ));
         assert_eq!(table.rules.len(), 2, "{key}={bad:?}");
         let x = table.rules.first();
-        assert_eq!(x.map(|r| r.gcmouse), Some(None));
-        assert_eq!(x.map(|r| r.dpi_aware), Some(Some(false)));
+        assert_eq!(x.map(|r| r.gcmouse), Some(Setting::Unset));
+        assert_eq!(x.map(|r| r.dpi_aware), Some(Setting::Set(false)));
         assert_eq!(diagnostics.len(), 1, "{key}={bad:?}");
         assert!(
             diagnostics.first().is_some_and(|d| d.contains(key)),
@@ -452,13 +455,13 @@ fn force_nx_round_trips_and_is_absent_when_unset() {
         rules: vec![
             Rule {
                 exe: ANY_EXE.into(),
-                force_nx: Some(true),
+                force_nx: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
                 exe: "old.exe".into(),
-                gcmouse: Some(false),
-                force_nx: Some(false),
+                gcmouse: Setting::Set(false),
+                force_nx: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
@@ -488,8 +491,8 @@ fn a_bad_force_nx_value_is_ignored() {
         ));
         assert_eq!(table.rules.len(), 2, "{key}={bad:?}");
         let x = table.rules.first();
-        assert_eq!(x.map(|r| r.force_nx), Some(None));
-        assert_eq!(x.map(|r| r.dpi_aware), Some(Some(false)));
+        assert_eq!(x.map(|r| r.force_nx), Some(Setting::Unset));
+        assert_eq!(x.map(|r| r.dpi_aware), Some(Setting::Set(false)));
         assert_eq!(diagnostics.len(), 1, "{key}={bad:?}");
         assert!(
             diagnostics.first().is_some_and(|d| d.contains(key)),
@@ -503,8 +506,9 @@ fn a_reset_round_trips_through_the_env_value() {
     let table = Table {
         rules: vec![Rule {
             exe: "a.exe".into(),
-            dxgi: Some(Dxgi::Wined3d),
-            resets: vec!["opengl", "force_nx"],
+            dxgi: Setting::Set(Dxgi::Wined3d),
+            opengl: Setting::Reset,
+            force_nx: Setting::Reset,
             dll_overrides: vec!["mscoree=default".into()],
             ..Rule::default()
         }],
@@ -517,20 +521,13 @@ fn a_reset_round_trips_through_the_env_value() {
     let (parsed, diagnostics) = Table::parse(&text);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert_eq!(parsed, as_sent(&table));
-    // A rule built with both a value and a reset for one key keeps the
-    // value, in the resolution as on the wire.
-    let both = Table {
-        rules: vec![Rule {
-            exe: ANY_EXE.into(),
-            dxgi: Some(Dxgi::Wined3d),
-            resets: vec!["dxgi"],
-            ..Rule::default()
-        }],
-    };
-    let r = both.resolve("x.exe", &VersionInfo::default());
-    assert_eq!(r.dxgi, Some(Dxgi::Wined3d));
-    assert_eq!(r.reset_origin("dxgi"), None);
-    assert_eq!(both.to_env_value(), "exe=*;dxgi=wined3d");
+    let r = table.resolve("a.exe", &VersionInfo::default());
+    assert_eq!(r.dxgi(), Some(Dxgi::Wined3d));
+    assert_eq!(r.scalar(Scalar::Dxgi).reset_by, None);
+    assert_eq!(
+        r.scalar(Scalar::OpenGl).reset_by,
+        Some(Origin::BuiltInFor("a.exe".into()))
+    );
 }
 
 #[test]
@@ -542,7 +539,7 @@ fn the_x86_64_wines_x87_sidecar_key_is_an_unknown_key() {
         Table::parse("exe=old.exe;x87_sidecar=false;large_address_aware=false");
     assert_eq!(
         table.rules.first().map(|r| r.large_address_aware),
-        Some(Some(false))
+        Some(Setting::Set(false))
     );
     assert_eq!(
         diagnostics,
@@ -559,16 +556,14 @@ fn every_field_a_record_can_carry_is_a_key_in_the_order_of_key_all() -> TestResu
         company: Some("c".into()),
         product: Some("p".into()),
         original_filename: Some("o".into()),
-        dxgi: Some(Dxgi::Dxmt),
-        d3d9: Some(D3d9::Mtld3d),
-        wined3d: Some(Wined3d::Gl),
-        opengl: Some(OpenGl::Egl),
-        dpi_aware: Some(true),
-        large_address_aware: Some(true),
-        gcmouse: Some(true),
-        force_nx: Some(true),
-        // Every key with a value, so nothing is reset.
-        resets: Vec::new(),
+        dxgi: Setting::Set(Dxgi::Dxmt),
+        d3d9: Setting::Set(D3d9::Mtld3d),
+        wined3d: Setting::Set(Wined3d::Gl),
+        opengl: Setting::Set(OpenGl::Egl),
+        dpi_aware: Setting::Set(true),
+        large_address_aware: Setting::Set(true),
+        gcmouse: Setting::Set(true),
+        force_nx: Setting::Set(true),
         dll_overrides: vec!["a=".into()],
         arguments: vec!["-a".into()],
         arguments_override: Some(vec!["-b".into()]),
@@ -610,13 +605,14 @@ fn every_word_of_the_format_is_read_in_any_case_and_written_in_lowercase() -> Te
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let rule = table.rules.first().ok_or("no rule")?;
-    assert_eq!(rule.dxgi, Some(Dxgi::Wined3d));
-    assert_eq!(rule.d3d9, Some(D3d9::Mtld3d));
-    assert_eq!(rule.wined3d, Some(Wined3d::Vulkan));
-    assert_eq!(rule.opengl, Some(OpenGl::Cgl));
-    assert_eq!(rule.dpi_aware, Some(true));
-    assert_eq!(rule.large_address_aware, Some(false));
-    assert_eq!(rule.resets, ["gcmouse", "force_nx"]);
+    assert_eq!(rule.dxgi, Setting::Set(Dxgi::Wined3d));
+    assert_eq!(rule.d3d9, Setting::Set(D3d9::Mtld3d));
+    assert_eq!(rule.wined3d, Setting::Set(Wined3d::Vulkan));
+    assert_eq!(rule.opengl, Setting::Set(OpenGl::Cgl));
+    assert_eq!(rule.dpi_aware, Setting::Set(true));
+    assert_eq!(rule.large_address_aware, Setting::Set(false));
+    assert_eq!(rule.gcmouse, Setting::Reset);
+    assert_eq!(rule.force_nx, Setting::Reset);
     // The user data keeps its case.
     assert_eq!(
         table.to_env_value(),
@@ -687,12 +683,12 @@ fn wined3d_parses_round_trips_and_rejects_other_values() {
         rules: vec![
             Rule {
                 exe: "vk.exe".into(),
-                wined3d: Some(Wined3d::Vulkan),
+                wined3d: Setting::Set(Wined3d::Vulkan),
                 ..Rule::default()
             },
             Rule {
                 exe: "gl.exe".into(),
-                wined3d: Some(Wined3d::Gl),
+                wined3d: Setting::Set(Wined3d::Gl),
                 ..Rule::default()
             },
             Rule {
@@ -710,7 +706,7 @@ fn wined3d_parses_round_trips_and_rejects_other_values() {
     assert_eq!(parsed, as_sent(&table));
     let (bad, diagnostics) = Table::parse("exe=x.exe;wined3d=opengl\nexe=ok.exe");
     assert_eq!(bad.rules.len(), 2);
-    assert_eq!(bad.rules.first().map(|r| r.wined3d), Some(None));
+    assert_eq!(bad.rules.first().map(|r| r.wined3d), Some(Setting::Unset));
     assert_eq!(diagnostics.len(), 1);
 }
 
@@ -727,12 +723,12 @@ fn opengl_parses_round_trips_and_rejects_other_values() {
         rules: vec![
             Rule {
                 exe: ANY_EXE.into(),
-                opengl: Some(OpenGl::Egl),
+                opengl: Setting::Set(OpenGl::Egl),
                 ..Rule::default()
             },
             Rule {
                 exe: "apple.exe".into(),
-                opengl: Some(OpenGl::Cgl),
+                opengl: Setting::Set(OpenGl::Cgl),
                 ..Rule::default()
             },
             Rule {
@@ -753,7 +749,7 @@ fn opengl_parses_round_trips_and_rejects_other_values() {
     assert_eq!(parsed, as_sent(&table));
     let (bad, diagnostics) = Table::parse("exe=x.exe;opengl=gl\nexe=ok.exe");
     assert_eq!(bad.rules.len(), 2);
-    assert_eq!(bad.rules.first().map(|r| r.opengl), Some(None));
+    assert_eq!(bad.rules.first().map(|r| r.opengl), Some(Setting::Unset));
     assert_eq!(diagnostics.len(), 1);
     assert!(
         diagnostics.first().is_some_and(|d| d.contains("opengl")),

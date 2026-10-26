@@ -58,17 +58,17 @@ fn dpi_aware_resolves_to_the_most_specific_rule_and_unset_inherits() {
             Rule {
                 exe: "game.exe".into(),
                 company: Some("Acme".into()),
-                dpi_aware: Some(true),
+                dpi_aware: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
                 exe: "game.exe".into(),
-                dpi_aware: Some(false),
+                dpi_aware: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
                 exe: ANY_EXE.into(),
-                dpi_aware: Some(true),
+                dpi_aware: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
@@ -84,27 +84,32 @@ fn dpi_aware_resolves_to_the_most_specific_rule_and_unset_inherits() {
     };
     // Only the wildcard matches.
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.dpi_aware, Some(true));
+    assert_eq!(other.dpi_aware(), Some(true));
     assert!(!other.is_empty());
     // The basename rule beats the wildcard.
     assert_eq!(
-        table.resolve("game.exe", &VersionInfo::default()).dpi_aware,
+        table
+            .resolve("game.exe", &VersionInfo::default())
+            .dpi_aware(),
         Some(false)
     );
     // The fingerprinted rule beats both.
     let pinned = table.resolve("game.exe", &acme);
-    assert_eq!(pinned.dpi_aware, Some(true));
+    assert_eq!(pinned.dpi_aware(), Some(true));
     assert_eq!(
-        pinned.origin("dpi_aware"),
+        pinned.scalar(Scalar::DpiAware).set_by.as_ref(),
         Some(&Origin::BuiltInFor("game.exe (Acme)".into()))
     );
     // A more specific rule that leaves it unset inherits the wildcard's.
     let quiet = table.resolve("quiet.exe", &VersionInfo::default());
-    assert_eq!(quiet.dpi_aware, Some(true));
-    assert_eq!(quiet.origin("dpi_aware"), Some(&Origin::BuiltIn));
+    assert_eq!(quiet.dpi_aware(), Some(true));
+    assert_eq!(
+        quiet.scalar(Scalar::DpiAware).set_by.as_ref(),
+        Some(&Origin::BuiltIn)
+    );
     assert_eq!(quiet.arguments, ["-x"]);
     // With no rule setting it, the resolution leaves it to wine.
-    assert_eq!(Table::default().resolve("x.exe", &acme).dpi_aware, None);
+    assert_eq!(Table::default().resolve("x.exe", &acme).dpi_aware(), None);
 }
 
 #[test]
@@ -112,38 +117,42 @@ fn a_later_star_rule_changes_a_builtin_value_only_when_it_sets_the_key() {
     let base = Table {
         rules: vec![Rule {
             exe: ANY_EXE.into(),
-            dpi_aware: Some(true),
-            large_address_aware: Some(true),
-            gcmouse: Some(true),
-            force_nx: Some(true),
+            dpi_aware: Setting::Set(true),
+            large_address_aware: Setting::Set(true),
+            gcmouse: Setting::Set(true),
+            force_nx: Setting::Set(true),
             ..Rule::default()
         }],
     };
     // A rule that does not mention them leaves the values alone.
     let table = with_lines(&base, "exe=*;dll_overrides=a=");
     let r = table.resolve("x.exe", &VersionInfo::default());
-    assert_eq!(r.dpi_aware, Some(true));
-    assert_eq!(r.large_address_aware, Some(true));
-    assert_eq!(r.gcmouse, Some(true));
-    assert_eq!(r.force_nx, Some(true));
-    assert_eq!(r.origin("dpi_aware"), Some(&Origin::BuiltIn));
+    assert_eq!(r.dpi_aware(), Some(true));
+    assert_eq!(r.large_address_aware(), Some(true));
+    assert_eq!(r.gcmouse(), Some(true));
+    assert_eq!(r.force_nx(), Some(true));
+    assert_eq!(
+        r.scalar(Scalar::DpiAware).set_by.as_ref(),
+        Some(&Origin::BuiltIn)
+    );
     // One that sets a key replaces that value and no other.
-    for key in ["dpi_aware", "large_address_aware", "gcmouse", "force_nx"] {
+    let switches = [
+        Scalar::DpiAware,
+        Scalar::LargeAddressAware,
+        Scalar::Gcmouse,
+        Scalar::ForceNx,
+    ];
+    for key in switches {
         let table = with_lines(&base, &format!("exe=*;{key}=false"));
         let r = table.resolve("x.exe", &VersionInfo::default());
-        let values = [
-            ("dpi_aware", r.dpi_aware),
-            ("large_address_aware", r.large_address_aware),
-            ("gcmouse", r.gcmouse),
-            ("force_nx", r.force_nx),
-        ];
-        for (k, value) in values {
+        for k in switches {
+            let state = r.scalar(k);
             if k == key {
-                assert_eq!(value, Some(false), "{key}");
-                assert_eq!(r.origin(k), Some(&Origin::Line(1)), "{key}");
+                assert_eq!(state.value, Some(ScalarValue::Bool(false)), "{key}");
+                assert_eq!(state.set_by, Some(Origin::Line(1)), "{key}");
             } else {
-                assert_eq!(value, Some(true), "{key}: {k}");
-                assert_eq!(r.origin(k), Some(&Origin::BuiltIn), "{key}: {k}");
+                assert_eq!(state.value, Some(ScalarValue::Bool(true)), "{key}: {k}");
+                assert_eq!(state.set_by, Some(Origin::BuiltIn), "{key}: {k}");
             }
         }
     }
@@ -156,17 +165,17 @@ fn large_address_aware_resolves_to_the_most_specific_rule() {
             Rule {
                 exe: "game.exe".into(),
                 company: Some("Acme".into()),
-                dpi_aware: Some(false),
+                dpi_aware: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
                 exe: "game.exe".into(),
-                large_address_aware: Some(false),
+                large_address_aware: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
                 exe: ANY_EXE.into(),
-                large_address_aware: Some(true),
+                large_address_aware: Setting::Set(true),
                 ..Rule::default()
             },
         ],
@@ -177,24 +186,24 @@ fn large_address_aware_resolves_to_the_most_specific_rule() {
     };
     // Only the wildcard matches.
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.large_address_aware, Some(true));
+    assert_eq!(other.large_address_aware(), Some(true));
     // The basename rule beats the wildcard.
     let named = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(named.large_address_aware, Some(false));
+    assert_eq!(named.large_address_aware(), Some(false));
     // A fingerprinted rule that leaves it unset inherits it from the next
     // most specific rule.
     let pinned = table.resolve("game.exe", &acme);
-    assert_eq!(pinned.dpi_aware, Some(false));
-    assert_eq!(pinned.large_address_aware, Some(false));
+    assert_eq!(pinned.dpi_aware(), Some(false));
+    assert_eq!(pinned.large_address_aware(), Some(false));
     // With no rule setting it, there is no opinion.
     let none = Table::default().resolve("x.exe", &acme);
-    assert_eq!(none.large_address_aware, None);
+    assert_eq!(none.large_address_aware(), None);
     assert!(none.is_empty());
     // It alone makes a resolution non-empty.
     let table = Table {
         rules: vec![Rule {
             exe: ANY_EXE.into(),
-            large_address_aware: Some(false),
+            large_address_aware: Setting::Set(false),
             ..Rule::default()
         }],
     };
@@ -208,17 +217,17 @@ fn gcmouse_resolves_to_the_most_specific_rule() {
             Rule {
                 exe: "game.exe".into(),
                 company: Some("Acme".into()),
-                dpi_aware: Some(false),
+                dpi_aware: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
                 exe: "game.exe".into(),
-                gcmouse: Some(false),
+                gcmouse: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
                 exe: ANY_EXE.into(),
-                gcmouse: Some(true),
+                gcmouse: Setting::Set(true),
                 ..Rule::default()
             },
         ],
@@ -229,24 +238,24 @@ fn gcmouse_resolves_to_the_most_specific_rule() {
     };
     // Only the wildcard matches.
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.gcmouse, Some(true));
+    assert_eq!(other.gcmouse(), Some(true));
     // The basename rule beats the wildcard.
     let named = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(named.gcmouse, Some(false));
+    assert_eq!(named.gcmouse(), Some(false));
     // A fingerprinted rule that leaves it unset inherits it from the next
     // most specific rule.
     let pinned = table.resolve("game.exe", &acme);
-    assert_eq!(pinned.dpi_aware, Some(false));
-    assert_eq!(pinned.gcmouse, Some(false));
+    assert_eq!(pinned.dpi_aware(), Some(false));
+    assert_eq!(pinned.gcmouse(), Some(false));
     // With no rule setting it, there is no opinion.
     let none = Table::default().resolve("x.exe", &acme);
-    assert_eq!(none.gcmouse, None);
+    assert_eq!(none.gcmouse(), None);
     assert!(none.is_empty());
     // It alone makes a resolution non-empty.
     let table = Table {
         rules: vec![Rule {
             exe: ANY_EXE.into(),
-            gcmouse: Some(false),
+            gcmouse: Setting::Set(false),
             ..Rule::default()
         }],
     };
@@ -259,38 +268,47 @@ fn force_nx_resolves_to_the_most_specific_rule() {
         rules: vec![
             Rule {
                 exe: "game.exe".into(),
-                force_nx: Some(false),
+                force_nx: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
                 exe: ANY_EXE.into(),
-                force_nx: Some(true),
+                force_nx: Setting::Set(true),
                 ..Rule::default()
             },
         ],
     };
     let other = base.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.force_nx, Some(true));
-    assert_eq!(other.origin("force_nx"), Some(&Origin::BuiltIn));
-    let named = base.resolve("Game.exe", &VersionInfo::default());
-    assert_eq!(named.force_nx, Some(false));
+    assert_eq!(other.force_nx(), Some(true));
     assert_eq!(
-        named.origin("force_nx"),
+        other.scalar(Scalar::ForceNx).set_by.as_ref(),
+        Some(&Origin::BuiltIn)
+    );
+    let named = base.resolve("Game.exe", &VersionInfo::default());
+    assert_eq!(named.force_nx(), Some(false));
+    assert_eq!(
+        named.scalar(Scalar::ForceNx).set_by.as_ref(),
         Some(&Origin::BuiltInFor("game.exe".into()))
     );
     let none = Table::default().resolve("x.exe", &VersionInfo::default());
-    assert_eq!(none.force_nx, None);
+    assert_eq!(none.force_nx(), None);
     assert!(none.is_empty());
     // A `*` rule from WINE_COMPATDB folds after every built-in rule, so
     // it beats the built-in rule for one program too.
     let table = with_lines(&base, "exe=*;force_nx=false\nexe=*;dll_overrides=a=");
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.force_nx, Some(false));
-    assert_eq!(other.origin("force_nx"), Some(&Origin::Line(1)));
+    assert_eq!(other.force_nx(), Some(false));
+    assert_eq!(
+        other.scalar(Scalar::ForceNx).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
     let table = with_lines(&base, "exe=*;force_nx=true");
     let named = table.resolve("Game.exe", &VersionInfo::default());
-    assert_eq!(named.force_nx, Some(true));
-    assert_eq!(named.origin("force_nx"), Some(&Origin::Line(1)));
+    assert_eq!(named.force_nx(), Some(true));
+    assert_eq!(
+        named.scalar(Scalar::ForceNx).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
 }
 
 #[test]
@@ -300,14 +318,14 @@ fn the_rules_of_wine_compatdb_fold_after_every_builtin_rule() {
             Rule {
                 exe: "game.exe".into(),
                 company: Some("Acme".into()),
-                dpi_aware: Some(false),
-                gcmouse: Some(false),
+                dpi_aware: Setting::Set(false),
+                gcmouse: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
                 exe: ANY_EXE.into(),
-                dpi_aware: Some(true),
-                gcmouse: Some(true),
+                dpi_aware: Setting::Set(true),
+                gcmouse: Setting::Set(true),
                 ..Rule::default()
             },
         ],
@@ -319,18 +337,24 @@ fn the_rules_of_wine_compatdb_fold_after_every_builtin_rule() {
     // The least specific line beats the most specific built-in rule.
     let table = with_lines(&base, "exe=*;dpi_aware=true");
     let game = table.resolve("game.exe", &acme);
-    assert_eq!(game.dpi_aware, Some(true));
-    assert_eq!(game.origin("dpi_aware"), Some(&Origin::Line(1)));
+    assert_eq!(game.dpi_aware(), Some(true));
+    assert_eq!(
+        game.scalar(Scalar::DpiAware).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
     // The key it leaves alone keeps the built-in value.
-    assert_eq!(game.gcmouse, Some(false));
+    assert_eq!(game.gcmouse(), Some(false));
     // Among the lines, specificity still decides before line order.
     let table = with_lines(
         &base,
         "exe=game.exe;company=Acme;dpi_aware=false\nexe=game.exe;dpi_aware=true\nexe=*;dpi_aware=true",
     );
     let game = table.resolve("game.exe", &acme);
-    assert_eq!(game.dpi_aware, Some(false));
-    assert_eq!(game.origin("dpi_aware"), Some(&Origin::Line(1)));
+    assert_eq!(game.dpi_aware(), Some(false));
+    assert_eq!(
+        game.scalar(Scalar::DpiAware).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
 }
 
 #[test]
@@ -338,9 +362,9 @@ fn default_resets_a_scalar_from_that_rule_on() -> TestResult {
     let base = Table {
         rules: vec![Rule {
             exe: ANY_EXE.into(),
-            dxgi: Some(Dxgi::Dxmt),
-            wined3d: Some(Wined3d::Vulkan),
-            dpi_aware: Some(true),
+            dxgi: Setting::Set(Dxgi::Dxmt),
+            wined3d: Setting::Set(Wined3d::Vulkan),
+            dpi_aware: Setting::Set(true),
             ..Rule::default()
         }],
     };
@@ -349,42 +373,47 @@ fn default_resets_a_scalar_from_that_rule_on() -> TestResult {
         "exe=*;dxgi=default;wined3d=default;dpi_aware=default",
     );
     let r = table.resolve("x.exe", &VersionInfo::default());
-    assert_eq!((r.dxgi, r.wined3d, r.dpi_aware), (None, None, None));
-    assert_eq!(r.set_by, []);
-    for key in ["dxgi", "wined3d", "dpi_aware"] {
-        assert_eq!(r.reset_origin(key), Some(&Origin::Line(1)), "{key}");
+    assert_eq!((r.dxgi(), r.wined3d(), r.dpi_aware()), (None, None, None));
+    for key in [Scalar::Dxgi, Scalar::Wined3d, Scalar::DpiAware] {
+        assert_eq!(r.scalar(key).set_by, None, "{key}");
+        assert_eq!(r.scalar(key).reset_by, Some(Origin::Line(1)), "{key}");
     }
     assert!(r.is_empty());
     // A rule folded later sets it again.
     let table = with_lines(&base, "exe=*;dpi_aware=default\nexe=x.exe;dpi_aware=false");
     let r = table.resolve("x.exe", &VersionInfo::default());
-    assert_eq!(r.dpi_aware, Some(false));
-    assert_eq!(r.reset_origin("dpi_aware"), None);
+    assert_eq!(r.dpi_aware(), Some(false));
+    assert_eq!(r.scalar(Scalar::DpiAware).reset_by.as_ref(), None);
     // Within one line the last field for a key wins.
     let (parsed, diagnostics) = Table::parse(
         "exe=a.exe;dpi_aware=default;dpi_aware=true\nexe=b.exe;gcmouse=false;gcmouse=default",
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let a = parsed.rules.first().ok_or("no a")?;
-    assert_eq!((a.dpi_aware, a.resets.clone()), (Some(true), vec![]));
+    assert_eq!(a.dpi_aware, Setting::Set(true));
     let b = parsed.rules.get(1).ok_or("no b")?;
-    assert_eq!((b.gcmouse, b.resets.clone()), (None, vec!["gcmouse"]));
+    assert_eq!(b.gcmouse, Setting::Reset);
     // Every scalar key takes it, and nothing else does: `default` is a word
     // of the format, read in any case like the booleans, while `env` and
     // `arguments` take it as text.
-    for scalar in Scalar::ALL {
+    for &scalar in Scalar::ALL {
         let (parsed, diagnostics) = Table::parse(&format!("exe=a.exe;{scalar}=default"));
         assert!(diagnostics.is_empty(), "{scalar}: {diagnostics:?}");
-        assert_eq!(
-            parsed.rules.first().map(|r| r.resets.clone()),
-            Some(vec![scalar.as_str()])
-        );
+        let rule = parsed.rules.first().ok_or("no rule")?;
+        for &other in Scalar::ALL {
+            let want = if other == scalar {
+                Setting::Reset
+            } else {
+                Setting::Unset
+            };
+            assert_eq!(rule.scalar(other), want, "{scalar}: {other}");
+        }
     }
     let (parsed, diagnostics) =
         Table::parse("exe=a.exe;dpi_aware=Default;env=A=default;arguments=DEFAULT");
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let a = parsed.rules.first().ok_or("no a")?;
-    assert_eq!(a.resets, ["dpi_aware"]);
+    assert_eq!(a.dpi_aware, Setting::Reset);
     assert_eq!(a.env, [("A".to_string(), "default".to_string())]);
     assert_eq!(a.arguments, ["DEFAULT"]);
     Ok(())
@@ -438,20 +467,20 @@ fn resolve_matches_case_insensitively_and_folds_in_order() {
         rules: vec![
             Rule {
                 exe: "game.exe".into(),
-                dxgi: Some(Dxgi::Dxmt),
+                dxgi: Setting::Set(Dxgi::Dxmt),
                 dll_overrides: vec!["a=".into()],
                 ..Rule::default()
             },
             Rule {
                 exe: "GAME.EXE".into(),
-                dxgi: Some(Dxgi::Wined3d),
+                dxgi: Setting::Set(Dxgi::Wined3d),
                 dll_overrides: vec!["b=".into()],
                 ..Rule::default()
             },
         ],
     };
     let r = table.resolve("Game.exe", &VersionInfo::default());
-    assert_eq!(r.dxgi, Some(Dxgi::Wined3d));
+    assert_eq!(r.dxgi(), Some(Dxgi::Wined3d));
     assert_eq!(r.dll_overrides, vec!["a=".to_string(), "b=".to_string()]);
 }
 
@@ -463,14 +492,14 @@ fn the_resolution_says_where_every_value_came_from() {
                 exe: "game.exe".into(),
                 company: Some("Acme".into()),
                 product: Some("Game".into()),
-                dpi_aware: Some(false),
+                dpi_aware: Setting::Set(false),
                 arguments: vec!["-b".into()],
                 ..Rule::default()
             },
             Rule {
                 exe: ANY_EXE.into(),
-                dxgi: Some(Dxgi::Dxmt),
-                dpi_aware: Some(true),
+                dxgi: Setting::Set(Dxgi::Dxmt),
+                dpi_aware: Setting::Set(true),
                 dll_overrides: vec!["a=".into()],
                 arguments: vec!["-a".into()],
                 env: vec![("A".into(), "1".into()), ("B".into(), "2".into())],
@@ -486,9 +515,12 @@ fn the_resolution_says_where_every_value_came_from() {
     let r = table.resolve("game.exe", &acme);
     // A scalar says which rule set it last, the most specific one.
     let pinned = Origin::BuiltInFor("game.exe (Acme, Game)".into());
-    assert_eq!(r.origin("dxgi"), Some(&Origin::BuiltIn));
-    assert_eq!(r.origin("dpi_aware"), Some(&pinned));
-    assert_eq!(r.origin("d3d9"), None);
+    assert_eq!(
+        r.scalar(Scalar::Dxgi).set_by.as_ref(),
+        Some(&Origin::BuiltIn)
+    );
+    assert_eq!(r.scalar(Scalar::DpiAware).set_by.as_ref(), Some(&pinned));
+    assert_eq!(r.scalar(Scalar::D3d9).set_by.as_ref(), None);
     assert_eq!(pinned.label(), "built-in for game.exe (Acme, Game)");
     assert_eq!(Origin::BuiltIn.label(), "built-in");
     assert_eq!(Origin::Line(3).label(), "WINE_COMPATDB line 3");
@@ -562,8 +594,8 @@ fn a_rule_from_wine_compatdb_is_named_by_its_line() -> TestResult {
     let base = Table {
         rules: vec![Rule {
             exe: ANY_EXE.into(),
-            dpi_aware: Some(true),
-            gcmouse: Some(true),
+            dpi_aware: Setting::Set(true),
+            gcmouse: Setting::Set(true),
             dll_overrides: vec!["a=".into()],
             env: vec![("A".into(), "1".into())],
             ..Rule::default()
@@ -572,9 +604,16 @@ fn a_rule_from_wine_compatdb_is_named_by_its_line() -> TestResult {
     let table = with_lines(&base, "v=7\nexe=*;dpi_aware=false;dll_overrides=b=;env=A=2");
     let r = table.resolve("x.exe", &VersionInfo::default());
     // The scalar the line set says so; the one it left does not.
-    let dpi = r.origin("dpi_aware").ok_or("no dpi_aware")?;
+    let dpi = r
+        .scalar(Scalar::DpiAware)
+        .set_by
+        .as_ref()
+        .ok_or("no dpi_aware")?;
     assert_eq!(dpi.label(), "WINE_COMPATDB line 2");
-    assert_eq!(r.origin("gcmouse"), Some(&Origin::BuiltIn));
+    assert_eq!(
+        r.scalar(Scalar::Gcmouse).set_by.as_ref(),
+        Some(&Origin::BuiltIn)
+    );
     assert_eq!(r.dll_overrides_from, [Origin::BuiltIn, Origin::Line(2)]);
     // The line's env entry replaces, and the built-in's own entry, a
     // default, says which line replaced it.
@@ -645,7 +684,7 @@ fn a_rule_for_the_same_exe_does_not_take_another_rules_fingerprint() {
         rules: vec![Rule {
             exe: "Launcher.exe".into(),
             company: Some("Rockstar Games".into()),
-            dxgi: Some(Dxgi::Wined3d),
+            dxgi: Setting::Set(Dxgi::Wined3d),
             ..Rule::default()
         }],
     };
@@ -657,18 +696,21 @@ fn a_rule_for_the_same_exe_does_not_take_another_rules_fingerprint() {
     };
     // Another program of that name gets the new rule alone.
     let other = table.resolve("Launcher.exe", &VersionInfo::default());
-    assert_eq!(other.dxgi, Some(Dxgi::Dxmt));
+    assert_eq!(other.dxgi(), Some(Dxgi::Dxmt));
     assert_eq!(other.dll_overrides, ["b="]);
     // The Rockstar launcher gets both. The line folds after every
     // built-in rule, so it takes the scalar, and the lists accumulate.
     let launcher = table.resolve("Launcher.exe", &rockstar);
-    assert_eq!(launcher.dxgi, Some(Dxgi::Dxmt));
-    assert_eq!(launcher.origin("dxgi"), Some(&Origin::Line(1)));
+    assert_eq!(launcher.dxgi(), Some(Dxgi::Dxmt));
+    assert_eq!(
+        launcher.scalar(Scalar::Dxgi).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
     assert_eq!(launcher.dll_overrides, ["b="]);
     // A fingerprint keeps a line to the Rockstar launcher alone.
     let table = with_lines(&base, "exe=Launcher.exe;company=Rockstar;dxgi=dxmt");
     let launcher = table.resolve("Launcher.exe", &rockstar);
-    assert_eq!(launcher.dxgi, Some(Dxgi::Dxmt));
+    assert_eq!(launcher.dxgi(), Some(Dxgi::Dxmt));
     assert!(
         table
             .resolve("Launcher.exe", &VersionInfo::default())
@@ -813,13 +855,13 @@ fn a_wildcard_rule_is_the_least_specific_and_a_process_rule_beats_it() {
         rules: vec![
             Rule {
                 exe: ANY_EXE.into(),
-                dxgi: Some(Dxgi::Dxmt),
+                dxgi: Setting::Set(Dxgi::Dxmt),
                 dll_overrides: vec!["global=".into()],
                 ..Rule::default()
             },
             Rule {
                 exe: "Launcher.exe".into(),
-                dxgi: Some(Dxgi::Wined3d),
+                dxgi: Setting::Set(Dxgi::Wined3d),
                 dll_overrides: vec!["specific=".into()],
                 ..Rule::default()
             },
@@ -827,14 +869,14 @@ fn a_wildcard_rule_is_the_least_specific_and_a_process_rule_beats_it() {
     };
     // The wildcard alone reaches an unrelated process.
     let other = table.resolve("Other.exe", &VersionInfo::default());
-    assert_eq!(other.dxgi, Some(Dxgi::Dxmt));
+    assert_eq!(other.dxgi(), Some(Dxgi::Dxmt));
     assert_eq!(other.dll_overrides, ["global="]);
     // Both match Launcher.exe; the more specific rule takes the scalar and
     // the lists accumulate least-specific-first.
     let launcher = table.resolve("launcher.exe", &VersionInfo::default());
-    assert_eq!(launcher.dxgi, Some(Dxgi::Wined3d));
+    assert_eq!(launcher.dxgi(), Some(Dxgi::Wined3d));
     assert_eq!(
-        launcher.origin("dxgi"),
+        launcher.scalar(Scalar::Dxgi).set_by.as_ref(),
         Some(&Origin::BuiltInFor("Launcher.exe".into()))
     );
     assert_eq!(
@@ -849,19 +891,21 @@ fn a_process_rule_wins_however_the_rules_are_ordered() {
     // rules as above with the specific one declared first.
     let specific = Rule {
         exe: "Launcher.exe".into(),
-        dxgi: Some(Dxgi::Wined3d),
+        dxgi: Setting::Set(Dxgi::Wined3d),
         ..Rule::default()
     };
     let wildcard = Rule {
         exe: ANY_EXE.into(),
-        dxgi: Some(Dxgi::Dxmt),
+        dxgi: Setting::Set(Dxgi::Dxmt),
         ..Rule::default()
     };
     let table = Table {
         rules: vec![specific, wildcard],
     };
     assert_eq!(
-        table.resolve("Launcher.exe", &VersionInfo::default()).dxgi,
+        table
+            .resolve("Launcher.exe", &VersionInfo::default())
+            .dxgi(),
         Some(Dxgi::Wined3d)
     );
 }
@@ -873,13 +917,13 @@ fn two_rules_for_one_basename_resolve_independently() {
             Rule {
                 exe: "Launcher.exe".into(),
                 company: Some("Rockstar Games".into()),
-                dxgi: Some(Dxgi::Wined3d),
+                dxgi: Setting::Set(Dxgi::Wined3d),
                 ..Rule::default()
             },
             Rule {
                 exe: "Launcher.exe".into(),
                 company: Some("Acme".into()),
-                dxgi: Some(Dxgi::Dxmt),
+                dxgi: Setting::Set(Dxgi::Dxmt),
                 ..Rule::default()
             },
         ],
@@ -893,12 +937,15 @@ fn two_rules_for_one_basename_resolve_independently() {
         ..VersionInfo::default()
     };
     let launcher = table.resolve("Launcher.exe", &rockstar);
-    assert_eq!(launcher.dxgi, Some(Dxgi::Wined3d));
+    assert_eq!(launcher.dxgi(), Some(Dxgi::Wined3d));
     assert_eq!(
-        launcher.origin("dxgi"),
+        launcher.scalar(Scalar::Dxgi).set_by.as_ref(),
         Some(&Origin::BuiltInFor("Launcher.exe (Rockstar Games)".into()))
     );
-    assert_eq!(table.resolve("Launcher.exe", &acme).dxgi, Some(Dxgi::Dxmt));
+    assert_eq!(
+        table.resolve("Launcher.exe", &acme).dxgi(),
+        Some(Dxgi::Dxmt)
+    );
     // A third program of that name matches neither.
     assert!(
         table
@@ -913,22 +960,22 @@ fn the_two_implementations_resolve_independently() {
         rules: vec![
             Rule {
                 exe: ANY_EXE.into(),
-                dxgi: Some(Dxgi::Wined3d),
+                dxgi: Setting::Set(Dxgi::Wined3d),
                 ..Rule::default()
             },
             Rule {
                 exe: "game.exe".into(),
-                d3d9: Some(D3d9::Wined3d),
+                d3d9: Setting::Set(D3d9::Wined3d),
                 ..Rule::default()
             },
         ],
     };
     let r = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(r.dxgi, Some(Dxgi::Wined3d));
-    assert_eq!(r.d3d9, Some(D3d9::Wined3d));
+    assert_eq!(r.dxgi(), Some(Dxgi::Wined3d));
+    assert_eq!(r.d3d9(), Some(D3d9::Wined3d));
     let other = table.resolve("other.exe", &VersionInfo::default());
-    assert_eq!(other.dxgi, Some(Dxgi::Wined3d));
-    assert_eq!(other.d3d9, None);
+    assert_eq!(other.dxgi(), Some(Dxgi::Wined3d));
+    assert_eq!(other.d3d9(), None);
 }
 
 #[test]
@@ -937,30 +984,37 @@ fn wined3d_resolves_to_the_most_specific_rule() {
         rules: vec![
             Rule {
                 exe: "game.exe".into(),
-                wined3d: Some(Wined3d::Gl),
+                wined3d: Setting::Set(Wined3d::Gl),
                 ..Rule::default()
             },
             Rule {
                 exe: ANY_EXE.into(),
-                wined3d: Some(Wined3d::Vulkan),
+                wined3d: Setting::Set(Wined3d::Vulkan),
                 ..Rule::default()
             },
         ],
     };
     let none = VersionInfo::default();
-    assert_eq!(base.resolve("game.exe", &none).wined3d, Some(Wined3d::Gl));
+    assert_eq!(base.resolve("game.exe", &none).wined3d(), Some(Wined3d::Gl));
     assert_eq!(
-        base.resolve("other.exe", &none).wined3d,
+        base.resolve("other.exe", &none).wined3d(),
         Some(Wined3d::Vulkan)
     );
     // A later rule of the same tier changes the setting for the game
     // and leaves other processes alone.
     let table = with_lines(&base, "exe=game.exe;wined3d=vulkan");
     let game = table.resolve("game.exe", &none);
-    assert_eq!(game.wined3d, Some(Wined3d::Vulkan));
-    assert_eq!(game.origin("wined3d"), Some(&Origin::Line(1)));
+    assert_eq!(game.wined3d(), Some(Wined3d::Vulkan));
     assert_eq!(
-        table.resolve("other.exe", &none).origin("wined3d"),
+        game.scalar(Scalar::Wined3d).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
+    assert_eq!(
+        table
+            .resolve("other.exe", &none)
+            .scalar(Scalar::Wined3d)
+            .set_by
+            .as_ref(),
         Some(&Origin::BuiltIn)
     );
 }
@@ -971,46 +1025,64 @@ fn opengl_resolves_to_the_most_specific_rule() {
         rules: vec![
             Rule {
                 exe: "apple.exe".into(),
-                opengl: Some(OpenGl::Cgl),
+                opengl: Setting::Set(OpenGl::Cgl),
                 ..Rule::default()
             },
             Rule {
                 exe: ANY_EXE.into(),
-                opengl: Some(OpenGl::Egl),
+                opengl: Setting::Set(OpenGl::Egl),
                 ..Rule::default()
             },
         ],
     };
     let none = VersionInfo::default();
     let apple = base.resolve("Apple.exe", &none);
-    assert_eq!(apple.opengl, Some(OpenGl::Cgl));
+    assert_eq!(apple.opengl(), Some(OpenGl::Cgl));
     assert_eq!(
-        apple.origin("opengl"),
+        apple.scalar(Scalar::OpenGl).set_by.as_ref(),
         Some(&Origin::BuiltInFor("apple.exe".into()))
     );
     // It is a setting of the process, not an env entry.
     assert_eq!(apple.env, []);
     let other = base.resolve("other.exe", &none);
-    assert_eq!(other.opengl, Some(OpenGl::Egl));
-    assert!(Table::default().resolve("x.exe", &none).opengl.is_none());
+    assert_eq!(other.opengl(), Some(OpenGl::Egl));
+    assert!(Table::default().resolve("x.exe", &none).opengl().is_none());
     // A `*` rule from WINE_COMPATDB changes it for every process, the
     // one a built-in rule names included.
     let table = with_lines(&base, "exe=*;opengl=cgl");
     let other = table.resolve("other.exe", &none);
-    assert_eq!(other.opengl, Some(OpenGl::Cgl));
-    assert_eq!(other.origin("opengl"), Some(&Origin::Line(1)));
+    assert_eq!(other.opengl(), Some(OpenGl::Cgl));
+    assert_eq!(
+        other.scalar(Scalar::OpenGl).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
     let table = with_lines(&base, "exe=*;opengl=egl");
-    assert_eq!(table.resolve("apple.exe", &none).opengl, Some(OpenGl::Egl));
+    assert_eq!(
+        table.resolve("apple.exe", &none).opengl(),
+        Some(OpenGl::Egl)
+    );
+}
+
+/// A resolution with the env entries `env` in which, when `wined3d` is
+/// set, line 1 set that renderer.
+fn with_renderer(wined3d: Option<Wined3d>, env: Vec<(String, String)>) -> Resolution {
+    let mut r = Resolution {
+        env,
+        ..Resolution::default()
+    };
+    if let Some(wined3d) = wined3d {
+        r.fold_scalar(
+            Scalar::Wined3d,
+            Setting::Set(ScalarValue::Wined3d(wined3d)),
+            &Origin::Line(1),
+        );
+    }
+    r
 }
 
 #[test]
 fn a_set_renderer_is_always_named_and_unset_sets_nothing() {
-    let resolved = |wined3d| Resolution {
-        wined3d,
-        env: vec![pair("A", "1")],
-        set_by: vec![("wined3d", Origin::Line(1))],
-        ..Resolution::default()
-    };
+    let resolved = |wined3d| with_renderer(wined3d, vec![pair("A", "1")]);
     // Each renderer a rule sets goes after the rules' env, OpenGL as
     // explicitly as Vulkan, so a child never keeps its parent's Vulkan.
     for (wined3d, value) in [
@@ -1032,18 +1104,16 @@ fn the_setting_decides_the_renderer_and_keeps_the_other_options_of_an_env_rule()
     // A rule's own WINE_D3D_CONFIG keeps its other options, loses its
     // renderer, and the setting's entry is the value the block ends with.
     for (wined3d, renderer) in [(Wined3d::Vulkan, "vulkan"), (Wined3d::Gl, "gl")] {
-        let mut r = Resolution {
-            wined3d: Some(wined3d),
-            env: vec![
+        let mut r = with_renderer(
+            Some(wined3d),
+            vec![
                 pair("wine_d3d_config", "csmt=0"),
                 pair(
                     "WINE_D3D_CONFIG",
                     "renderer=no3d,csmt=0x1;MaxVersionGL=0x40001",
                 ),
             ],
-            set_by: vec![("wined3d", Origin::Line(1))],
-            ..Resolution::default()
-        };
+        );
         assert_eq!(r.apply_wined3d(), Some(wined3d));
         let want = format!("renderer={renderer},csmt=0x1,MaxVersionGL=0x40001");
         assert_eq!(r.env.last(), Some(&pair("WINE_D3D_CONFIG", &want)));
@@ -1057,12 +1127,7 @@ fn the_setting_decides_the_renderer_and_keeps_the_other_options_of_an_env_rule()
         );
     }
     // A rule that removes the variable leaves just the renderer.
-    let mut r = Resolution {
-        wined3d: Some(Wined3d::Vulkan),
-        env: vec![pair("WINE_D3D_CONFIG", "")],
-        set_by: vec![("wined3d", Origin::Line(1))],
-        ..Resolution::default()
-    };
+    let mut r = with_renderer(Some(Wined3d::Vulkan), vec![pair("WINE_D3D_CONFIG", "")]);
     r.apply_wined3d();
     assert_eq!(
         r.env.last(),
@@ -1070,10 +1135,10 @@ fn the_setting_decides_the_renderer_and_keeps_the_other_options_of_an_env_rule()
     );
     // Without the setting a rule's WINE_D3D_CONFIG applies as it is,
     // renderer and all.
-    let mut r = Resolution {
-        env: vec![pair("WINE_D3D_CONFIG", "renderer=vulkan,csmt=0")],
-        ..Resolution::default()
-    };
+    let mut r = with_renderer(
+        None,
+        vec![pair("WINE_D3D_CONFIG", "renderer=vulkan,csmt=0")],
+    );
     assert_eq!(r.apply_wined3d(), None);
     assert_eq!(r.env, [pair("WINE_D3D_CONFIG", "renderer=vulkan,csmt=0")]);
     assert_eq!(r.d3d_config(), Some("renderer=vulkan,csmt=0"));

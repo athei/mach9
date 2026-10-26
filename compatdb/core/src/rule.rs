@@ -35,43 +35,35 @@ pub struct Rule {
     /// Substring the image's version `OriginalFilename` must contain.
     pub original_filename: Option<String>,
     /// The DXGI-family implementation to load.
-    pub dxgi: Option<Dxgi>,
+    pub dxgi: Setting<Dxgi>,
     /// The D3D9 implementation to load.
-    pub d3d9: Option<D3d9>,
+    pub d3d9: Setting<D3d9>,
     /// The renderer of wined3d, for every wined3d user in the process.
-    pub wined3d: Option<Wined3d>,
-    /// Which OpenGL the Mac driver gives the process. Unset leaves the
-    /// decision to a rule folded earlier; with none, the Mac driver gives
-    /// Apple's OpenGL, as upstream Wine does.
-    pub opengl: Option<OpenGl>,
-    /// Whether the process is DPI-aware (system-aware) or unaware. Unset
-    /// leaves the decision to a rule folded earlier, and with none to wine
-    /// (the registry and the manifest).
-    pub dpi_aware: Option<bool>,
+    pub wined3d: Setting<Wined3d>,
+    /// Which OpenGL the Mac driver gives the process. With no rule setting
+    /// it, the Mac driver gives Apple's OpenGL, as upstream Wine does.
+    pub opengl: Setting<OpenGl>,
+    /// Whether the process is DPI-aware (system-aware) or unaware. With no
+    /// rule setting it, wine decides (the registry and the manifest).
+    pub dpi_aware: Setting<bool>,
     /// Whether a 32-bit process gets the 4 GB address space whatever its
     /// executable's `IMAGE_FILE_LARGE_ADDRESS_AWARE` flag says. `false` does
     /// not take the space away from an executable that has the flag; it only
     /// stops forcing it. Has no effect on a 64-bit process.
-    pub large_address_aware: Option<bool>,
+    pub large_address_aware: Setting<bool>,
     /// Whether the Mac driver takes the mouse movement of raw input
-    /// (`WM_INPUT`) and `DirectInput` from `GameController`'s `GCMouse`, in the
+    /// (`WM_INPUT`) and `DirectInput` from GameController's `GCMouse`, in the
     /// device's own counts, instead of from the cursor's movement, which macOS
-    /// accelerates and scales for retina. Unset leaves the decision to a rule
-    /// folded earlier; with none, the Mac driver keeps upstream Wine's
-    /// behaviour, the cursor's movement.
-    pub gcmouse: Option<bool>,
+    /// accelerates and scales for retina. With no rule setting it, the Mac
+    /// driver keeps upstream Wine's behaviour, the cursor's movement.
+    pub gcmouse: Setting<bool>,
     /// Whether no-execute stays permanently on in a 32-bit process, even when
     /// its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine
     /// turns it off. `false` is the same as unset: Wine's behaviour. Has no
     /// effect on a 64-bit process, which always has no-execute on. Unlike an
     /// `env` entry, the value is the process's own: the processes it starts
     /// get their own rules' value.
-    pub force_nx: Option<bool>,
-    /// The keys of the scalar settings (those of [`Scalar::ALL`]) this rule
-    /// sets to `default`: from this rule on the setting is unset again, so
-    /// upstream Wine decides unless a rule folded later sets it. A key is
-    /// either here or has a value in its field, never both.
-    pub resets: Vec<&'static str>,
+    pub force_nx: Setting<bool>,
     /// `WINEDLLOVERRIDES` elements (each a `names=order` string). An entry
     /// whose order is `default` sets no load order: it removes the entries
     /// that the rules folded before it gave its modules, so the registry and
@@ -101,12 +93,59 @@ pub struct Rule {
     pub source: Source,
 }
 
-/// The value of a scalar setting that resets it (see [`Rule::resets`]), and
-/// of a `dll_overrides` entry that removes the overrides of its modules.
+/// The value of a scalar setting that resets it (see [`Setting::Reset`]),
+/// and of a `dll_overrides` entry that removes the overrides of its modules.
 ///
 /// Like every word of the format it is matched ASCII-case-insensitively and
 /// written in lowercase.
 pub const DEFAULT_VALUE: &str = "default";
+
+/// What a rule says about a setting that holds one value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Setting<T> {
+    /// Nothing: a rule folded earlier decides, and with none upstream Wine.
+    #[default]
+    Unset,
+    /// This value, which beats that of every rule folded earlier.
+    Set(T),
+    /// `default`: from this rule on the setting is unset again, so upstream
+    /// Wine decides unless a rule folded later sets it.
+    Reset,
+}
+
+impl<T> Setting<T> {
+    /// The value it sets, or `None` when it is unset or reset.
+    #[must_use]
+    pub fn value(self) -> Option<T> {
+        match self {
+            Self::Set(value) => Some(value),
+            Self::Unset | Self::Reset => None,
+        }
+    }
+
+    /// Whether it says nothing.
+    #[must_use]
+    pub const fn is_unset(&self) -> bool {
+        matches!(self, Self::Unset)
+    }
+
+    /// The same setting with the value, if any, passed through `f`.
+    #[must_use]
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Setting<U> {
+        match self {
+            Self::Unset => Setting::Unset,
+            Self::Set(value) => Setting::Set(f(value)),
+            Self::Reset => Setting::Reset,
+        }
+    }
+}
+
+impl<T> From<T> for Setting<T> {
+    /// The setting that sets `value`.
+    fn from(value: T) -> Self {
+        Self::Set(value)
+    }
+}
 
 impl Default for Rule {
     fn default() -> Self {
@@ -115,15 +154,14 @@ impl Default for Rule {
             company: None,
             product: None,
             original_filename: None,
-            dxgi: None,
-            d3d9: None,
-            wined3d: None,
-            opengl: None,
-            dpi_aware: None,
-            large_address_aware: None,
-            gcmouse: None,
-            force_nx: None,
-            resets: Vec::new(),
+            dxgi: Setting::Unset,
+            d3d9: Setting::Unset,
+            wined3d: Setting::Unset,
+            opengl: Setting::Unset,
+            dpi_aware: Setting::Unset,
+            large_address_aware: Setting::Unset,
+            gcmouse: Setting::Unset,
+            force_nx: Setting::Unset,
             dll_overrides: Vec::new(),
             arguments: Vec::new(),
             arguments_override: None,
@@ -135,63 +173,65 @@ impl Default for Rule {
 }
 
 impl Rule {
-    /// The value this rule sets for the scalar setting `scalar`, or `None`
-    /// when it sets none.
+    /// What this rule says about the scalar setting `scalar`.
     #[must_use]
-    pub const fn scalar(&self, scalar: Scalar) -> Option<ScalarValue> {
+    pub fn scalar(&self, scalar: Scalar) -> Setting<ScalarValue> {
         match scalar {
-            Scalar::Dxgi => match self.dxgi {
-                Some(value) => Some(ScalarValue::Dxgi(value)),
-                None => None,
-            },
-            Scalar::D3d9 => match self.d3d9 {
-                Some(value) => Some(ScalarValue::D3d9(value)),
-                None => None,
-            },
-            Scalar::Wined3d => match self.wined3d {
-                Some(value) => Some(ScalarValue::Wined3d(value)),
-                None => None,
-            },
-            Scalar::OpenGl => match self.opengl {
-                Some(value) => Some(ScalarValue::OpenGl(value)),
-                None => None,
-            },
-            Scalar::DpiAware => bool_value(self.dpi_aware),
-            Scalar::LargeAddressAware => bool_value(self.large_address_aware),
-            Scalar::Gcmouse => bool_value(self.gcmouse),
-            Scalar::ForceNx => bool_value(self.force_nx),
+            Scalar::Dxgi => self.dxgi.map(ScalarValue::Dxgi),
+            Scalar::D3d9 => self.d3d9.map(ScalarValue::D3d9),
+            Scalar::Wined3d => self.wined3d.map(ScalarValue::Wined3d),
+            Scalar::OpenGl => self.opengl.map(ScalarValue::OpenGl),
+            Scalar::DpiAware => self.dpi_aware.map(ScalarValue::Bool),
+            Scalar::LargeAddressAware => self.large_address_aware.map(ScalarValue::Bool),
+            Scalar::Gcmouse => self.gcmouse.map(ScalarValue::Bool),
+            Scalar::ForceNx => self.force_nx.map(ScalarValue::Bool),
         }
     }
 
-    /// Set the scalar setting that `value` is a value of, `scalar`, and
-    /// take it out of [`Rule::resets`]; `None` resets it to `default`. A
+    /// Make this rule say `setting` about the scalar setting `scalar`. A
     /// value of another setting leaves the rule as it is.
-    pub(crate) fn put_scalar(&mut self, scalar: Scalar, value: Option<ScalarValue>) {
-        match (scalar, value) {
-            (Scalar::Dxgi, Some(ScalarValue::Dxgi(value))) => self.dxgi = Some(value),
-            (Scalar::D3d9, Some(ScalarValue::D3d9(value))) => self.d3d9 = Some(value),
-            (Scalar::Wined3d, Some(ScalarValue::Wined3d(value))) => self.wined3d = Some(value),
-            (Scalar::OpenGl, Some(ScalarValue::OpenGl(value))) => self.opengl = Some(value),
-            (Scalar::DpiAware, Some(ScalarValue::Bool(on))) => self.dpi_aware = Some(on),
-            (Scalar::LargeAddressAware, Some(ScalarValue::Bool(on))) => {
-                self.large_address_aware = Some(on);
-            }
-            (Scalar::Gcmouse, Some(ScalarValue::Bool(on))) => self.gcmouse = Some(on),
-            (Scalar::ForceNx, Some(ScalarValue::Bool(on))) => self.force_nx = Some(on),
-            (_, Some(_)) => return,
-            (Scalar::Dxgi, None) => self.dxgi = None,
-            (Scalar::D3d9, None) => self.d3d9 = None,
-            (Scalar::Wined3d, None) => self.wined3d = None,
-            (Scalar::OpenGl, None) => self.opengl = None,
-            (Scalar::DpiAware, None) => self.dpi_aware = None,
-            (Scalar::LargeAddressAware, None) => self.large_address_aware = None,
-            (Scalar::Gcmouse, None) => self.gcmouse = None,
-            (Scalar::ForceNx, None) => self.force_nx = None,
+    pub(crate) fn put_scalar(&mut self, scalar: Scalar, setting: Setting<ScalarValue>) {
+        /// Put `setting` into `slot`, its value taken out by `pick`, which
+        /// gives `None` for a value of another setting.
+        fn put<T>(
+            slot: &mut Setting<T>,
+            setting: Setting<ScalarValue>,
+            pick: impl FnOnce(ScalarValue) -> Option<T>,
+        ) {
+            *slot = match setting {
+                Setting::Unset => Setting::Unset,
+                Setting::Reset => Setting::Reset,
+                Setting::Set(value) => match pick(value) {
+                    Some(value) => Setting::Set(value),
+                    None => return,
+                },
+            };
         }
-        let key = scalar.as_str();
-        self.resets.retain(|k| *k != key);
-        if value.is_none() {
-            self.resets.push(key);
+        let on = |value| match value {
+            ScalarValue::Bool(on) => Some(on),
+            _ => None,
+        };
+        match scalar {
+            Scalar::Dxgi => put(&mut self.dxgi, setting, |value| match value {
+                ScalarValue::Dxgi(dxgi) => Some(dxgi),
+                _ => None,
+            }),
+            Scalar::D3d9 => put(&mut self.d3d9, setting, |value| match value {
+                ScalarValue::D3d9(d3d9) => Some(d3d9),
+                _ => None,
+            }),
+            Scalar::Wined3d => put(&mut self.wined3d, setting, |value| match value {
+                ScalarValue::Wined3d(wined3d) => Some(wined3d),
+                _ => None,
+            }),
+            Scalar::OpenGl => put(&mut self.opengl, setting, |value| match value {
+                ScalarValue::OpenGl(opengl) => Some(opengl),
+                _ => None,
+            }),
+            Scalar::DpiAware => put(&mut self.dpi_aware, setting, on),
+            Scalar::LargeAddressAware => put(&mut self.large_address_aware, setting, on),
+            Scalar::Gcmouse => put(&mut self.gcmouse, setting, on),
+            Scalar::ForceNx => put(&mut self.force_nx, setting, on),
         }
     }
 
@@ -269,14 +309,6 @@ impl Rule {
         } else {
             format!("{} ({})", self.exe, pins.join(", "))
         }
-    }
-}
-
-/// The value of a true-or-false setting a rule sets.
-const fn bool_value(value: Option<bool>) -> Option<ScalarValue> {
-    match value {
-        Some(on) => Some(ScalarValue::Bool(on)),
-        None => None,
     }
 }
 

@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use crate::{DEFAULT_VALUE, ENV_VAR, FieldError, Key, Rule, Scalar, Source, Table};
+use crate::{DEFAULT_VALUE, ENV_VAR, FieldError, Key, Rule, Scalar, Setting, Source, Table};
 
 /// Whether `line` is a version header of the old format, `v=` and nothing
 /// but ASCII digits, which launchers wrote as the first line of a table. The
@@ -91,11 +91,10 @@ fn rule_to_record(rule: &Rule) -> String {
         fields.push(field("original_filename", v));
     }
     for &scalar in Scalar::ALL {
-        let key = scalar.as_str();
-        if let Some(value) = rule.scalar(scalar) {
-            fields.push(field(key, value.as_str()));
-        } else if rule.resets.contains(&key) {
-            fields.push(field(key, DEFAULT_VALUE));
+        match rule.scalar(scalar) {
+            Setting::Unset => {}
+            Setting::Set(value) => fields.push(field(scalar.as_str(), value.as_str())),
+            Setting::Reset => fields.push(field(scalar.as_str(), DEFAULT_VALUE)),
         }
     }
     for over in &rule.dll_overrides {
@@ -191,18 +190,18 @@ fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), FieldError> 
 }
 
 /// Set the scalar setting `scalar` of `rule` from its wire `value`:
-/// `default`, in any case, resets it (see [`Rule::resets`]), and anything
+/// `default`, in any case, resets it (see [`Setting::Reset`]), and anything
 /// else is read as a value of the setting. The last field for a key wins, as
 /// for any scalar. A value the setting does not take leaves the rule as it
 /// was.
 fn set_scalar(rule: &mut Rule, scalar: Scalar, value: &str) -> Result<(), FieldError> {
     let decoded = decode(value);
-    let value = if decoded.eq_ignore_ascii_case(DEFAULT_VALUE) {
-        None
+    let setting = if decoded.eq_ignore_ascii_case(DEFAULT_VALUE) {
+        Setting::Reset
     } else {
-        Some(scalar.parse_value(&decoded)?)
+        Setting::Set(scalar.parse_value(&decoded)?)
     };
-    rule.put_scalar(scalar, value);
+    rule.put_scalar(scalar, setting);
     Ok(())
 }
 

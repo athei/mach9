@@ -1,10 +1,13 @@
 //! Folding the rules that match a process into the settings it gets, with
 //! where each value came from.
 
+use std::collections::BTreeMap;
+
 #[cfg(doc)]
 use crate::basename_of;
 use crate::{
-    D3d9, DEFAULT_VALUE, Dxgi, ENV_VAR, OpenGl, Rule, Scalar, Source, Table, VersionInfo, Wined3d,
+    D3d9, DEFAULT_VALUE, Dxgi, ENV_VAR, OpenGl, Rule, Scalar, ScalarValue, Setting, Source, Table,
+    VersionInfo, Wined3d,
 };
 
 /// The settings that apply to one process.
@@ -14,30 +17,9 @@ use crate::{
 /// accumulate. Also says where each value came from, for the log.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Resolution {
-    /// The DXGI-family implementation (see [`Rule::dxgi`]), `None` when no
-    /// rule sets it.
-    pub dxgi: Option<Dxgi>,
-    /// The D3D9 implementation (see [`Rule::d3d9`]), `None` when no rule
-    /// sets it.
-    pub d3d9: Option<D3d9>,
-    /// The renderer of wined3d (see [`Rule::wined3d`]), `None` when no rule
-    /// sets it.
-    pub wined3d: Option<Wined3d>,
-    /// Which OpenGL the Mac driver gives (see [`Rule::opengl`]), `None` when
-    /// no rule sets it.
-    pub opengl: Option<OpenGl>,
-    /// The DPI awareness (see [`Rule::dpi_aware`]), `None` when no rule sets
-    /// it.
-    pub dpi_aware: Option<bool>,
-    /// Whether large address awareness is forced (see
-    /// [`Rule::large_address_aware`]), `None` when no rule sets it.
-    pub large_address_aware: Option<bool>,
-    /// Whether mouse movement comes from `GCMouse` (see [`Rule::gcmouse`]),
-    /// `None` when no rule sets it.
-    pub gcmouse: Option<bool>,
-    /// Whether no-execute stays on (see [`Rule::force_nx`]), `None` when no
-    /// rule sets it.
-    pub force_nx: Option<bool>,
+    /// The state of each scalar setting a rule set or reset; one that is
+    /// missing is unset.
+    scalars: BTreeMap<Scalar, ScalarState>,
     /// The `dll_overrides` entries of every matching rule in fold order,
     /// without the `default` entries, which only take modules out of the
     /// entries before them.
@@ -63,15 +45,28 @@ pub struct Resolution {
     pub env: Vec<(String, String)>,
     /// Where each entry of [`Resolution::env`] came from, at the same index.
     pub env_from: Vec<EnvFrom>,
-    /// Where each scalar setting came from, by its key (`dxgi`, `d3d9`,
-    /// `wined3d`, `opengl`, `dpi_aware`, `large_address_aware`, `gcmouse`,
-    /// `force_nx`): the last rule folded that set it. A key no rule set, or
-    /// one a later rule reset, is missing.
-    pub set_by: Vec<(&'static str, Origin)>,
-    /// The scalar settings a rule set to `default` and no rule folded after
-    /// it set again, by key, with that rule.
-    pub reset_by: Vec<(&'static str, Origin)>,
 }
+
+/// Where a scalar setting of a [`Resolution`] ended up.
+#[non_exhaustive]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct ScalarState {
+    /// The value of the last rule folded that set it, or `None` when no rule
+    /// set it or a later rule reset it.
+    pub value: Option<ScalarValue>,
+    /// The rule of that value; `Some` exactly when `value` is.
+    pub set_by: Option<Origin>,
+    /// The rule that reset the setting to `default` when no rule folded
+    /// after it set it again; never `Some` together with `value`.
+    pub reset_by: Option<Origin>,
+}
+
+/// The state of a setting no rule set or reset.
+static UNSET: ScalarState = ScalarState {
+    value: None,
+    set_by: None,
+    reset_by: None,
+};
 
 /// What a `<module>=default` entry of `dll_overrides` did.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,18 +161,94 @@ pub struct EnvStep {
 impl Resolution {
     /// Whether there is nothing to apply.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.dxgi.is_none()
-            && self.d3d9.is_none()
-            && self.wined3d.is_none()
-            && self.opengl.is_none()
-            && self.dpi_aware.is_none()
-            && self.large_address_aware.is_none()
-            && self.gcmouse.is_none()
-            && self.force_nx.is_none()
+    pub fn is_empty(&self) -> bool {
+        self.scalars.values().all(|state| state.value.is_none())
             && self.dll_overrides.is_empty()
             && self.arguments.is_empty()
             && self.env.is_empty()
+    }
+
+    /// Where the scalar setting `scalar` ended up: its value and the rule
+    /// that set it, or the rule that reset it.
+    #[must_use]
+    pub fn scalar(&self, scalar: Scalar) -> &ScalarState {
+        self.scalars.get(&scalar).unwrap_or(&UNSET)
+    }
+
+    /// The DXGI-family implementation (see [`Rule::dxgi`]), `None` when no
+    /// rule sets it.
+    #[must_use]
+    pub fn dxgi(&self) -> Option<Dxgi> {
+        match self.scalar(Scalar::Dxgi).value {
+            Some(ScalarValue::Dxgi(dxgi)) => Some(dxgi),
+            _ => None,
+        }
+    }
+
+    /// The D3D9 implementation (see [`Rule::d3d9`]), `None` when no rule
+    /// sets it.
+    #[must_use]
+    pub fn d3d9(&self) -> Option<D3d9> {
+        match self.scalar(Scalar::D3d9).value {
+            Some(ScalarValue::D3d9(d3d9)) => Some(d3d9),
+            _ => None,
+        }
+    }
+
+    /// The renderer of wined3d (see [`Rule::wined3d`]), `None` when no rule
+    /// sets it.
+    #[must_use]
+    pub fn wined3d(&self) -> Option<Wined3d> {
+        match self.scalar(Scalar::Wined3d).value {
+            Some(ScalarValue::Wined3d(wined3d)) => Some(wined3d),
+            _ => None,
+        }
+    }
+
+    /// Which OpenGL the Mac driver gives (see [`Rule::opengl`]), `None` when
+    /// no rule sets it.
+    #[must_use]
+    pub fn opengl(&self) -> Option<OpenGl> {
+        match self.scalar(Scalar::OpenGl).value {
+            Some(ScalarValue::OpenGl(opengl)) => Some(opengl),
+            _ => None,
+        }
+    }
+
+    /// The DPI awareness (see [`Rule::dpi_aware`]), `None` when no rule sets
+    /// it.
+    #[must_use]
+    pub fn dpi_aware(&self) -> Option<bool> {
+        self.switch(Scalar::DpiAware)
+    }
+
+    /// Whether large address awareness is forced (see
+    /// [`Rule::large_address_aware`]), `None` when no rule sets it.
+    #[must_use]
+    pub fn large_address_aware(&self) -> Option<bool> {
+        self.switch(Scalar::LargeAddressAware)
+    }
+
+    /// Whether mouse movement comes from `GCMouse` (see [`Rule::gcmouse`]),
+    /// `None` when no rule sets it.
+    #[must_use]
+    pub fn gcmouse(&self) -> Option<bool> {
+        self.switch(Scalar::Gcmouse)
+    }
+
+    /// Whether no-execute stays on (see [`Rule::force_nx`]), `None` when no
+    /// rule sets it.
+    #[must_use]
+    pub fn force_nx(&self) -> Option<bool> {
+        self.switch(Scalar::ForceNx)
+    }
+
+    /// The value of the true-or-false setting `scalar`.
+    fn switch(&self, scalar: Scalar) -> Option<bool> {
+        match self.scalar(scalar).value {
+            Some(ScalarValue::Bool(on)) => Some(on),
+            _ => None,
+        }
     }
 
     /// The value the rules' own `env` entries leave `WINE_D3D_CONFIG` at:
@@ -203,8 +274,8 @@ impl Resolution {
     /// [`Table::resolve`], which records where the setting came from; a
     /// resolution without that record is left as it is.
     pub fn apply_wined3d(&mut self) -> Option<Wined3d> {
-        let wined3d = self.wined3d?;
-        let origin = self.origin("wined3d")?.clone();
+        let wined3d = self.wined3d()?;
+        let origin = self.scalar(Scalar::Wined3d).set_by.clone()?;
         let value = wined3d.config(self.d3d_config().filter(|value| !value.is_empty()));
         self.env.push((Wined3d::CONFIG_VAR.to_string(), value));
         self.env_from.push(EnvFrom {
@@ -212,16 +283,6 @@ impl Resolution {
             default: false,
         });
         Some(wined3d)
-    }
-
-    /// Where the scalar setting `key` came from, or `None` when no rule set
-    /// it.
-    #[must_use]
-    pub fn origin(&self, key: &str) -> Option<&Origin> {
-        self.set_by
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, origin)| origin)
     }
 
     /// Where the env entry that leaves `WINE_D3D_CONFIG` at
@@ -235,42 +296,29 @@ impl Resolution {
         self.env_from.get(i).map(|from| &from.origin)
     }
 
-    /// The rule that reset the scalar setting `key` to `default`, when no
-    /// rule folded after it set it again.
-    #[must_use]
-    pub fn reset_origin(&self, key: &str) -> Option<&Origin> {
-        self.reset_by
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, origin)| origin)
-    }
-
-    /// Record that `rule` set the scalar setting `key`, replacing a rule
-    /// folded before that set or reset it.
-    fn record(&mut self, key: &'static str, rule: &Rule) {
-        self.set_by.retain(|(k, _)| *k != key);
-        self.reset_by.retain(|(k, _)| *k != key);
-        self.set_by.push((key, Origin::of(rule)));
-    }
-
-    /// Unset the scalar setting `key`, as `rule` sets it to `default`, and
-    /// record that it did. A key that is not one of [`Scalar::ALL`] is
-    /// ignored.
-    fn reset(&mut self, key: &'static str, rule: &Rule) {
-        match key {
-            "dxgi" => self.dxgi = None,
-            "d3d9" => self.d3d9 = None,
-            "wined3d" => self.wined3d = None,
-            "opengl" => self.opengl = None,
-            "dpi_aware" => self.dpi_aware = None,
-            "large_address_aware" => self.large_address_aware = None,
-            "gcmouse" => self.gcmouse = None,
-            "force_nx" => self.force_nx = None,
-            _ => return,
-        }
-        self.set_by.retain(|(k, _)| *k != key);
-        self.reset_by.retain(|(k, _)| *k != key);
-        self.reset_by.push((key, Origin::of(rule)));
+    /// Fold what a rule from `origin` says about the scalar setting
+    /// `scalar`: a value replaces the value or reset of a rule folded before,
+    /// and a reset unsets the setting from here on.
+    pub(crate) fn fold_scalar(
+        &mut self,
+        scalar: Scalar,
+        setting: Setting<ScalarValue>,
+        origin: &Origin,
+    ) {
+        let state = match setting {
+            Setting::Unset => return,
+            Setting::Set(value) => ScalarState {
+                value: Some(value),
+                set_by: Some(origin.clone()),
+                reset_by: None,
+            },
+            Setting::Reset => ScalarState {
+                value: None,
+                set_by: None,
+                reset_by: Some(origin.clone()),
+            },
+        };
+        self.scalars.insert(scalar, state);
     }
 
     /// Fold the `dll_overrides` entries of `rule` into the list: an entry
@@ -408,7 +456,7 @@ impl Table {
     /// rule's `arguments_override`, which replaces the arguments the rules
     /// folded before it accumulated (the `arguments` of the rule itself and
     /// of the rules folded after it append to it), a scalar set to
-    /// `default` (see [`Rule::resets`]), and a `dll_overrides` entry with
+    /// `default` (see [`Setting::Reset`]), and a `dll_overrides` entry with
     /// the order `default`, which takes its modules out of the entries
     /// before it.
     ///
@@ -430,47 +478,10 @@ impl Table {
         matching.sort_by_key(|rule| (rule.source != Source::BuiltIn, rule.specificity()));
         let mut r = Resolution::default();
         for rule in matching {
-            if let Some(dxgi) = rule.dxgi {
-                r.dxgi = Some(dxgi);
-                r.record("dxgi", rule);
-            }
-            if let Some(d3d9) = rule.d3d9 {
-                r.d3d9 = Some(d3d9);
-                r.record("d3d9", rule);
-            }
-            if let Some(wined3d) = rule.wined3d {
-                r.wined3d = Some(wined3d);
-                r.record("wined3d", rule);
-            }
-            if let Some(opengl) = rule.opengl {
-                r.opengl = Some(opengl);
-                r.record("opengl", rule);
-            }
-            if let Some(aware) = rule.dpi_aware {
-                r.dpi_aware = Some(aware);
-                r.record("dpi_aware", rule);
-            }
-            if let Some(laa) = rule.large_address_aware {
-                r.large_address_aware = Some(laa);
-                r.record("large_address_aware", rule);
-            }
-            if let Some(gcmouse) = rule.gcmouse {
-                r.gcmouse = Some(gcmouse);
-                r.record("gcmouse", rule);
-            }
-            if let Some(force_nx) = rule.force_nx {
-                r.force_nx = Some(force_nx);
-                r.record("force_nx", rule);
-            }
-            // A key is either reset or set (see Rule::resets); a rule built
-            // with both keeps its value, as it serializes.
-            for &scalar in Scalar::ALL {
-                let key = scalar.as_str();
-                if rule.resets.contains(&key) && rule.scalar(scalar).is_none() {
-                    r.reset(key, rule);
-                }
-            }
             let origin = Origin::of(rule);
+            for &scalar in Scalar::ALL {
+                r.fold_scalar(scalar, rule.scalar(scalar), &origin);
+            }
             r.fold_dll_overrides(rule);
             r.fold_arguments(rule);
             let default = rule.env_is_default();

@@ -9,7 +9,7 @@
 use std::{fmt, str::FromStr};
 
 #[cfg(doc)]
-use crate::Rule;
+use crate::Setting;
 use crate::{D3d9, DEFAULT_VALUE, Dxgi, FieldError, OpenGl, Wined3d};
 
 /// The key of a field of a rule, which is also the name of the field on the
@@ -332,7 +332,7 @@ impl Scalar {
 
     /// Read `text` as a value of this setting, ASCII-case-insensitively.
     /// `default` is not a value: it resets the setting (see
-    /// [`Rule::resets`]).
+    /// [`Setting::Reset`]).
     ///
     /// # Errors
     ///
