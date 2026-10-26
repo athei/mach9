@@ -1,6 +1,8 @@
 //! The process side: its arch, and the UTF-16 image path, command line and
 //! environment block as wine hands them over.
 
+use crate::EnvEntry;
+
 /// The architecture of the program a process runs, which is that of its main
 /// executable.
 ///
@@ -71,17 +73,21 @@ pub fn basename_of(image_path: &[u16]) -> String {
 /// `--type=` children, which inherit their parent's switches, untouched.
 /// Returns `None` when nothing changed.
 #[must_use]
-pub fn append_cmdline(cmdline: &[u16], appends: &[String]) -> Option<Vec<u16>> {
+pub fn append_cmdline(cmdline: &[u16], appends: &[impl AsRef<str>]) -> Option<Vec<u16>> {
     append_cmdline_each(cmdline, appends).0
 }
 
 /// [`append_cmdline`], also saying for each text whether it was appended:
 /// false for one that was already present, or empty.
 #[must_use]
-pub fn append_cmdline_each(cmdline: &[u16], appends: &[String]) -> (Option<Vec<u16>>, Vec<bool>) {
+pub fn append_cmdline_each(
+    cmdline: &[u16],
+    appends: &[impl AsRef<str>],
+) -> (Option<Vec<u16>>, Vec<bool>) {
     let mut cur = cmdline.to_vec();
     let mut appended = Vec::with_capacity(appends.len());
     for text in appends {
+        let text = text.as_ref();
         if text.is_empty() || contains_cs(&cur, text) {
             appended.push(false);
             continue;
@@ -111,22 +117,23 @@ pub fn env_value(block: &[u16], name: &str) -> Option<String> {
 
 /// Merge environment entries into a `NAME=value\0...\0\0` block.
 ///
-/// A name is matched case-insensitively; a non-empty value replaces in place
-/// or appends, an empty value removes. Drive entries (`=C:=...`) are left
+/// A name is matched case-insensitively; a value replaces in place or
+/// appends, an entry without one removes. Drive entries (`=C:=...`) are left
 /// alone. Returns `None` when nothing changed.
 #[must_use]
-pub fn merge_env(block: &[u16], entries: &[(String, String)]) -> Option<Vec<u16>> {
+pub fn merge_env(block: &[u16], entries: &[EnvEntry]) -> Option<Vec<u16>> {
     let mut segs = split_env(block);
     let mut changed = false;
-    for (name, value) in entries {
+    for entry in entries {
+        let name = entry.name().as_str();
         let found = segs.iter().position(|seg| env_name_matches(seg, name));
-        if value.is_empty() {
+        let Some(value) = entry.value() else {
             if let Some(i) = found {
                 segs.remove(i);
                 changed = true;
             }
             continue;
-        }
+        };
         let mut new_seg: Vec<u16> = name.encode_utf16().collect();
         new_seg.push(u16::from(b'='));
         new_seg.extend(value.encode_utf16());

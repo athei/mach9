@@ -30,11 +30,11 @@ mod version;
 
 use std::{
     ffi::{CStr, CString},
-    fmt::Write as _,
+    fmt::{Display, Write as _},
 };
 
 use compatdb_core::{
-    Arch, ArgumentsDropped, D3d9, DllOverrideReset, Dxgi, ENV_VAR, EnvStep, Key, Origin,
+    Arch, ArgumentsDropped, D3d9, DllOverrideReset, Dxgi, ENV_VAR, EnvEntry, EnvStep, Key, Origin,
     Resolution, Scalar, Table, VersionInfo, Wined3d, basename_of,
 };
 
@@ -163,12 +163,12 @@ extern "C" fn run() {
         log::line(&unset_line(Key::Env));
     }
     for step in &steps {
-        log::line(&env_line(step, has(&step.name).as_deref()));
+        log::line(&env_line(step, has(step.entry.name().as_str()).as_deref()));
     }
-    let env: Vec<(String, String)> = steps
+    let env: Vec<EnvEntry> = steps
         .iter()
         .filter(|step| step.applied)
-        .map(|step| (step.name.clone(), step.value.clone()))
+        .map(|step| step.entry.clone())
         .collect();
     // The env goes into both the environment block, for the PE side and
     // what reads it at process init (FEX, wined3d), and the unix
@@ -272,7 +272,12 @@ fn dll_reset_line(reset: &DllOverrideReset) -> String {
 
 /// The log line of a list setting: each entry with where it came from, and,
 /// when `applied` is given, whether it went in.
-fn list_line(key: Key, entries: &[String], from: &[Origin], applied: Option<&[bool]>) -> String {
+fn list_line(
+    key: Key,
+    entries: &[impl Display],
+    from: &[Origin],
+    applied: Option<&[bool]>,
+) -> String {
     if entries.is_empty() {
         return unset_line(key);
     }
@@ -309,26 +314,22 @@ fn dropped_line(dropped: &ArgumentsDropped) -> String {
 /// The log line of an env entry: its value, where it came from and what it
 /// did. `has` is the value the process had for the variable, if any.
 fn env_line(step: &EnvStep, has: Option<&str>) -> String {
-    let what = match (&step.replaced_by, step.applied, step.value.is_empty()) {
+    let what = match (&step.replaced_by, step.applied, step.entry.value()) {
         (Some(later), _, _) => format!("replaced by a later entry from {}", later.label()),
         (None, false, _) => format!(
             "left alone, the process has {}={}",
-            step.name,
+            step.entry.name(),
             has.unwrap_or_default()
         ),
-        (None, true, true) => match (&step.removes, has) {
+        (None, true, None) => match (&step.removes, has) {
             (Some(earlier), _) => format!("removes the value from {}", earlier.label()),
             (None, Some(_)) => String::from("removed"),
             (None, None) => String::from("not set, nothing to remove"),
         },
-        (None, true, false) => String::from("set"),
+        (None, true, Some(_)) => String::from("set"),
     };
-    format!(
-        "  env {}={}, {}: {what}",
-        step.name,
-        step.value,
-        step.origin.label()
-    )
+    // The entry prints as `NAME=value`, and a removal as `NAME=`.
+    format!("  env {}, {}: {what}", step.entry, step.origin.label())
 }
 
 /// Log each message about the rules from [`ENV_VAR`] as a warning: a field

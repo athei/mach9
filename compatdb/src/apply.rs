@@ -12,7 +12,7 @@ use std::{
     ptr,
 };
 
-use compatdb_core::{OpenGl, merge_env};
+use compatdb_core::{DllOverride, EnvEntry, OpenGl, merge_env};
 
 use crate::{Process, log, ntdll::Ntdll};
 
@@ -60,7 +60,7 @@ pub fn tree(nt: &Ntdll, pe_dir: &str, family: &str, name: &str, source: &str) {
 }
 
 /// Add each `names=order` load-order override.
-pub fn dll_overrides(nt: &Ntdll, overrides: &[String]) {
+pub fn dll_overrides(nt: &Ntdll, overrides: &[DllOverride]) {
     if overrides.is_empty() {
         return;
     }
@@ -69,7 +69,7 @@ pub fn dll_overrides(nt: &Ntdll, overrides: &[String]) {
         return;
     }
     for entry in overrides {
-        add_override(nt, entry);
+        add_override(nt, entry.as_str());
     }
 }
 
@@ -176,12 +176,7 @@ pub fn opengl(nt: &Ntdll, opengl: OpenGl, source: &str) {
 /// wow64 process, in the 32-bit copy too: the command line to `cmd`, when
 /// there is one, and the environment with the `env` entries that apply
 /// merged in. Nothing is touched when neither actually changes.
-pub fn rewrite_params(
-    nt: &Ntdll,
-    process: &Process,
-    cmd: Option<&[u16]>,
-    env: &[(String, String)],
-) {
+pub fn rewrite_params(nt: &Ntdll, process: &Process, cmd: Option<&[u16]>, env: &[EnvEntry]) {
     // Touch only what actually changes. Rewriting the (often large, inherited)
     // environment when only the command line changed is unnecessary and risky,
     // so the two are handled independently, each in its own allocation.
@@ -299,21 +294,21 @@ fn alloc_block(nt: &Ntdll, process: &Process, size: usize) -> Option<*mut core::
 }
 
 /// Apply the environment entries to this process's own unix environment too, so
-/// unix-side readers (winemetal, mtld3d, Metal) see them. An empty value
-/// removes the variable.
-pub fn unix_env(entries: &[(String, String)]) {
-    for (name, value) in entries {
-        let Ok(c_name) = CString::new(name.as_str()) else {
+/// unix-side readers (winemetal, mtld3d, Metal) see them. An entry without a
+/// value removes the variable.
+pub fn unix_env(entries: &[EnvEntry]) {
+    for entry in entries {
+        let Ok(c_name) = CString::new(entry.name().as_str()) else {
             continue;
         };
-        if value.is_empty() {
+        let Some(value) = entry.value() else {
             // SAFETY: `c_name` is a valid NUL-terminated string for the call.
             unsafe {
                 libc::unsetenv(c_name.as_ptr());
             }
             continue;
-        }
-        let Ok(c_value) = CString::new(value.as_str()) else {
+        };
+        let Ok(c_value) = CString::new(value) else {
             continue;
         };
         // SAFETY: both strings are valid and NUL-terminated for the call.

@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 #[cfg(doc)]
 use crate::basename_of;
 use crate::{
-    D3d9, DEFAULT_VALUE, Dxgi, ENV_VAR, OpenGl, Rule, Scalar, ScalarValue, Setting, Source, Table,
-    VersionInfo, Wined3d,
+    Argument, D3d9, DllOverride, Dxgi, ENV_VAR, EnvEntry, OpenGl, Rule, Scalar, ScalarValue,
+    Setting, Source, Specificity, Table, VersionInfo, Wined3d,
 };
 
 /// The settings that apply to one process.
@@ -23,7 +23,7 @@ pub struct Resolution {
     /// The `dll_overrides` entries of every matching rule in fold order,
     /// without the `default` entries, which only take modules out of the
     /// entries before them.
-    pub dll_overrides: Vec<String>,
+    pub dll_overrides: Vec<DllOverride>,
     /// Where each entry of [`Resolution::dll_overrides`] came from, at the
     /// same index.
     pub dll_overrides_from: Vec<Origin>,
@@ -32,17 +32,16 @@ pub struct Resolution {
     pub dll_overrides_reset: Vec<DllOverrideReset>,
     /// The texts to append to the command line, in fold order, after any
     /// `arguments_override` replaced what came before it.
-    pub arguments: Vec<String>,
+    pub arguments: Vec<Argument>,
     /// Where each entry of [`Resolution::arguments`] came from, at the same
     /// index.
     pub arguments_from: Vec<Origin>,
     /// Each `arguments_override` that dropped entries from the argument
     /// list, in fold order.
     pub arguments_dropped: Vec<ArgumentsDropped>,
-    /// The `env` entries of every matching rule in fold order, as name and
-    /// value; an empty value removes the variable. [`Resolution::env_steps`]
-    /// says which of them apply in a process.
-    pub env: Vec<(String, String)>,
+    /// The `env` entries of every matching rule in fold order.
+    /// [`Resolution::env_steps`] says which of them apply in a process.
+    pub env: Vec<EnvEntry>,
     /// Where each entry of [`Resolution::env`] came from, at the same index.
     pub env_from: Vec<EnvFrom>,
 }
@@ -100,7 +99,7 @@ impl Origin {
     pub fn of(rule: &Rule) -> Self {
         match rule.source {
             Source::Line(n) => Self::Line(n),
-            Source::BuiltIn if rule.specificity() == 0 => Self::BuiltIn,
+            Source::BuiltIn if rule.specificity() == Specificity::Any => Self::BuiltIn,
             Source::BuiltIn => Self::BuiltInFor(rule.matchers()),
         }
     }
@@ -124,7 +123,7 @@ pub struct ArgumentsDropped {
     /// The rule whose `arguments_override` it is.
     pub by: Origin,
     /// The arguments it dropped, each with where it came from.
-    pub entries: Vec<(String, Origin)>,
+    pub entries: Vec<(Argument, Origin)>,
 }
 
 /// Where an env entry of a [`Resolution`] came from.
@@ -140,10 +139,8 @@ pub struct EnvFrom {
 /// What one env entry of a [`Resolution`] does in a process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvStep {
-    /// The name of the variable.
-    pub name: String,
-    /// The value it sets; empty removes the variable.
-    pub value: String,
+    /// The entry: the variable and the value it sets, or none to remove it.
+    pub entry: EnvEntry,
     /// The rule that set it.
     pub origin: Origin,
     /// False for a default whose variable the process already had, which it
@@ -259,8 +256,8 @@ impl Resolution {
         self.env
             .iter()
             .rev()
-            .find(|(name, _)| name.eq_ignore_ascii_case(Wined3d::CONFIG_VAR))
-            .map(|(_, value)| value.as_str())
+            .find(|entry| is_d3d_config(entry))
+            .map(|entry| entry.value().unwrap_or_default())
     }
 
     /// When a rule sets [`Resolution::wined3d`], that renderer, with the
@@ -277,7 +274,9 @@ impl Resolution {
         let wined3d = self.wined3d()?;
         let origin = self.scalar(Scalar::Wined3d).set_by.clone()?;
         let value = wined3d.config(self.d3d_config().filter(|value| !value.is_empty()));
-        self.env.push((Wined3d::CONFIG_VAR.to_string(), value));
+        // The value is the renderer and the options of a checked one.
+        self.env
+            .push(EnvEntry::literal(Wined3d::CONFIG_VAR, &value));
         self.env_from.push(EnvFrom {
             origin,
             default: false,
@@ -289,10 +288,7 @@ impl Resolution {
     /// [`Resolution::d3d_config`] came from, or `None` when no rule sets it.
     #[must_use]
     pub fn d3d_config_origin(&self) -> Option<&Origin> {
-        let i = self
-            .env
-            .iter()
-            .rposition(|(name, _)| name.eq_ignore_ascii_case(Wined3d::CONFIG_VAR))?;
+        let i = self.env.iter().rposition(is_d3d_config)?;
         self.env_from.get(i).map(|from| &from.origin)
     }
 
@@ -328,12 +324,12 @@ impl Resolution {
     fn fold_dll_overrides(&mut self, rule: &Rule) {
         let origin = Origin::of(rule);
         for entry in &rule.dll_overrides {
-            let Some(modules) = default_modules(entry) else {
+            if !entry.is_default() {
                 self.dll_overrides.push(entry.clone());
                 self.dll_overrides_from.push(origin.clone());
                 continue;
-            };
-            for module in modules {
+            }
+            for module in entry.modules() {
                 let mut removed = Vec::new();
                 let mut kept = Vec::new();
                 let entries = std::mem::take(&mut self.dll_overrides)
@@ -367,7 +363,7 @@ impl Resolution {
     fn fold_arguments(&mut self, rule: &Rule) {
         let origin = Origin::of(rule);
         if let Some(over) = &rule.arguments_override {
-            let entries: Vec<(String, Origin)> = std::mem::take(&mut self.arguments)
+            let entries: Vec<(Argument, Origin)> = std::mem::take(&mut self.arguments)
                 .into_iter()
                 .zip(std::mem::take(&mut self.arguments_from))
                 .collect();
@@ -402,16 +398,21 @@ impl Resolution {
             .env
             .iter()
             .zip(&self.env_from)
-            .map(|((name, value), from)| EnvStep {
-                name: name.clone(),
-                value: value.clone(),
+            .map(|(entry, from)| EnvStep {
+                entry: entry.clone(),
                 origin: from.origin.clone(),
-                applied: !(from.default && has(name)),
+                applied: !(from.default && has(entry.name().as_str())),
                 replaced_by: None,
                 removes: None,
             })
             .collect();
-        let same = |a: &EnvStep, b: &EnvStep| a.applied && a.name.eq_ignore_ascii_case(&b.name);
+        let same = |a: &EnvStep, b: &EnvStep| {
+            a.applied
+                && a.entry
+                    .name()
+                    .as_str()
+                    .eq_ignore_ascii_case(b.entry.name().as_str())
+        };
         let links: Vec<(Option<Origin>, Option<Origin>)> = steps
             .iter()
             .enumerate()
@@ -427,7 +428,9 @@ impl Resolution {
                     .take(i)
                     .rev()
                     .find(|earlier| same(earlier, step))
-                    .filter(|earlier| step.value.is_empty() && !earlier.value.is_empty())
+                    .filter(|earlier| {
+                        step.entry.value().is_none() && earlier.entry.value().is_some()
+                    })
                     .map(|earlier| earlier.origin.clone());
                 (replaced_by, removes)
             })
@@ -495,26 +498,13 @@ impl Table {
     }
 }
 
-/// The modules of a `dll_overrides` entry whose order is `default`, or
-/// `None` for an entry with any other order.
-fn default_modules(entry: &str) -> Option<Vec<&str>> {
-    let (names, order) = entry.split_once('=')?;
-    // Case-insensitive, unlike the `default` of a scalar: `Default` would
-    // otherwise reach ntdll, which reads an order with no `n` or `b` as
-    // disabled.
-    order
-        .trim()
-        .eq_ignore_ascii_case(DEFAULT_VALUE)
-        .then(|| module_names(names))
-}
-
-/// The module names of the `names` part of a `dll_overrides` entry.
-fn module_names(names: &str) -> Vec<&str> {
-    names
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .collect()
+/// Whether `entry` is for the variable wined3d reads its settings from,
+/// matched ASCII-case-insensitively as in a process environment.
+fn is_d3d_config(entry: &EnvEntry) -> bool {
+    entry
+        .name()
+        .as_str()
+        .eq_ignore_ascii_case(Wined3d::CONFIG_VAR)
 }
 
 /// Whether two module names of `dll_overrides` entries name the same module:
@@ -533,15 +523,12 @@ enum Without {
     /// The module was the entry's only one, so nothing is left.
     Emptied,
     /// The entry with its other modules and the same order.
-    Rest(String),
+    Rest(DllOverride),
 }
 
 /// The `dll_overrides` entry `entry` without `module`.
-fn without_module(entry: &str, module: &str) -> Without {
-    let Some((names, order)) = entry.split_once('=') else {
-        return Without::Absent;
-    };
-    let all = module_names(names);
+fn without_module(entry: &DllOverride, module: &str) -> Without {
+    let all: Vec<&str> = entry.modules().collect();
     let rest: Vec<&str> = all
         .iter()
         .copied()
@@ -552,7 +539,12 @@ fn without_module(entry: &str, module: &str) -> Without {
     } else if rest.is_empty() {
         Without::Emptied
     } else {
-        Without::Rest(format!("{}={order}", rest.join(",")))
+        // Made of the parts of a checked entry: its `=` is there.
+        Without::Rest(DllOverride::literal(&format!(
+            "{}={}",
+            rest.join(","),
+            entry.order()
+        )))
     }
 }
 

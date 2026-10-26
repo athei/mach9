@@ -2,7 +2,7 @@
 
 #[cfg(doc)]
 use crate::ENV_VAR;
-use crate::Rule;
+use crate::{Rule, Specificity};
 
 /// The whole database: the built-in rules followed by the rules of
 /// [`ENV_VAR`], in the order they were declared.
@@ -25,7 +25,7 @@ impl Table {
     pub fn duplicate_matchers(&self) -> Vec<(usize, usize)> {
         let mut pairs = Vec::new();
         for (i, rule) in self.rules.iter().enumerate() {
-            if rule.specificity() == 0 {
+            if rule.specificity() == Specificity::Any {
                 continue;
             }
             for (j, other) in self.rules.iter().enumerate().skip(i.saturating_add(1)) {

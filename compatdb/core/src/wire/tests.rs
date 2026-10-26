@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ANY_EXE, D3d9, Dxgi, KeyKind, OpenGl, Origin, VersionInfo, Wined3d};
+use crate::{D3d9, Dxgi, KeyKind, OpenGl, Origin, VersionInfo, Wined3d};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
@@ -56,23 +56,23 @@ fn table_round_trips_through_the_env_value() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: "Launcher.exe".into(),
-                company: Some("Rockstar Games".into()),
-                product: Some("Rockstar Games Launcher".into()),
+                exe: Exe::literal("Launcher.exe"),
+                company: Some(Fingerprint::literal("Rockstar Games")),
+                product: Some(Fingerprint::literal("Rockstar Games Launcher")),
                 dxgi: Setting::Set(Dxgi::Wined3d),
                 ..Rule::default()
             },
             Rule {
-                exe: "SocialClubHelper.exe".into(),
-                arguments: vec!["--in-process-gpu --disable-gpu".into()],
-                original_filename: Some("SocialClubHelper.exe".into()),
+                exe: Exe::literal("SocialClubHelper.exe"),
+                arguments: vec![Argument::literal("--in-process-gpu --disable-gpu")],
+                original_filename: Some(Fingerprint::literal("SocialClubHelper.exe")),
                 ..Rule::default()
             },
             Rule {
-                exe: "WoW.exe".into(),
+                exe: Exe::literal("WoW.exe"),
                 d3d9: Setting::Set(D3d9::Wined3d),
-                dll_overrides: vec!["d3d12,vulkan-1=".into()],
-                env: vec![("DXMT_CONFIG".into(), "d3d11.maxFrameRate=60".into())],
+                dll_overrides: vec![DllOverride::literal("d3d12,vulkan-1=")],
+                env: vec![EnvEntry::literal("DXMT_CONFIG", "d3d11.maxFrameRate=60")],
                 ..Rule::default()
             },
         ],
@@ -86,8 +86,8 @@ fn table_round_trips_through_the_env_value() {
 fn env_field_survives_an_equals_in_the_value() {
     let table = Table {
         rules: vec![Rule {
-            exe: "x.exe".into(),
-            env: vec![("A".into(), "b=c;d".into())],
+            exe: Exe::literal("x.exe"),
+            env: vec![EnvEntry::literal("A", "b=c;d")],
             ..Rule::default()
         }],
     };
@@ -156,17 +156,16 @@ fn the_env_value_is_the_records_alone() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: "game.exe".into(),
+                exe: Exe::literal("game.exe"),
                 dxgi: Setting::Set(Dxgi::Wined3d),
                 wined3d: Setting::Set(Wined3d::Vulkan),
-                env: vec![("A".into(), "1".into())],
+                env: vec![EnvEntry::literal("A", "1")],
                 ..Rule::default()
             },
             // Neither the source nor the debug channels travel.
             Rule {
-                exe: ANY_EXE.into(),
+                exe: Exe::Any,
                 gcmouse: Setting::Set(false),
-                debug_channels: vec!["+loaddll".into()],
                 source: Source::Line(7),
                 ..Rule::default()
             },
@@ -235,13 +234,13 @@ fn the_name_and_enabled_of_the_old_format_are_unknown_keys() {
         table.rules,
         [
             Rule {
-                exe: "Game.exe".into(),
+                exe: Exe::literal("Game.exe"),
                 dpi_aware: Setting::Set(false),
                 source: Source::Line(1),
                 ..Rule::default()
             },
             Rule {
-                exe: ANY_EXE.into(),
+                exe: Exe::Any,
                 gcmouse: Setting::Set(false),
                 source: Source::Line(2),
                 ..Rule::default()
@@ -264,9 +263,9 @@ fn a_field_that_cannot_be_read_is_ignored_and_the_rest_applies() -> TestResult {
     // '=' each cost only that field, with one diagnostic naming the line
     // and the field. The record before and after it still applies.
     let want = Rule {
-        exe: "x.exe".into(),
+        exe: Exe::literal("x.exe"),
         d3d9: Setting::Set(D3d9::Wined3d),
-        env: vec![("A".into(), "1".into())],
+        env: vec![EnvEntry::literal("A", "1")],
         source: Source::Line(1),
         ..Rule::default()
     };
@@ -279,6 +278,16 @@ fn a_field_that_cannot_be_read_is_ignored_and_the_rest_applies() -> TestResult {
         ("wined3d=opengl", "unknown wined3d value \"opengl\""),
         ("dpi_aware=yes", "unknown dpi_aware value \"yes\""),
         ("bogus", "field \"bogus\" without '='"),
+        // A list entry or a fingerprint value its type does not take.
+        ("arguments=", "an empty argument"),
+        ("arguments_override=%00", "a NUL in its value"),
+        ("company=a%00", "a NUL in its value"),
+        (
+            "dll_overrides=mscoree",
+            "DLL override \"mscoree\" without '=' before its load order",
+        ),
+        ("env==1", "invalid variable name \"\""),
+        ("env=A%3DB=1", "invalid variable name \"A=B\""),
     ] {
         let text = format!("{field};exe=x.exe;d3d9=wined3d;env=A=1\nexe=ok.exe");
         let (table, diagnostics) = Table::parse(&text);
@@ -303,19 +312,19 @@ fn dpi_aware_round_trips_in_both_values_and_is_absent_when_unset() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: ANY_EXE.into(),
+                exe: Exe::Any,
                 dpi_aware: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
-                exe: "old.exe".into(),
+                exe: Exe::literal("old.exe"),
                 d3d9: Setting::Set(D3d9::Wined3d),
                 dpi_aware: Setting::Set(false),
-                dll_overrides: vec!["a=".into()],
+                dll_overrides: vec![DllOverride::literal("a=")],
                 ..Rule::default()
             },
             Rule {
-                exe: "other.exe".into(),
+                exe: Exe::literal("other.exe"),
                 ..Rule::default()
             },
         ],
@@ -350,18 +359,18 @@ fn large_address_aware_round_trips_and_is_absent_when_unset() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: ANY_EXE.into(),
+                exe: Exe::Any,
                 large_address_aware: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
-                exe: "old.exe".into(),
+                exe: Exe::literal("old.exe"),
                 dpi_aware: Setting::Set(false),
                 large_address_aware: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
-                exe: "other.exe".into(),
+                exe: Exe::literal("other.exe"),
                 ..Rule::default()
             },
         ],
@@ -402,18 +411,18 @@ fn gcmouse_round_trips_and_is_absent_when_unset() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: ANY_EXE.into(),
+                exe: Exe::Any,
                 gcmouse: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
-                exe: "old.exe".into(),
+                exe: Exe::literal("old.exe"),
                 large_address_aware: Setting::Set(false),
                 gcmouse: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
-                exe: "other.exe".into(),
+                exe: Exe::literal("other.exe"),
                 ..Rule::default()
             },
         ],
@@ -454,18 +463,18 @@ fn force_nx_round_trips_and_is_absent_when_unset() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: ANY_EXE.into(),
+                exe: Exe::Any,
                 force_nx: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
-                exe: "old.exe".into(),
+                exe: Exe::literal("old.exe"),
                 gcmouse: Setting::Set(false),
                 force_nx: Setting::Set(false),
                 ..Rule::default()
             },
             Rule {
-                exe: "other.exe".into(),
+                exe: Exe::literal("other.exe"),
                 ..Rule::default()
             },
         ],
@@ -505,11 +514,11 @@ fn a_bad_force_nx_value_is_ignored() {
 fn a_reset_round_trips_through_the_env_value() {
     let table = Table {
         rules: vec![Rule {
-            exe: "a.exe".into(),
+            exe: Exe::literal("a.exe"),
             dxgi: Setting::Set(Dxgi::Wined3d),
             opengl: Setting::Reset,
             force_nx: Setting::Reset,
-            dll_overrides: vec!["mscoree=default".into()],
+            dll_overrides: vec![DllOverride::literal("mscoree=default")],
             ..Rule::default()
         }],
     };
@@ -552,10 +561,10 @@ fn every_field_a_record_can_carry_is_a_key_in_the_order_of_key_all() -> TestResu
     // The literal names every field, so a new one does not compile until
     // it is added here, and with it its key.
     let rule = Rule {
-        exe: "all.exe".into(),
-        company: Some("c".into()),
-        product: Some("p".into()),
-        original_filename: Some("o".into()),
+        exe: Exe::literal("all.exe"),
+        company: Some(Fingerprint::literal("c")),
+        product: Some(Fingerprint::literal("p")),
+        original_filename: Some(Fingerprint::literal("o")),
         dxgi: Setting::Set(Dxgi::Dxmt),
         d3d9: Setting::Set(D3d9::Mtld3d),
         wined3d: Setting::Set(Wined3d::Gl),
@@ -564,11 +573,10 @@ fn every_field_a_record_can_carry_is_a_key_in_the_order_of_key_all() -> TestResu
         large_address_aware: Setting::Set(true),
         gcmouse: Setting::Set(true),
         force_nx: Setting::Set(true),
-        dll_overrides: vec!["a=".into()],
-        arguments: vec!["-a".into()],
-        arguments_override: Some(vec!["-b".into()]),
-        env: vec![("A".into(), "1".into())],
-        debug_channels: Vec::new(),
+        dll_overrides: vec![DllOverride::literal("a=")],
+        arguments: vec![Argument::literal("-a")],
+        arguments_override: Some(vec![Argument::literal("-b")]),
+        env: vec![EnvEntry::literal("A", "1")],
         source: Source::BuiltIn,
     };
     let record = rule_to_record(&rule);
@@ -638,18 +646,18 @@ fn arguments_override_round_trips_and_an_empty_one_clears() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: "a.exe".into(),
-                arguments_override: Some(vec!["-x".into(), "-y z".into()]),
-                arguments: vec!["-w".into()],
+                exe: Exe::literal("a.exe"),
+                arguments_override: Some(vec![Argument::literal("-x"), Argument::literal("-y z")]),
+                arguments: vec![Argument::literal("-w")],
                 ..Rule::default()
             },
             Rule {
-                exe: "b.exe".into(),
+                exe: Exe::literal("b.exe"),
                 arguments_override: Some(Vec::new()),
                 ..Rule::default()
             },
             Rule {
-                exe: "c.exe".into(),
+                exe: Exe::literal("c.exe"),
                 ..Rule::default()
             },
         ],
@@ -667,8 +675,8 @@ fn arguments_override_round_trips_and_an_empty_one_clears() {
     // An empty value among others adds no entry.
     let (parsed, _) = Table::parse("exe=a.exe;arguments_override=;arguments_override=-x");
     assert_eq!(
-        parsed.rules.first().map(|r| r.arguments_override.clone()),
-        Some(Some(vec!["-x".to_string()]))
+        parsed.rules.first().and_then(Rule::arguments_override),
+        Some(&[Argument::literal("-x")][..])
     );
 }
 
@@ -682,17 +690,17 @@ fn wined3d_parses_round_trips_and_rejects_other_values() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: "vk.exe".into(),
+                exe: Exe::literal("vk.exe"),
                 wined3d: Setting::Set(Wined3d::Vulkan),
                 ..Rule::default()
             },
             Rule {
-                exe: "gl.exe".into(),
+                exe: Exe::literal("gl.exe"),
                 wined3d: Setting::Set(Wined3d::Gl),
                 ..Rule::default()
             },
             Rule {
-                exe: "unset.exe".into(),
+                exe: Exe::literal("unset.exe"),
                 ..Rule::default()
             },
         ],
@@ -722,17 +730,17 @@ fn opengl_parses_round_trips_and_rejects_other_values() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: ANY_EXE.into(),
+                exe: Exe::Any,
                 opengl: Setting::Set(OpenGl::Egl),
                 ..Rule::default()
             },
             Rule {
-                exe: "apple.exe".into(),
+                exe: Exe::literal("apple.exe"),
                 opengl: Setting::Set(OpenGl::Cgl),
                 ..Rule::default()
             },
             Rule {
-                exe: "unset.exe".into(),
+                exe: Exe::literal("unset.exe"),
                 ..Rule::default()
             },
         ],

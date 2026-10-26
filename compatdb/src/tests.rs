@@ -1,4 +1,10 @@
+use compatdb_core::{Argument, DllOverride, EnvName};
+
 use super::*;
+
+/// What a test returns, so a missing value fails it through `?` rather
+/// than a panic in the test body.
+type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
 fn a_native_arm64_program_gets_dxmt_and_mtld3d_and_either_tree_a_rule_asks_for() {
@@ -130,9 +136,9 @@ fn a_reset_scalar_and_a_default_dll_override_say_which_line_reset_them() {
 }
 
 #[test]
-fn the_list_and_env_lines_name_the_source_of_each_entry_and_what_happened() {
+fn the_list_and_env_lines_name_the_source_of_each_entry_and_what_happened() -> TestResult {
     assert_eq!(
-        list_line(Key::Arguments, &[], &[], Some(&[])),
+        list_line(Key::Arguments, &[] as &[String], &[], Some(&[])),
         "  arguments = unset (upstream: the command line the process was started with)"
     );
     let args = ["--in-process-gpu".to_string(), "-x".to_string()];
@@ -146,15 +152,21 @@ fn the_list_and_env_lines_name_the_source_of_each_entry_and_what_happened() {
     assert_eq!(
         list_line(
             Key::DllOverrides,
-            &["mscoree,mshtml=".into()],
+            &[DllOverride::new("mscoree,mshtml=")?],
             &[Origin::BuiltIn],
             None
         ),
         "  dll_overrides = mscoree,mshtml= (built-in)"
     );
+    let name = EnvName::new("FEX_X87REDUCEDPRECISION")?;
+    let one = EnvEntry::new(name.clone(), "1")?;
+    let removal = EnvEntry::remove(name);
     let step = |value: &str, applied, replaced_by: Option<Origin>| EnvStep {
-        name: "FEX_X87REDUCEDPRECISION".into(),
-        value: value.into(),
+        entry: if value.is_empty() {
+            removal.clone()
+        } else {
+            one.clone()
+        },
         origin: Origin::BuiltIn,
         applied,
         replaced_by,
@@ -199,15 +211,16 @@ fn the_list_and_env_lines_name_the_source_of_each_entry_and_what_happened() {
         "  env FEX_X87REDUCEDPRECISION=1, built-in: replaced by a later entry from \
          built-in for WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)"
     );
+    Ok(())
 }
 
 #[test]
-fn an_arguments_override_line_names_what_it_dropped() {
+fn an_arguments_override_line_names_what_it_dropped() -> TestResult {
     let dropped = ArgumentsDropped {
         by: Origin::Line(1),
         entries: vec![
-            ("--in-process-gpu".into(), wow()),
-            ("-x".into(), Origin::BuiltIn),
+            (Argument::new("--in-process-gpu")?, wow()),
+            (Argument::new("-x")?, Origin::BuiltIn),
         ],
     };
     assert_eq!(
@@ -215,6 +228,7 @@ fn an_arguments_override_line_names_what_it_dropped() {
         "  arguments_override, WINE_COMPATDB line 1: dropped --in-process-gpu (built-in \
          for WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)); -x (built-in)"
     );
+    Ok(())
 }
 
 #[test]

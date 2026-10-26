@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    ArgumentsDropped, DllOverrideReset, Origin, Resolution, Scalar, ScalarValue, Source,
+    ArgumentsDropped, DllOverrideReset, EnvName, Origin, Resolution, Scalar, ScalarValue, Source,
     VersionInfo, Wined3d,
 };
 
@@ -21,33 +21,39 @@ fn applied(resolution: &Resolution, has: &[&str]) -> (Vec<String>, Vec<String>) 
     let steps = resolution.env_steps(|name| has.contains(&name));
     let (set, kept): (Vec<_>, Vec<_>) = steps.into_iter().partition(|s| s.applied);
     (
-        set.into_iter()
-            .map(|s| format!("{}={}", s.name, s.value))
+        set.into_iter().map(|s| s.entry.to_string()).collect(),
+        kept.into_iter()
+            .map(|s| s.entry.name().to_string())
             .collect(),
-        kept.into_iter().map(|s| s.name).collect(),
     )
+}
+
+/// The env entry that sets `name` to `value`, or removes it when `value`
+/// is empty.
+fn env(name: &str, value: &str) -> EnvEntry {
+    EnvEntry::literal(name, value)
 }
 
 /// The env of the FEX rule. The variable is spelled out here to guard
 /// against a typo: FEX matches the name exactly and parses the value as
 /// an integer.
-fn fex_env() -> Vec<(String, String)> {
-    vec![("FEX_X87REDUCEDPRECISION".to_string(), "1".to_string())]
+fn fex_env() -> Vec<EnvEntry> {
+    vec![env("FEX_X87REDUCEDPRECISION", "1")]
 }
 
 /// The env every process gets from the built-in rules.
-fn wildcard_env() -> Vec<(String, String)> {
+fn wildcard_env() -> Vec<EnvEntry> {
     fex_env()
 }
 
 /// The DLL overrides every process gets from the built-in rules: Mono
 /// and Gecko are disabled.
-fn wildcard_overrides() -> Vec<String> {
-    vec!["mscoree,mshtml=".to_string()]
+fn wildcard_overrides() -> Vec<DllOverride> {
+    vec![DllOverride::literal("mscoree,mshtml=")]
 }
 
 /// `wildcard_env()` followed by `more`.
-fn wildcard_env_and(more: &[(String, String)]) -> Vec<(String, String)> {
+fn wildcard_env_and(more: &[EnvEntry]) -> Vec<EnvEntry> {
     let mut env = wildcard_env();
     env.extend_from_slice(more);
     env
@@ -80,10 +86,11 @@ fn rule<'a>(table: &'a Table, exe: &str) -> Result<&'a Rule, String> {
 /// The version resource that the built-in `rule` pins, filled in with
 /// its own fingerprint values.
 fn version_of(rule: &Rule) -> VersionInfo {
+    let text = |pin: Option<&Fingerprint>| pin.map(|p| p.as_str().to_owned()).unwrap_or_default();
     VersionInfo {
-        company: rule.company.clone().unwrap_or_default(),
-        product: rule.product.clone().unwrap_or_default(),
-        original_filename: rule.original_filename.clone().unwrap_or_default(),
+        company: text(rule.company()),
+        product: text(rule.product()),
+        original_filename: text(rule.original_filename()),
     }
 }
 
@@ -93,10 +100,10 @@ fn a_variable_the_caller_set_wins_over_a_builtin_default() {
     // Unset, the defaults apply.
     let (set, kept) = applied(&game, &[]);
     assert_eq!(set, ["FEX_X87REDUCEDPRECISION=1"]);
-    assert_eq!(kept, [] as [String; 0]);
+    assert_eq!(kept, [] as [&str; 0]);
     // Exported by the caller, the default leaves it alone.
     let (set, kept) = applied(&game, &["FEX_X87REDUCEDPRECISION"]);
-    assert_eq!(set, [] as [String; 0]);
+    assert_eq!(set, [] as [&str; 0]);
     assert_eq!(kept, ["FEX_X87REDUCEDPRECISION"]);
     // The steps say where each entry came from.
     let steps = game.env_steps(|_| false);
@@ -121,7 +128,7 @@ fn a_rule_for_one_game_or_from_the_launcher_replaces_what_the_caller_set() {
     // Only the built-in `*` rules' own entries are defaults.
     let table = with_lines("exe=*;env=A=1");
     for r in &table.rules {
-        let builtin_star = r.source == Source::BuiltIn && r.exe == ANY_EXE;
+        let builtin_star = r.source == Source::BuiltIn && r.exe.is_any();
         assert_eq!(r.env_is_default(), builtin_star, "{}", r.matchers());
     }
 }
@@ -131,7 +138,7 @@ fn the_table_asks_fex_for_reduced_x87_precision() {
     let table = Table::builtin();
     let fex: Vec<&Rule> = table.rules.iter().filter(|r| !r.env.is_empty()).collect();
     // One `*` rule sets it; the other env rules are the CEF helpers'.
-    let star: Vec<&&Rule> = fex.iter().filter(|r| r.exe == ANY_EXE).collect();
+    let star: Vec<&&Rule> = fex.iter().filter(|r| r.exe.is_any()).collect();
     assert_eq!(star.len(), 1);
     assert_eq!(star.first().map(|r| r.env.clone()), Some(fex_env()));
     // Every process gets it: x86_64, i386 and native ARM64 alike, since
@@ -145,7 +152,7 @@ fn a_rule_turns_reduced_x87_precision_off_for_one_game_or_every_process() -> Tes
     // after the default.
     let table = with_lines("exe=old.exe;env=FEX_X87REDUCEDPRECISION=");
     let old = table.resolve("Old.exe", &VersionInfo::default());
-    let removed = ("FEX_X87REDUCEDPRECISION".to_string(), String::new());
+    let removed = env("FEX_X87REDUCEDPRECISION", "");
     assert_eq!(old.env, wildcard_env_and(std::slice::from_ref(&removed)));
     let block: Vec<u16> = "FEX_X87REDUCEDPRECISION=1\0OTHER=x\0\0"
         .encode_utf16()
@@ -236,7 +243,7 @@ fn wined3d_on_vulkan_is_a_setting_for_one_game_and_never_a_default() {
         !Table::builtin()
             .rules
             .iter()
-            .any(|r| !r.wined3d.is_unset() || r.env.iter().any(|(n, _)| n == "WINE_D3D_CONFIG"))
+            .any(|r| !r.wined3d.is_unset() || r.env.iter().any(|e| *e.name() == "WINE_D3D_CONFIG"))
     );
     let mut game = plain();
     assert_eq!(game.apply_wined3d(), None);
@@ -244,7 +251,7 @@ fn wined3d_on_vulkan_is_a_setting_for_one_game_and_never_a_default() {
     let table = with_lines("exe=game.exe;wined3d=vulkan");
     let mut game = table.resolve("Game.exe", &VersionInfo::default());
     assert_eq!(game.apply_wined3d(), Some(Wined3d::Vulkan));
-    let vulkan = ("WINE_D3D_CONFIG".to_string(), "renderer=vulkan".to_string());
+    let vulkan = env("WINE_D3D_CONFIG", "renderer=vulkan");
     assert_eq!(game.env, wildcard_env_and(&[vulkan]));
     assert_eq!(
         game.env_from.last().map(|f| &f.origin),
@@ -259,12 +266,11 @@ fn wined3d_on_vulkan_is_a_setting_for_one_game_and_never_a_default() {
 fn the_table_leaves_vulkan_1_alone() {
     // The bundle ships Wine's Vulkan, so no built-in rule disables the
     // loader.
-    assert!(
-        !Table::builtin()
-            .rules
+    assert!(!Table::builtin().rules.iter().any(|r| {
+        r.dll_overrides
             .iter()
-            .any(|r| r.dll_overrides.iter().any(|o| o.contains("vulkan")))
-    );
+            .any(|o| o.as_str().contains("vulkan"))
+    }));
     assert_eq!(plain().dll_overrides, wildcard_overrides());
 }
 
@@ -273,12 +279,15 @@ fn the_builtin_table_pins_the_launcher_and_round_trips() -> TestResult {
     let table = Table::builtin();
     let launcher = rule(&table, "Launcher.exe")?;
     assert_eq!(launcher.dxgi, Setting::Set(Dxgi::Wined3d));
-    assert_eq!(launcher.company.as_deref(), Some("Rockstar Games"));
+    assert_eq!(
+        launcher.company().map(Fingerprint::as_str),
+        Some("Rockstar Games")
+    );
     let gta = rule(&table, "GTAIV.exe")?;
     assert!(
         gta.arguments
             .first()
-            .is_some_and(|a| a.starts_with("-availablevidmem"))
+            .is_some_and(|a| a.as_str().starts_with("-availablevidmem"))
     );
     // The D3D9 quirks are mtld3d's, not ours.
     assert_eq!(gta.env, []);
@@ -301,7 +310,7 @@ fn the_builtin_table_pins_the_cef_helpers_to_dxmt() -> TestResult {
     for exe in ["steamwebhelper.exe", "SocialClubHelper.exe"] {
         let helper = rule(&table, exe)?;
         assert_eq!(helper.dxgi, Setting::Set(Dxgi::Dxmt), "{exe}");
-        assert_eq!(helper.arguments, vec!["--in-process-gpu".to_string()]);
+        assert_eq!(helper.arguments, ["--in-process-gpu"]);
     }
     Ok(())
 }
@@ -313,13 +322,13 @@ fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
     // entries. The `*` env rule is the exception: it is meant for every
     // process, so a child that inherits it gets what it would get
     // anyway.
-    let hud_off = vec![("MTL_HUD_ENABLED".to_string(), "0".to_string())];
+    let hud_off = vec![env("MTL_HUD_ENABLED", "0")];
     let helpers = ["steamwebhelper.exe", "SocialClubHelper.exe"];
     let table = Table::builtin();
     for rule in &table.rules {
         if helpers.contains(&rule.exe.as_str()) {
             assert_eq!(rule.env, hud_off, "{}", rule.matchers());
-        } else if rule.exe == ANY_EXE && !rule.env.is_empty() {
+        } else if rule.exe.is_any() && !rule.env.is_empty() {
             assert_eq!(rule.env, fex_env(), "{}", rule.matchers());
         } else {
             assert_eq!(rule.env, [], "{}", rule.matchers());
@@ -358,14 +367,33 @@ fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
 }
 
 #[test]
-fn every_builtin_rule_has_an_exe_and_none_matches_a_bare_basename() {
+fn every_builtin_rule_has_an_exe_and_none_matches_a_bare_basename() -> TestResult {
     // A rule naming an executable must also pin its version resource, or
     // it would catch every program of that name. The `*` rules are a
     // different case: they are meant for every process, and several of
     // them are not duplicates of each other.
     let table = Table::builtin();
     for rule in &table.rules {
-        assert!(!rule.exe.is_empty(), "a rule has no exe");
+        // Its parts are literals, which must be what the checked
+        // constructors make of their text.
+        assert_eq!(Exe::new(rule.exe.as_str()).as_ref(), Ok(&rule.exe));
+        for pin in [&rule.company, &rule.product, &rule.original_filename]
+            .into_iter()
+            .flatten()
+        {
+            assert_eq!(Fingerprint::new(pin.as_str()).as_ref(), Ok(pin));
+        }
+        for entry in &rule.dll_overrides {
+            assert_eq!(DllOverride::new(entry.as_str()).as_ref(), Ok(entry));
+        }
+        for argument in &rule.arguments {
+            assert_eq!(Argument::new(argument.as_str()).as_ref(), Ok(argument));
+        }
+        for entry in &rule.env {
+            let name = EnvName::new(entry.name().as_str())?;
+            let checked = EnvEntry::new(name, entry.value().unwrap_or_default())?;
+            assert_eq!(&checked, entry);
+        }
         assert!(
             !rule.is_unfingerprinted(),
             "{} matches on its executable alone",
@@ -374,6 +402,7 @@ fn every_builtin_rule_has_an_exe_and_none_matches_a_bare_basename() {
         assert_eq!(rule.source, Source::BuiltIn, "{}", rule.matchers());
     }
     assert_eq!(table.duplicate_matchers(), []);
+    Ok(())
 }
 
 #[test]
@@ -394,7 +423,7 @@ fn every_process_gets_the_wildcard_defaults() {
     assert_eq!(resolution.env, wildcard_env());
     assert_eq!(resolution.dxgi(), Some(Dxgi::Dxmt));
     assert_eq!(resolution.d3d9(), Some(D3d9::Mtld3d));
-    assert_eq!(resolution.arguments, [] as [String; 0]);
+    assert_eq!(resolution.arguments, [] as [&str; 0]);
     // Every value comes from a built-in `*` rule.
     let set: Vec<Scalar> = Scalar::ALL
         .iter()
@@ -426,11 +455,11 @@ fn the_pins_for_one_program_beat_the_builtin_direct3d_rules() -> TestResult {
     let pins: Vec<&Rule> = table
         .rules
         .iter()
-        .filter(|r| r.exe != ANY_EXE && (!r.dxgi.is_unset() || !r.d3d9.is_unset()))
+        .filter(|r| !r.exe.is_any() && (!r.dxgi.is_unset() || !r.d3d9.is_unset()))
         .collect();
     assert_ne!(pins.len(), 0);
     for pin in &pins {
-        let resolution = table.resolve(&pin.exe, &version_of(pin));
+        let resolution = table.resolve(pin.exe.as_str(), &version_of(pin));
         let from = Origin::BuiltInFor(pin.matchers());
         if let Setting::Set(dxgi) = pin.dxgi {
             assert_eq!(resolution.dxgi(), Some(dxgi), "{}", pin.matchers());
@@ -445,7 +474,7 @@ fn the_pins_for_one_program_beat_the_builtin_direct3d_rules() -> TestResult {
     // it moves the pinned programs too.
     let star = with_lines("exe=*;dxgi=dxmt;d3d9=wined3d");
     for pin in pins {
-        let resolution = star.resolve(&pin.exe, &version_of(pin));
+        let resolution = star.resolve(pin.exe.as_str(), &version_of(pin));
         assert_eq!(resolution.dxgi(), Some(Dxgi::Dxmt), "{}", pin.matchers());
         assert_eq!(resolution.d3d9(), Some(D3d9::Wined3d), "{}", pin.matchers());
         assert_eq!(
@@ -755,7 +784,7 @@ fn a_default_dll_override_hands_mono_and_gecko_back_to_the_registry() {
     ] {
         let table = with_lines(text);
         let game = table.resolve("game.exe", &VersionInfo::default());
-        assert_eq!(game.dll_overrides, [] as [String; 0], "{text}");
+        assert_eq!(game.dll_overrides, [] as [&str; 0], "{text}");
         assert_eq!(game.dll_overrides_reset.len(), 2, "{text}");
     }
     // A module no entry names is reported with nothing removed, and a
@@ -812,10 +841,7 @@ fn a_launch_wide_rule_re_enables_mono_after_the_builtins() {
     // module, so `mscoree=b` wins while mshtml stays disabled.
     let table = with_lines("exe=*;dll_overrides=mscoree=b");
     let resolution = table.resolve("game.exe", &VersionInfo::default());
-    assert_eq!(
-        resolution.dll_overrides,
-        vec!["mscoree,mshtml=".to_string(), "mscoree=b".to_string()]
-    );
+    assert_eq!(resolution.dll_overrides, ["mscoree,mshtml=", "mscoree=b"]);
     assert_eq!(
         resolution.dll_overrides_from,
         [Origin::BuiltIn, Origin::Line(1)]
@@ -845,7 +871,7 @@ fn an_arguments_override_drops_a_builtin_helpers_switch() -> TestResult {
             helper.arguments_dropped,
             [ArgumentsDropped {
                 by: Origin::Line(1),
-                entries: vec![("--in-process-gpu".into(), from.clone())],
+                entries: vec![(Argument::new("--in-process-gpu")?, from.clone())],
             }],
             "{text}"
         );

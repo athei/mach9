@@ -1,5 +1,5 @@
 use super::*;
-use crate::Rule;
+use crate::{Exe, Fingerprint, Rule};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.
@@ -183,10 +183,10 @@ fn the_nostale_client_has_only_a_company() {
     );
     // A rule that pins a field the exe leaves empty does not match it.
     let pinned = |product: Option<&str>, original_filename: Option<&str>| Rule {
-        exe: "NostaleClientX.exe".into(),
-        company: Some("Entwell".into()),
-        product: product.map(Into::into),
-        original_filename: original_filename.map(Into::into),
+        exe: Exe::literal("NostaleClientX.exe"),
+        company: Some(Fingerprint::literal("Entwell")),
+        product: product.map(Fingerprint::literal),
+        original_filename: original_filename.map(Fingerprint::literal),
         ..Rule::default()
     };
     assert!(pinned(None, None).matches("NostaleClientX.exe", &vi));

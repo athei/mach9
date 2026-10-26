@@ -11,7 +11,9 @@
 //! purpose: each is a default that a built-in rule for one program, or any
 //! `WINE_COMPATDB` rule that sets the same key, overrides.
 
-use crate::{ANY_EXE, D3d9, Dxgi, OpenGl, Rule, Setting, Table};
+use crate::{
+    Argument, D3d9, DllOverride, Dxgi, EnvEntry, Exe, Fingerprint, OpenGl, Rule, Setting, Table,
+};
 
 /// The rules the bundle ships with: the [`defaults`] for every process, then
 /// the rules for one program each ([`programs`]).
@@ -71,7 +73,7 @@ pub fn programs() -> Vec<Rule> {
 #[must_use]
 pub fn dxgi_dxmt() -> Rule {
     Rule {
-        exe: ANY_EXE.into(),
+        exe: Exe::Any,
         dxgi: Setting::Set(Dxgi::Dxmt),
         ..Rule::default()
     }
@@ -86,7 +88,7 @@ pub fn dxgi_dxmt() -> Rule {
 #[must_use]
 pub fn d3d9_mtld3d() -> Rule {
     Rule {
-        exe: ANY_EXE.into(),
+        exe: Exe::Any,
         d3d9: Setting::Set(D3d9::Mtld3d),
         ..Rule::default()
     }
@@ -102,7 +104,7 @@ pub fn d3d9_mtld3d() -> Rule {
 #[must_use]
 pub fn dpi_aware() -> Rule {
     Rule {
-        exe: ANY_EXE.into(),
+        exe: Exe::Any,
         dpi_aware: Setting::Set(true),
         ..Rule::default()
     }
@@ -127,7 +129,7 @@ pub fn dpi_aware() -> Rule {
 #[must_use]
 pub fn gcmouse() -> Rule {
     Rule {
-        exe: ANY_EXE.into(),
+        exe: Exe::Any,
         gcmouse: Setting::Set(true),
         ..Rule::default()
     }
@@ -154,8 +156,8 @@ pub fn gcmouse() -> Rule {
 #[must_use]
 pub fn fex_reduced_x87_precision() -> Rule {
     Rule {
-        exe: ANY_EXE.into(),
-        env: vec![("FEX_X87REDUCEDPRECISION".into(), "1".into())],
+        exe: Exe::Any,
+        env: vec![EnvEntry::literal("FEX_X87REDUCEDPRECISION", "1")],
         ..Rule::default()
     }
 }
@@ -178,7 +180,7 @@ pub fn fex_reduced_x87_precision() -> Rule {
 #[must_use]
 pub fn opengl_egl() -> Rule {
     Rule {
-        exe: ANY_EXE.into(),
+        exe: Exe::Any,
         opengl: Setting::Set(OpenGl::Egl),
         ..Rule::default()
     }
@@ -209,7 +211,7 @@ pub fn opengl_egl() -> Rule {
 #[must_use]
 pub fn force_nx() -> Rule {
     Rule {
-        exe: ANY_EXE.into(),
+        exe: Exe::Any,
         force_nx: Setting::Set(true),
         ..Rule::default()
     }
@@ -227,8 +229,8 @@ pub fn force_nx() -> Rule {
 #[must_use]
 pub fn no_mono_or_gecko() -> Rule {
     Rule {
-        exe: ANY_EXE.into(),
-        dll_overrides: vec!["mscoree,mshtml=".into()],
+        exe: Exe::Any,
+        dll_overrides: vec![DllOverride::literal("mscoree,mshtml=")],
         ..Rule::default()
     }
 }
@@ -242,9 +244,9 @@ pub fn no_mono_or_gecko() -> Rule {
 #[must_use]
 pub fn rockstar_games_launcher() -> Rule {
     Rule {
-        exe: "Launcher.exe".into(),
-        company: Some("Rockstar Games".into()),
-        product: Some("Rockstar Games Launcher".into()),
+        exe: Exe::literal("Launcher.exe"),
+        company: Some(Fingerprint::literal("Rockstar Games")),
+        product: Some(Fingerprint::literal("Rockstar Games Launcher")),
         dxgi: Setting::Set(Dxgi::Wined3d),
         ..Rule::default()
     }
@@ -264,12 +266,12 @@ pub fn rockstar_games_launcher() -> Rule {
 #[must_use]
 pub fn social_club_helper() -> Rule {
     Rule {
-        exe: "SocialClubHelper.exe".into(),
-        company: Some("Take-Two Interactive Software".into()),
-        product: Some("Social Club UI".into()),
+        exe: Exe::literal("SocialClubHelper.exe"),
+        company: Some(Fingerprint::literal("Take-Two Interactive Software")),
+        product: Some(Fingerprint::literal("Social Club UI")),
         dxgi: Setting::Set(Dxgi::Dxmt),
-        arguments: vec!["--in-process-gpu".into()],
-        env: vec![("MTL_HUD_ENABLED".into(), "0".into())],
+        arguments: vec![Argument::literal("--in-process-gpu")],
+        env: vec![EnvEntry::literal("MTL_HUD_ENABLED", "0")],
         ..Rule::default()
     }
 }
@@ -286,12 +288,12 @@ pub fn social_club_helper() -> Rule {
 #[must_use]
 pub fn steam_web_helper() -> Rule {
     Rule {
-        exe: "steamwebhelper.exe".into(),
-        company: Some("Valve Corporation".into()),
-        product: Some("Steam Client WebHelper".into()),
+        exe: Exe::literal("steamwebhelper.exe"),
+        company: Some(Fingerprint::literal("Valve Corporation")),
+        product: Some(Fingerprint::literal("Steam Client WebHelper")),
         dxgi: Setting::Set(Dxgi::Dxmt),
-        arguments: vec!["--in-process-gpu".into()],
-        env: vec![("MTL_HUD_ENABLED".into(), "0".into())],
+        arguments: vec![Argument::literal("--in-process-gpu")],
+        env: vec![EnvEntry::literal("MTL_HUD_ENABLED", "0")],
         ..Rule::default()
     }
 }
@@ -307,10 +309,10 @@ pub fn steam_web_helper() -> Rule {
 #[must_use]
 pub fn gta_iv() -> Rule {
     Rule {
-        exe: "GTAIV.exe".into(),
-        company: Some("Rockstar Games".into()),
-        product: Some("Grand Theft Auto IV".into()),
-        arguments: vec!["-availablevidmem 2048.0".into()],
+        exe: Exe::literal("GTAIV.exe"),
+        company: Some(Fingerprint::literal("Rockstar Games")),
+        product: Some(Fingerprint::literal("Grand Theft Auto IV")),
+        arguments: vec![Argument::literal("-availablevidmem 2048.0")],
         ..Rule::default()
     }
 }
@@ -327,8 +329,8 @@ pub fn gta_iv() -> Rule {
 #[must_use]
 pub fn nostale() -> Rule {
     Rule {
-        exe: "NostaleClientX.exe".into(),
-        company: Some("Entwell".into()),
+        exe: Exe::literal("NostaleClientX.exe"),
+        company: Some(Fingerprint::literal("Entwell")),
         dpi_aware: Setting::Set(false),
         ..Rule::default()
     }
@@ -349,8 +351,8 @@ pub fn nostale() -> Rule {
 #[must_use]
 pub fn age_of_empires_ii_hd() -> Rule {
     Rule {
-        exe: "AoK HD.exe".into(),
-        company: Some("Microsoft Corporation".into()),
+        exe: Exe::literal("AoK HD.exe"),
+        company: Some(Fingerprint::literal("Microsoft Corporation")),
         dpi_aware: Setting::Set(false),
         ..Rule::default()
     }
@@ -370,10 +372,10 @@ pub fn age_of_empires_ii_hd() -> Rule {
 #[must_use]
 pub fn world_of_warcraft() -> Rule {
     Rule {
-        exe: "WoW.exe".into(),
-        company: Some("Blizzard Entertainment".into()),
-        product: Some("World of Warcraft".into()),
-        original_filename: Some("WoW.exe".into()),
+        exe: Exe::literal("WoW.exe"),
+        company: Some(Fingerprint::literal("Blizzard Entertainment")),
+        product: Some(Fingerprint::literal("World of Warcraft")),
+        original_filename: Some(Fingerprint::literal("WoW.exe")),
         large_address_aware: Setting::Set(true),
         ..Rule::default()
     }

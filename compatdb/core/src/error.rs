@@ -6,8 +6,8 @@ use crate::Key;
 
 /// Why a field of a rule cannot be read, or a value cannot be set.
 ///
-/// The [`Display`](fmt::Display) form is the phrase `compatdb.so` logs after
-/// `ignoring`, for example `unknown key "bogus"`.
+/// The [`Display`](fmt::Display) form is a short phrase, for example
+/// `unknown key "bogus"`, which `compatdb.so` logs after `ignoring`.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FieldError {
@@ -28,6 +28,19 @@ pub enum FieldError {
         /// The spellings the value can have there, in lowercase.
         expected: &'static [&'static str],
     },
+    /// A NUL in a value, which the process APIs that take it would end the
+    /// text at.
+    Nul,
+    /// An `exe` that is empty, or a rule without one, which matches no
+    /// process.
+    MissingExe,
+    /// An empty argument, which would append nothing.
+    EmptyArgument,
+    /// A variable name that is empty or holds a `=`, as it was written.
+    InvalidEnvName(String),
+    /// A DLL override without the `=` between its modules and its load
+    /// order, as it was written.
+    InvalidDllOverride(String),
 }
 
 impl fmt::Display for FieldError {
@@ -35,6 +48,13 @@ impl fmt::Display for FieldError {
         match self {
             Self::UnknownKey(key) => write!(f, "unknown key {key:?}"),
             Self::BadValue { key, value, .. } => write!(f, "unknown {key} value {value:?}"),
+            Self::Nul => f.write_str("a NUL in its value"),
+            Self::MissingExe => f.write_str("no exe"),
+            Self::EmptyArgument => f.write_str("an empty argument"),
+            Self::InvalidEnvName(name) => write!(f, "invalid variable name {name:?}"),
+            Self::InvalidDllOverride(text) => {
+                write!(f, "DLL override {text:?} without '=' before its load order")
+            }
         }
     }
 }

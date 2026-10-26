@@ -190,7 +190,9 @@ Errors never abort a process.
 - A field with an unknown key, an unknown `dxgi`, `d3d9`, `wined3d` or
   `opengl` value, a boolean other than `true` or `false` in any case (so
   `1` or `yes`), or no `=` is ignored with a warning naming the line and
-  the field. The rest of its line still applies.
+  the field. So is an empty `arguments` value, a `dll_overrides` entry
+  without `=`, an `env` name that is empty or holds `=`, and any value
+  with a NUL. The rest of its line still applies.
 - `name` and `enabled`, which launchers wrote for an older format where a
   rule named a built-in rule to change or drop it, are unknown keys like
   any other. A line with them and an `exe` is a rule of its own;

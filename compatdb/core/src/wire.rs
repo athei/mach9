@@ -3,7 +3,10 @@
 
 use std::fmt::Write as _;
 
-use crate::{DEFAULT_VALUE, ENV_VAR, FieldError, Key, Rule, Scalar, Setting, Source, Table};
+use crate::{
+    Argument, DEFAULT_VALUE, DllOverride, ENV_VAR, EnvEntry, EnvName, Exe, FieldError, Fingerprint,
+    Key, Rule, Scalar, Setting, Source, Table,
+};
 
 /// Whether `line` is a version header of the old format, `v=` and nothing
 /// but ASCII digits, which launchers wrote as the first line of a table. The
@@ -57,21 +60,19 @@ impl Table {
                     .into_iter()
                     .map(|field| format!("{ENV_VAR} line {n}: ignoring {field}")),
             );
-            if rule.exe.is_empty() {
-                diagnostics.push(format!(
+            match rule {
+                Some(rule) => rules.push(rule),
+                None => diagnostics.push(format!(
                     "{ENV_VAR} line {n}: ignoring the line, it has no exe"
-                ));
-            } else {
-                rules.push(rule);
+                )),
             }
         }
         (Self { rules }, diagnostics)
     }
 }
 
-/// Serialize one rule. `debug_channels` is deliberately left out: whoever
-/// starts wine applies those through `WINEDEBUG`, and the library would see
-/// them too late. So is `source`, which [`Table::parse`] sets from the line.
+/// Serialize one rule. `source` is left out: [`Table::parse`] sets it from
+/// the line.
 ///
 /// A library that does not know a key added later ignores that field with
 /// a diagnostic and applies the rest of the record. That is safe only for a
@@ -80,15 +81,15 @@ impl Table {
 /// setting: a library that ignored an unknown matcher would apply the rule
 /// to more processes than it names.
 fn rule_to_record(rule: &Rule) -> String {
-    let mut fields: Vec<String> = vec![field("exe", &rule.exe)];
+    let mut fields: Vec<String> = vec![field("exe", rule.exe.as_str())];
     if let Some(v) = &rule.company {
-        fields.push(field("company", v));
+        fields.push(field("company", v.as_str()));
     }
     if let Some(v) = &rule.product {
-        fields.push(field("product", v));
+        fields.push(field("product", v.as_str()));
     }
     if let Some(v) = &rule.original_filename {
-        fields.push(field("original_filename", v));
+        fields.push(field("original_filename", v.as_str()));
     }
     for &scalar in Scalar::ALL {
         match rule.scalar(scalar) {
@@ -98,27 +99,36 @@ fn rule_to_record(rule: &Rule) -> String {
         }
     }
     for over in &rule.dll_overrides {
-        fields.push(field("dll_overrides", over));
+        fields.push(field("dll_overrides", over.as_str()));
     }
     match &rule.arguments_override {
         // An override without entries clears the list, so it travels as the
         // key with an empty value.
         Some(texts) if texts.is_empty() => fields.push(String::from("arguments_override=")),
-        Some(texts) => fields.extend(texts.iter().map(|t| field("arguments_override", t))),
+        Some(texts) => fields.extend(
+            texts
+                .iter()
+                .map(|t| field("arguments_override", t.as_str())),
+        ),
         None => {}
     }
     for text in &rule.arguments {
-        fields.push(field("arguments", text));
+        fields.push(field("arguments", text.as_str()));
     }
-    for (name, value) in &rule.env {
-        fields.push(format!("env={}={}", encode(name), encode(value)));
+    for entry in &rule.env {
+        fields.push(format!(
+            "env={}={}",
+            encode(entry.name().as_str()),
+            encode(entry.value().unwrap_or_default())
+        ));
     }
     fields.join(";")
 }
 
-/// Read one record into a rule. A field that cannot be read (an unknown key,
-/// a value its key does not take, no `=`) is left out, and what was wrong
-/// with it is returned next to the rule for the caller to report; the other
+/// Read one record into a rule, or `None` for a record without an `exe`,
+/// which matches no process. A field that cannot be read (an unknown key, a
+/// value its key does not take, no `=`) is left out, and what was wrong with
+/// it is returned next to the rule for the caller to report; the other
 /// fields still apply. `line` is the record's line, which becomes the rule's
 /// [`Source`].
 ///
@@ -128,11 +138,11 @@ fn rule_to_record(rule: &Rule) -> String {
 /// rule then matches more processes than it meant to. The `name` and
 /// `enabled` keys of the old format, where an override merged into or
 /// dropped a rule by name, are unknown keys too.
-fn record_to_rule(record: &str, line: usize) -> (Rule, Vec<String>) {
-    let mut rule = Rule {
-        source: Source::Line(line),
-        ..Rule::default()
-    };
+fn record_to_rule(record: &str, line: usize) -> (Option<Rule>, Vec<String>) {
+    let mut rule = Rule::new(Exe::Any);
+    rule.source = Source::Line(line);
+    // The rule's `exe`, which every rule needs; an empty one is none.
+    let mut exe = None;
     let mut ignored = Vec::new();
     for raw in record.split(';') {
         if raw.is_empty() {
@@ -142,42 +152,66 @@ fn record_to_rule(record: &str, line: usize) -> (Rule, Vec<String>) {
             ignored.push(format!("field {raw:?} without '='"));
             continue;
         };
-        if let Err(reason) = set_field(&mut rule, key, value) {
+        let read = match key.parse() {
+            Ok(Key::Exe) => match Exe::new(decode(value)) {
+                Ok(name) => {
+                    exe = Some(name);
+                    Ok(())
+                }
+                Err(FieldError::MissingExe) => {
+                    exe = None;
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            },
+            Ok(key) => set_field(&mut rule, key, value),
+            Err(error) => Err(error),
+        };
+        if let Err(reason) = read {
             ignored.push(reason.to_string());
         }
     }
+    let rule = exe.map(|exe| {
+        rule.exe = exe;
+        rule
+    });
     (rule, ignored)
 }
 
 /// Set the field `key` of `rule` from its wire `value`, or say why it
-/// cannot be set, leaving the rule as it was. The key is matched
-/// ASCII-case-insensitively.
-fn set_field(rule: &mut Rule, key: &str, value: &str) -> Result<(), FieldError> {
-    let key: Key = key.parse()?;
+/// cannot be set, leaving the rule as it was. The `exe` is the caller's.
+fn set_field(rule: &mut Rule, key: Key, value: &str) -> Result<(), FieldError> {
     if let Some(scalar) = key.scalar() {
         return set_scalar(rule, scalar, value);
     }
     match key {
-        Key::Exe => rule.exe = decode(value),
-        Key::Company => rule.company = Some(decode(value)),
-        Key::Product => rule.product = Some(decode(value)),
-        Key::OriginalFilename => rule.original_filename = Some(decode(value)),
-        Key::DllOverrides => rule.dll_overrides.push(decode(value)),
-        Key::Arguments => rule.arguments.push(decode(value)),
+        Key::Company => rule.company = Some(Fingerprint::new(decode(value))?),
+        Key::Product => rule.product = Some(Fingerprint::new(decode(value))?),
+        Key::OriginalFilename => {
+            rule.original_filename = Some(Fingerprint::new(decode(value))?);
+        }
+        Key::DllOverrides => rule.dll_overrides.push(DllOverride::new(decode(value))?),
+        Key::Arguments => rule.arguments.push(Argument::new(decode(value))?),
         // Present at all, the override is set; an empty value adds no entry,
         // so `arguments_override=` alone clears the list.
         Key::ArgumentsOverride => {
+            let argument = if value.is_empty() {
+                None
+            } else {
+                Some(Argument::new(decode(value))?)
+            };
             let texts = rule.arguments_override.get_or_insert_default();
-            if !value.is_empty() {
-                texts.push(decode(value));
-            }
+            texts.extend(argument);
         }
+        // A value without `=` is the variable alone, which it removes.
         Key::Env => {
             let (name, val) = value.split_once('=').unwrap_or((value, ""));
-            rule.env.push((decode(name), decode(val)));
+            let name = EnvName::new(decode(name))?;
+            rule.env.push(EnvEntry::new(name, decode(val))?);
         }
-        // The scalar settings returned above.
-        Key::Dxgi
+        // The caller's `exe`, and the scalar settings returned above.
+        Key::Exe
+        | Key::Dxgi
         | Key::D3d9
         | Key::Wined3d
         | Key::OpenGl

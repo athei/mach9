@@ -31,6 +31,7 @@
 pub mod builtin;
 mod error;
 mod key;
+mod part;
 mod process;
 mod resolve;
 mod rule;
@@ -42,6 +43,7 @@ mod wire;
 pub use crate::{
     error::FieldError,
     key::{Key, KeyKind, Scalar, ScalarValue, ValueKind},
+    part::{Argument, DllOverride, EnvEntry, EnvName, Exe, ExeName, Fingerprint, Specificity},
     process::{
         Arch, IMAGE_FILE_MACHINE_ARM64, append_cmdline, append_cmdline_each, basename_of,
         env_value, merge_env,
@@ -49,7 +51,7 @@ pub use crate::{
     resolve::{
         ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution, ScalarState,
     },
-    rule::{ANY_EXE, DEFAULT_VALUE, Rule, Setting, Source},
+    rule::{DEFAULT_VALUE, Rule, Setting, Source},
     table::Table,
     value::{D3d9, Dxgi, OpenGl, Wined3d},
     version::VersionInfo,

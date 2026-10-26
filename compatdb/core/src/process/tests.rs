@@ -62,9 +62,9 @@ fn merge_env_replaces_appends_and_removes() -> TestResult {
     let out = merge_env(
         &block,
         &[
-            ("foo".into(), "new".into()),   // case-insensitive replace
-            ("BAR".into(), "added".into()), // append
-            ("PATH".into(), String::new()), // remove
+            EnvEntry::literal("foo", "new"),   // case-insensitive replace
+            EnvEntry::literal("BAR", "added"), // append
+            EnvEntry::literal("PATH", ""),     // remove
         ],
     )
     .ok_or("changed")?;
@@ -79,8 +79,8 @@ fn merge_env_replaces_appends_and_removes() -> TestResult {
 #[test]
 fn merge_env_reports_no_change() {
     let block = env_block(&["FOO=bar"]);
-    assert!(merge_env(&block, &[("FOO".into(), "bar".into())]).is_none());
-    assert!(merge_env(&block, &[("MISSING".into(), String::new())]).is_none());
+    assert!(merge_env(&block, &[EnvEntry::literal("FOO", "bar")]).is_none());
+    assert!(merge_env(&block, &[EnvEntry::literal("MISSING", "")]).is_none());
 }
 
 #[test]

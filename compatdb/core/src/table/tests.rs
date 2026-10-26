@@ -1,22 +1,22 @@
 use super::*;
-use crate::{ANY_EXE, Setting};
+use crate::{DllOverride, Exe, Fingerprint, Setting};
 
 #[test]
 fn duplicate_matchers_finds_rules_that_cannot_be_told_apart() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: "game.exe".into(),
-                company: Some("Acme".into()),
+                exe: Exe::literal("game.exe"),
+                company: Some(Fingerprint::literal("Acme")),
                 ..Rule::default()
             },
             Rule {
-                exe: "GAME.EXE".into(),
-                company: Some("Acme".into()),
+                exe: Exe::literal("GAME.EXE"),
+                company: Some(Fingerprint::literal("Acme")),
                 ..Rule::default()
             },
             Rule {
-                exe: "game.exe".into(),
+                exe: Exe::literal("game.exe"),
                 ..Rule::default()
             },
         ],
@@ -31,27 +31,27 @@ fn wildcard_rules_are_not_duplicates_of_each_other() {
     let table = Table {
         rules: vec![
             Rule {
-                exe: ANY_EXE.into(),
-                dll_overrides: vec!["mscoree,mshtml=".into()],
+                exe: Exe::Any,
+                dll_overrides: vec![DllOverride::literal("mscoree,mshtml=")],
                 ..Rule::default()
             },
             Rule {
-                exe: ANY_EXE.into(),
+                exe: Exe::Any,
                 dpi_aware: Setting::Set(true),
                 ..Rule::default()
             },
             Rule {
-                exe: ANY_EXE.into(),
+                exe: Exe::Any,
                 ..Rule::default()
             },
             Rule {
-                exe: ANY_EXE.into(),
-                company: Some("Acme".into()),
+                exe: Exe::Any,
+                company: Some(Fingerprint::literal("Acme")),
                 ..Rule::default()
             },
             Rule {
-                exe: ANY_EXE.into(),
-                company: Some("Acme".into()),
+                exe: Exe::Any,
+                company: Some(Fingerprint::literal("Acme")),
                 ..Rule::default()
             },
         ],
