@@ -9,7 +9,10 @@
 //! none of them can catch an unrelated program that happens to share a file
 //! name. The exceptions are the [`defaults`], which match every process on
 //! purpose: each is a default that a built-in rule for one program, or any
-//! `WINE_COMPATDB` rule that sets the same key, overrides.
+//! `WINE_COMPATDB` rule that sets the same key, overrides. A rule for one
+//! program folds after a `*` rule from `WINE_COMPATDB`, so its fix survives
+//! launch-wide settings; a `WINE_COMPATDB` rule for that program changes it
+//! (see [`Table::resolve`]).
 
 use std::fmt;
 
@@ -65,7 +68,8 @@ pub fn programs() -> Vec<Rule> {
 /// frame rate on a Mac. D3D12 is vkd3d-proton in the same tree, which presents
 /// through DXMT's dxgi.dll; the wined3d tree has no D3D12 at all. A rule for
 /// one program with `dxgi = wined3d` gives it wined3d, as the Rockstar
-/// launcher's does, and a `*` rule with it gives every process wined3d.
+/// launcher's does, and a `*` rule with it gives wined3d to every process
+/// that no built-in rule for one program pins to a tree.
 #[must_use]
 pub fn dxgi_dxmt() -> Rule {
     Rule {
@@ -277,10 +281,11 @@ pub fn social_club_helper() -> Rule {
 /// Steam's embedded browser (CEF): its GPU process cannot paint into the
 /// browser's window (blank UI), so keep the GPU in-process. GPU rendering
 /// stays on and goes through DXMT, which the Steam client runs well on; the
-/// dxgi pin keeps it there over the built-in `*` rule, while a
-/// `WINE_COMPATDB` rule that selects another tree, even a `*` one, moves it
-/// too. The Metal HUD is off for the same reason as on the Social Club helper
-/// ([`social_club_helper`]); steam.exe, which starts the games, has no rule.
+/// dxgi pin keeps it there over the `*` rules, built-in or from
+/// `WINE_COMPATDB`, while a `WINE_COMPATDB` rule for the helper that
+/// selects another tree moves it. The Metal HUD is off for the same reason
+/// as on the Social Club helper ([`social_club_helper`]); steam.exe, which
+/// starts the games, has no rule.
 #[must_use]
 pub fn steam_web_helper() -> Rule {
     Rule {
@@ -552,8 +557,8 @@ impl Former {
         match self.did {
             Did::Setting(key) => format!(
                 "{key} set to default in a rule matching every process hands the setting back to \
-                 upstream Wine in every process instead, which also resets what the built-in \
-                 rules for single programs set"
+                 upstream Wine in every process instead, except where a built-in rule for one \
+                 program sets it"
             ),
             Did::Other { off, .. } => off.to_owned(),
         }

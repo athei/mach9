@@ -26,7 +26,7 @@ pub enum Source {
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Table {
     /// The rules, in the order they were declared, which is the order
-    /// [`Table::resolve`] folds rules of equal layer and specificity in.
+    /// [`Table::resolve`] folds rules of equal place in its order in.
     pub(crate) rules: Vec<Rule>,
     /// Where each rule comes from, at the same index.
     pub(crate) sources: Vec<Source>,

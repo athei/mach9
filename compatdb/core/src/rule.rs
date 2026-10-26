@@ -511,11 +511,12 @@ impl Rule {
             && pin(self.original_filename.as_ref(), &version.original_filename)
     }
 
-    /// How specific this rule is, which is the order [`Table::resolve`] folds
-    /// the matching rules of a layer in: a wildcard rule first (a launch-wide
-    /// default), then one naming an executable, then one that also pins a
-    /// version fingerprint. Within a layer a more specific rule therefore
-    /// wins a scalar field.
+    /// How specific this rule is: a wildcard rule (a launch-wide default),
+    /// one naming an executable, each with or without a version
+    /// fingerprint. [`Table::resolve`] folds a wildcard rule before one
+    /// naming an executable whatever their source, and within each the
+    /// built-in rules before the others, a rule without a fingerprint before
+    /// one with.
     #[must_use]
     pub const fn specificity(&self) -> Specificity {
         let fingerprinted =

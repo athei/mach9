@@ -125,9 +125,9 @@ impl PartialEq<&str> for Exe {
     }
 }
 
-/// How specific a rule's matchers are, least specific first, which is the
-/// order [`Table::resolve`](crate::Table::resolve) folds the rules of a layer
-/// in.
+/// How specific a rule's matchers are, least specific first (see
+/// [`Table::resolve`](crate::Table::resolve) for how it orders the rules
+/// with their source).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Specificity {
     /// `exe` `*` and no fingerprint: a default for every process.

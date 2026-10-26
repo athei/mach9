@@ -515,14 +515,25 @@ impl Table {
     /// basename (see [`basename_of`]); `version` is the image's version
     /// resource, for the optional fingerprint constraints.
     ///
-    /// The built-in rules fold first and the rules of [`ENV_VAR`] after
-    /// them, so any value a rule from the variable sets beats every
-    /// built-in value. Within each of the two layers the rules fold least
-    /// specific first (see [`Rule::specificity`]) and within a tier in table
-    /// order, which is line order for the variable's rules. So a scalar
-    /// field ends up holding the value of the last rule that sets it: in a
-    /// layer, a rule naming a process beats a launch-wide default. The lists
-    /// accumulate across every rule that matched. The exceptions are a
+    /// The rules fold in this order, each group in table order, which is
+    /// line order for the rules of [`ENV_VAR`]:
+    ///
+    /// 1. built-in `*` rules, those without a fingerprint first;
+    /// 2. `*` rules of the variable, those without a fingerprint first;
+    /// 3. built-in rules naming an executable, those without a fingerprint
+    ///    first;
+    /// 4. rules of the variable naming an executable, those without a
+    ///    fingerprint first.
+    ///
+    /// So a scalar field ends up holding the value of the last rule that
+    /// sets it. Whether a rule names an executable decides first, then where
+    /// it comes from, then whether it pins a fingerprint (see
+    /// [`Rule::specificity`]). A launch-wide `*` rule from the variable
+    /// replaces a built-in default but not what a built-in rule for one
+    /// program sets, so that fix survives launch-wide settings, and a rule
+    /// from the variable for the program beats it, with or without a
+    /// fingerprint. The lists accumulate across every rule that matched, in
+    /// the same order. The exceptions are a
     /// rule's `arguments_override`, which replaces the arguments the rules
     /// folded before it accumulated (the `arguments` of the rule itself and
     /// of the rules folded after it append to it), a scalar set to
@@ -530,10 +541,8 @@ impl Table {
     /// the order `default`, which takes its modules out of the entries
     /// before it.
     ///
-    /// The sort has to stay stable: rules of equal layer and specificity
-    /// fold in table order, which is what lets a launcher's `*` rule,
-    /// appended after the built-in `*` rules, add its list entries after
-    /// theirs.
+    /// The sort has to stay stable: rules of equal place in that order fold
+    /// in table order.
     ///
     /// A rule whose executable matches but whose fingerprint does not simply
     /// does not apply; nothing falls back to it, and the rules that do match
@@ -544,7 +553,14 @@ impl Table {
             .entries()
             .filter(|(_, rule)| rule.matches(exe, version))
             .collect();
-        matching.sort_by_key(|(source, rule)| (*source != Source::BuiltIn, rule.specificity()));
+        matching.sort_by_key(|(source, rule)| {
+            let specificity = rule.specificity();
+            let names_exe = matches!(
+                specificity,
+                Specificity::Exe | Specificity::ExeWithFingerprint
+            );
+            (names_exe, *source != Source::BuiltIn, specificity)
+        });
         let mut r = Resolution::default();
         for (source, rule) in matching {
             let origin = Origin::of(source, rule);

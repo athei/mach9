@@ -289,8 +289,8 @@ fn force_nx_resolves_to_the_most_specific_rule() {
     let none = Table::default().resolve("x.exe", &VersionInfo::default());
     assert_eq!(none.force_nx(), None);
     assert!(none.is_empty());
-    // A `*` rule from WINE_COMPATDB folds after every built-in rule, so
-    // it beats the built-in rule for one program too.
+    // A `*` rule from WINE_COMPATDB folds after the built-in `*` rule and
+    // before the built-in rule for one program.
     let table = with_lines(&base, "exe=*;force_nx=false\nexe=*;dll_overrides=a=");
     let other = table.resolve("other.exe", &VersionInfo::default());
     assert_eq!(other.force_nx(), Some(false));
@@ -300,6 +300,14 @@ fn force_nx_resolves_to_the_most_specific_rule() {
     );
     let table = with_lines(&base, "exe=*;force_nx=true");
     let named = table.resolve("Game.exe", &VersionInfo::default());
+    assert_eq!(named.force_nx(), Some(false));
+    assert_eq!(
+        named.scalar(Scalar::ForceNx).set_by.as_ref(),
+        Some(&Origin::BuiltInFor("game.exe".into()))
+    );
+    // A rule from it for the same program folds after the built-in one.
+    let table = with_lines(&base, "exe=GAME.exe;force_nx=true");
+    let named = table.resolve("Game.exe", &VersionInfo::default());
     assert_eq!(named.force_nx(), Some(true));
     assert_eq!(
         named.scalar(Scalar::ForceNx).set_by.as_ref(),
@@ -308,7 +316,7 @@ fn force_nx_resolves_to_the_most_specific_rule() {
 }
 
 #[test]
-fn the_rules_of_wine_compatdb_fold_after_every_builtin_rule() {
+fn naming_an_exe_decides_first_then_the_source_then_a_fingerprint() {
     let base = Table::of_builtin(vec![
         Rule {
             exe: Exe::literal("game.exe"),
@@ -328,16 +336,33 @@ fn the_rules_of_wine_compatdb_fold_after_every_builtin_rule() {
         company: "Acme".into(),
         ..VersionInfo::default()
     };
-    // The least specific line beats the most specific built-in rule.
+    let pinned = Origin::BuiltInFor("game.exe (Acme)".into());
+    // A `*` line does not beat the built-in rule for the game, but beats
+    // the built-in `*` rule for every other process.
     let table = with_lines(&base, "exe=*;dpi_aware=true");
     let game = table.resolve("game.exe", &acme);
-    assert_eq!(game.dpi_aware(), Some(true));
+    assert_eq!(game.dpi_aware(), Some(false));
+    assert_eq!(game.scalar(Scalar::DpiAware).set_by.as_ref(), Some(&pinned));
+    let other = table.resolve("other.exe", &acme);
     assert_eq!(
-        game.scalar(Scalar::DpiAware).set_by.as_ref(),
+        other.scalar(Scalar::DpiAware).set_by.as_ref(),
         Some(&Origin::Line(1))
     );
-    // The key it leaves alone keeps the built-in value.
-    assert_eq!(game.gcmouse(), Some(false));
+    // A line naming the game beats it, without a fingerprint too; the key
+    // it leaves alone keeps the built-in value.
+    for text in [
+        "exe=*;dpi_aware=false\nexe=game.exe;dpi_aware=true",
+        "exe=game.exe;company=ACME;dpi_aware=true",
+    ] {
+        let table = with_lines(&base, text);
+        let game = table.resolve("game.exe", &acme);
+        assert_eq!(game.dpi_aware(), Some(true), "{text}");
+        assert!(
+            matches!(game.scalar(Scalar::DpiAware).set_by, Some(Origin::Line(_))),
+            "{text}"
+        );
+        assert_eq!(game.gcmouse(), Some(false), "{text}");
+    }
     // Among the lines, specificity still decides before line order.
     let table = with_lines(
         &base,
@@ -436,11 +461,11 @@ fn a_default_dll_override_takes_its_modules_out_of_the_entries_before_it() {
     ]);
     let table = with_lines(
         &base,
-        "exe=*;dll_overrides=d3d12=default;dll_overrides=mshtml=b",
+        "exe=game.exe;dll_overrides=d3d12=default;dll_overrides=mshtml=b",
     );
     let game = table.resolve("game.exe", &VersionInfo::default());
-    // Both entries for d3d12 go, whatever their case or suffix; the
-    // other modules and later entries stay.
+    // Both entries for d3d12 that folded before it go, whatever their case
+    // or suffix; the other modules and later entries stay.
     assert_eq!(game.dll_overrides, ["mscoree,mshtml=", "mshtml=b"]);
     assert_eq!(game.dll_overrides_from, [Origin::BuiltIn, Origin::Line(1)]);
     assert_eq!(
@@ -695,8 +720,9 @@ fn a_rule_for_the_same_exe_does_not_take_another_rules_fingerprint() {
     let other = table.resolve("Launcher.exe", &VersionInfo::default());
     assert_eq!(other.dxgi(), Some(Dxgi::Dxmt));
     assert_eq!(other.dll_overrides, ["b="]);
-    // The Rockstar launcher gets both. The line folds after every
-    // built-in rule, so it takes the scalar, and the lists accumulate.
+    // The Rockstar launcher gets both. The line names the executable and
+    // folds after the built-in rule naming one, fingerprint or not, so it
+    // takes the scalar, and the lists accumulate.
     let launcher = table.resolve("Launcher.exe", &rockstar);
     assert_eq!(launcher.dxgi(), Some(Dxgi::Dxmt));
     assert_eq!(
@@ -746,8 +772,9 @@ fn arguments_override_replaces_what_the_rules_before_it_accumulated() {
 #[test]
 fn an_empty_arguments_override_clears_the_list() {
     let table = with_lines(&argument_rules(), "exe=*;arguments_override=");
-    // It folds after every built-in rule, so it drops the arguments of
-    // both, the rule for the game included.
+    // It folds after the built-in `*` rule and drops its argument, but
+    // before the more specific built-in rule for the game, which keeps
+    // its own.
     let other = table.resolve("other.exe", &VersionInfo::default());
     assert_eq!(other.arguments, [] as [&str; 0]);
     assert_eq!(
@@ -758,7 +785,7 @@ fn an_empty_arguments_override_clears_the_list() {
         }]
     );
     let game = table.resolve("game.exe", &acme());
-    assert_eq!(game.arguments, [] as [&str; 0]);
+    assert_eq!(game.arguments, ["-game"]);
     // An override that finds nothing to drop is not reported.
     let table = with_lines(&Table::default(), "exe=*;arguments_override=");
     let r = table.resolve("x.exe", &VersionInfo::default());
@@ -769,21 +796,25 @@ fn an_empty_arguments_override_clears_the_list() {
 #[test]
 fn arguments_after_an_override_still_append() {
     // The rule's own `arguments` come after its override, and so do
-    // those of the rules folded after it: a later line of the same tier
-    // and a more specific line.
+    // those of the rules folded after it: a later line of the same tier,
+    // the built-in rule for the game and a line naming the game.
     let table = with_lines(
         &argument_rules(),
         "exe=game.exe;arguments=-specific\nexe=*;arguments_override=-new;arguments=-own\n\
          exe=*;arguments=-later",
     );
     let game = table.resolve("game.exe", &acme());
-    assert_eq!(game.arguments, ["-new", "-own", "-later", "-specific"]);
+    assert_eq!(
+        game.arguments,
+        ["-new", "-own", "-later", "-game", "-specific"]
+    );
     assert_eq!(
         game.arguments_from,
         [
             Origin::Line(2),
             Origin::Line(2),
             Origin::Line(3),
+            Origin::BuiltInFor("game.exe (Acme)".into()),
             Origin::Line(1)
         ]
     );
@@ -812,22 +843,27 @@ fn arguments_after_an_override_still_append() {
 
 #[test]
 fn a_less_specific_override_cannot_drop_a_more_specific_lines_arguments() {
-    // Within WINE_COMPATDB tiers still fold least specific first, so a
-    // `*` override runs before a line for the game and leaves its
-    // argument, whatever the line order.
+    // A `*` override runs before every rule naming the game, so it leaves
+    // their arguments, whatever the line order: the built-in rule's, then
+    // the line's.
     for text in [
         "exe=game.exe;arguments=-mine\nexe=*;arguments_override=-x",
         "exe=*;arguments_override=-x\nexe=game.exe;arguments=-mine",
     ] {
         let table = with_lines(&argument_rules(), text);
         let game = table.resolve("game.exe", &acme());
-        assert_eq!(game.arguments, ["-x", "-mine"], "{text}");
+        assert_eq!(game.arguments, ["-x", "-game", "-mine"], "{text}");
     }
-    // A basename line without a fingerprint still drops the built-in
-    // rule's argument, since every line folds after every built-in rule.
-    let table = with_lines(&argument_rules(), "exe=game.exe;arguments_override=");
-    let game = table.resolve("game.exe", &acme());
-    assert_eq!(game.arguments, [] as [&str; 0]);
+    // A line naming the game folds after the built-in rule for it, so it
+    // drops that rule's argument, with or without a fingerprint.
+    for text in [
+        "exe=game.exe;arguments_override=",
+        "exe=game.exe;company=Acme;arguments_override=",
+    ] {
+        let table = with_lines(&argument_rules(), text);
+        let game = table.resolve("game.exe", &acme());
+        assert_eq!(game.arguments, [] as [&str; 0], "{text}");
+    }
 }
 
 #[test]
@@ -1029,8 +1065,8 @@ fn opengl_resolves_to_the_most_specific_rule() {
     let other = base.resolve("other.exe", &none);
     assert_eq!(other.opengl(), Some(OpenGl::Egl));
     assert!(Table::default().resolve("x.exe", &none).opengl().is_none());
-    // A `*` rule from WINE_COMPATDB changes it for every process, the
-    // one a built-in rule names included.
+    // A `*` rule from WINE_COMPATDB changes it for every process but the
+    // one a built-in rule names; a rule for that one changes it there.
     let table = with_lines(&base, "exe=*;opengl=cgl");
     let other = table.resolve("other.exe", &none);
     assert_eq!(other.opengl(), Some(OpenGl::Cgl));
@@ -1039,6 +1075,11 @@ fn opengl_resolves_to_the_most_specific_rule() {
         Some(&Origin::Line(1))
     );
     let table = with_lines(&base, "exe=*;opengl=egl");
+    assert_eq!(
+        table.resolve("apple.exe", &none).opengl(),
+        Some(OpenGl::Cgl)
+    );
+    let table = with_lines(&base, "exe=apple.exe;opengl=egl");
     assert_eq!(
         table.resolve("apple.exe", &none).opengl(),
         Some(OpenGl::Egl)

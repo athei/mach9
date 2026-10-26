@@ -485,22 +485,130 @@ fn the_pins_for_one_program_beat_the_builtin_direct3d_rules() -> TestResult {
             assert_eq!(resolution.scalar(Scalar::D3d9).set_by.as_ref(), Some(&from));
         }
     }
-    // A `*` rule from WINE_COMPATDB folds after every built-in rule, so
-    // it moves the pinned programs too.
-    let star = with_lines("exe=*;dxgi=dxmt;d3d9=wined3d");
-    for pin in pins {
+    // A `*` rule from WINE_COMPATDB is less specific than a built-in rule
+    // for one program, so the pinned programs keep their tree, while a
+    // setting they do not pin moves.
+    let star = with_lines("exe=*;dxgi=dxmt;d3d9=wined3d\nexe=*;dxgi=wined3d");
+    for pin in &pins {
         let resolution = star.resolve(pin.exe.as_str(), &version_of(pin));
-        assert_eq!(resolution.dxgi(), Some(Dxgi::Dxmt), "{}", pin.matchers());
-        assert_eq!(resolution.d3d9(), Some(D3d9::Wined3d), "{}", pin.matchers());
+        let Setting::Set(dxgi) = pin.dxgi else {
+            continue;
+        };
+        assert_eq!(resolution.dxgi(), Some(dxgi), "{}", pin.matchers());
         assert_eq!(
             resolution.scalar(Scalar::Dxgi).set_by.as_ref(),
-            Some(&Origin::Line(1))
+            Some(&Origin::BuiltInFor(pin.matchers()))
         );
+        assert_eq!(resolution.d3d9(), Some(D3d9::Wined3d), "{}", pin.matchers());
     }
+    // Every other program gets the `*` rules' tree.
+    let game = star.resolve("game.exe", &VersionInfo::default());
+    assert_eq!(game.dxgi(), Some(Dxgi::Wined3d));
+    assert_eq!(
+        game.scalar(Scalar::Dxgi).set_by.as_ref(),
+        Some(&Origin::Line(2))
+    );
     assert_eq!(
         rule(&table, "Launcher.exe")?.dxgi,
         Setting::Set(Dxgi::Wined3d)
     );
+    Ok(())
+}
+
+#[test]
+fn a_launcher_rule_for_one_program_beats_the_fingerprinted_builtin_one() -> TestResult {
+    let launcher = rule(&Table::builtin(), "Launcher.exe")?.clone();
+    let version = version_of(&launcher);
+    // A rule naming the executable folds after the built-in rules naming
+    // one, with its fingerprint or without one.
+    for text in [
+        "exe=Launcher.exe;dxgi=dxmt",
+        "exe=Launcher.exe;company=Rockstar Games;dxgi=dxmt",
+    ] {
+        let resolution = with_lines(text).resolve("Launcher.exe", &version);
+        assert_eq!(resolution.dxgi(), Some(Dxgi::Dxmt), "{text}");
+        assert_eq!(
+            resolution.scalar(Scalar::Dxgi).set_by.as_ref(),
+            Some(&Origin::Line(1)),
+            "{text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_launcher_star_rule_beats_a_fingerprinted_builtin_star_rule() -> TestResult {
+    // Of the `*` rules, a built-in one with a fingerprint still folds
+    // before every one from WINE_COMPATDB.
+    let mut table = Table::of_builtin(vec![
+        Rule::new(Exe::Any)
+            .with_company(Fingerprint::new("Acme")?)
+            .with_dpi_aware(false),
+    ]);
+    let (lines, diagnostics) = parse("exe=*;dpi_aware=true");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    table.append(lines);
+    let acme = VersionInfo {
+        company: "Acme".into(),
+        ..VersionInfo::default()
+    };
+    let game = table.resolve("game.exe", &acme);
+    assert_eq!(game.dpi_aware(), Some(true));
+    assert_eq!(
+        game.scalar(Scalar::DpiAware).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
+    Ok(())
+}
+
+#[test]
+fn a_star_rule_of_the_launcher_beats_a_builtin_star_rule() {
+    let table = with_lines("exe=*;opengl=cgl;dll_overrides=mscoree=n,b");
+    let game = table.resolve("game.exe", &VersionInfo::default());
+    assert_eq!(game.opengl(), Some(OpenGl::Cgl));
+    assert_eq!(
+        game.scalar(Scalar::OpenGl).set_by.as_ref(),
+        Some(&Origin::Line(1))
+    );
+    // Its list entries come after the built-in `*` rules' ones.
+    assert_eq!(game.dll_overrides, ["mscoree,mshtml=", "mscoree=n,b"]);
+}
+
+#[test]
+fn the_cef_helpers_keep_the_metal_hud_off_under_a_launcher_star_metal_hud() -> TestResult {
+    let table = with_lines("exe=*;metal_hud=true");
+    let helper = rule(&table, "steamwebhelper.exe")?.clone();
+    let mut resolution = table.resolve("steamwebhelper.exe", &version_of(&helper));
+    resolution.fold_derived_env();
+    assert_eq!(resolution.metal_hud(), Some(true));
+    // The HUD's entries go where the `*` rule folded, and the helper's own
+    // MTL_HUD_ENABLED=0, folded after it, is the value the process gets.
+    let mut want = wildcard_env();
+    want.extend(crate::metal_hud_env(true));
+    want.push(env("MTL_HUD_ENABLED", "0"));
+    assert_eq!(resolution.env, want);
+    let steps = resolution.env_steps(|_| false);
+    let enabled: Vec<(String, Option<Origin>)> = steps
+        .iter()
+        .filter(|step| step.entry.name().as_str() == "MTL_HUD_ENABLED")
+        .map(|step| (step.entry.to_string(), step.replaced_by.clone()))
+        .collect();
+    assert_eq!(
+        enabled,
+        [
+            (
+                String::from("MTL_HUD_ENABLED=1"),
+                Some(Origin::BuiltInFor(helper.matchers()))
+            ),
+            (String::from("MTL_HUD_ENABLED=0"), None),
+        ]
+    );
+    // A game keeps the HUD.
+    let mut game = table.resolve("game.exe", &VersionInfo::default());
+    game.fold_derived_env();
+    let mut want = wildcard_env();
+    want.extend(crate::metal_hud_env(true));
+    assert_eq!(game.env, want);
     Ok(())
 }
 
@@ -687,19 +795,30 @@ fn world_of_warcraft_gets_4_gb_and_nothing_else_changes() {
 
 #[test]
 fn a_rule_from_wine_compatdb_leaves_world_of_warcraft_to_its_flag() {
-    // The rules of WINE_COMPATDB fold after every built-in rule, so a
-    // rule on the basename alone beats the fingerprinted built-in one.
-    for text in [
-        "exe=WoW.exe;large_address_aware=false",
-        "exe=WoW.exe;company=Blizzard;large_address_aware=false",
-        "exe=*;large_address_aware=false",
+    // A rule of WINE_COMPATDB naming the executable folds after the
+    // fingerprinted built-in one, with or without a fingerprint, so it
+    // wins; a `*` rule folds before it.
+    let wow =
+        Origin::BuiltInFor("WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)".into());
+    for (text, wins) in [
+        (
+            "exe=WoW.exe;company=Blizzard;large_address_aware=false",
+            true,
+        ),
+        ("exe=WoW.exe;large_address_aware=false", true),
+        ("exe=*;large_address_aware=false", false),
     ] {
         let table = with_lines(text);
         let client = table.resolve("WoW.exe", &wow_version());
-        assert_eq!(client.large_address_aware(), Some(false), "{text}");
+        let (value, from) = if wins {
+            (false, Origin::Line(1))
+        } else {
+            (true, wow.clone())
+        };
+        assert_eq!(client.large_address_aware(), Some(value), "{text}");
         assert_eq!(
             client.scalar(Scalar::LargeAddressAware).set_by.as_ref(),
-            Some(&Origin::Line(1)),
+            Some(&from),
             "{text}"
         );
     }
@@ -719,8 +838,8 @@ fn a_rule_from_wine_compatdb_leaves_world_of_warcraft_to_its_flag() {
 
 #[test]
 fn within_wine_compatdb_a_more_specific_rule_still_wins() {
-    // Whatever the line order, the rule for the game beats the `*` rule
-    // of the same layer.
+    // Whatever the line order, the rule of WINE_COMPATDB for the game
+    // folds after its `*` rule and beats it.
     for text in [
         "exe=*;dpi_aware=false\nexe=game.exe;dpi_aware=true",
         "exe=game.exe;dpi_aware=true\nexe=*;dpi_aware=false",
@@ -873,8 +992,8 @@ fn an_arguments_override_drops_a_builtin_helpers_switch() -> TestResult {
     let steam = rule(&table, "steamwebhelper.exe")?;
     let version = version_of(steam);
     let from = Origin::BuiltInFor(steam.matchers());
-    // A rule from WINE_COMPATDB folds after the helper's, with or without
-    // a fingerprint, and replaces its switch.
+    // A rule from WINE_COMPATDB for the helper folds after the helper's,
+    // with or without a fingerprint, and replaces its switch.
     for (text, want) in [
         (
             "exe=steamwebhelper.exe;company=Valve;arguments_override=",
@@ -894,6 +1013,11 @@ fn an_arguments_override_drops_a_builtin_helpers_switch() -> TestResult {
             "{text}"
         );
     }
+    // A `*` override folds before it: the switch is appended after it.
+    let table = with_lines("exe=*;arguments_override=-x");
+    let helper = table.resolve("steamwebhelper.exe", &version);
+    assert_eq!(helper.arguments, ["-x", "--in-process-gpu"]);
+    assert_eq!(helper.arguments_dropped, []);
     Ok(())
 }
 
@@ -1087,8 +1211,8 @@ fn every_former_name_of_a_builtin_rule_says_what_does_it_now() -> TestResult {
     assert_eq!(
         dxmt.instead_of_turning_off(),
         "dxgi set to default in a rule matching every process hands the setting back to \
-         upstream Wine in every process instead, which also resets what the built-in rules for \
-         single programs set"
+         upstream Wine in every process instead, except where a built-in rule for one program \
+         sets it"
     );
     // A rule for one program is changed by a rule for that program.
     let nostale = former("nostale").ok_or("nostale")?;

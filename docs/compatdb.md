@@ -58,20 +58,18 @@ and `arguments_override=` clears the arguments.
 ## Merging
 
 - Every matching rule applies; no rule removes or replaces another rule.
-- The built-in rules fold first and the `WINE_COMPATDB` rules after them.
-  Within each of the two layers the rules fold least specific first: `*`,
-  then `*` with a fingerprint, then a basename, then a basename with a
-  fingerprint. Within a tier they fold in table order, which for
-  `WINE_COMPATDB` is the order of its lines.
-- A scalar ends up with the last folded value. So any value a
-  `WINE_COMPATDB` rule sets beats every built-in value, and within a layer
-  the more specific rule wins. Lists (`dll_overrides`, `arguments`, `env`)
-  accumulate in fold order.
-- So a built-in value is changed by a `WINE_COMPATDB` rule that sets the
-  same key: `exe=*` for every process, or a rule for one executable. That
-  includes the value of a built-in rule for one program, which pins a
-  fingerprint: a rule on the basename alone changes it. The log names the
-  matchers of the built-in rule behind each value
+- The rules fold in this order: the built-in `*` rules, the `*` rules of
+  `WINE_COMPATDB`, the built-in rules naming an executable, then the
+  `WINE_COMPATDB` rules naming one. Within each group a rule without a
+  fingerprint folds before one with, and otherwise the rules fold in table
+  order, which for `WINE_COMPATDB` is the order of its lines.
+- A scalar ends up with the last folded value. Lists (`dll_overrides`,
+  `arguments`, `env`) accumulate in fold order.
+- So an `exe=*` rule from `WINE_COMPATDB` changes the built-in defaults
+  for every process, but not what a built-in rule for one program sets:
+  that fix survives launch-wide settings. A `WINE_COMPATDB` rule for that
+  executable changes it, on the basename alone or with a fingerprint. The
+  log names the matchers of the built-in rule behind each value
   ([logging](#logging-and-verification)).
 - Within `WINE_COMPATDB`, a rule for one executable beats a `*` rule
   whatever their line order, and several `*` rules are not a conflict.
@@ -109,8 +107,8 @@ and `arguments_override=` clears the arguments.
   can switch is off in the code by default, and a built-in rule turns it
   on, for every process or for the programs that need it. So the compatdb
   log of a process shows its complete resolved configuration, with the
-  source of every value, and a rule that sets the key changes it
-  ([merging](#merging)).
+  source of every value, and a rule that sets the key and folds after the
+  built-in one changes it ([merging](#merging)).
 - Every other rule names an executable and pins its version resource, so it
   cannot catch an unrelated program of the same name; a test enforces this.
 - The CEF helper rules add `--in-process-gpu` because a CEF GPU process
@@ -258,18 +256,18 @@ executable.
 | Leave one game to what upstream Wine does for a setting | `exe=Game.exe;<key>=default` |
 | Replace the arguments the rules give one game with your own | `exe=Game.exe;arguments_override=-windowed` |
 | Give one game no arguments from any rule | `exe=Game.exe;arguments_override=` |
-| Keep a program that a built-in rule pins on its tree under a `*` rule | `exe=<its exe>;dxgi=<its tree>` |
+| Change what a built-in rule sets for one program | `exe=<its exe>;<key>=<value>`, for example `exe=Launcher.exe;dxgi=dxmt` |
 
-- A `*` rule from `WINE_COMPATDB` folds after every built-in rule, so it
-  also changes the programs that the built-in rules for one program set up
-  ([`builtin.rs`](../compatdb/core/src/builtin.rs)), in both directions:
-  `exe=*;dxgi=dxmt` moves the Rockstar Games Launcher onto DXMT, which
-  lacks the D3D10.1 device it needs, `exe=*;dxgi=wined3d` moves the Steam
-  and Social Club web helpers (CEF) off DXMT, and
-  `exe=*;arguments_override=` takes `--in-process-gpu` from them, which
-  leaves the Steam UI blank again. A rule for such a program that sets its
-  tree again, or adds the argument again, keeps it as the built-in rule
-  had it; the log shows each value with its source.
+- A `*` rule from `WINE_COMPATDB` folds before the built-in rules for one
+  program ([`builtin.rs`](../compatdb/core/src/builtin.rs)), so it leaves
+  what they set alone: `exe=*;dxgi=dxmt` keeps the Rockstar Games Launcher
+  on wined3d, which has the D3D10.1 device it needs, and
+  `exe=*;dxgi=wined3d` keeps the Steam and Social Club web helpers (CEF) on
+  DXMT. A setting such a rule leaves unset still comes from the `*` rule.
+  Its list entries come before theirs, so `exe=*;arguments_override=`
+  clears the arguments of every rule folded before it, and the helpers
+  still get `--in-process-gpu`. A rule for the program changes what the
+  built-in rule set; the log shows each value with its source.
 - A game that can use D3D12 and D3D11 usually takes D3D12 when
   `d3d12.dll` loads, which in the `dxmt` tree means vkd3d-proton. The rule
   that hides D3D12 disables both of vkd3d-proton's modules through
@@ -283,8 +281,9 @@ executable.
   compatdb adds replaces the entry for the same module. ntdll also consults
   compatdb's overrides before the registry `DllOverrides` keys. With
   `mscoree=default` compatdb has no entry for it, and both apply again.
-- A rule works because it folds after the built-in rules and ntdll keeps
-  the last entry for a module.
+- A rule works because it folds after the built-in `*` rules, and after
+  the built-in rules naming an executable when it names one, and ntdll
+  keeps the last entry for a module.
 - The processes a game starts inherit the variables of its `env` rule. For
   a variable a built-in `*` rule sets by default, such as
   `FEX_X87REDUCEDPRECISION`, a value a rule for one game sets carries into
