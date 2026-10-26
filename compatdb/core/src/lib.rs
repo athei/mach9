@@ -19,6 +19,7 @@
 //! decision logic is all unit-tested on the host and the `.so` itself only has
 //! to move bytes in and out of the process.
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -51,8 +52,11 @@ fn is_legacy_header(line: &str) -> bool {
 /// the resource leaves that field empty.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct VersionInfo {
+    /// The `CompanyName` string.
     pub company: String,
+    /// The `ProductName` string.
     pub product: String,
+    /// The `OriginalFilename` string.
     pub original_filename: String,
 }
 
@@ -712,6 +716,8 @@ impl Rule {
 /// [`ENV_VAR`], in the order they were declared.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Table {
+    /// The rules, in the order they were declared, which is the order
+    /// [`Table::resolve`] folds rules of equal layer and specificity in.
     pub rules: Vec<Rule>,
 }
 
@@ -722,14 +728,33 @@ pub struct Table {
 /// accumulate. Also says where each value came from, for the log.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Resolution {
+    /// The DXGI-family implementation (see [`Rule::dxgi`]), `None` when no
+    /// rule sets it.
     pub dxgi: Option<Dxgi>,
+    /// The D3D9 implementation (see [`Rule::d3d9`]), `None` when no rule
+    /// sets it.
     pub d3d9: Option<D3d9>,
+    /// The renderer of wined3d (see [`Rule::wined3d`]), `None` when no rule
+    /// sets it.
     pub wined3d: Option<Wined3d>,
+    /// Which OpenGL the Mac driver gives (see [`Rule::opengl`]), `None` when
+    /// no rule sets it.
     pub opengl: Option<OpenGl>,
+    /// The DPI awareness (see [`Rule::dpi_aware`]), `None` when no rule sets
+    /// it.
     pub dpi_aware: Option<bool>,
+    /// Whether large address awareness is forced (see
+    /// [`Rule::large_address_aware`]), `None` when no rule sets it.
     pub large_address_aware: Option<bool>,
+    /// Whether mouse movement comes from `GCMouse` (see [`Rule::gcmouse`]),
+    /// `None` when no rule sets it.
     pub gcmouse: Option<bool>,
+    /// Whether no-execute stays on (see [`Rule::force_nx`]), `None` when no
+    /// rule sets it.
     pub force_nx: Option<bool>,
+    /// The `dll_overrides` entries of every matching rule in fold order,
+    /// without the `default` entries, which only take modules out of the
+    /// entries before them.
     pub dll_overrides: Vec<String>,
     /// Where each entry of [`Resolution::dll_overrides`] came from, at the
     /// same index.
@@ -737,6 +762,8 @@ pub struct Resolution {
     /// Each module a `<module>=default` entry named, in fold order, with
     /// what that did to the entries before it.
     pub dll_overrides_reset: Vec<DllOverrideReset>,
+    /// The texts to append to the command line, in fold order, after any
+    /// `arguments_override` replaced what came before it.
     pub arguments: Vec<String>,
     /// Where each entry of [`Resolution::arguments`] came from, at the same
     /// index.
@@ -744,6 +771,9 @@ pub struct Resolution {
     /// Each `arguments_override` that dropped entries from the argument
     /// list, in fold order.
     pub arguments_dropped: Vec<ArgumentsDropped>,
+    /// The `env` entries of every matching rule in fold order, as name and
+    /// value; an empty value removes the variable. [`Resolution::env_steps`]
+    /// says which of them apply in a process.
     pub env: Vec<(String, String)>,
     /// Where each entry of [`Resolution::env`] came from, at the same index.
     pub env_from: Vec<EnvFrom>,
@@ -829,6 +859,7 @@ pub struct EnvFrom {
 /// What one env entry of a [`Resolution`] does in a process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvStep {
+    /// The name of the variable.
     pub name: String,
     /// The value it sets; empty removes the variable.
     pub value: String,
