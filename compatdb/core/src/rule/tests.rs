@@ -191,3 +191,27 @@ fn a_rule_reads_and_writes_each_scalar_by_its_key() {
     rule.put_scalar(Scalar::DpiAware, Setting::Unset);
     assert_eq!(rule.dpi_aware, Setting::Unset);
 }
+
+#[test]
+fn a_rule_with_matchers_alone_sets_nothing() -> TestResult {
+    assert!(Rule::new(Exe::Any).sets_nothing());
+    let pinned = Rule::new(Exe::new("Game.exe")?).with_company(Fingerprint::new("Acme")?);
+    assert!(pinned.sets_nothing());
+    // Each setting, a reset and an empty override included, is something.
+    let any = || Rule::new(Exe::Any);
+    let name = EnvName::new("A")?;
+    let set = [
+        any().with_dxgi(Dxgi::Dxmt),
+        any().with_dpi_aware(Setting::Reset),
+        any().with_metal_hud(false),
+        any().with_dll_override(DllOverride::new("a=")?),
+        any().with_argument(Argument::new("-x")?),
+        any().with_arguments_override([]),
+        any().with_debug_channel(DebugChannel::new("+seh")?),
+        any().with_env(EnvEntry::remove(name)),
+    ];
+    for rule in set {
+        assert!(!rule.sets_nothing(), "{rule:?}");
+    }
+    Ok(())
+}

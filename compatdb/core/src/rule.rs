@@ -415,6 +415,23 @@ impl Rule {
         &self.env
     }
 
+    /// Whether the rule sets nothing beyond its matchers: no scalar setting
+    /// is set or reset and every list is empty, `arguments_override`
+    /// included. Such a rule changes nothing in any process, so a launcher
+    /// can leave it out of the table, for example the rule for every process
+    /// that its launch-wide settings make when they set nothing.
+    #[must_use]
+    pub fn sets_nothing(&self) -> bool {
+        Scalar::ALL
+            .iter()
+            .all(|&scalar| self.scalar(scalar).is_unset())
+            && self.dll_overrides.is_empty()
+            && self.arguments.is_empty()
+            && self.arguments_override.is_none()
+            && self.debug_channels.is_empty()
+            && self.env.is_empty()
+    }
+
     /// What this rule says about the scalar setting `scalar`.
     #[must_use]
     pub fn scalar(&self, scalar: Scalar) -> Setting<ScalarValue> {

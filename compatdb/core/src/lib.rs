@@ -14,6 +14,14 @@
 //! appends the result to them and applies whatever matches the process), and
 //! by any launcher that wants to feed it extra rules through that variable.
 //!
+//! A launcher fills a rule from its own settings without knowing any key:
+//! it reads the name of each with [`Key::from_setting`], branches on
+//! [`Key::kind`] and hands the value as text to [`Rule::set`],
+//! [`Rule::set_list`] or [`Rule::set_env`]. Every error is a [`FieldError`]
+//! to print as it is, and its [`FieldError::severity`] says whether to warn
+//! and go on or to refuse the settings. [`builtin::former`] says what to do
+//! instead of naming a former built-in rule.
+//!
 //! Everything here is pure: it works on `&str`, `&[u16]` (UTF-16 as wine hands
 //! it over) and owned values, with no unsafe and no I/O, so the library's
 //! decision logic is all unit-tested on the host and the `.so` itself only has
@@ -35,13 +43,14 @@ mod part;
 mod process;
 mod resolve;
 mod rule;
+mod settings;
 mod table;
 mod value;
 mod version;
 mod wire;
 
 pub use crate::{
-    error::{Diagnostic, FieldError, ParseError},
+    error::{Diagnostic, FieldError, ParseError, Severity},
     key::{Key, KeyKind, Scalar, ScalarValue, ValueKind},
     part::{
         Argument, DebugChannel, DllOverride, EnvEntry, EnvName, Exe, ExeName, Fingerprint,
@@ -55,6 +64,7 @@ pub use crate::{
         ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution, ScalarState,
     },
     rule::{DEFAULT_VALUE, Rule, Setting},
+    settings::{inherited_conflicts, retired_env},
     table::{Source, Table},
     value::{D3d9, Dxgi, METAL_HUD_ENV, OpenGl, Wined3d, metal_hud_env},
     version::VersionInfo,

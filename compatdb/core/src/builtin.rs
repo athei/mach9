@@ -11,9 +11,13 @@
 //! purpose: each is a default that a built-in rule for one program, or any
 //! `WINE_COMPATDB` rule that sets the same key, overrides.
 
+use std::fmt;
+
 #[cfg(doc)]
 use crate::Table;
-use crate::{Argument, D3d9, DllOverride, Dxgi, EnvEntry, Exe, Fingerprint, OpenGl, Rule, Setting};
+use crate::{
+    Argument, D3d9, DllOverride, Dxgi, EnvEntry, Exe, Fingerprint, Key, OpenGl, Rule, Setting,
+};
 
 /// The rules the bundle ships with: the [`defaults`] for every process, then
 /// the rules for one program each ([`programs`]). [`Table::builtin`] is the
@@ -370,6 +374,200 @@ pub fn world_of_warcraft() -> Rule {
         original_filename: Some(Fingerprint::literal("WoW.exe")),
         large_address_aware: Setting::Set(true),
         ..Rule::default()
+    }
+}
+
+/// A name a built-in rule had while each had one.
+///
+/// A launcher's settings written for those rules may still use one to
+/// extend a rule or turn it off. The rules have no names any more, so such
+/// a name reaches nothing; [`former`] gives what does the same now.
+///
+/// Its `Display` form says that, for example `"dxmt" was the name of a
+/// built-in rule of compatdb.so, and the built-in rules have no names any
+/// more, so a rule can no longer extend or turn off one by naming it`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Former {
+    /// The name, in lowercase.
+    name: &'static str,
+    /// What the rule of that name did, and so what does it now.
+    did: Did,
+}
+
+/// What a former built-in rule did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Did {
+    /// Set the scalar setting of this key in every process.
+    Setting(Key),
+    /// Anything else: what to do instead of extending it, if that differs
+    /// from what to do instead of turning it off, and that.
+    Other {
+        /// The clause that says what to do instead of extending the rule.
+        extend: Option<&'static str>,
+        /// The clause that says what to do instead of turning it off.
+        off: &'static str,
+    },
+}
+
+/// What changes what a former built-in rule for one program set.
+const PROGRAM_RULE: Did = Did::Other {
+    extend: None,
+    off: "to change what a built-in rule sets for one program, give that program's exe a rule \
+          that sets the same keys, or default for upstream Wine's behaviour",
+};
+
+/// The former names of the built-in rules.
+const FORMER: &[Former] = &[
+    Former {
+        name: "dxmt",
+        did: Did::Setting(Key::Dxgi),
+    },
+    Former {
+        name: "mtld3d",
+        did: Did::Setting(Key::D3d9),
+    },
+    Former {
+        name: "dpi-aware",
+        did: Did::Setting(Key::DpiAware),
+    },
+    Former {
+        name: "force-nx",
+        did: Did::Setting(Key::ForceNx),
+    },
+    Former {
+        name: "gcmouse",
+        did: Did::Setting(Key::Gcmouse),
+    },
+    Former {
+        name: "opengl-egl",
+        did: Did::Setting(Key::OpenGl),
+    },
+    Former {
+        name: "no-mono-gecko",
+        did: Did::Other {
+            extend: Some(
+                "set dll_overrides instead, in a rule matching every process or in a rule for \
+                 one program",
+            ),
+            off: "dll_overrides set to \"mscoree,mshtml=default\" in a rule matching every \
+                  process takes the built-in overrides of Mono and Gecko away instead",
+        },
+    },
+    Former {
+        name: "fex-x87-reduced-precision",
+        did: Did::Other {
+            extend: Some(
+                "set FEX_X87REDUCEDPRECISION in the env of a rule instead, one matching every \
+                 process or one for one program",
+            ),
+            off: "FEX_X87REDUCEDPRECISION=0 in the environment Wine is started with gives every \
+                  process FEX's full x87 precision instead, as does a rule matching every \
+                  process whose env removes FEX_X87REDUCEDPRECISION",
+        },
+    },
+    Former {
+        name: "vkd3d-proton-min-latency",
+        did: Did::Other {
+            extend: None,
+            off: "compatdb.so no longer has that rule, so there is nothing left to change or turn \
+                  off; remove it",
+        },
+    },
+    Former {
+        name: "large-address-aware",
+        did: Did::Other {
+            extend: None,
+            off: "compatdb.so no longer gives every 32-bit process 4 GB: the executable's \
+                  large-address-aware flag decides, and large_address_aware set to true gives 4 \
+                  GB, in a rule matching every process to every 32-bit process or in a rule for \
+                  one program to that program",
+        },
+    },
+    Former {
+        name: "rockstar-launcher",
+        did: PROGRAM_RULE,
+    },
+    Former {
+        name: "rockstar-social-club-ui",
+        did: PROGRAM_RULE,
+    },
+    Former {
+        name: "steam-web-helper",
+        did: PROGRAM_RULE,
+    },
+    Former {
+        name: "gta-iv",
+        did: PROGRAM_RULE,
+    },
+    Former {
+        name: "nostale",
+        did: PROGRAM_RULE,
+    },
+    Former {
+        name: "aoe2-hd",
+        did: PROGRAM_RULE,
+    },
+];
+
+/// The former built-in rule called `name`, compared
+/// ASCII-case-insensitively as `compatdb.so` compared the names, or `None`
+/// when no built-in rule had that name.
+#[must_use]
+pub fn former(name: &str) -> Option<Former> {
+    FORMER
+        .iter()
+        .find(|former| former.name.eq_ignore_ascii_case(name))
+        .copied()
+}
+
+impl Former {
+    /// The name, in lowercase.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
+
+    /// What to do instead of extending the rule by its name, a clause a
+    /// launcher can print after its own words, for example `set dxgi
+    /// instead, in a rule matching every process or in a rule for one
+    /// program`.
+    #[must_use]
+    pub fn instead_of_extending(self) -> String {
+        match self.did {
+            Did::Setting(key) => format!(
+                "set {key} instead, in a rule matching every process or in a rule for one program"
+            ),
+            Did::Other {
+                extend: Some(extend),
+                ..
+            } => extend.to_owned(),
+            Did::Other { extend: None, off } => off.to_owned(),
+        }
+    }
+
+    /// What to do instead of turning the rule off by its name, a clause
+    /// like [`Former::instead_of_extending`].
+    #[must_use]
+    pub fn instead_of_turning_off(self) -> String {
+        match self.did {
+            Did::Setting(key) => format!(
+                "{key} set to default in a rule matching every process hands the setting back to \
+                 upstream Wine in every process instead, which also resets what the built-in \
+                 rules for single programs set"
+            ),
+            Did::Other { off, .. } => off.to_owned(),
+        }
+    }
+}
+
+impl fmt::Display for Former {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:?} was the name of a built-in rule of compatdb.so, and the built-in rules have no \
+             names any more, so a rule can no longer extend or turn off one by naming it",
+            self.name
+        )
     }
 }
 

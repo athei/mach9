@@ -3,9 +3,9 @@
 
 use std::fmt;
 
-#[cfg(doc)]
-use crate::Table;
 use crate::{ENV_VAR, Key};
+#[cfg(doc)]
+use crate::{Rule, Table, retired_env};
 
 /// Why a field of a rule cannot be read, or a value cannot be set.
 ///
@@ -58,6 +58,71 @@ pub enum FieldError {
     /// A second field for a key that holds one value: a matcher or a scalar
     /// setting.
     Duplicate(Key),
+    /// A key that the settings of a launcher may still hold but that is no
+    /// longer read (see [`Key::from_setting`]).
+    RetiredKey {
+        /// The key as it was written.
+        key: String,
+        /// Why it is no longer read and what to do instead, a clause that
+        /// follows the key.
+        reason: &'static str,
+        /// Whether a launcher ignores it or refuses it.
+        severity: Severity,
+    },
+    /// A value of `key` that is no longer read (see [`Rule::set`]).
+    RetiredValue {
+        /// The key whose value it is.
+        key: Key,
+        /// The value as it was written.
+        value: String,
+        /// Why it is no longer read and what to do instead, a clause that
+        /// follows the value.
+        reason: &'static str,
+        /// Whether a launcher ignores it or refuses it.
+        severity: Severity,
+    },
+    /// An environment variable that a setting replaced, as it was written,
+    /// with the key of that setting (see [`retired_env`]).
+    RetiredEnv {
+        /// The variable as it was written.
+        name: String,
+        /// The setting that replaced it.
+        key: Key,
+    },
+    /// `arguments_override` in a rule whose `exe` is `*` (see [`Rule::set`]).
+    ArgumentsOverrideOnAny,
+    /// A list of values for a key that holds one (see [`Rule::set_list`]).
+    NotAList(Key),
+}
+
+/// How a launcher treats a [`FieldError`] from its own settings, as
+/// [`FieldError::severity`] gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Severity {
+    /// The value is ignored, the rule is left as it was, and the launcher
+    /// prints the error as a warning and goes on.
+    Warning,
+    /// The launcher refuses the settings: what they ask for would not
+    /// happen.
+    Error,
+}
+
+impl FieldError {
+    /// How a launcher treats this error from [`Rule::set`],
+    /// [`Rule::set_list`], [`Rule::set_env`] or [`Key::from_setting`]:
+    /// [`Severity::Warning`] for a retired key or value that asks for
+    /// nothing this Wine could still do, [`Severity::Error`] for everything
+    /// else.
+    ///
+    /// [`Table::parse_lenient`] ignores every field it cannot read, whatever
+    /// its severity.
+    #[must_use]
+    pub const fn severity(&self) -> Severity {
+        match self {
+            Self::RetiredKey { severity, .. } | Self::RetiredValue { severity, .. } => *severity,
+            _ => Severity::Error,
+        }
+    }
 }
 
 impl fmt::Display for FieldError {
@@ -78,6 +143,19 @@ impl fmt::Display for FieldError {
             Self::InvalidUtf8 => f.write_str("escapes that are not UTF-8"),
             Self::MissingEquals => f.write_str("a field without '='"),
             Self::Duplicate(key) => write!(f, "{key} given more than once"),
+            Self::RetiredKey { key, reason, .. } => write!(f, "{key} {reason}"),
+            Self::RetiredValue {
+                key, value, reason, ..
+            } => write!(f, "{key} value {value:?} {reason}"),
+            Self::RetiredEnv { name, key } => {
+                write!(f, "env {name} is no longer read; use the {key} setting")
+            }
+            Self::ArgumentsOverrideOnAny => f.write_str(
+                "arguments_override needs an exe other than *: for every process it would also \
+                 take away the arguments the built-in rules give single programs, which some of \
+                 them need to work",
+            ),
+            Self::NotAList(key) => write!(f, "{key} holds one value, not a list"),
         }
     }
 }

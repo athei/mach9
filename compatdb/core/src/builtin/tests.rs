@@ -1043,3 +1043,79 @@ fn age_of_empires_ii_hd_is_dpi_unaware_and_nothing_else_changes() {
     };
     assert_eq!(table.resolve("AoK HD.exe", &other), plain());
 }
+
+#[test]
+fn every_former_name_of_a_builtin_rule_says_what_does_it_now() -> TestResult {
+    let names = [
+        "dxmt",
+        "mtld3d",
+        "dpi-aware",
+        "force-nx",
+        "gcmouse",
+        "opengl-egl",
+        "no-mono-gecko",
+        "fex-x87-reduced-precision",
+        "vkd3d-proton-min-latency",
+        "large-address-aware",
+        "rockstar-launcher",
+        "rockstar-social-club-ui",
+        "steam-web-helper",
+        "gta-iv",
+        "nostale",
+        "aoe2-hd",
+    ];
+    for name in names {
+        let rule = former(name).ok_or(name)?;
+        assert_eq!(rule.name(), name);
+        assert_eq!(former(&name.to_ascii_uppercase()), Some(rule));
+        assert!(!rule.instead_of_extending().is_empty(), "{name}");
+        assert!(!rule.instead_of_turning_off().is_empty(), "{name}");
+    }
+    for other in ["world-of-warcraft", "", "dxmt "] {
+        assert_eq!(former(other), None, "{other:?}");
+    }
+    let dxmt = former("DXMT").ok_or("dxmt")?;
+    assert_eq!(
+        dxmt.to_string(),
+        "\"dxmt\" was the name of a built-in rule of compatdb.so, and the built-in rules have no \
+         names any more, so a rule can no longer extend or turn off one by naming it"
+    );
+    assert_eq!(
+        dxmt.instead_of_extending(),
+        "set dxgi instead, in a rule matching every process or in a rule for one program"
+    );
+    assert_eq!(
+        dxmt.instead_of_turning_off(),
+        "dxgi set to default in a rule matching every process hands the setting back to \
+         upstream Wine in every process instead, which also resets what the built-in rules for \
+         single programs set"
+    );
+    // A rule for one program is changed by a rule for that program.
+    let nostale = former("nostale").ok_or("nostale")?;
+    assert_eq!(
+        nostale.instead_of_extending(),
+        nostale.instead_of_turning_off()
+    );
+    assert!(
+        nostale
+            .instead_of_turning_off()
+            .starts_with("to change what a built-in rule sets for one program")
+    );
+    let gecko = former("no-mono-gecko").ok_or("no-mono-gecko")?;
+    assert!(
+        gecko
+            .instead_of_extending()
+            .starts_with("set dll_overrides")
+    );
+    assert!(
+        gecko
+            .instead_of_turning_off()
+            .contains("\"mscoree,mshtml=default\"")
+    );
+    let laa = former("large-address-aware").ok_or("large-address-aware")?;
+    assert!(
+        laa.instead_of_turning_off()
+            .contains("large_address_aware set to true gives 4 GB")
+    );
+    Ok(())
+}
