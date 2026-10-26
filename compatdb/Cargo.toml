@@ -29,10 +29,6 @@ libc = "0.2"
 [workspace.lints.clippy]
 nursery = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
-# The doc comments explain what a function is for; nothing here panics on
-# input, and the core crate has no fallible functions to document.
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
 
 [profile.release]
 lto = "thin"

@@ -5,7 +5,7 @@ use crate::{
     ScalarValue, Specificity, VersionInfo, Wined3d,
 };
 #[cfg(doc)]
-use crate::{Origin, Resolution, Source, Table, metal_hud_env};
+use crate::{Origin, Resolution, Source, Table, builtin, metal_hud_env};
 
 /// One rule of the table: what it matches, and the settings it applies to a
 /// process that matches. A rule has no name; `exe` is its only required
@@ -294,42 +294,90 @@ impl Rule {
         self.original_filename.as_ref()
     }
 
-    /// The DXGI-family implementation to load.
+    /// The DXGI-family implementation to load, for D3D10, D3D10.1, D3D11
+    /// and D3D12 (see [`Dxgi`]): `compatdb.so` prepends its tree,
+    /// `lib/wine/dxgi/<name>`, to ntdll's builtin DLL search path when the
+    /// process loads. Only [`Dxgi::Dxmt`] has D3D12 (vkd3d-proton): under
+    /// [`Dxgi::Wined3d`] `d3d12.dll` does not load, so a game that only has
+    /// D3D12 does not start.
+    ///
+    /// With no rule setting it, the process gets wined3d, as in upstream
+    /// Wine. [`builtin::dxgi_dxmt`] sets it for every process.
     #[must_use]
     pub const fn dxgi(&self) -> Setting<Dxgi> {
         self.dxgi
     }
 
-    /// The D3D9 implementation to load.
+    /// The D3D9 implementation to load (see [`D3d9`]): `compatdb.so`
+    /// prepends its tree, `lib/wine/d3d9/<name>`, to ntdll's builtin DLL
+    /// search path when the process loads.
+    ///
+    /// With no rule setting it, the process gets wined3d, as in upstream
+    /// Wine. [`builtin::d3d9_mtld3d`] sets it for every process.
     #[must_use]
     pub const fn d3d9(&self) -> Setting<D3d9> {
         self.d3d9
     }
 
-    /// The renderer of wined3d, for every wined3d user in the process.
+    /// The renderer of wined3d, for every wined3d user in the process (see
+    /// [`Wined3d`]): the wined3d trees of [`Rule::dxgi`] and [`Rule::d3d9`],
+    /// D3D8 and `DirectDraw` share one wined3d, which reads its settings
+    /// once. It chooses no tree.
+    ///
+    /// Set, `compatdb.so` names the renderer in `WINE_D3D_CONFIG`, after
+    /// the rules' own `env` entries: the options a rule's `env` gives the
+    /// variable are kept and its `renderer` is replaced (see
+    /// [`Resolution::fold_derived_env`]), and a value the process was
+    /// started with is replaced as by any `env` entry. wined3d reads the
+    /// variable from the environment block, and it takes precedence over
+    /// wined3d's registry settings.
+    ///
+    /// With no rule setting it, `compatdb.so` sets nothing: a
+    /// `WINE_D3D_CONFIG` from a rule's `env` or inherited from the process
+    /// that started this one applies as it is, and without one wined3d's
+    /// registry settings or its default, OpenGL.
     #[must_use]
     pub const fn wined3d(&self) -> Setting<Wined3d> {
         self.wined3d
     }
 
-    /// Which OpenGL the Mac driver gives the process. With no rule setting
-    /// it, the Mac driver gives Apple's OpenGL, as upstream Wine does.
+    /// Which OpenGL the Mac driver gives the process (see [`OpenGl`]).
+    /// winemac.drv reads the value through ntdll when the process first
+    /// uses OpenGL. [`OpenGl::Egl`] does not fall back: where Zink has no
+    /// GPU, as on a Mac without a Metal 4 GPU, the process gets no OpenGL.
+    ///
+    /// With no rule setting it, the Mac driver gives Apple's OpenGL, as
+    /// upstream Wine does. [`builtin::opengl_egl`] sets it for every
+    /// process. The value is the process's own: the programs it starts get
+    /// the value of their own rules.
     #[must_use]
     pub const fn opengl(&self) -> Setting<OpenGl> {
         self.opengl
     }
 
-    /// Whether the process is DPI-aware (system-aware) or unaware. With no
-    /// rule setting it, wine decides (the registry and the manifest).
+    /// Whether the process is DPI-aware (`true`, system-aware) or unaware
+    /// (`false`). win32u applies the value before the `AppCompatFlags`
+    /// `Layers` registry value and the manifest, and the first setting
+    /// wins, so the rule beats both. `true` also caps a program that asks
+    /// for per-monitor awareness at system-aware.
+    ///
+    /// With no rule setting it, Wine decides: the registry value, then the
+    /// manifest, and otherwise unaware. So `default` differs from `false`
+    /// here. [`builtin::dpi_aware`] sets it for every process.
     #[must_use]
     pub const fn dpi_aware(&self) -> Setting<bool> {
         self.dpi_aware
     }
 
     /// Whether a 32-bit process gets the 4 GB address space whatever its
-    /// executable's `IMAGE_FILE_LARGE_ADDRESS_AWARE` flag says. `false` does
-    /// not take the space away from an executable that has the flag; it only
-    /// stops forcing it. Has no effect on a 64-bit process.
+    /// executable's `IMAGE_FILE_LARGE_ADDRESS_AWARE` flag says. ntdll
+    /// applies it after `compatdb.so` returns. `false` does not take the
+    /// space away from an executable that has the flag; it only stops
+    /// forcing it, so it is the same as unset. Has no effect on a 64-bit
+    /// process.
+    ///
+    /// With no rule setting it, the executable's flag decides, as in
+    /// upstream Wine.
     #[must_use]
     pub const fn large_address_aware(&self) -> Setting<bool> {
         self.large_address_aware
@@ -338,8 +386,12 @@ impl Rule {
     /// Whether the Mac driver takes the mouse movement of raw input
     /// (`WM_INPUT`) and `DirectInput` from GameController's `GCMouse`, in the
     /// device's own counts, instead of from the cursor's movement, which macOS
-    /// accelerates and scales for retina. With no rule setting it, the Mac
-    /// driver keeps upstream Wine's behaviour, the cursor's movement.
+    /// accelerates and scales for retina. winemac.drv reads the value
+    /// through ntdll when it reads its settings.
+    ///
+    /// With no rule setting it, the Mac driver keeps upstream Wine's
+    /// behaviour, the cursor's movement, which `false` gives too.
+    /// [`builtin::gcmouse`] sets it for every process.
     #[must_use]
     pub const fn gcmouse(&self) -> Setting<bool> {
         self.gcmouse
@@ -347,10 +399,14 @@ impl Rule {
 
     /// Whether no-execute stays permanently on in a 32-bit process, even when
     /// its executable or a DLL lacks the `NX_COMPAT` flag, for which Wine
-    /// turns it off. `false` is the same as unset: Wine's behaviour. Has no
-    /// effect on a 64-bit process, which always has no-execute on. Unlike an
-    /// `env` entry, the value is the process's own: the processes it starts
-    /// get their own rules' value.
+    /// turns it off, and whether the process cannot turn it off. ntdll reads
+    /// the value the first time the process asks for or changes its execute
+    /// flags. Has no effect on a 64-bit process, which always has no-execute
+    /// on.
+    ///
+    /// `false` is the same as unset: Wine's behaviour. [`builtin::force_nx`]
+    /// sets it for every process. Unlike an `env` entry, the value is the
+    /// process's own: the processes it starts get their own rules' value.
     #[must_use]
     pub const fn force_nx(&self) -> Setting<bool> {
         self.force_nx
@@ -379,16 +435,29 @@ impl Rule {
         &self.debug_channels
     }
 
-    /// `WINEDLLOVERRIDES` elements. An entry whose order is `default` sets no
-    /// load order: it removes the entries that the rules folded before it
-    /// gave its modules, so the registry and `WINEDLLOVERRIDES` decide for
-    /// them again.
+    /// `WINEDLLOVERRIDES` elements, which `compatdb.so` adds through ntdll's
+    /// load-order hook. ntdll consults them before the registry
+    /// `DllOverrides` keys, and one for a module replaces the
+    /// `WINEDLLOVERRIDES` entry for it, so neither can undo them.
+    ///
+    /// An entry whose order is `default` sets no load order: it removes the
+    /// entries that the rules folded before it gave its modules, so the
+    /// registry and `WINEDLLOVERRIDES` decide for them again (see
+    /// [`DllOverride::is_default`]). Module names match
+    /// ASCII-case-insensitively, with or without `.dll`.
+    ///
+    /// With no entry, `WINEDLLOVERRIDES` and the registry decide, as in
+    /// upstream Wine. [`builtin::no_mono_or_gecko`] adds entries for every
+    /// process.
     #[must_use]
     pub fn dll_overrides(&self) -> &[DllOverride] {
         &self.dll_overrides
     }
 
-    /// Text appended to the command line, unless already present.
+    /// Text appended to the command line when the process loads, each
+    /// entry unless the command line already holds it. The test is a
+    /// case-sensitive substring test, which leaves a Chromium `--type=`
+    /// child that inherited its parent's switches alone.
     #[must_use]
     pub fn arguments(&self) -> &[Argument] {
         &self.arguments
@@ -405,11 +474,13 @@ impl Rule {
 
     /// Environment entries. The library sets them in the process's
     /// environment block and unix environment when it loads, before any PE
-    /// code runs. The entries of a built-in rule that matches every process
+    /// code runs, and the programs the process starts inherit them. The
+    /// entries of a built-in rule that matches every process
     /// (`exe` `*`, no fingerprint) are defaults: such an entry sets its
     /// variable only where the process does not have it, so a value the
-    /// caller exported wins (see [`Origin::env_is_default`]). Every other
-    /// entry replaces the variable.
+    /// caller exported wins, an empty one included (see
+    /// [`Origin::env_is_default`]). Every other entry replaces the
+    /// variable, or removes it when it has no value.
     #[must_use]
     pub fn env(&self) -> &[EnvEntry] {
         &self.env

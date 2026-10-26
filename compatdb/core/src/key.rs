@@ -10,54 +10,83 @@ use std::{fmt, str::FromStr};
 
 use crate::{D3d9, DEFAULT_VALUE, Dxgi, FieldError, OpenGl, Wined3d};
 #[cfg(doc)]
-use crate::{Setting, Table, metal_hud_env};
+use crate::{Exe, Rule, Setting, Table, metal_hud_env};
 
 /// The key of a field of a rule, which is also the name of the field on the
 /// wire.
+///
+/// Each variant says what the field does and what a process gets without
+/// it; the getter of [`Rule`] it links to has the details. The text
+/// `compatdb.so` logs for an unset setting is [`Key::upstream`].
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
-    /// `exe`: the image basename a rule matches, or `*` for every process.
+    /// `exe`: the image basename a rule matches, ASCII-case-insensitively,
+    /// or `*` for every process (see [`Exe`]). Every rule has one.
     Exe,
-    /// `company`: a substring of the image's version `CompanyName`.
+    /// `company`: a substring the image's version `CompanyName` must
+    /// contain (see [`Rule::company`]). Without it, any company matches.
     Company,
-    /// `product`: a substring of the image's version `ProductName`.
+    /// `product`: a substring the image's version `ProductName` must
+    /// contain (see [`Rule::product`]). Without it, any product matches.
     Product,
-    /// `original_filename`: a substring of the image's version
-    /// `OriginalFilename`.
+    /// `original_filename`: a substring the image's version
+    /// `OriginalFilename` must contain (see [`Rule::original_filename`]).
+    /// Without it, any original filename matches.
     OriginalFilename,
-    /// `dxgi`: the DXGI-family implementation, a [`Dxgi`].
+    /// `dxgi`: the implementation of D3D10 to D3D12, a [`Dxgi`] (see
+    /// [`Rule::dxgi`]). Unset: wined3d, as in upstream Wine.
     Dxgi,
-    /// `d3d9`: the D3D9 implementation, a [`D3d9`].
+    /// `d3d9`: the D3D9 implementation, a [`D3d9`] (see [`Rule::d3d9`]).
+    /// Unset: wined3d, as in upstream Wine.
     D3d9,
-    /// `wined3d`: the renderer of wined3d, a [`Wined3d`].
+    /// `wined3d`: the renderer of wined3d for the whole process, a
+    /// [`Wined3d`] (see [`Rule::wined3d`]). Unset: `WINE_D3D_CONFIG` or
+    /// wined3d's registry settings decide, and without them OpenGL.
     Wined3d,
-    /// `opengl`: which OpenGL the Mac driver gives, an [`OpenGl`].
+    /// `opengl`: which OpenGL the Mac driver gives, an [`OpenGl`] (see
+    /// [`Rule::opengl`]). Unset: Apple's OpenGL, as in upstream Wine.
     OpenGl,
-    /// `dpi_aware`: whether the process is DPI-aware.
+    /// `dpi_aware`: whether the process is DPI-aware (see
+    /// [`Rule::dpi_aware`]). Unset: the registry and the manifest decide,
+    /// and without them the process is unaware.
     DpiAware,
-    /// `large_address_aware`: whether a 32-bit process gets 4 GB.
+    /// `large_address_aware`: whether a 32-bit process gets 4 GB whatever
+    /// its executable's flag says (see [`Rule::large_address_aware`]).
+    /// Unset: the flag decides.
     LargeAddressAware,
-    /// `gcmouse`: whether mouse movement comes from GameController.
+    /// `gcmouse`: whether raw mouse movement comes from GameController
+    /// (see [`Rule::gcmouse`]). Unset: from the cursor, as in upstream
+    /// Wine.
     Gcmouse,
-    /// `force_nx`: whether no-execute stays on in a 32-bit process.
+    /// `force_nx`: whether no-execute stays on in a 32-bit process (see
+    /// [`Rule::force_nx`]). Unset: Wine turns it off for an image without
+    /// `NX_COMPAT`.
     ForceNx,
     /// `metal_hud`: whether the Metal performance HUD shows, through the
-    /// variables of [`metal_hud_env`].
+    /// variables of [`metal_hud_env`] (see [`Rule::metal_hud`]). Unset: the
+    /// process keeps the variables it was started with.
     MetalHud,
-    /// `dll_overrides`: load-order overrides, repeatable.
+    /// `dll_overrides`: load-order overrides, repeatable (see
+    /// [`Rule::dll_overrides`]). None: `WINEDLLOVERRIDES` and the registry
+    /// decide.
     DllOverrides,
     /// `arguments_override`: the arguments that replace those of the rules
-    /// folded before, repeatable.
+    /// folded before, repeatable (see [`Rule::arguments_override`]). None:
+    /// the arguments of every rule append.
     ArgumentsOverride,
-    /// `arguments`: text appended to the command line, repeatable.
+    /// `arguments`: text appended to the command line, repeatable (see
+    /// [`Rule::arguments`]). None: the command line stays as it was.
     Arguments,
-    /// `debug_channels`: `WINEDEBUG` entries, repeatable. Wine reads
-    /// `WINEDEBUG` before `compatdb.so` loads, so the library only logs
-    /// them; a launcher puts them into the variable (see
-    /// [`Table::winedebug`]).
+    /// `debug_channels`: `WINEDEBUG` entries, repeatable (see
+    /// [`Rule::debug_channels`]). Wine reads `WINEDEBUG` before
+    /// `compatdb.so` loads, so the library only logs them; a launcher puts
+    /// them into the variable (see [`Table::winedebug`]). None: the
+    /// `WINEDEBUG` the process was started with.
     DebugChannels,
-    /// `env`: an environment entry, repeatable.
+    /// `env`: an environment entry, `NAME=value`, repeatable (see
+    /// [`Rule::env`]). An empty value removes the variable. None: the
+    /// environment the process was started with.
     Env,
 }
 
@@ -268,27 +297,38 @@ impl fmt::Display for Key {
     }
 }
 
-/// A setting that holds one value (see [`KeyKind::Scalar`]).
+/// A setting that holds one value (see [`KeyKind::Scalar`]), or is reset
+/// with `default` (see [`Setting::Reset`]).
+///
+/// Each variant is the setting of its [`Key`], whose doc says what it does
+/// and what a process gets without it.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Scalar {
-    /// [`Key::Dxgi`].
+    /// [`Key::Dxgi`]: the implementation of D3D10 to D3D12. Unset:
+    /// wined3d.
     Dxgi,
-    /// [`Key::D3d9`].
+    /// [`Key::D3d9`]: the D3D9 implementation. Unset: wined3d.
     D3d9,
-    /// [`Key::Wined3d`].
+    /// [`Key::Wined3d`]: the renderer of wined3d. Unset: what
+    /// `WINE_D3D_CONFIG` or the registry says, otherwise OpenGL.
     Wined3d,
-    /// [`Key::OpenGl`].
+    /// [`Key::OpenGl`]: the Mac driver's OpenGL. Unset: Apple's.
     OpenGl,
-    /// [`Key::DpiAware`].
+    /// [`Key::DpiAware`]: DPI awareness. Unset: the registry and the
+    /// manifest decide.
     DpiAware,
-    /// [`Key::LargeAddressAware`].
+    /// [`Key::LargeAddressAware`]: 4 GB for a 32-bit process. Unset: the
+    /// executable's flag decides.
     LargeAddressAware,
-    /// [`Key::Gcmouse`].
+    /// [`Key::Gcmouse`]: raw mouse movement from GameController. Unset:
+    /// from the cursor.
     Gcmouse,
-    /// [`Key::ForceNx`].
+    /// [`Key::ForceNx`]: no-execute kept on in a 32-bit process. Unset:
+    /// Wine's behaviour.
     ForceNx,
-    /// [`Key::MetalHud`].
+    /// [`Key::MetalHud`]: the Metal performance HUD. Unset: the inherited
+    /// variables decide.
     MetalHud,
 }
 
