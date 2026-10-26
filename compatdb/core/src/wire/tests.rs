@@ -785,8 +785,6 @@ fn opengl_parses_round_trips_and_rejects_other_values() {
     assert!("gl".parse::<OpenGl>().is_err());
     assert!("".parse::<OpenGl>().is_err());
     assert_eq!(OpenGl::Egl.as_str(), "egl");
-    assert_eq!(OpenGl::Egl.hook_value(), 1);
-    assert_eq!(OpenGl::Cgl.hook_value(), 0);
     let table = sent(vec![
         Rule {
             exe: Exe::Any,

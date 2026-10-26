@@ -1,4 +1,4 @@
-use compatdb_core::{Argument, DllOverride, EnvName};
+use compatdb_core::{Argument, D3d9, DllOverride, Dxgi, EnvName};
 
 use super::*;
 
@@ -11,17 +11,17 @@ fn a_native_arm64_program_gets_dxmt_and_mtld3d_and_either_tree_a_rule_asks_for()
     let native = Arch::Aarch64;
     // The built-in rules give it dxmt and mtld3d, as an x86 program.
     let game = Table::builtin().resolve("game.exe", &VersionInfo::default());
-    assert_eq!(Dxgi::effective(game.dxgi(), native), Dxgi::Dxmt);
-    assert_eq!(D3d9::effective(game.d3d9(), native), D3d9::Mtld3d);
+    assert_eq!(effective_dxgi(game.dxgi(), native), Dxgi::Dxmt);
+    assert_eq!(effective_d3d9(game.d3d9(), native), D3d9::Mtld3d);
     // Without a rule, wined3d, as in upstream Wine.
-    assert_eq!(Dxgi::effective(None, native), Dxgi::Wined3d);
-    assert_eq!(D3d9::effective(None, native), D3d9::Wined3d);
+    assert_eq!(effective_dxgi(None, native), Dxgi::Wined3d);
+    assert_eq!(effective_d3d9(None, native), D3d9::Wined3d);
     // Either tree of each family is what it gets when a rule asks for it.
     for requested in [Dxgi::Dxmt, Dxgi::Wined3d] {
-        assert_eq!(Dxgi::effective(Some(requested), native), requested);
+        assert_eq!(effective_dxgi(Some(requested), native), requested);
     }
     for requested in [D3d9::Mtld3d, D3d9::Wined3d] {
-        assert_eq!(D3d9::effective(Some(requested), native), requested);
+        assert_eq!(effective_d3d9(Some(requested), native), requested);
     }
 }
 

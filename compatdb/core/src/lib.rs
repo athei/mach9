@@ -20,7 +20,9 @@
 //! [`Rule::set_list`] or [`Rule::set_env`]. Every error is a [`FieldError`]
 //! to print as it is, and its [`FieldError::severity`] says whether to warn
 //! and go on or to refuse the settings. [`builtin::former`] says what to do
-//! instead of naming a former built-in rule.
+//! instead of naming a former built-in rule. [`Table::preview`] shows what a
+//! program would get. The [`runtime`] module holds what only `compatdb.so`
+//! needs.
 //!
 //! Everything here is pure: it works on `&str`, `&[u16]` (UTF-16 as wine hands
 //! it over) and owned values, with no unsafe and no I/O, so the library's
@@ -40,9 +42,9 @@ pub mod builtin;
 mod error;
 mod key;
 mod part;
-mod process;
 mod resolve;
 mod rule;
+pub mod runtime;
 mod settings;
 mod table;
 mod value;
@@ -55,10 +57,6 @@ pub use crate::{
     part::{
         Argument, DebugChannel, DllOverride, EnvEntry, EnvName, Exe, ExeName, Fingerprint,
         Specificity,
-    },
-    process::{
-        Arch, IMAGE_FILE_MACHINE_ARM64, append_cmdline, append_cmdline_each, basename_of,
-        env_value, merge_env,
     },
     resolve::{
         ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution, ScalarState,

@@ -3,7 +3,7 @@
 
 use std::{fmt, str::FromStr};
 
-use crate::{Arch, EnvEntry, FieldError, Key};
+use crate::{EnvEntry, FieldError, Key};
 
 /// Which implementation of the DXGI family a process loads.
 ///
@@ -31,27 +31,6 @@ impl Dxgi {
             Self::Wined3d => "wined3d",
         }
     }
-
-    /// What a process gets when no rule names an implementation: wined3d,
-    /// as in upstream Wine, for every arch. Its tree has no D3D12. Either
-    /// tree serves every arch: the 64-bit modules of both are ARM64X, so a
-    /// native ARM64 program loads their ARM64 half and an x64 program, which
-    /// runs as ARM64EC, their ARM64EC half; an i386 program gets their i386
-    /// builds under emulation.
-    #[must_use]
-    pub const fn default_for(_arch: Arch) -> Self {
-        Self::Wined3d
-    }
-
-    /// The implementation a process loads: the requested one, or the default
-    /// for the arch when nothing was requested.
-    #[must_use]
-    pub const fn effective(requested: Option<Self>, arch: Arch) -> Self {
-        match requested {
-            Some(want) => want,
-            None => Self::default_for(arch),
-        }
-    }
 }
 
 /// Which D3D9 implementation a process loads. Independent of [`Dxgi`]: neither
@@ -75,27 +54,6 @@ impl D3d9 {
         match self {
             Self::Mtld3d => "mtld3d",
             Self::Wined3d => "wined3d",
-        }
-    }
-
-    /// What a process gets when no rule names an implementation: wined3d,
-    /// as in upstream Wine, for every arch. Either tree serves every arch:
-    /// the 64-bit modules of both, mtld3d's release build and Wine's own
-    /// `d3d9.dll`, are ARM64X, so a native ARM64 program loads their ARM64
-    /// half and an x64 program, which runs as ARM64EC, their ARM64EC half;
-    /// an i386 program gets their i386 builds under emulation.
-    #[must_use]
-    pub const fn default_for(_arch: Arch) -> Self {
-        Self::Wined3d
-    }
-
-    /// The implementation a process loads: the requested one, or the default
-    /// for the arch when nothing was requested.
-    #[must_use]
-    pub const fn effective(requested: Option<Self>, arch: Arch) -> Self {
-        match requested {
-            Some(want) => want,
-            None => Self::default_for(arch),
         }
     }
 }
@@ -131,36 +89,6 @@ impl Wined3d {
             Self::Vulkan => "vulkan",
         }
     }
-
-    /// The `WINE_D3D_CONFIG` value for this renderer on top of `config`, the
-    /// value the rules' own `env` entries leave the variable at (`None` when
-    /// they do not set it, or remove it). The renderer comes first and the
-    /// other options of `config` are kept, while a `renderer` option there is
-    /// dropped: this setting decides the renderer. OpenGL is set as
-    /// explicitly as Vulkan, so a process that asks for it does not inherit
-    /// Vulkan from the process that started it.
-    #[must_use]
-    pub fn config(self, config: Option<&str>) -> String {
-        let mut options = vec![format!("renderer={}", self.as_str())];
-        options.extend(
-            config
-                .unwrap_or("")
-                .split([',', ';'])
-                .filter(|o| !o.is_empty())
-                .filter(|o| o.split('=').next() != Some("renderer"))
-                .map(String::from),
-        );
-        options.join(",")
-    }
-
-    /// The `renderer` option of a `WINE_D3D_CONFIG` value, the first one as
-    /// wined3d reads it, or `None` when the value has none.
-    #[must_use]
-    pub fn renderer_in(config: &str) -> Option<&str> {
-        config
-            .split([',', ';'])
-            .find_map(|o| o.strip_prefix("renderer="))
-    }
 }
 
 /// Which OpenGL the Mac driver gives a process.
@@ -187,16 +115,6 @@ impl OpenGl {
         match self {
             Self::Egl => "egl",
             Self::Cgl => "cgl",
-        }
-    }
-
-    /// The value ntdll's `set_compat_opengl` takes: 1 for Mesa's EGL, 0 for
-    /// Apple's OpenGL.
-    #[must_use]
-    pub const fn hook_value(self) -> i32 {
-        match self {
-            Self::Egl => 1,
-            Self::Cgl => 0,
         }
     }
 }

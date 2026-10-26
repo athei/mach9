@@ -399,9 +399,9 @@ executable.
 - Whether the program can load a Direct3D name at all depends on its
   marker, which is hybrid while every tree of its family holds an ARM64X
   build ([arm64.md](arm64.md#limitations)).
-- `default_for` and `effective` of `Dxgi` and `D3d9` in
-  [`compatdb/core/src/value.rs`](../compatdb/core/src/value.rs) decide the
-  tree when no rule names one.
+- `default_dxgi`, `default_d3d9`, `effective_dxgi` and `effective_d3d9` in
+  [`compatdb/core/src/runtime.rs`](../compatdb/core/src/runtime.rs) decide
+  the tree when no rule names one.
 - A 64-bit process loads the Direct3D trees from `aarch64-windows`, as Wine
   on an arm64 host loads its builtins from there. An i386 process uses
   `i386-windows`.

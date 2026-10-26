@@ -169,7 +169,7 @@ fn a_rule_turns_reduced_x87_precision_off_for_one_game_or_every_process() -> Tes
     let block: Vec<u16> = "FEX_X87REDUCEDPRECISION=1\0OTHER=x\0\0"
         .encode_utf16()
         .collect();
-    let merged = crate::merge_env(&block, &old.env).ok_or("unchanged")?;
+    let merged = crate::runtime::merge_env(&block, &old.env).ok_or("unchanged")?;
     assert_eq!(String::from_utf16_lossy(&merged), "OTHER=x\0\0");
     // Another process keeps it.
     let other = table.resolve("other.exe", &VersionInfo::default());
@@ -760,7 +760,7 @@ fn default_hands_a_setting_back_to_upstream_wine() {
     }
     // Then the trees are upstream Wine's.
     assert_eq!(
-        Dxgi::effective(game.dxgi(), crate::Arch::X86_64),
+        crate::runtime::effective_dxgi(game.dxgi(), crate::runtime::Arch::X86_64),
         Dxgi::Wined3d
     );
     // A rule folded later sets it again, and the reset is gone.

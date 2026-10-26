@@ -132,7 +132,7 @@ impl Headers {
 
 fn from_image<R: Rva + ?Sized>(img: &R) -> VersionInfo {
     version_blob(img)
-        .map(|blob| VersionInfo::from_resource(&blob))
+        .map(|blob| compatdb_core::runtime::version_info(&blob))
         .unwrap_or_default()
 }
 

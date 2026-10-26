@@ -2,7 +2,7 @@
 
 #[cfg(doc)]
 use crate::{ENV_VAR, Origin};
-use crate::{Exe, Rule, Specificity, builtin};
+use crate::{Exe, Resolution, Rule, Specificity, VersionInfo, builtin};
 
 /// Where a rule of a [`Table`] comes from. It decides how the log names the
 /// rule's values (see [`Origin`]) and whether its `env` entries are defaults
@@ -110,6 +110,28 @@ impl Table {
     /// Each rule with its source, in the order they were declared.
     pub(crate) fn entries(&self) -> impl Iterator<Item = (Source, &Rule)> {
         self.sources.iter().copied().zip(&self.rules)
+    }
+
+    /// What a process with the image basename `exe` and the version
+    /// resource `version` would get from `compatdb.so` with this table in
+    /// [`ENV_VAR`]: the built-in rules followed by this table's own (a
+    /// built-in rule in this table is left out, since the library has it
+    /// already), resolved, with [`Resolution::fold_derived_env`] done.
+    ///
+    /// Which env entries apply also depends on the environment the process
+    /// starts with, which [`Resolution::env_steps`] takes.
+    #[must_use]
+    pub fn preview(&self, exe: &str, version: &VersionInfo) -> Resolution {
+        let mut table = Self::builtin();
+        for (source, rule) in self.entries() {
+            if source != Source::BuiltIn {
+                table.rules.push(rule.clone());
+                table.sources.push(source);
+            }
+        }
+        let mut resolution = table.resolve(exe, version);
+        resolution.fold_derived_env();
+        resolution
     }
 
     /// The `WINEDEBUG` entries the `debug_channels` of this table's rules

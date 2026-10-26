@@ -6,6 +6,54 @@ use crate::{DebugChannel, DllOverride, Exe, Fingerprint, Setting};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn preview_is_what_compatdb_so_resolves_with_the_table_in_the_variable() -> TestResult {
+    let mut table = Table::new();
+    table.push(Rule::new(Exe::Any).with_metal_hud(true));
+    table.push(
+        Rule::new(Exe::new("Game.exe")?)
+            .with_dxgi(crate::Dxgi::Wined3d)
+            .with_wined3d(crate::Wined3d::Vulkan),
+    );
+    let none = VersionInfo::default();
+    let game = table.preview("game.exe", &none);
+    // The built-in rules first, then the table's, as the library folds
+    // them; the derived env is folded in.
+    let expected = {
+        let (sent, diagnostics) = Table::parse_lenient(&table.to_string());
+        assert_eq!(diagnostics, []);
+        let mut resolution = sent.with_builtin().resolve("game.exe", &none);
+        resolution.fold_derived_env();
+        resolution
+    };
+    assert_eq!(game, expected);
+    assert_eq!(game.dxgi(), Some(crate::Dxgi::Wined3d));
+    assert_eq!(game.opengl(), Some(crate::OpenGl::Egl));
+    assert_eq!(game.metal_hud(), Some(true));
+    let names: Vec<&str> = game.env.iter().map(|e| e.name().as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "FEX_X87REDUCEDPRECISION",
+            "MTL_HUD_ENABLED",
+            "MTL_HUD_ALIGNMENT",
+            "MTL_HUD_ELEMENTS",
+            "WINE_D3D_CONFIG"
+        ]
+    );
+    // A table that holds the built-in rules already does not get them
+    // twice.
+    assert_eq!(
+        table.clone().with_builtin().preview("game.exe", &none),
+        game
+    );
+    // Without rules of its own, a process gets the built-in rules alone.
+    let mut plain = Table::builtin().resolve("other.exe", &none);
+    plain.fold_derived_env();
+    assert_eq!(Table::new().preview("other.exe", &none), plain);
+    Ok(())
+}
+
+#[test]
 fn winedebug_scopes_the_channels_of_a_rule_for_an_exe_and_not_those_of_a_star_rule() -> TestResult {
     let channel = |text: &str| DebugChannel::new(text);
     let mut table = Table::new();

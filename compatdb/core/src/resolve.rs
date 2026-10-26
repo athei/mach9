@@ -4,10 +4,10 @@
 use std::collections::BTreeMap;
 
 #[cfg(doc)]
-use crate::basename_of;
+use crate::runtime::basename_of;
 use crate::{
     Argument, D3d9, DebugChannel, DllOverride, Dxgi, ENV_VAR, EnvEntry, OpenGl, Rule, Scalar,
-    ScalarValue, Setting, Source, Specificity, Table, VersionInfo, Wined3d, metal_hud_env,
+    ScalarValue, Setting, Source, Specificity, Table, VersionInfo, Wined3d, metal_hud_env, runtime,
 };
 
 /// The settings that apply to one process.
@@ -298,9 +298,9 @@ impl Resolution {
     /// - [`Resolution::wined3d`], when a rule sets it: the `WINE_D3D_CONFIG`
     ///   that names the renderer, after the rules' own entries. It is the
     ///   value the variable ends up with, and it keeps the other options a
-    ///   rule's `WINE_D3D_CONFIG` set (see [`Wined3d::config`]). Unset, the
-    ///   process keeps whatever `WINE_D3D_CONFIG` it has, from a rule's
-    ///   `env` or inherited, and without one wined3d uses OpenGL.
+    ///   rule's `WINE_D3D_CONFIG` set (see [`runtime::wined3d_config`]).
+    ///   Unset, the process keeps whatever `WINE_D3D_CONFIG` it has, from a
+    ///   rule's `env` or inherited, and without one wined3d uses OpenGL.
     /// - [`Resolution::metal_hud`], when a rule sets it: the entries of
     ///   [`metal_hud_env`], which set or remove the `MTL_HUD_` variables.
     ///   They go where the rule that set it folded, before that rule's own
@@ -318,7 +318,8 @@ impl Resolution {
         if let (Some(wined3d), Some(origin)) =
             (self.wined3d(), self.scalar(Scalar::Wined3d).set_by.clone())
         {
-            let value = wined3d.config(self.d3d_config().filter(|value| !value.is_empty()));
+            let config = self.d3d_config().filter(|value| !value.is_empty());
+            let value = runtime::wined3d_config(wined3d, config);
             // The value is the renderer and the options of a checked one.
             self.push_derived(EnvEntry::literal(Wined3d::CONFIG_VAR, &value), origin);
         }

@@ -93,7 +93,7 @@ fn version_info_reads_the_standard_fields_from_a_resource() {
             ("ProductName", "Rockstar Games Launcher"),
         ],
     )]);
-    let vi = VersionInfo::from_resource(&blob);
+    let vi = version_info(&blob);
     assert_eq!(vi.company, "Rockstar Games");
     assert_eq!(vi.product, "Rockstar Games Launcher");
     assert_eq!(vi.original_filename, "Launcher.exe");
@@ -112,7 +112,7 @@ fn an_empty_value_followed_by_another_entry_is_empty() {
             ("ProductVersion", "1.0.0.0"),
         ],
     )]);
-    assert_eq!(VersionInfo::from_resource(&blob), VersionInfo::default());
+    assert_eq!(version_info(&blob), VersionInfo::default());
 }
 
 #[test]
@@ -125,13 +125,13 @@ fn an_empty_value_at_the_end_of_a_table_is_empty() {
         ),
         ("040704b0", &[("ProductName", "Rocket Sled")]),
     ]);
-    let vi = VersionInfo::from_resource(&blob);
+    let vi = version_info(&blob);
     assert_eq!(vi.company, "Acme");
     assert_eq!(vi.original_filename, "");
     // A field the first table lacks comes from the next one.
     assert_eq!(vi.product, "Rocket Sled");
     let last = version_resource(&[("040904b0", &[("ProductName", "")])]);
-    assert_eq!(VersionInfo::from_resource(&last), VersionInfo::default());
+    assert_eq!(version_info(&last), VersionInfo::default());
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn the_nostale_client_has_only_a_company() {
         string_entry("ProductName", ""),
         entry([0x22, 1, 1], "ProductName\0\0\0")
     );
-    let vi = VersionInfo::from_resource(&blob);
+    let vi = version_info(&blob);
     assert_eq!(
         vi,
         VersionInfo {
@@ -200,7 +200,7 @@ fn keys_match_case_insensitively_and_the_first_entry_wins() {
         ("040904b0", &[("companyname", "First")]),
         ("040704b0", &[("CompanyName", "Second")]),
     ]);
-    assert_eq!(VersionInfo::from_resource(&blob).company, "First");
+    assert_eq!(version_info(&blob).company, "First");
 }
 
 #[test]
@@ -212,21 +212,21 @@ fn a_malformed_resource_yields_empty_fields() -> TestResult {
     // Cut short anywhere: never a panic, and never a value that is not
     // the field's own.
     for len in 0..blob.len() {
-        let vi = VersionInfo::from_resource(blob.get(..len).ok_or("cut")?);
+        let vi = version_info(blob.get(..len).ok_or("cut")?);
         assert!("Acme".starts_with(&vi.company), "{len}: {vi:?}");
         assert!("Rocket Sled".starts_with(&vi.product), "{len}: {vi:?}");
     }
     // A root that is not VS_VERSION_INFO, and a zero length.
     let mut foreign = blob.clone();
     *foreign.get_mut(3).ok_or("no key")? = u16::from(b'X');
-    assert_eq!(VersionInfo::from_resource(&foreign), VersionInfo::default());
+    assert_eq!(version_info(&foreign), VersionInfo::default());
     let mut zero = blob;
     *zero.first_mut().ok_or("no wLength")? = 0;
-    assert_eq!(VersionInfo::from_resource(&zero), VersionInfo::default());
+    assert_eq!(version_info(&zero), VersionInfo::default());
     // A bare key and value with no tree around them.
     let mut runs: Vec<u16> = vec![0x40, 0x0f, 0x01];
     runs.extend("CompanyName\0\0Acme\0".encode_utf16());
-    assert_eq!(VersionInfo::from_resource(&runs), VersionInfo::default());
+    assert_eq!(version_info(&runs), VersionInfo::default());
     Ok(())
 }
 
@@ -259,17 +259,13 @@ fn a_broken_entry_ends_its_table_without_taking_a_neighbours_value() -> TestResu
     for length in [0, 2, 6] {
         let mut broken = blob.clone();
         *w_length(&mut broken, "FileDescription")? = length;
-        assert_eq!(
-            VersionInfo::from_resource(&broken),
-            acme_only,
-            "wLength {length}"
-        );
+        assert_eq!(version_info(&broken), acme_only, "wLength {length}");
     }
     // An entry claiming more than its table holds is cut off at the
     // table's end, and nothing after it is read as a sibling.
     let mut oversized = blob;
     *w_length(&mut oversized, "CompanyName")? = 0xfffe;
-    assert_eq!(VersionInfo::from_resource(&oversized), acme_only);
+    assert_eq!(version_info(&oversized), acme_only);
     // A value with wValueLength 0 and no NUL before the next entry ends
     // where its entry does.
     let mut unterminated = version_node("CompanyName", &u16s("Acme"), true, &[]);
@@ -287,7 +283,7 @@ fn a_broken_entry_ends_its_table_without_taking_a_neighbours_value() -> TestResu
     let info = version_node("StringFileInfo", &[], false, &table);
     let unterminated = version_node("VS_VERSION_INFO", &[0; 26], false, &info);
     assert_eq!(
-        VersionInfo::from_resource(&unterminated),
+        version_info(&unterminated),
         VersionInfo {
             company: "Acme".into(),
             product: "Rocket Sled".into(),

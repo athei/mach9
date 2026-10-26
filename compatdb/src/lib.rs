@@ -35,8 +35,12 @@ use std::{
 };
 
 use compatdb_core::{
-    Arch, ArgumentsDropped, D3d9, Diagnostic, DllOverrideReset, Dxgi, ENV_VAR, EnvEntry, EnvStep,
-    Key, Origin, Resolution, Scalar, Table, VersionInfo, Wined3d, basename_of,
+    ArgumentsDropped, Diagnostic, DllOverrideReset, ENV_VAR, EnvEntry, EnvStep, Key, Origin,
+    Resolution, Scalar, Table, VersionInfo, Wined3d,
+    runtime::{
+        Arch, append_cmdline_each, basename_of, effective_d3d9, effective_dxgi, env_value,
+        wined3d_renderer_in,
+    },
 };
 
 use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TEB_PEB_OFFSET};
@@ -95,7 +99,7 @@ extern "C" fn run() {
     // upstream Wine does instead, so the block is the whole configuration of
     // the process.
     let pe_dir = process.arch.pe_dir();
-    let dxgi = Dxgi::effective(resolution.dxgi(), process.arch);
+    let dxgi = effective_dxgi(resolution.dxgi(), process.arch);
     apply::tree(
         &nt,
         pe_dir,
@@ -103,7 +107,7 @@ extern "C" fn run() {
         dxgi.as_str(),
         &scalar_source(&resolution, Scalar::Dxgi),
     );
-    let d3d9 = D3d9::effective(resolution.d3d9(), process.arch);
+    let d3d9 = effective_d3d9(resolution.d3d9(), process.arch);
     apply::tree(
         &nt,
         pe_dir,
@@ -121,7 +125,7 @@ extern "C" fn run() {
     let wined3d = resolution.wined3d();
     let config = match resolution.d3d_config() {
         Some(value) => Some((value.to_owned(), resolution.d3d_config_origin())),
-        None => compatdb_core::env_value(&process.env, Wined3d::CONFIG_VAR).map(|v| (v, None)),
+        None => env_value(&process.env, Wined3d::CONFIG_VAR).map(|v| (v, None)),
     };
     log::line(&wined3d_line(
         wined3d,
@@ -142,8 +146,7 @@ extern "C" fn run() {
     }
     apply::dll_overrides(&nt, &resolution.dll_overrides);
     apply_hooks(&nt, &process, &resolution);
-    let (cmd, appended) =
-        compatdb_core::append_cmdline_each(&process.cmdline, &resolution.arguments);
+    let (cmd, appended) = append_cmdline_each(&process.cmdline, &resolution.arguments);
     log::line(&list_line(
         Key::Arguments,
         &resolution.arguments,
@@ -157,9 +160,7 @@ extern "C" fn run() {
     // A default env entry leaves a variable the process already has alone,
     // whether it is in the environment block or only in the unix
     // environment.
-    let has = |name: &str| {
-        compatdb_core::env_value(&process.env, name).or_else(|| std::env::var(name).ok())
-    };
+    let has = |name: &str| env_value(&process.env, name).or_else(|| std::env::var(name).ok());
     let steps = resolution.env_steps(|name| has(name).is_some());
     if steps.is_empty() {
         log::line(&unset_line(Key::Env));
@@ -393,7 +394,7 @@ fn wined3d_line(
     reset: Option<&Origin>,
     config: Option<(&str, Option<&Origin>)>,
 ) -> String {
-    let asks = config.and_then(|(value, from)| Wined3d::renderer_in(value).map(|r| (r, from)));
+    let asks = config.and_then(|(value, from)| wined3d_renderer_in(value).map(|r| (r, from)));
     let reset = reset.map_or_else(String::new, |by| format!(", reset by {}", by.label()));
     match (set, asks) {
         (Some(wined3d), _) => format!("  wined3d = {}, {source}", wined3d.as_str()),

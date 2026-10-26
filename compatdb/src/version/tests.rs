@@ -209,10 +209,14 @@ fn the_mapped_image_is_read() -> Fallible {
 fn the_mapped_image_reports_its_machine() -> Fallible {
     let mut image = mapped_layout()?;
     assert_eq!(machine(image.as_ptr().cast()), Some(0x14c));
-    put16(&mut image, 0x44, compatdb_core::IMAGE_FILE_MACHINE_ARM64)?;
+    put16(
+        &mut image,
+        0x44,
+        compatdb_core::runtime::IMAGE_FILE_MACHINE_ARM64,
+    )?;
     assert_eq!(
         machine(image.as_ptr().cast()),
-        Some(compatdb_core::IMAGE_FILE_MACHINE_ARM64)
+        Some(compatdb_core::runtime::IMAGE_FILE_MACHINE_ARM64)
     );
     assert_eq!(machine(std::ptr::null()), None);
     // Without the PE signature there is no header to read it from.

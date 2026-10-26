@@ -1,5 +1,8 @@
 use super::*;
-use crate::{Exe, Fingerprint, append_cmdline_each, merge_env};
+use crate::{
+    Exe, Fingerprint,
+    runtime::{append_cmdline_each, merge_env},
+};
 
 /// What a test returns, so a missing value fails it through `?` rather
 /// than a panic in the test body.

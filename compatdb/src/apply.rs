@@ -12,14 +12,17 @@ use std::{
     ptr,
 };
 
-use compatdb_core::{DllOverride, EnvEntry, OpenGl, merge_env};
+use compatdb_core::{
+    DllOverride, EnvEntry, OpenGl,
+    runtime::{merge_env, opengl_hook_value},
+};
 
 use crate::{Process, log, ntdll::Ntdll};
 
 /// Prepend `lib/wine/<family>/<name>` to the builtin search path, where
 /// `family` is `dxgi` or `d3d9` and `name` the implementation's tree. The
 /// tree counts as present when it has the process's builtin directory,
-/// `pe_dir` ([`Arch::pe_dir`](compatdb_core::Arch::pe_dir)).
+/// `pe_dir` ([`Arch::pe_dir`](compatdb_core::runtime::Arch::pe_dir)).
 ///
 /// Every process gets one tree per family. The default dirs hold only
 /// fake-module markers for these DLLs, so this is purely additive and nothing
@@ -168,7 +171,7 @@ pub fn opengl(nt: &Ntdll, opengl: OpenGl, source: &str) {
         ));
         return;
     }
-    nt.set_compat_opengl(opengl.hook_value());
+    nt.set_compat_opengl(opengl_hook_value(opengl));
     log::line(&format!("  opengl = {name}, {source}"));
 }
 
