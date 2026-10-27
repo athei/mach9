@@ -27,9 +27,10 @@ mtld3d; the [format][format] and the [recipes][recipes] show the rest.
   [DXMT](docs/internals.md#dxmt), D3D12 on
   [vkd3d-proton](docs/internals.md#vkd3d-proton). x64 programs run as
   ARM64EC: Wine and the graphics stack are ARM64X and run natively, and
-  only the game's own code is emulated. FEX runs that code without AFP,
-  which costs more at every switch between x86 and native code than it
-  saves, so x64 code runs faster than on upstream FEX
+  only the game's own code is emulated. Unlike upstream FEX, our FEX runs
+  the x86_64 code of these programs without AFP: AFP needs a
+  floating-point mode switch at every call between x86 and native code,
+  and measurements showed that switch costs more than AFP saves
   ([FEX](docs/internals.md#fex)).
 
 Other defaults that differ from Wine, besides the built-in rules
