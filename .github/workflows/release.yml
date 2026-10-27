@@ -230,7 +230,7 @@ jobs:
           cargo test --locked --manifest-path Cargo.toml --workspace
           cargo clippy --locked --manifest-path Cargo.toml --workspace --all-targets -- -D warnings
 
-      # One cache per staged dist (docs/arm64.md, commands): Mesa with the
+      # One cache per staged dist (docs/internals.md, commands): Mesa with the
       # Vulkan loader, GStreamer, FEX, DXMT and vkd3d-proton. Its key is the
       # hash of the KEY line the dist's build script would write into it now
       # (--print-key): the commit its ref names (GStreamer's pin), the hash

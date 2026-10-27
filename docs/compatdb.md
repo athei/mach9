@@ -19,9 +19,9 @@
 
 | Family | APIs | Rule value | Tree |
 |--------|------|------------|------|
-| `dxgi` | D3D10, D3D11, D3D12 | `dxmt` ([DXMT](arm64.md#dxmt), D3D12 from [vkd3d-proton](arm64.md#vkd3d-proton)) | `lib/wine/dxgi/dxmt/` |
+| `dxgi` | D3D10, D3D11, D3D12 | `dxmt` ([DXMT](internals.md#dxmt), D3D12 from [vkd3d-proton](internals.md#vkd3d-proton)) | `lib/wine/dxgi/dxmt/` |
 | `dxgi` | D3D10, D3D10.1, D3D11 | `wined3d` | `lib/wine/dxgi/wined3d/` |
-| `d3d9` | D3D9 | `mtld3d` ([mtld3d](arm64.md#mtld3d)) | `lib/wine/d3d9/mtld3d/` |
+| `d3d9` | D3D9 | `mtld3d` ([mtld3d](internals.md#mtld3d)) | `lib/wine/d3d9/mtld3d/` |
 | `d3d9` | D3D9 | `wined3d` | `lib/wine/d3d9/wined3d/` |
 
 - Which tree a process gets is [`Rule::dxgi`][dxgi] and
@@ -47,7 +47,7 @@
 - A native ARM64 program gets the same trees as every program and loads
   the ARM64 half of their ARM64X modules. Whether it can load a Direct3D
   name at all depends on the name's marker
-  ([limitations](arm64.md#limitations)).
+  ([limitations](internals.md#limitations)).
 - `default_dxgi`, `default_d3d9`, `effective_dxgi` and `effective_d3d9` in
   the crate's [`runtime`][runtime] module decide the tree when no rule
   names one.

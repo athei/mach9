@@ -1,4 +1,4 @@
-# The arm64 build
+# How the build works
 
 `build-wine.sh` and `bundle-wine.sh` build and bundle a native arm64 Wine
 that runs x86 programs through [FEX](https://github.com/FEX-Emu/FEX). The
@@ -7,8 +7,8 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
 - The Wine source is upstream Wine with our own series on top, the branch
   [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched) of
   athei/wine. Some of its commits come from Hadron, and it carries
-  CrossOver's msync (see [Runtime](#runtime)). It is configured against the
-  arm64 Homebrew with the allowlist in
+  CrossOver's msync (see [Runtime](#runtime)). It is configured against
+  Homebrew with the allowlist in
   [`build-wine.sh`](../bin/build-wine.sh), plus the configure results
   the floor overrides (`FLOOR_NEWER_FUNCS`,
   [macOS floors](maintenance.md#macos-floors)).
@@ -40,7 +40,7 @@ settings they share are in [`profile.sh`](../bin/lib/profile.sh). In short:
 
 - An Apple Silicon Mac and a macOS SDK at least as new as `MACOS_FLOOR` in
   [`profile.sh`](../bin/lib/profile.sh).
-- The arm64 Homebrew at `DEPS_PREFIX` (in `profile.sh`) with the formulae
+- Homebrew at `DEPS_PREFIX` (in `profile.sh`) with the formulae
   in [`brew-formulae`](../pins/brew-formulae): those of `DEPS_FORMULAE` and
   `MESA_FORMULAE` in `profile.sh`, which the scripts check for, and the
   build tools they run. A CI build installs exactly these. Only a host on
@@ -221,7 +221,7 @@ commit. What goes in is the Wine SDK step of
   from the build itself. Its `aarch64-windows` archives are ARM64X,
   carrying ARM64 and ARM64EC members, since arm64ec is paired with aarch64
   there.
-- The `x86_64-windows` archives are what the arm64 build cannot make: x64
+- The `x86_64-windows` archives are what the main build cannot make: x64
   objects do not link against ARM64EC ones. The x86 tree, a second
   configure of the same source for i386 and x86_64 that reuses the build's
   tools, builds just those and the [graphics tests](#graphics-tests).
@@ -364,7 +364,7 @@ checks, at most 255.
   builtin mark does not change with Wine, so a new Wine needs no new
   vkd3d-proton build. A meson tree is configured afresh whenever the
   commit, its options, llvm-mingw's clang or glslang change.
-- Its shaders are compiled with glslang from the arm64 Homebrew
+- Its shaders are compiled with glslang from Homebrew
   ([`brew-formulae`](../pins/brew-formulae)).
 
 ## mtld3d

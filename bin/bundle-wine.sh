@@ -42,7 +42,7 @@ usage() {
 # warning, for a CI or release build. The bundled libraries are Homebrew's
 # bottles, which carry the minos of the macOS they were poured for, so they
 # meet the floor only on a host of the floor's major version, where such a
-# build has to run (docs/arm64.md). A local build on a newer macOS gets
+# build has to run (docs/internals.md). A local build on a newer macOS gets
 # newer bottles and is not distributed, so a warning is enough there.
 # --symbols keeps the PE files as they were before Step 4e stripped them in
 # <dir>/wine-symbols. --yes deletes an existing bundle at <dir>/wine without
@@ -2823,7 +2823,7 @@ fi
 # So every 64-bit name gets such a hybrid marker (winebuild -marm64x), and
 # every 64-bit DLL of every tree has to be ARM64X, which check_trees_arm64x
 # makes sure of first. An AMD64 marker, which a native ARM64 program cannot
-# get past (docs/arm64.md, Limitations), is no longer stamped: compatdb.so
+# get past (docs/internals.md, Limitations), is no longer stamped: compatdb.so
 # gives native ARM64 programs these trees too. Step 5 checks every marker's
 # machine. An arm64 winebuild has no default PE target, hence the explicit
 # -b.

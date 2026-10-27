@@ -38,7 +38,7 @@ check when something upstream changes.
   `lib/external/` the same way. The loader finds it through the manifest in
   `share/vulkan/icd.d/`, whose `library_path` is relative to the manifest,
   and ntdll points the loader at that directory
-  ([arm64.md](arm64.md#vulkan)).
+  ([internals.md](internals.md#vulkan)).
 - `winegstreamer.so` is the one unix module that links libraries outside
   the system: GStreamer's, which `build-gstreamer.sh` staged in
   `GSTREAMER_DIST` under the install names
@@ -51,9 +51,9 @@ check when something upstream changes.
   as their own install names like every bundled dylib, and stops on a
   reference of `winegstreamer.so` by any other name, or on a GStreamer
   library with the name of one Step 3 already copied from Homebrew
-  ([GStreamer](arm64.md#gstreamer)).
+  ([GStreamer](internals.md#gstreamer)).
 - There is no `DYLD_*` variable. The loader app is the only entry point
-  ([loader app](arm64.md#loader-app)).
+  ([loader app](internals.md#loader-app)).
 
 ## Direct3D trees
 
@@ -81,7 +81,7 @@ check when something upstream changes.
   (`check_trees_arm64x` in [`bundle-wine.sh`](../bin/bundle-wine.sh)), such
   as an x86_64 build, and Step 5 checks every marker's machine. No AMD64
   marker is stamped any more; a native ARM64 program could not load a name
-  with one ([limitations](arm64.md#limitations)).
+  with one ([limitations](internals.md#limitations)).
 - Beyond the trees, nothing in any `aarch64-windows` directory, the
   default one included, may be code an x64 process would load but not run
   natively. Step 5's `check_pe64_native` in
@@ -96,7 +96,7 @@ check when something upstream changes.
   goes into that list with the reason.
 
 What the bundle step checks is in
-[arm64.md](arm64.md#what-the-bundle-step-checks).
+[internals.md](internals.md#what-the-bundle-step-checks).
 
 ## macOS floors
 
@@ -129,11 +129,11 @@ What the bundle step checks is in
   `minos`, and a formula compiled on that machine carries its macOS, so a
   local bundle can exceed the floor. It is not distributed, so a warning is
   enough. When the libraries meet the floor is in
-  [arm64.md](arm64.md#homebrew-libraries-and-the-floor).
+  [internals.md](internals.md#homebrew-libraries-and-the-floor).
 
 ## Pinned inputs
 
-What is pinned, and where, is in [arm64.md](arm64.md#pinned-inputs).
+What is pinned, and where, is in [internals.md](internals.md#pinned-inputs).
 
 - `bundle-wine.sh` downloads each artifact in [`redist.env`](../pins/redist.env)
   into `CACHE_DIR` and reuses the cached copy while its checksum matches
@@ -234,7 +234,7 @@ Each key changes only with what its cache was made from:
 
 - Each staged directory: the runner image and the hash of the `KEY` line
   its build script would write into it, which the script prints with
-  `--print-key` ([commands](arm64.md#commands)). That line names the commit
+  `--print-key` ([commands](internals.md#commands)). That line names the commit
   the component's ref resolves to now (for GStreamer the pinned one), the
   hash of the build script and of [`profile.sh`](../bin/lib/profile.sh),
   the versions of the compilers,
@@ -298,7 +298,7 @@ repository's cache budget.
 ### Signing identity
 
 The loader is signed in `release.yml`, by the identity of the
-[provisioning profile](arm64.md#loader-app)'s team, from the secrets of the
+[provisioning profile](internals.md#loader-app)'s team, from the secrets of the
 GitHub environment `release`, or of the environment `pull-request` in a run
 on a pull request. `bin/ci/keychain.sh` imports it into a keychain of its
 own for the bundle step and deletes that keychain at the end of the job.
@@ -362,24 +362,24 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
   - On an ntdll without one of them, compatdb.so logs that and skips the
     setting. The bundle step checks that `ntdll.so` exports
     `set_compat_force_nx` and `set_compat_opengl`
-    ([what the bundle step checks](arm64.md#what-the-bundle-step-checks)).
+    ([what the bundle step checks](internals.md#what-the-bundle-step-checks)).
 - winemac exports `macdrv_functions`, the window, Metal and monitor helpers
   DXMT's `winemetal.so` uses. It gets the window's client view through its
   `get_win_data(hwnd)` entry, which only finds windows the calling process
   created.
 - ntdll sets `VK_DRIVER_FILES` to the bundle's `share/vulkan/icd.d` unless
-  the caller chose the Vulkan drivers ([Vulkan](arm64.md#vulkan)); the
+  the caller chose the Vulkan drivers ([Vulkan](internals.md#vulkan)); the
   bundle step checks that `ntdll.so` names the variable.
 - ntdll points GStreamer at the bundle's `lib/external/gstreamer-1.0` and
   its registry at a file of its own unless the caller chose them
-  ([GStreamer](arm64.md#gstreamer)); the smoke test checks that the
+  ([GStreamer](internals.md#gstreamer)); the smoke test checks that the
   registry lands there.
 - The WMA decoder DMO's stream info and input status calls return `S_OK`;
   the smoke test's `wmadec.c` checks them.
 - The wineserver runs CrossOver's msync and prints the lines the smoke test
-  looks for ([runtime](arm64.md#runtime)).
+  looks for ([runtime](internals.md#runtime)).
 - The loader checks for its entitlement and re-execs itself with 4K pages
-  ([loader app](arm64.md#loader-app)).
+  ([loader app](internals.md#loader-app)).
 
 ## Upgrade checklist
 
@@ -415,7 +415,7 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
 
 - Mesa is a fork: upstream Mesa plus our topic commits, originally from
   Hadron's patches, at the ref in [`mesa-src.ref`](../pins/mesa-src.ref)
-  ([arm64.md](arm64.md#vulkan)). To move it to a newer Mesa main:
+  ([internals.md](internals.md#vulkan)). To move it to a newer Mesa main:
   - Rebase the topic series onto the new upstream main with `git rerere`
     enabled, so a conflict resolved once is resolved again on the next
     rebase.
@@ -464,7 +464,7 @@ of athei/wine. The scripts and `compatdb.so` rely on it for:
 ### GStreamer
 
 GStreamer, with glib and FFmpeg, is pinned in
-[`redist.env`](../pins/redist.env) ([GStreamer](arm64.md#gstreamer)). On
+[`redist.env`](../pins/redist.env) ([GStreamer](internals.md#gstreamer)). On
 a bump of the tag:
 
 - Pin the commit of the FFmpeg port branch that the new tag's
@@ -499,7 +499,7 @@ a bump of the tag:
 Both are forks: upstream plus our commits, at the refs in
 [`dxmt-src.ref`](../pins/dxmt-src.ref) and
 [`vkd3d-proton-src.ref`](../pins/vkd3d-proton-src.ref)
-([DXMT](arm64.md#dxmt), [vkd3d-proton](arm64.md#vkd3d-proton)). They are
+([DXMT](internals.md#dxmt), [vkd3d-proton](internals.md#vkd3d-proton)). They are
 upgraded together when the swapchain interface between them changes.
 
 - To move either to a newer upstream main (DXMT) or master (vkd3d-proton),
@@ -524,5 +524,5 @@ upgraded together when the swapchain interface between them changes.
   the default builds what the remote has.
 - Run a full bundle step: its smoke test runs `d3d12.exe` on every arch.
   Run Wine's `d3d12_test.exe`, `dxgi_test.exe` and `d3d11_test.exe` from
-  the bundle's [graphics tests](arm64.md#graphics-tests) before and after,
+  the bundle's [graphics tests](internals.md#graphics-tests) before and after,
   and explain any new failure before the bundle takes the new build.
