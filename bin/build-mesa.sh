@@ -200,7 +200,7 @@ echo "    at $MESA_COMMIT"
 # records it, and a loader built for another key, or none, is built again
 # from fresh trees. The headers are installed into a prefix of their own,
 # and the loader's configure is pointed at their CMake package, so it can
-# only take these and not the arm64 Homebrew's.
+# only take these and not Homebrew's.
 LOADER_KEY="headers=$VULKAN_HEADERS_GIT_COMMIT loader=$VULKAN_LOADER_GIT_COMMIT floor=$MACOS_FLOOR"
 if [ "$(cat "$LOADER_PREFIX/KEY" 2>/dev/null)" = "$LOADER_KEY" ]; then
     echo "==> Vulkan loader $VULKAN_LOADER_GIT_TAG: built already"
@@ -296,7 +296,7 @@ mesa_setup() {
 # ── KosmicKrisp, stage 1: the host tools ────────────────────────────────
 # Built for the host, not the floor: they run here and nowhere else, and
 # the Homebrew libraries they link are newer than the floor anyway, found
-# through the arm64 Homebrew's pkg-config files. The versions of those
+# through Homebrew's pkg-config files. The versions of those
 # libraries are part of the key, since a tool linked against an upgraded one
 # has to be linked again.
 #
@@ -346,7 +346,7 @@ EOF
 # driver needs it, so a library that happens to be installed cannot change
 # what is built: each Mesa feature option that looks for an optional library
 # is disabled here. The probes that have no option (libudev, lua, libelf,
-# glslangValidator) find nothing in the arm64 Homebrew either: pkg-config
+# glslangValidator) find nothing in Homebrew either: pkg-config
 # searches nowhere (an empty PKG_CONFIG_LIBDIR), the native file names false
 # as cmake, so meson's CMake lookup has no CMake to search with, and meson
 # and ninja run with a PATH of the Python environment and the system

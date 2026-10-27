@@ -3,8 +3,8 @@
 //! provides), before any PE code runs. Its only entry point is a Mach-O
 //! initializer.
 //!
-//! It is built for the arm64 Wine, which runs x86 programs under emulation
-//! and native ARM64 ones.
+//! It is built for a native arm64 Wine, which runs x86 programs under
+//! emulation and native ARM64 ones.
 //!
 //! It takes the built-in rules of [`compatdb_core::builtin`], which are
 //! compiled in, appends the ones passed in [`ENV_VAR`], resolves the rules

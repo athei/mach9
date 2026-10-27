@@ -1986,7 +1986,7 @@ check_vkd3d_proton_build() {
 }
 
 # ── Loader app ──────────────────────────────────────────────────────────
-# The arm64 loader needs com.apple.developer.cross-architecture-support,
+# The loader needs com.apple.developer.cross-architecture-support,
 # with which the kernel leaves most of the 4 GB __PAGEZERO replaceable, so
 # Wine can claim the low address space its i386 code needs (the same
 # entitlement gates the hardware x86 memory ordering FEX runs x86 code with,

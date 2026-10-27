@@ -1,4 +1,4 @@
-# The formulae a CI build installs into the arm64 Homebrew, one per line,
+# The formulae a CI build installs into Homebrew, one per line,
 # with everything they depend on: the ones profile.sh lists (DEPS_FORMULAE,
 # which the bundle and Wine's configure use, and MESA_FORMULAE, which
 # build-mesa.sh's host tools link), and the build tools the scripts run that

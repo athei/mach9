@@ -41,8 +41,8 @@ set -e
 # does not need a new vkd3d-proton build. WINE_COMMIT only records which
 # commit WINE_SRC was at; the two winebuilds may come from an older build.
 #
-# vkd3d-proton compiles its internal shaders with glslang, from the arm64
-# Homebrew (pins/brew-formulae).
+# vkd3d-proton compiles its internal shaders with glslang, from Homebrew
+# (pins/brew-formulae).
 #
 # Nothing is built when VKD3D_PROTON_DIST is complete and has the KEY this
 # run would write (skip_current_dist in profile.sh). --clean wipes the

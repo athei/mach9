@@ -43,7 +43,7 @@ BUILD_DIR="${BUILD_DIR:-$BUILD_TOP/wine}"
 BUNDLE_DEST="$ROOT/dist"
 HOST_TRIPLE=aarch64-apple-darwin
 WINE_ARCHS=arm64ec,aarch64,i386
-# The arm64 Homebrew. Configure finds the libraries here and the bundle
+# Homebrew's prefix. Configure finds the libraries here and the bundle
 # copies them from here.
 DEPS_PREFIX=/opt/homebrew
 DEPS_FORMULAE="freetype gnutls sdl2-compat sdl3 bison pkgconf"
@@ -142,7 +142,7 @@ CONFIGURE_TOOLCHAIN=(CC="clang -arch arm64"
                      LDFLAGS="-L$GSTREAMER_DIST/lib -L$MESA_DIST/lib -L$DEPS_PREFIX/lib")
 # Path prefixes no bundled Mach-O may still load from. An x86_64 library
 # from /usr/local cannot load into an arm64 process, so a reference to it is
-# as much a leak as one to the arm64 Homebrew.
+# as much a leak as one to Homebrew's prefix.
 LEAK_PREFIXES="/usr/local/ /opt/homebrew/"
 # The floor every Mach-O is held to. The loader's cross-architecture
 # entitlement needs macOS 26.4, so nothing in this bundle aims lower.

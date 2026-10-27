@@ -1,6 +1,6 @@
 name: Release
 
-# Builds the arm64 bundle on a hosted runner, from the Wine branch in
+# Builds the bundle on a hosted runner, from the Wine branch in
 # pins/wine-src.ref and the pins of this commit, and signs its loader with
 # the identity in the secrets of the job's environment. An arm64-* tag
 # attaches the bundle and its symbols to a draft release of that tag. A

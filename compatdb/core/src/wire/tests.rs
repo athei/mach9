@@ -297,7 +297,7 @@ fn a_field_that_cannot_be_read_is_ignored_and_the_rest_applies() -> TestResult {
     for (field, said) in [
         ("bogus=1", "unknown key \"bogus\""),
         ("dxgi=vulkan", "unknown dxgi value \"vulkan\""),
-        // The x86_64 Wine's D3DMetal is a value like any other unknown one.
+        // The retired D3DMetal value is a value like any other unknown one.
         ("dxgi=gptk", "unknown dxgi value \"gptk\""),
         ("d3d9=gptk", "unknown d3d9 value \"gptk\""),
         ("wined3d=opengl", "unknown wined3d value \"opengl\""),

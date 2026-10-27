@@ -301,7 +301,7 @@ EOF
 # the same: glib would take /usr/local's libintl.h for a gettext and then
 # fail to link it. Its libintl is forced to be the proxy-libintl wrap, and
 # after the build no object may have read a header from /usr/local or the
-# arm64 Homebrew (the dependency check below). proxy-libintl is linked
+# Homebrew prefix (the dependency check below). proxy-libintl is linked
 # statically, into glib and GStreamer: as a library of its own it would be
 # libintl.8.dylib, the name of Homebrew's gettext, which lib/external carries
 # for GnuTLS.
