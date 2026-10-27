@@ -3,6 +3,7 @@ name = "compatdb"
 version = "0.1.0"
 edition = "2024"
 publish = false
+license.workspace = true
 description = "The per-process compat library wine's ntdll loads as compatdb.so"
 
 [lib]
@@ -21,6 +22,9 @@ workspace = true
 resolver = "3"
 members = [".", "core"]
 default-members = [".", "core"]
+
+[workspace.package]
+license = "Zlib"
 
 [workspace.dependencies]
 compatdb-core = { path = "core" }
