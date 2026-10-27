@@ -9,11 +9,12 @@ name: Docs
 # settings (Settings, Pages, Build and deployment), or the deploy job
 # fails.
 #
-# The checks run on Linux for compatdb-core alone. It is pure Rust with no
-# platform code. The other crates of the workspace are macOS only:
-# release.yml tests and lints them on its macOS runner before it builds, on
-# every push to main that changes them and on every pull request. rustfmt
-# checks every crate here, since formatting does not depend on the target.
+# The tests and lints run on Linux for compatdb-core alone. It is pure Rust
+# with no platform code. compatdb is a macOS cdylib: release.yml tests and
+# lints it on its macOS runner before it builds, on every push to main that
+# changes it and on every pull request. rustfmt checks both compatdb crates
+# here, since formatting does not depend on the target. The launcher crates
+# have their own checks in launcher.yml.
 
 on:
   push:
@@ -62,7 +63,7 @@ jobs:
           rustup default stable
 
       - name: Check the formatting
-        run: cargo +nightly fmt --manifest-path "$MANIFEST" --all --check
+        run: cargo +nightly fmt --manifest-path "$MANIFEST" -p compatdb -p compatdb-core --check
 
       - name: Test
         run: cargo test --locked --manifest-path "$MANIFEST" -p compatdb-core

@@ -30,6 +30,9 @@ the focus.
 
 Setup and use: [docs/app.md](docs/app.md).
 
+The app's source is in [`launcher/`](launcher); the engine does not depend
+on it.
+
 ## The engine
 
 A launcher that wants one game's D3D9 on wined3d, for example, sets:

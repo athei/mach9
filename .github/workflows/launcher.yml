@@ -1,0 +1,76 @@
+name: Launcher
+
+# Checks the crates of Mach9.app's launcher (launcher/) on macOS, which they
+# need: the formatting of the workspace, then clippy and the tests of the
+# launcher, its Dock tile plug-in and their shared code. It runs on a change
+# to them, to compatdb-core, which the launcher builds on, or to the
+# workspace files, so a change to the launcher alone does not start the
+# Wine build of release.yml. The launcher is built without Sparkle, since
+# SPARKLE_DIR is unset (launcher/app/build.rs).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'launcher/**'
+      - 'compatdb/core/**'
+      - '.cargo/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+      - 'rustfmt.toml'
+      - '.github/workflows/launcher.yml'
+  # The same paths. This check is not a required one, so a pull request it
+  # skips can still merge.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'launcher/**'
+      - 'compatdb/core/**'
+      - '.cargo/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+      - 'rustfmt.toml'
+      - '.github/workflows/launcher.yml'
+
+permissions:
+  contents: read
+
+# A newer push to main or to a pull request cancels the run it makes
+# pointless.
+concurrency:
+  group: launcher-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # rustfmt.toml uses options that only nightly rustfmt applies.
+      - name: Install the toolchains
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup toolchain install nightly --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Check the formatting
+        run: cargo +nightly fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --locked -p gamelauncher -p gamelauncher-core -p gamelauncher-docktile --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked -p gamelauncher -p gamelauncher-core -p gamelauncher-docktile

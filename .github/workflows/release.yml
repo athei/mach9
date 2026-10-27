@@ -22,8 +22,9 @@ on:
   push:
     tags: ['arm64-*']
     branches: [main]
-    # What the build and bundle steps read. GitHub applies path filters to
-    # branch pushes only, so every arm64-* tag still runs.
+    # What the build and bundle steps read. A change to the launcher alone
+    # runs launcher.yml instead. GitHub applies path filters to branch
+    # pushes only, so every arm64-* tag still runs.
     paths:
       - 'bin/**'
       - 'compatdb/**'
@@ -212,8 +213,9 @@ jobs:
       - name: Add the Rust target
         run: rustup target add aarch64-apple-darwin
 
-      # What cargo fetches for compatdb.so, which the bundle step builds.
-      # Saved at the end of the job, as the pinned downloads.
+      # What cargo fetches for the tests and lints below and for compatdb.so,
+      # which the bundle step builds. Saved at the end of the job, as the
+      # pinned downloads.
       - name: Restore the cargo registry
         id: cargo
         uses: actions/cache/restore@v6
@@ -224,10 +226,12 @@ jobs:
           key: cargo-${{ hashFiles('scripts/Cargo.lock') }}
 
       # The tests and lints of every crate of the workspace. compatdb.so runs
-      # from a Mach-O initializer inside Wine's ntdll, so its tests run here
-      # and not in docs.yml. From the repository root, as bundle-wine.sh
-      # builds it, so cargo reads .cargo/config.toml. Before the build, so a
-      # failure costs minutes, not the whole build.
+      # from a Mach-O initializer inside Wine's ntdll and the launcher crates
+      # are macOS only, so their tests run here and not in docs.yml; the
+      # launcher builds without Sparkle, since SPARKLE_DIR is unset. From
+      # the repository root, as bundle-wine.sh builds compatdb.so, so cargo
+      # reads .cargo/config.toml. Before the build, so a failure costs
+      # minutes, not the whole build.
       - name: Test and lint the crates
         working-directory: scripts
         run: |

@@ -56,6 +56,7 @@ What the bundle step checks is in
 |---------|------------|------------|------------|
 | `MACOS_FLOOR` | [`profile.sh`](../bin/lib/profile.sh) | Exported as `MACOSX_DEPLOYMENT_TARGET` for everything the scripts build except KosmicKrisp's build tools, and the floor every Mach-O in the bundle is checked against | The loader's cross-architecture entitlement needs it; equals the `.cargo/config.toml` row |
 | `MACOSX_DEPLOYMENT_TARGET` | [`.cargo/config.toml`](../.cargo/config.toml) | Every crate built by a plain `cargo build` in the repository; the scripts override it for `compatdb.so` | Same as `MACOS_FLOOR` |
+| `LSMinimumSystemVersion` | [`launcher/app/Info.plist`](../launcher/app/Info.plist), [`launcher/docktile/Info.plist`](../launcher/docktile/Info.plist) | Mach9.app and its Dock tile plug-in | Same as `MACOS_FLOOR` |
 
 - Without the pin, clang takes the deployment target from the build host.
 - Only the minimum is fixed. The SDK is whatever the build host has, at
@@ -121,6 +122,10 @@ x86_64 Wine this repository built before, which runs under Rosetta.
   record `docs` -> `athei.github.io` in the DNS of `mach9.app` (DNS only,
   not proxied) and the domain set as the custom domain in the
   repository's Pages settings.
+- [`launcher.yml`](../.github/workflows/launcher.yml) checks the
+  formatting and lints and tests the launcher crates on macOS, so a change
+  to the launcher alone does not start a Wine build; its header says when
+  it runs.
 
 ### Homebrew formulae
 

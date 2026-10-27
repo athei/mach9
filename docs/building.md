@@ -35,6 +35,7 @@ scripts also run alone ([commands](internals.md#commands)).
 | [`pins/`](../pins) | The pinned inputs: [`redist.env`](../pins/redist.env), the refs of the sources the build checks out, and the Homebrew formulae a CI build installs |
 | [`.github/workflows/`](../.github/workflows) | The CI workflows ([releases](maintenance.md#releases)) |
 | [`compatdb/`](../compatdb) | The crates of `compatdb.so` and `compatdb-core` ([compatdb.md](compatdb.md)); the Cargo workspace is the repository root, so run cargo there |
+| [`launcher/`](../launcher) | The source of [Mach9.app](app.md)'s launcher (`app`), its Dock tile plug-in (`docktile`) and the code both share (`core`); nothing the bundle step builds depends on it. Without `SPARKLE_DIR` naming the directory that holds `Sparkle.framework`, the launcher builds without its updater ([`build.rs`](../launcher/app/build.rs)) |
 | [`smoke/`](../smoke) | The programs the bundle step builds and runs to check the bundle |
 | [`signing/`](../signing) | The loader's provisioning profile |
 | [`docs/`](.) | The documentation the README links to |
