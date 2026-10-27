@@ -27,6 +27,11 @@ on:
     paths:
       - 'bin/**'
       - 'compatdb/**'
+      - '.cargo/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+      - 'rustfmt.toml'
       - 'pins/**'
       - 'signing/**'
       - 'smoke/**'
@@ -216,19 +221,19 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ hashFiles('scripts/compatdb/Cargo.lock') }}
+          key: cargo-${{ hashFiles('scripts/Cargo.lock') }}
 
-      # The tests and lints of both compatdb crates. compatdb.so runs from a
-      # Mach-O initializer inside Wine's ntdll, so its tests run here and
-      # not in docs.yml. From compatdb/, as bundle-wine.sh builds it, so
-      # cargo reads compatdb/.cargo/config.toml. Before the build, so a
+      # The tests and lints of every crate of the workspace. compatdb.so runs
+      # from a Mach-O initializer inside Wine's ntdll, so its tests run here
+      # and not in docs.yml. From the repository root, as bundle-wine.sh
+      # builds it, so cargo reads .cargo/config.toml. Before the build, so a
       # failure costs minutes, not the whole build.
-      - name: Test and lint compatdb
-        working-directory: scripts/compatdb
+      - name: Test and lint the crates
+        working-directory: scripts
         run: |
           rustup component add clippy
-          cargo test --locked --manifest-path Cargo.toml --workspace
-          cargo clippy --locked --manifest-path Cargo.toml --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+          cargo clippy --locked --workspace --all-targets -- -D warnings
 
       # One cache per staged dist (docs/internals.md, commands): Mesa with the
       # Vulkan loader, GStreamer, FEX, DXMT and vkd3d-proton. Its key is the

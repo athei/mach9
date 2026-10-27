@@ -43,7 +43,7 @@ fn headings() -> Vec<String> {
 /// have not been built.
 fn rustdoc_ids(page: &str) -> Option<String> {
     let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(
-        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target"),
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target"),
         PathBuf::from,
     );
     fs::read_to_string(target.join("doc/compatdb_core").join(page)).ok()

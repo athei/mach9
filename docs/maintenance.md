@@ -55,7 +55,7 @@ What the bundle step checks is in
 | Setting | Defined in | Applies to | Constraint |
 |---------|------------|------------|------------|
 | `MACOS_FLOOR` | [`profile.sh`](../bin/lib/profile.sh) | Exported as `MACOSX_DEPLOYMENT_TARGET` for everything the scripts build except KosmicKrisp's build tools, and the floor every Mach-O in the bundle is checked against | The loader's cross-architecture entitlement needs it; equals the `.cargo/config.toml` row |
-| `MACOSX_DEPLOYMENT_TARGET` | [`.cargo/config.toml`](../compatdb/.cargo/config.toml) | `compatdb.so` built by a plain `cargo build` in `compatdb/`; the scripts override it | Same as `MACOS_FLOOR` |
+| `MACOSX_DEPLOYMENT_TARGET` | [`.cargo/config.toml`](../.cargo/config.toml) | Every crate built by a plain `cargo build` in the repository; the scripts override it for `compatdb.so` | Same as `MACOS_FLOOR` |
 
 - Without the pin, clang takes the deployment target from the build host.
 - Only the minimum is fixed. The SDK is whatever the build host has, at
@@ -146,7 +146,7 @@ the check.
 | ccache directory | Runner image, run ID and attempt; every run restores the newest by prefix | Runs on `main` only |
 | DXMT's LLVM | The LLVM pin, the floor, the Xcode version and the runner image | Runs on tags and `main` |
 | Pinned downloads | The `redist.env` lines that `pins-key.sh` hashes for it in `release.yml` | Runs on tags and `main` |
-| cargo's registry | `compatdb/Cargo.lock` | Runs on tags and `main` |
+| cargo's registry | `Cargo.lock` | Runs on tags and `main` |
 | Xcode choice | Runner image, its version, and the hashes of `host.sh` and `profile.sh`; `brew-cache.yml` shares it | Runs on tags and `main` |
 
 A run on a tag writes caches only later runs on that tag can read. A run

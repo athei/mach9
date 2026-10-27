@@ -10,17 +10,21 @@ name: Docs
 # fails.
 #
 # The checks run on Linux for compatdb-core alone. It is pure Rust with no
-# platform code. compatdb itself is a macOS cdylib that runs from a Mach-O
-# initializer inside Wine's ntdll: release.yml tests and lints both crates
-# on its macOS runner before it builds, on every push to main that changes
-# compatdb/ and on every pull request. rustfmt checks both crates here,
-# since formatting does not depend on the target.
+# platform code. The other crates of the workspace are macOS only:
+# release.yml tests and lints them on its macOS runner before it builds, on
+# every push to main that changes them and on every pull request. rustfmt
+# checks every crate here, since formatting does not depend on the target.
 
 on:
   push:
     branches: [main]
     paths:
       - 'compatdb/**'
+      - '.cargo/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+      - 'rustfmt.toml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -43,7 +47,7 @@ jobs:
     timeout-minutes: 20
     env:
       CARGO_TERM_COLOR: always
-      MANIFEST: compatdb/Cargo.toml
+      MANIFEST: Cargo.toml
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -73,12 +77,12 @@ jobs:
           cargo doc --locked --manifest-path "$MANIFEST" -p compatdb-core --no-deps
           printf '%s\n' '<!doctype html>' \
             '<meta http-equiv="refresh" content="0; url=compatdb_core/">' \
-            '<a href="compatdb_core/">compatdb_core</a>' > compatdb/target/doc/index.html
+            '<a href="compatdb_core/">compatdb_core</a>' > target/doc/index.html
 
       - name: Upload the docs
         uses: actions/upload-pages-artifact@v5
         with:
-          path: compatdb/target/doc
+          path: target/doc
 
   deploy:
     needs: docs

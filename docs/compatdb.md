@@ -1,6 +1,6 @@
 # compatdb.so
 
-- Built from the Cargo workspace in [`compatdb/`](../compatdb):
+- Built from two crates of the Cargo workspace at the repository root:
   `compatdb-core` ([`compatdb/core`](../compatdb/core)) holds the rules,
   their format, the built-in rules and the API a launcher uses;
   `compatdb` ([`compatdb/src`](../compatdb/src)) is the cdylib around it.

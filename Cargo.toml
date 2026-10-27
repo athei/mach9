@@ -1,0 +1,26 @@
+# Every Rust crate of the repository: compatdb.so (compatdb), the rule
+# table it is built on (compatdb/core). A plain cargo command here acts on
+# all of them.
+[workspace]
+resolver = "3"
+members = ["compatdb", "compatdb/core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Zlib"
+
+[workspace.dependencies]
+compatdb-core = { path = "compatdb/core" }
+libc = "0.2"
+
+[workspace.lints.clippy]
+nursery = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+
+[profile.release]
+lto = "thin"
+strip = true
+panic = "abort"
+codegen-units = 1

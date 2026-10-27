@@ -74,7 +74,7 @@ WINE_DIR="$DIST_DIR/wine"
 # never in it.
 SYMBOLS_DIR="$DIST_DIR/wine-symbols"
 unixdir="$WINE_DIR/lib/wine/$UNIX_DIR"
-# cargo's target directory for compatdb/: one per checkout of this
+# cargo's target directory for compatdb.so: one per checkout of this
 # repository, under BUILD_DIR/compatdb, named after the start of the
 # SHA-256 of REPO_DIR. cargo identifies a workspace's own packages by their
 # path inside the workspace, so two checkouts sharing a target directory
@@ -336,11 +336,12 @@ drop_coff_symtab() {
 # as plain statements, never inside `if` or before `||`: either would turn
 # off set -e for everything they run.
 
-# build_compatdb: build the compatdb/ crate and install it as
-# $unixdir/compatdb.so. profile.sh exports MACOSX_DEPLOYMENT_TARGET, which
-# cargo hands to rustc and which takes precedence over the same pin in
-# compatdb/.cargo/config.toml; cargo only reads that file from the working
-# directory upward, hence the subshell in the workspace all the same.
+# build_compatdb: build the compatdb crate of the workspace at the root of
+# this repository and install it as $unixdir/compatdb.so. profile.sh exports
+# MACOSX_DEPLOYMENT_TARGET, which cargo hands to rustc and which takes
+# precedence over the same pin in .cargo/config.toml; cargo only reads that
+# file from the working directory upward, hence the subshell in the
+# repository all the same.
 # --locked builds the versions Cargo.lock names, and fails at once when the
 # file does not match Cargo.toml instead of rewriting it. The new file is
 # copied next to the old one and renamed over it, so a Wine process that has
@@ -358,8 +359,8 @@ build_compatdb() {
         echo "(rustup target add $RUST_TARGET)"
         exit 1
     fi
-    (cd "$REPO_DIR/compatdb" && CARGO_TARGET_DIR="$COMPATDB_TARGET" \
-        cargo build --quiet --release --locked --manifest-path "$REPO_DIR/compatdb/Cargo.toml" \
+    (cd "$REPO_DIR" && CARGO_TARGET_DIR="$COMPATDB_TARGET" \
+        cargo build --quiet --release --locked --manifest-path "$REPO_DIR/Cargo.toml" \
             -p compatdb --target "$RUST_TARGET")
     echo "    $UNIX_DIR/compatdb.so"
     cp "$COMPATDB_BUILD" "$unixdir/compatdb.so.new"
