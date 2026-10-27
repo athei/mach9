@@ -1,4 +1,8 @@
-# Mach9
+<p align="center">
+  <img src="docs/images/mach9.png" width="128" alt="Mach9 icon">
+</p>
+
+<h1 align="center">Mach9</h1>
 
 A relocatable, signed Wine for Apple Silicon Macs, focused on Direct3D 9
 games and made to be embedded in a launcher. The launcher configures it
@@ -8,7 +12,27 @@ processes, so each game gets the Direct3D implementation
 needs. The API that writes the rules is [published][spec], so a launcher
 generates them in code.
 
-For example, a launcher that wants one game's D3D9 on wined3d sets:
+## Mach9.app
+
+The easy way to play games on Mach9 today, until other launchers embed it.
+It is made for older games and runs them with mtld3d. Everything else in
+the engine is included, so newer D3D10, D3D11 and D3D12 games run too,
+but those already run well under CrossOver, which is why older games are
+the focus.
+
+**[Download Mach9.app](https://updates.mach9.app/Mach9.dmg)**
+
+- Runs the Windows version of Steam, so Steam games install and start
+  from there.
+- Wine is built in: nothing else to download, no Rosetta.
+- Notarized, and updates itself.
+- Pick and start games from its Dock menu.
+
+Setup and use: [docs/app.md](docs/app.md).
+
+## The engine
+
+A launcher that wants one game's D3D9 on wined3d, for example, sets:
 
 ```bash
 export WINE_COMPATDB='exe=game.exe;d3d9=wined3d'
