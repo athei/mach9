@@ -89,12 +89,12 @@ To confirm a tree took effect, look at the running process's mapped files,
 for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
 `lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.
 
-[spec]: https://athei.github.io/wine-build/compatdb_core/
-[format]: https://athei.github.io/wine-build/compatdb_core/#format
-[parsing]: https://athei.github.io/wine-build/compatdb_core/#strict-and-lenient-parsing
-[recipes]: https://athei.github.io/wine-build/compatdb_core/#recipes
-[upstream]: https://athei.github.io/wine-build/compatdb_core/enum.Key.html#method.upstream
-[runtime]: https://athei.github.io/wine-build/compatdb_core/runtime/index.html
-[dxgi]: https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.dxgi
-[d3d9]: https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.d3d9
-[env]: https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.env
+[spec]: https://docs.mach9.app/compatdb_core/
+[format]: https://docs.mach9.app/compatdb_core/#format
+[parsing]: https://docs.mach9.app/compatdb_core/#strict-and-lenient-parsing
+[recipes]: https://docs.mach9.app/compatdb_core/#recipes
+[upstream]: https://docs.mach9.app/compatdb_core/enum.Key.html#method.upstream
+[runtime]: https://docs.mach9.app/compatdb_core/runtime/index.html
+[dxgi]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.dxgi
+[d3d9]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.d3d9
+[env]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.env

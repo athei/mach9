@@ -13,7 +13,7 @@
 //! stays on, whether the Metal performance HUD shows, command-line
 //! arguments and environment entries. It logs every value with the rule it
 //! came from: the lines on Wine's stderr that start with `compatdb:`, which
-//! [docs/compatdb.md](https://github.com/athei/wine-build/blob/main/docs/compatdb.md#logging-and-verification)
+//! [docs/compatdb.md](https://github.com/athei/mach9/blob/main/docs/compatdb.md#logging-and-verification)
 //! describes, show a launcher author what a process got and why.
 //!
 //! This crate is the only place that knows the rules and their format. A
@@ -186,7 +186,7 @@
 //! reads back from its text as itself, and canonical text writes back byte
 //! for byte.
 //!
-//! [round-trip suite]: https://github.com/athei/wine-build/blob/main/compatdb/core/tests/roundtrip.rs
+//! [round-trip suite]: https://github.com/athei/mach9/blob/main/compatdb/core/tests/roundtrip.rs
 //!
 //! ```
 //! use compatdb_core::Table;
@@ -463,7 +463,7 @@
 /// of [`Key::docs_url`] and [`DocSection::url`] from it.
 macro_rules! docs_url {
     () => {
-        "https://athei.github.io/wine-build/compatdb_core/"
+        "https://docs.mach9.app/compatdb_core/"
     };
 }
 

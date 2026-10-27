@@ -115,8 +115,12 @@ x86_64 Wine this repository built before, which runs under Rosetta.
   before publishing the draft.
 - [`docs.yml`](../.github/workflows/docs.yml) publishes the rustdoc of
   `compatdb-core` to
-  [GitHub Pages](https://athei.github.io/wine-build/compatdb_core/); its
+  [GitHub Pages](https://docs.mach9.app/compatdb_core/); its
   header says when it runs and what Pages needs.
+- The site uses the custom domain `docs.mach9.app`. It needs a CNAME
+  record `docs` -> `athei.github.io` in the DNS of `mach9.app` (DNS only,
+  not proxied) and the domain set as the custom domain in the
+  repository's Pages settings.
 
 ### Homebrew formulae
 
@@ -232,9 +236,9 @@ setting; the bundle step checks the `force_nx` and `opengl` hooks
 - The loader checks for its entitlement and re-execs itself with 4K pages
   ([loader app](internals.md#loader-app)).
 
-[gcmouse]: https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.gcmouse
-[force_nx]: https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.force_nx
-[opengl]: https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.opengl
+[gcmouse]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.gcmouse
+[force_nx]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.force_nx
+[opengl]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.opengl
 
 ## Upgrade checklist
 

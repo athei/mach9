@@ -46,7 +46,7 @@ Other defaults that differ from Wine, besides the built-in rules
 ## Using it from a launcher
 
 - Get a bundle from the `arm64-*`
-  [releases](https://github.com/athei/wine-build/releases)
+  [releases](https://github.com/athei/mach9/releases)
   ([releases](docs/maintenance.md#releases)) or a local build
   ([building](docs/building.md)).
 - Copy the `wine/` tree into the app
@@ -64,7 +64,7 @@ used at the same release as the bundle:
 
 ```toml
 [dependencies]
-compatdb-core = { git = "https://github.com/athei/wine-build", tag = "<the bundle's arm64-* tag>" }
+compatdb-core = { git = "https://github.com/athei/mach9", tag = "<the bundle's arm64-* tag>" }
 ```
 
 - The [crate documentation][spec] is the spec; it has only a Rust API.
@@ -94,11 +94,11 @@ Variables the bundle reads besides `WINE_COMPATDB`:
   rules.
 - [docs/maintenance.md](docs/maintenance.md): maintaining the build.
 
-[spec]: https://athei.github.io/wine-build/compatdb_core/
-[format]: https://athei.github.io/wine-build/compatdb_core/#format
-[recipes]: https://athei.github.io/wine-build/compatdb_core/#recipes
-[quick-start]: https://athei.github.io/wine-build/compatdb_core/#quick-start
-[launcher]: https://athei.github.io/wine-build/compatdb_core/#launcher-responsibilities
-[defaults]: https://athei.github.io/wine-build/compatdb_core/builtin/fn.defaults.html
-[x87]: https://athei.github.io/wine-build/compatdb_core/builtin/fn.fex_reduced_x87_precision.html
-[wined3d]: https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.wined3d
+[spec]: https://docs.mach9.app/compatdb_core/
+[format]: https://docs.mach9.app/compatdb_core/#format
+[recipes]: https://docs.mach9.app/compatdb_core/#recipes
+[quick-start]: https://docs.mach9.app/compatdb_core/#quick-start
+[launcher]: https://docs.mach9.app/compatdb_core/#launcher-responsibilities
+[defaults]: https://docs.mach9.app/compatdb_core/builtin/fn.defaults.html
+[x87]: https://docs.mach9.app/compatdb_core/builtin/fn.fex_reduced_x87_precision.html
+[wined3d]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.wined3d

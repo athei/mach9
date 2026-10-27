@@ -46,7 +46,7 @@ Everything lives beside this repository, in the directory that holds it
 
 | Path | What it is |
 |------|------------|
-| `scripts/` | The checkout of this repository, [wine-build](https://github.com/athei/wine-build), named `scripts` locally |
+| `scripts/` | The checkout of this repository, [mach9](https://github.com/athei/mach9), named `scripts` locally |
 | `src/` | The Wine source, a checkout of athei/wine |
 | `src-fex/` | The FEX checkout |
 | `src-mesa/` | The Mesa checkout, for the Vulkan driver |

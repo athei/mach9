@@ -14,9 +14,9 @@ script's header says what it builds and stages.
   and adds i386 for WoW64.
 - FEX is our fork ([FEX](#fex)). Built-in compatdb rules keep no-execute
   on in 32-bit processes
-  ([`builtin::force_nx`](https://athei.github.io/wine-build/compatdb_core/builtin/fn.force_nx.html))
+  ([`builtin::force_nx`](https://docs.mach9.app/compatdb_core/builtin/fn.force_nx.html))
   and turn on FEX's reduced x87 precision
-  ([`builtin::fex_reduced_x87_precision`](https://athei.github.io/wine-build/compatdb_core/builtin/fn.fex_reduced_x87_precision.html)).
+  ([`builtin::fex_reduced_x87_precision`](https://docs.mach9.app/compatdb_core/builtin/fn.fex_reduced_x87_precision.html)).
 - Direct3D comes from [DXMT](#dxmt), [vkd3d-proton](#vkd3d-proton) and
   [mtld3d](#mtld3d), in the trees `DXGI_IMPLS` and `D3D9_IMPLS` name.
   Their 64-bit DLLs are ARM64X: an x64 game loads the ARM64EC half, so
@@ -218,7 +218,7 @@ WINEPREFIX=/tmp/gfx-prefix dist/wine/bin/wine \
 
 The test picks its Direct3D tree through compatdb as a game does, so a
 `WINE_COMPATDB` rule for `d3d9_test.exe` puts it on another tree
-([recipes](https://athei.github.io/wine-build/compatdb_core/#recipes)).
+([recipes](https://docs.mach9.app/compatdb_core/#recipes)).
 It prints a summary line per part and exits with the number of failed
 checks, at most 255.
 
@@ -306,7 +306,7 @@ can, per game.
   lower feature level on Apple's OpenGL. Its Vulkan renderer is not the
   default because it still crashes in many of Wine's conformance tests and
   does not fall back to OpenGL. A compatdb rule turns it on for one game
-  ([`Rule::wined3d`](https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.wined3d)).
+  ([`Rule::wined3d`](https://docs.mach9.app/compatdb_core/struct.Rule.html#method.wined3d)).
 - DXVK is not covered. A program that wants Vulkan itself gets it.
 
 ## OpenGL
@@ -325,7 +325,7 @@ core and 2.1 compatibility.
 - Zink reports OpenGL above 2.1 only with transform feedback, which our
   KosmicKrisp always advertises.
 - The Mac driver takes the choice from compatdb's `opengl` setting
-  ([`Rule::opengl`](https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.opengl)).
+  ([`Rule::opengl`](https://docs.mach9.app/compatdb_core/struct.Rule.html#method.opengl)).
 - With `egl` it does not fall back: where EGL does not start, as on a Mac
   without a GPU of the Metal 4 family, it logs a `winediag` message and
   the process gets no OpenGL.
