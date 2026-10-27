@@ -1,9 +1,9 @@
-# wine-build
+# Mach9
 
-A relocatable, signed Wine for Apple Silicon Macs, made to be embedded in a
-launcher. The launcher configures it through one environment variable,
-`WINE_COMPATDB`, with rules that match processes, so each game gets the
-Direct3D implementation
+A relocatable, signed Wine for Apple Silicon Macs, focused on Direct3D 9
+games and made to be embedded in a launcher. The launcher configures it
+through one environment variable, `WINE_COMPATDB`, with rules that match
+processes, so each game gets the Direct3D implementation
 ([backends](docs/compatdb.md#direct3d-backends)) and the settings it
 needs. The API that writes the rules is [published][spec], so a launcher
 generates them in code.
