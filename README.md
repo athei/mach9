@@ -1,42 +1,76 @@
 # wine-build
 
-A relocatable, signed Wine for macOS on Apple Silicon, made to be embedded
-in a launcher, and [`compatdb-core`](compatdb/core), the Rust crate that
-writes its per-program configuration. What it is built from:
-[how the build works](docs/internals.md).
+A relocatable, signed Wine for Apple Silicon Macs, made to be embedded in a
+launcher. The launcher configures it through one environment variable,
+`WINE_COMPATDB`, with rules that match processes, so each game gets the
+Direct3D implementation
+([backends](docs/compatdb.md#direct3d-backends)) and the settings it
+needs. The API that writes the rules is [published][spec], so a launcher
+generates them in code.
+
+For example, a launcher that wants one game's D3D9 on wined3d sets:
+
+```bash
+export WINE_COMPATDB='exe=game.exe;d3d9=wined3d'
+```
+
+`game.exe` then gets the wined3d D3D9 tree while every other process keeps
+mtld3d; the [format][format] and the [recipes][recipes] show the rest.
+
+- Wine is built for arm64 and runs without Rosetta.
+  [FEX](docs/internals.md#fex) runs the x86 code of Windows programs.
+- It is aimed at old games. D3D9 runs on
+  [mtld3d](docs/internals.md#mtld3d), a D3D9 on Metal, and x87 code runs
+  fast because FEX's reduced x87 precision is on by default
+  ([`builtin::fex_reduced_x87_precision`][x87]).
+- Modern games run too: D3D10 and D3D11 on
+  [DXMT](docs/internals.md#dxmt), D3D12 on
+  [vkd3d-proton](docs/internals.md#vkd3d-proton). x64 programs run as
+  ARM64EC: Wine and the graphics stack are ARM64X and run natively, and
+  only the game's own code is emulated. FEX runs that code without AFP,
+  which costs more at every switch between x86 and native code than it
+  saves, so x64 code runs faster than on upstream FEX
+  ([FEX](docs/internals.md#fex)).
+
+Other defaults that differ from Wine, besides the built-in rules
+([`builtin::defaults`][defaults]):
+
+- msync ([runtime](docs/internals.md#runtime))
+- the hardware x86 memory ordering ([FEX](docs/internals.md#fex))
+- the bundled Vulkan driver with its features always on
+  ([Vulkan](docs/internals.md#vulkan))
+- D3D12 frame latency handles released when the GPU is done
+  ([vkd3d-proton](docs/internals.md#vkd3d-proton))
 
 ## Using it from a launcher
 
 - Get a bundle from the `arm64-*`
   [releases](https://github.com/athei/wine-build/releases)
-  ([releases](docs/maintenance.md#releases)), or from a local build
-  ([building](docs/building.md)). The `cx-*` releases are the frozen
-  x86_64 Wine this repository built before, run under Rosetta.
+  ([releases](docs/maintenance.md#releases)) or a local build
+  ([building](docs/building.md)).
 - Copy the `wine/` tree into the app
   ([bundle layout](docs/building.md#bundle-layout)).
-- Signing an app that embeds the bundle:
-  [loader app](docs/internals.md#loader-app).
-- The minimum macOS: [macOS floors](docs/maintenance.md#macos-floors).
+- Sign the app without touching `wine.app`
+  ([loader app](docs/internals.md#loader-app)).
+- Minimum macOS: [macOS floors](docs/maintenance.md#macos-floors).
 - Prefixes after an upgrade:
   [upgrade checklist](docs/maintenance.md#upgrade-checklist).
 
 ## Per-program configuration
 
-A launcher passes per-program rules to the bundle's `compatdb.so` in
-`WINE_COMPATDB`, written with the `compatdb-core` crate. The crate and
-the bundle are used at the same release:
+The rules in `WINE_COMPATDB` are written with the `compatdb-core` crate,
+used at the same release as the bundle:
 
 ```toml
 [dependencies]
 compatdb-core = { git = "https://github.com/athei/wine-build", tag = "<the bundle's arm64-* tag>" }
 ```
 
-The [crate documentation][spec] is the spec. A complete example is in
-the [Quick start][quick-start]. What a launcher must do is in
-[launcher responsibilities][launcher]; each process logs its
-configuration ([logging](docs/compatdb.md#logging-and-verification)).
-
-The crate has only a Rust API.
+- The [crate documentation][spec] is the spec; it has only a Rust API.
+- A complete example: [Quick start][quick-start].
+- What a launcher must do: [launcher responsibilities][launcher].
+- Each process logs its configuration
+  ([logging](docs/compatdb.md#logging-and-verification)).
 
 ## Environment variables
 
@@ -51,18 +85,6 @@ Variables the bundle reads besides `WINE_COMPATDB`:
 | `VKD3D_CONFIG`, `VKD3D_DEBUG` and vkd3d-proton's other variables | [upstream](https://github.com/HansKristian-Work/vkd3d-proton#readme) |
 | `WINE_D3D_CONFIG` | [`Rule::wined3d`][wined3d] |
 
-## Defaults that differ from Wine
-
-[`builtin::defaults`][defaults] lists the built-in rules for every
-process. The defaults that are not compatdb rules:
-
-- msync: [runtime](docs/internals.md#runtime)
-- the hardware x86 memory ordering, and no AFP in x86_64 programs:
-  [FEX](docs/internals.md#fex)
-- KosmicKrisp's features, and the bundled Vulkan driver:
-  [Vulkan](docs/internals.md#vulkan)
-- D3D12 frame latency handles: [vkd3d-proton](docs/internals.md#vkd3d-proton)
-
 ## Building
 
 - [docs/building.md](docs/building.md): building the bundle locally.
@@ -72,7 +94,10 @@ process. The defaults that are not compatdb rules:
 - [docs/maintenance.md](docs/maintenance.md): maintaining the build.
 
 [spec]: https://athei.github.io/wine-build/compatdb_core/
+[format]: https://athei.github.io/wine-build/compatdb_core/#format
+[recipes]: https://athei.github.io/wine-build/compatdb_core/#recipes
 [quick-start]: https://athei.github.io/wine-build/compatdb_core/#quick-start
 [launcher]: https://athei.github.io/wine-build/compatdb_core/#launcher-responsibilities
 [defaults]: https://athei.github.io/wine-build/compatdb_core/builtin/fn.defaults.html
+[x87]: https://athei.github.io/wine-build/compatdb_core/builtin/fn.fex_reduced_x87_precision.html
 [wined3d]: https://athei.github.io/wine-build/compatdb_core/struct.Rule.html#method.wined3d

@@ -150,7 +150,8 @@ An `arm64-<Wine version>-<n>` tag makes
 [`release.yml`](../.github/workflows/release.yml) build the bundle and
 attach it and its symbols to a draft release of the tag. Its steps call the
 build and bundle scripts and the scripts in [`bin/ci/`](../bin/ci), each of
-which says in its header what it does.
+which says in its header what it does. The `cx-*` releases are the frozen
+x86_64 Wine this repository built before, which runs under Rosetta.
 
 - `release.yml` builds on a hosted runner of the floor's major macOS
   version, from the branch of athei/wine that
