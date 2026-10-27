@@ -1,0 +1,94 @@
+# Launcher config: the defaults every game starts from.
+#
+# This file, the games, the log and the wine prefix all live in
+# ~/Library/Application Support/<CFBundleIdentifier>/ so that nothing is ever
+# written inside the app bundle, and so an update that replaces the bundle
+# leaves every one of them alone.
+#
+# Each game is a file of its own under games/, for example games/MyGame.toml,
+# and the one-line file `game` next to this one names the game the next launch
+# starts. Right-click the app's Dock icon to start a game, to add one, or to
+# run an executable once; the menu is there while the app is pinned to the
+# Dock and not running. The executable belongs in the game file, never here:
+# this file only holds what every game shares. A game file may repeat any
+# option below to override it. Single values are replaced, lists are merged
+# with the game's entries after these, and a table such as [env] or [process]
+# is merged key by key.
+#
+# Every setting below can be set here, for the whole launch, or in one of the
+# process rules at the bottom, for a single process. That is the only
+# distinction: there is no separate language for per-process tweaks. The
+# exceptions are retina_mode and dpi, which wine reads prefix-wide by design.
+#
+# A key the launcher does not know, a value of the wrong type, or a setting
+# that has since been renamed stops the launch with an error that names this
+# file and the key, so nothing written here is quietly left out.
+#
+# Each of the launcher's own options is shown with the value the launcher uses
+# when the line stays commented out. The other options are keys of the rules
+# of the wine bundle's compatdb.so, each shown with an example value and a link
+# to its documentation, which says what a process gets without it. The
+# launcher tops this file up with options it learns about later, reading the
+# layout below: one option per block, blocks separated by blank lines, each
+# block holding its comments plus a single assignment.
+#
+# For one launch, command-line overrides take precedence over the files:
+#   gamelauncher --config "game=MyGame;retina_mode=false"
+#@ keys
+# Values are split like a shell command line, so one holding a space or a
+# semicolon is quoted:
+#   gamelauncher --config 'arguments="-console" "two words"'
+# Repeat --config to provide more assignments; later values win. These
+# overrides are never written back.
+
+# Arguments passed to every game's executable, one string each, exactly as
+# written, ahead of the game file's own, for example ["-console"]. To pass
+# arguments to some other process in the tree, give it a process rule with an
+# `arguments` list of its own.
+# arguments = []
+
+# Wine Mac Driver retina mode: true renders at the display's native HiDPI
+# resolution, false at 1x. "auto" turns it on when the main display is HiDPI
+# (a built-in Retina panel) and off on a 1x display such as most external
+# monitors. Applied to the prefix registry on every launch. Like dpi below, it
+# cannot be aimed at a single process: winemac.drv reads it from the
+# prefix-wide key on purpose, so that every process in the prefix agrees on
+# the display modes.
+# retina_mode = "auto"
+
+# The Windows system DPI, which sets the size of Windows UI and text. "auto"
+# follows retina mode: with it on Windows sees two pixels per macOS point, so
+# auto picks 192 to draw Windows UI at the size of macOS UI, and with it off
+# 96. "off" or 0 means 96, no scaling. A number from 48 to 480, such as 144,
+# pins the DPI whatever the retina mode. Prefix-wide like retina_mode, and a
+# change restarts the running wine session.
+# dpi = "auto"
+
+#@ settings
+
+# Environment overrides for the whole launch, applied after the launcher's own
+# variables, WINEPREFIX and WINEMSYNC, so these win. A variable that a key of
+# the rules replaced is refused, in any case:
+#@ doc LauncherResponsibilities
+# [env]
+#@ env
+
+# A per-process rule: the same settings as above, applied to one process
+# instead of the whole launch. Use it when the executable that needs a tweak is
+# not the one you launch, which is the usual case for a game that comes with a
+# launcher or an embedded browser.
+#
+# The block's name is the launcher's and nothing else: it is what a game file
+# names to extend the rule, or to leave it out with `enabled = false`, and
+# what the launcher's log prints. {exe} is what it matches and is required; a
+# block without one matches no process and is left out with a warning. Since
+# file names like Tool.exe are not unique, add a version-resource
+# fingerprint to pin the rule to one program; two rules may name the same
+# executable with different fingerprints. How a rule matches:
+#@ doc Matching
+# How it combines with the other rules, the wine bundle's built-in rules
+# included:
+#@ doc Folding
+# compatdb.so's log names the source of every value each process gets.
+# [process."my-rule"]
+#@ rule

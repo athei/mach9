@@ -1,0 +1,50 @@
+# One game. The file's name is the game's name: games/MyGame.toml is "MyGame"
+# in the Dock menu, and writing MyGame into the `game` file next to
+# gamelauncher.toml makes it the game the next launch starts.
+#
+# Every option here overrides the same option in gamelauncher.toml, which holds
+# the defaults shared by all games and documents each of them. Only
+# `executable` is required. Each option is shown as in gamelauncher.toml, with
+# a link for a key of the rules; the launcher tops this file up with options
+# it learns about later, one option per block. Anything here the launcher
+# cannot use stops the launch with an error that names this file.
+
+# The Windows executable to launch. The path must be absolute, a leading ~/ is
+# expanded, and the directory holding the executable is the game directory,
+# which wine runs in. Leave this unset, or point it at a file that no longer
+# exists, and the launcher asks for the executable with a file picker and
+# writes the answer back here. Required, so this is an example rather than a
+# default.
+# executable = "~/Games/MyGame/Game.exe"
+
+# Arguments passed to the executable, one string each, exactly as written, for
+# example ["-console"]. To pass arguments to some other process in the tree,
+# give it a process rule with an `arguments` list of its own.
+# arguments = []
+
+# Wine Mac Driver retina mode: "auto" is on when the main display is HiDPI,
+# true forces it on, false renders at 1x. Prefix-wide, so unlike the rest it
+# cannot be set per process.
+# retina_mode = "auto"
+
+# The Windows system DPI: "auto" picks 192 with retina mode on and 96 with it
+# off, so Windows UI comes out the size of macOS UI; "off" or 0 means 96; a
+# number from 48 to 480 pins it. Prefix-wide like retina_mode.
+# dpi = "auto"
+
+#@ settings
+
+# Environment overrides for this game, merged key by key over the [env] table
+# of gamelauncher.toml. A variable that a key of the rules replaced is
+# refused, in any case.
+# [env]
+#@ env
+
+# A rule for one process of this game, holding the same settings as above.
+# A block whose name matches a rule in gamelauncher.toml extends it, so it
+# needs only the fields it changes, and `enabled = false` leaves that rule out
+# for this game. A new rule needs {exe}, plus a version fingerprint to pin a
+# common file name to one program; a block without {exe} matches nothing and
+# is left out.
+# [process."my-rule"]
+#@ rule

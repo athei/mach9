@@ -1,0 +1,19 @@
+[package]
+name = "gamelauncher-docktile"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+name = "docktile"
+crate-type = ["cdylib"]
+
+[dependencies]
+gamelauncher-core = { workspace = true }
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = ["std", "NSDockTile", "NSMenu", "NSMenuItem", "NSCell", "NSWorkspace", "NSRunningApplication", "block2"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSBundle", "NSEnumerator", "NSString", "NSURL"] }
+
+[lints]
+workspace = true

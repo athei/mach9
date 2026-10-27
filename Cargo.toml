@@ -1,9 +1,16 @@
 # Every Rust crate of the repository: compatdb.so (compatdb), the rule
-# table it is built on (compatdb/core). A plain cargo command here acts on
-# all of them.
+# table it is built on (compatdb/core), and Mach9.app's launcher
+# (launcher/app), its Dock tile plug-in (launcher/docktile) and the code
+# both share (launcher/core). A plain cargo command here acts on all of them.
 [workspace]
 resolver = "3"
-members = ["compatdb", "compatdb/core"]
+members = [
+    "compatdb",
+    "compatdb/core",
+    "launcher/app",
+    "launcher/core",
+    "launcher/docktile",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,7 +20,12 @@ license = "Zlib"
 
 [workspace.dependencies]
 compatdb-core = { path = "compatdb/core" }
+gamelauncher-core = { path = "launcher/core" }
 libc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false }
+objc2-foundation = { version = "0.3", default-features = false }
+plist = { version = "1.9", default-features = false, features = ["serde"] }
 
 [workspace.lints.clippy]
 nursery = { level = "deny", priority = -1 }

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>gamelauncher</string>
+	<key>CFBundleIconFile</key>
+	<string>mach9</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.mach9</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Mach9</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- The release version. Apple splits it into a marketing version
+	     (CFBundleShortVersionString) and a build number (CFBundleVersion),
+	     and Sparkle compares the build number; the two are kept equal. Both
+	     are bumped and committed before each release, by editing these lines,
+	     since PlistBuddy would drop this comment. The release build reads the
+	     version from here, and a local build carries the committed one. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.1.0</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<!-- Game Mode. macOS turns it on for an app in the games category while
+	     the app is fullscreen and frontmost. LSSupportsGameMode declares the
+	     app eligible, and GCSupportsGameMode does the same for the Game
+	     Controller side, which raises the polling rate of Bluetooth
+	     controllers. -->
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.games</string>
+	<key>LSSupportsGameMode</key>
+	<true/>
+	<key>GCSupportsGameMode</key>
+	<true/>
+	<!-- The bundled arm64 wine's own floor. Matches
+	     MACOSX_DEPLOYMENT_TARGET in .cargo/config.toml and the Dock tile
+	     plug-in's Info.plist. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>26.4</string>
+	<key>NSDockTilePlugIn</key>
+	<string>GameLauncherDockTile.docktileplugin</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Uses the microphone for in-game voice features.</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<!-- Sparkle. SUFeedURL can never change: every copy ever shipped polls
+	     this exact URL forever, so it points at a host we control rather than
+	     wherever the archives happen to live. SUPublicEDKey is the public half
+	     of Sparkle's EdDSA signing key; the private half is kept outside the
+	     repository. PlistBuddy strips these comments, so edit this file by
+	     hand. -->
+	<key>SUFeedURL</key>
+	<string>https://updates.mach9.app/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>I3lqkTv6m+kA6p2XlMNfNItk32X19llHw9qFJc+3DX8=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+</dict>
+</plist>
