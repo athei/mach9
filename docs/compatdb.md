@@ -89,7 +89,7 @@ To confirm a tree took effect, look at the running process's mapped files,
 for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
 `lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.
 
-[spec]: https://docs.mach9.app/compatdb_core/
+[spec]: https://docs.mach9.app
 [format]: https://docs.mach9.app/compatdb_core/#format
 [parsing]: https://docs.mach9.app/compatdb_core/#strict-and-lenient-parsing
 [recipes]: https://docs.mach9.app/compatdb_core/#recipes

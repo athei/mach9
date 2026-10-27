@@ -94,7 +94,7 @@ Variables the bundle reads besides `WINE_COMPATDB`:
   rules.
 - [docs/maintenance.md](docs/maintenance.md): maintaining the build.
 
-[spec]: https://docs.mach9.app/compatdb_core/
+[spec]: https://docs.mach9.app
 [format]: https://docs.mach9.app/compatdb_core/#format
 [recipes]: https://docs.mach9.app/compatdb_core/#recipes
 [quick-start]: https://docs.mach9.app/compatdb_core/#quick-start

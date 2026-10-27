@@ -114,9 +114,9 @@ x86_64 Wine this repository built before, which runs under Rosetta.
   (`package.sh`). Add the changes by hand below them, as short bullets,
   before publishing the draft.
 - [`docs.yml`](../.github/workflows/docs.yml) publishes the rustdoc of
-  `compatdb-core` to
-  [GitHub Pages](https://docs.mach9.app/compatdb_core/); its
-  header says when it runs and what Pages needs.
+  `compatdb-core` to [GitHub Pages](https://docs.mach9.app), whose
+  root redirects to the crate's page; its header says when it runs and
+  what Pages needs.
 - The site uses the custom domain `docs.mach9.app`. It needs a CNAME
   record `docs` -> `athei.github.io` in the DNS of `mach9.app` (DNS only,
   not proxied) and the domain set as the custom domain in the

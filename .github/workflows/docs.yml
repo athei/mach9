@@ -2,8 +2,8 @@ name: Docs
 
 # Checks the compatdb crates and publishes the rustdoc of compatdb-core,
 # which is the spec of WINE_COMPATDB, to GitHub Pages. It is served at
-# https://docs.mach9.app/compatdb_core/ (the repository's Pages custom
-# domain).
+# https://docs.mach9.app (the repository's Pages custom domain), whose
+# root redirects to the crate's page.
 #
 # Pages must be set to "GitHub Actions" as its source in the repository
 # settings (Settings, Pages, Build and deployment), or the deploy job
