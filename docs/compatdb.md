@@ -57,58 +57,37 @@
 
 ## Logging and verification
 
-The library writes to Wine's stderr; every line starts with `compatdb:`.
+The library writes to Wine's stderr, once in every process at load, a
+block that is the whole configuration of the process. Every line starts
+with `compatdb:`.
 
-- Once in every process at load it writes a block starting
-  `compatdb: <exe> [<arch>]`, with the image name, arch and version
-  fingerprint. The block is the whole configuration of the process: every
-  setting gets a line with its value and its source, or, where no rule set
-  it, `unset (upstream: ...)` with what upstream Wine does instead, followed
-  by `reset by <source>` when the last rule for it set it to `default`.
-  Those descriptions are [`Key::upstream`][upstream].
-- The arch is `x86_64 (arm64ec)` for an x86_64 program, which runs in an
-  ARM64EC process, and `aarch64` for a native ARM64 program. The main
-  image's machine type tells them apart; a wow64 process is i386.
-- A source is `built-in` for a built-in rule that matches every process,
+- Each setting gets a line with its value and its source. Where no rule
+  set it, the line says `unset (upstream: ...)` with what upstream Wine
+  does instead ([`Key::upstream`][upstream]), followed by
+  `reset by <source>` when the last rule for it set it to `default`.
+- A source is `built-in` for a built-in rule for every process,
   `built-in for <exe> (<fingerprint values>)` for a built-in rule for one
-  program, with the values it pins, and `WINE_COMPATDB line <n>` for a
-  rule from that variable ([format][format]).
-- After the first line come:
-  - a `warning: WINE_COMPATDB line <n>: ...` line for each field or line
-    of `WINE_COMPATDB` it ignored ([parsing][parsing]);
-  - the trees it prepended (`dxgi = <impl> (from <path>), <source>`,
-    `d3d9 = ...`); a family no rule chose gets `wined3d`;
-  - the wined3d renderer: `wined3d = <renderer>, <source>` when a rule set
-    it, whose `WINE_D3D_CONFIG` the `env` lines show; otherwise the
-    renderer a `WINE_D3D_CONFIG` the process has asks for, from a rule's
-    `env` or inherited, as the line says, or unset, where wined3d's
-    registry settings or its default decide;
-  - `metal_hud = <value>, <source>`, whose variables the `env` lines show;
-  - `dll_overrides` and `arguments`, each entry with its source, and for an
-    argument whether it was appended or already present;
-  - `debug_channels`, each entry with its source, which the library only
-    logs;
-  - one `dll_overrides <module>=default, <source>: ...` line for each
-    module an entry with the order `default` names, with the sources of
-    the overrides it removed, or saying there was none to remove;
-  - one `arguments_override, <source>: dropped ...` line for each
-    `arguments_override` that dropped arguments, naming each with its
-    source;
-  - `dpi_aware`, `large_address_aware`, `gcmouse`, `force_nx` and
-    `opengl` (`large_address_aware` and `force_nx` noting that they have no
-    effect in a 64-bit process);
-  - one `env NAME=value, <source>: ...` line per entry, saying whether it
-    was set, removed (naming the source of the earlier entry whose value it
-    undoes, or saying the variable was not set, so there was nothing to
-    remove), left alone because the process had the variable, with the
-    value it kept ([`Rule::env`][env]), or replaced by a later entry for
-    the same variable, whose source it names, so the last entry that
-    applies is the value the process ends up with.
-- A line also says when ntdll lacks the hook a setting needs, and the
-  setting is ignored.
-- To confirm a tree took effect, look at the running process's mapped files,
-  for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
-  `lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.
+  program, and `WINE_COMPATDB line <n>` for a rule from that variable
+  ([format][format]).
+
+| Line | What it shows |
+|------|---------------|
+| `<exe> [<arch>]` | The image name, arch and version fingerprint. The arch is `x86_64 (arm64ec)` for an x86_64 program, `aarch64` for a native ARM64 one and `i386` for a wow64 one |
+| `warning: WINE_COMPATDB line <n>: ...` | A field or line of `WINE_COMPATDB` it ignored ([parsing][parsing]) |
+| `dxgi = <impl> (from <path>), <source>`, `d3d9 = ...` | The trees it prepended; a family no rule chose gets `wined3d` |
+| `wined3d = ...` | The wined3d renderer a rule set, or the one a `WINE_D3D_CONFIG` from a rule's `env` or inherited asks for; unset, wined3d's registry settings or its default decide |
+| `metal_hud = <value>, <source>` | The HUD setting; its variables are in the `env` lines |
+| `dll_overrides`, `arguments` | Each entry with its source; for an argument, whether it was appended or already present |
+| `debug_channels` | Each entry with its source; only logged |
+| `dll_overrides <module>=default, <source>: ...` | The overrides an entry with the order `default` removed, or that there was none |
+| `arguments_override, <source>: dropped ...` | The arguments it dropped, each with its source |
+| `dpi_aware`, `large_address_aware`, `gcmouse`, `force_nx`, `opengl` | The value; `large_address_aware` and `force_nx` note that they do nothing in a 64-bit process |
+| `env NAME=value, <source>: ...` | Whether the entry was set, removed, left alone because the process had the variable ([`Rule::env`][env]), or replaced by a later entry, with the sources involved |
+| `<setting> = <value>, <source>: ntdll lacks <hook>, ignored` | ntdll lacks the hook; the setting is ignored |
+
+To confirm a tree took effect, look at the running process's mapped files,
+for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
+`lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.
 
 [spec]: https://athei.github.io/wine-build/compatdb_core/
 [format]: https://athei.github.io/wine-build/compatdb_core/#format
