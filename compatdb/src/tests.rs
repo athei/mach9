@@ -1,4 +1,4 @@
-use compatdb_core::{Argument, D3d9, DllOverride, Dxgi, EnvName};
+use compatdb_core::{Argument, D3d9, DllOverride, Dxgi, ENV_VAR, EnvName, FILE_ENV_VAR};
 
 use super::*;
 

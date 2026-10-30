@@ -15,12 +15,9 @@
   through ntdll's hooks
   ([Wine-side contract](maintenance.md#wine-side-contract)).
 - The caller's rules are the file `WINE_COMPATDB_FILE` names or, without
-  that variable, the value of `WINE_COMPATDB`. The file is read at each
-  process start, so a process started later in a running tree gets a
-  changed file, while a running process keeps the rules it read. The
-  [format][format] has what the file must be and what happens when it
-  cannot be read; [launcher responsibilities][launcher] has how to write
-  it. The reader is [`rules_file.rs`](../compatdb/src/rules_file.rs).
+  that variable, the value of `WINE_COMPATDB`
+  ([format][format], [launcher responsibilities][launcher],
+  [`rules_file.rs`](../compatdb/src/rules_file.rs)).
 
 ## Direct3D backends
 

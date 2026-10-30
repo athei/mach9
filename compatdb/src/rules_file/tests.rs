@@ -1,5 +1,7 @@
 use std::{env, path::PathBuf, process::Command, sync::mpsc, thread, time::Duration};
 
+use compatdb_core::{Dxgi, Origin, Scalar, VersionInfo};
+
 use super::*;
 
 /// What a test returns, so a missing value fails it through `?` rather
@@ -40,8 +42,19 @@ impl Drop for Scratch {
     }
 }
 
+fn variables(file: Option<&str>, inline: Option<&str>) -> Variables {
+    Variables {
+        file: file.map(str::to_owned),
+        inline: inline.map(str::to_owned),
+    }
+}
+
 fn path_line(path: &str) -> String {
     format!("  WINE_COMPATDB_FILE = {path}")
+}
+
+fn replaces_line() -> String {
+    String::from("  warning: WINE_COMPATDB_FILE replaces WINE_COMPATDB, which is ignored")
 }
 
 fn not_read(reason: &str) -> String {
@@ -54,31 +67,37 @@ fn reads_rule() -> impl FnOnce(&str) -> io::Result<String> {
 }
 
 #[test]
+fn each_variable_is_read_by_its_own_name() {
+    let variables = Variables::read_with(|name| Some(name.to_owned()));
+    assert_eq!(variables.file.as_deref(), Some("WINE_COMPATDB_FILE"));
+    assert_eq!(variables.inline.as_deref(), Some("WINE_COMPATDB"));
+}
+
+#[test]
 fn without_either_variable_there_are_no_rules_and_nothing_to_log() {
-    let chosen = choose(None, None, reads_rule());
+    let chosen = choose(variables(None, None), reads_rule());
     assert_eq!(chosen.text, None);
     assert_eq!(chosen.lines, NO_LINES);
 }
 
 #[test]
 fn the_variable_alone_is_the_source_and_logs_nothing() {
-    let chosen = choose(None, Some(String::from("exe=a.exe")), reads_rule());
+    let chosen = choose(variables(None, Some("exe=a.exe")), reads_rule());
     assert_eq!(chosen.text.as_deref(), Some("exe=a.exe"));
     assert_eq!(chosen.lines, NO_LINES);
 }
 
 #[test]
 fn an_empty_variable_counts_as_unset() {
-    let empty = || Some(String::new());
     // An empty path reads nothing, so the other variable is the source.
-    let chosen = choose(empty(), Some(String::from("exe=a.exe")), reads_rule());
+    let chosen = choose(variables(Some(""), Some("exe=a.exe")), reads_rule());
     assert_eq!(chosen.text.as_deref(), Some("exe=a.exe"));
     assert_eq!(chosen.lines, NO_LINES);
     // An empty table does not count as set beside a file, so no warning.
-    let chosen = choose(Some(String::from("/rules")), empty(), reads_rule());
+    let chosen = choose(variables(Some("/rules"), Some("")), reads_rule());
     assert_eq!(chosen.text.as_deref(), Some(RULE));
     assert_eq!(chosen.lines, [path_line("/rules")]);
-    let chosen = choose(empty(), empty(), reads_rule());
+    let chosen = choose(variables(Some(""), Some("")), reads_rule());
     assert_eq!(chosen.text, None);
     assert_eq!(chosen.lines, NO_LINES);
 }
@@ -87,7 +106,7 @@ fn an_empty_variable_counts_as_unset() {
 fn a_file_alone_is_the_source_and_its_path_is_logged() -> TestResult {
     let scratch = Scratch::new("file_alone")?;
     let path = scratch.file("rules", RULE.as_bytes())?;
-    let chosen = choose(Some(path.clone()), None, read);
+    let chosen = choose(variables(Some(&path), None), read);
     assert_eq!(chosen.text.as_deref(), Some(RULE));
     assert_eq!(chosen.lines, [path_line(&path)]);
     Ok(())
@@ -97,23 +116,58 @@ fn a_file_alone_is_the_source_and_its_path_is_logged() -> TestResult {
 fn the_file_wins_over_the_variable_with_a_warning() -> TestResult {
     let scratch = Scratch::new("both_set")?;
     let path = scratch.file("rules", RULE.as_bytes())?;
-    let chosen = choose(Some(path.clone()), Some(String::from("exe=a.exe")), read);
+    let chosen = choose(variables(Some(&path), Some("exe=a.exe")), read);
     assert_eq!(chosen.text.as_deref(), Some(RULE));
+    assert_eq!(chosen.lines, [path_line(&path), replaces_line()]);
+    Ok(())
+}
+
+#[test]
+fn a_bad_key_in_the_file_warns_after_the_path_and_the_rule_keeps_its_label() -> TestResult {
+    let scratch = Scratch::new("bad_key")?;
+    let path = scratch.file("rules", b"exe=Game.exe;bogus=1;dpi_aware=false")?;
+    let (table, lines) = choose(variables(Some(&path), None), read).into_table();
     assert_eq!(
-        chosen.lines,
+        lines,
         [
             path_line(&path),
-            String::from("  warning: WINE_COMPATDB_FILE replaces WINE_COMPATDB, which is ignored"),
+            String::from("  warning: WINE_COMPATDB line 1: ignoring unknown key \"bogus\""),
         ]
     );
+    let game = table.resolve("Game.exe", &VersionInfo::default());
+    assert_eq!(
+        game.scalar(Scalar::DpiAware)
+            .set_by
+            .as_ref()
+            .map(Origin::label)
+            .as_deref(),
+        Some("WINE_COMPATDB line 1")
+    );
+    // The built-in rules stay in front of the file's.
+    assert_eq!(game.dxgi(), Some(Dxgi::Dxmt));
     Ok(())
+}
+
+#[test]
+fn no_chosen_text_is_the_built_in_table_with_the_lines_of_the_choice() {
+    let chosen = choose(variables(Some("rules"), Some("exe=a.exe")), read);
+    let (table, lines) = chosen.into_table();
+    assert_eq!(table, Table::builtin());
+    assert_eq!(
+        lines,
+        [
+            path_line("rules"),
+            replaces_line(),
+            not_read("not an absolute path"),
+        ]
+    );
 }
 
 #[test]
 fn an_empty_file_is_a_table_without_rules_not_a_fallback() -> TestResult {
     let scratch = Scratch::new("empty_file")?;
     let path = scratch.file("rules", b"")?;
-    let chosen = choose(Some(path), Some(String::from("exe=a.exe")), read);
+    let chosen = choose(variables(Some(&path), Some("exe=a.exe")), read);
     assert_eq!(chosen.text.as_deref(), Some(""));
     Ok(())
 }
@@ -122,13 +176,13 @@ fn an_empty_file_is_a_table_without_rules_not_a_fallback() -> TestResult {
 fn a_missing_file_gives_the_built_in_rules_and_no_fallback() -> TestResult {
     let scratch = Scratch::new("missing_file")?;
     let path = scratch.path("rules");
-    let chosen = choose(Some(path.clone()), Some(String::from("exe=a.exe")), read);
+    let chosen = choose(variables(Some(&path), Some("exe=a.exe")), read);
     assert_eq!(chosen.text, None);
     assert_eq!(
         chosen.lines,
         [
             path_line(&path),
-            String::from("  warning: WINE_COMPATDB_FILE replaces WINE_COMPATDB, which is ignored"),
+            replaces_line(),
             not_read("No such file or directory (os error 2)"),
         ]
     );
@@ -137,7 +191,7 @@ fn a_missing_file_gives_the_built_in_rules_and_no_fallback() -> TestResult {
 
 #[test]
 fn a_relative_path_is_refused() {
-    let chosen = choose(Some(String::from("rules")), None, read);
+    let chosen = choose(variables(Some("rules"), None), read);
     assert_eq!(chosen.text, None);
     assert_eq!(
         chosen.lines,
@@ -149,7 +203,7 @@ fn a_relative_path_is_refused() {
 fn a_directory_is_refused() -> TestResult {
     let scratch = Scratch::new("directory")?;
     let path = scratch.path("");
-    let chosen = choose(Some(path.clone()), None, read);
+    let chosen = choose(variables(Some(&path), None), read);
     assert_eq!(chosen.text, None);
     assert_eq!(
         chosen.lines,
@@ -166,8 +220,8 @@ fn a_fifo_is_refused_without_blocking() -> TestResult {
     // On a thread, so a read that blocks fails this test instead of hanging
     // the run.
     let (sender, receiver) = mpsc::channel();
-    let fifo = path.clone();
-    thread::spawn(move || sender.send(choose(Some(fifo), None, read)));
+    let fifo = variables(Some(&path), None);
+    thread::spawn(move || sender.send(choose(fifo, read)));
     let chosen = receiver.recv_timeout(Duration::from_secs(5))?;
     assert_eq!(chosen.text, None);
     assert_eq!(
@@ -185,7 +239,7 @@ fn a_file_over_the_limit_is_refused_and_one_at_the_limit_is_not() -> TestResult 
         .write(true)
         .open(&path)?
         .set_len(MAX_BYTES + 1)?;
-    let chosen = choose(Some(path.clone()), None, read);
+    let chosen = choose(variables(Some(&path), None), read);
     assert_eq!(chosen.text, None);
     assert_eq!(
         chosen.lines,
@@ -198,9 +252,21 @@ fn a_file_over_the_limit_is_refused_and_one_at_the_limit_is_not() -> TestResult 
         .write(true)
         .open(&path)?
         .set_len(MAX_BYTES)?;
-    let chosen = choose(Some(path.clone()), None, read);
+    let chosen = choose(variables(Some(&path), None), read);
     assert!(chosen.text.is_some());
     assert_eq!(chosen.lines, [path_line(&path)]);
+    Ok(())
+}
+
+#[test]
+fn a_file_that_grew_past_the_limit_is_refused_not_cut_off() -> TestResult {
+    // What the read sees of a file that grew after its size was checked.
+    let error = read_capped(io::repeat(b'\n'))
+        .err()
+        .ok_or("read past the limit")?;
+    assert_eq!(error.to_string(), format!("over {MAX_BYTES} bytes"));
+    let at_limit = read_capped(io::repeat(b'\n').take(MAX_BYTES))?;
+    assert_eq!(u64::try_from(at_limit.len())?, MAX_BYTES);
     Ok(())
 }
 

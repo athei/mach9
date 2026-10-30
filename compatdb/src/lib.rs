@@ -7,15 +7,17 @@
 //! emulation and native ARM64 ones.
 //!
 //! It takes the built-in rules of [`compatdb_core::builtin`], which are
-//! compiled in, appends the ones passed in [`ENV_VAR`] or in the file
-//! [`FILE_ENV_VAR`] names, resolves the rules that match this process and
-//! applies them: the D3D9 and DXGI trees, the wined3d renderer, DLL
-//! load-order overrides, the DPI awareness, large address awareness, whether
-//! the Mac driver reads raw mouse input from GameController, the Metal HUD,
-//! and command-line/environment rewrites. It logs a rule's `WINEDEBUG`
-//! channels, which Wine has read already. All the decision logic lives in
-//! [`compatdb_core`]; this crate only moves bytes in and out of the running
-//! process, so its `unsafe` is confined to a thin ntdll shell.
+//! compiled in, appends the ones passed in
+//! [`ENV_VAR`](compatdb_core::ENV_VAR) or in the file
+//! [`FILE_ENV_VAR`](compatdb_core::FILE_ENV_VAR) names, resolves the rules
+//! that match this process and applies them: the D3D9 and DXGI trees, the
+//! wined3d renderer, DLL load-order overrides, the DPI awareness, large
+//! address awareness, whether the Mac driver reads raw mouse input from
+//! GameController, the Metal HUD, and command-line/environment rewrites. It
+//! logs a rule's `WINEDEBUG` channels, which Wine has read already. All the
+//! decision logic lives in [`compatdb_core`]; this crate only moves bytes in
+//! and out of the running process, so its `unsafe` is confined to a thin
+//! ntdll shell.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -36,8 +38,8 @@ use std::{
 };
 
 use compatdb_core::{
-    ArgumentsDropped, DllOverrideReset, ENV_VAR, EnvEntry, EnvStep, FILE_ENV_VAR, Key, Origin,
-    Resolution, Scalar, Table, VersionInfo, Wined3d,
+    ArgumentsDropped, DllOverrideReset, EnvEntry, EnvStep, Key, Origin, Resolution, Scalar, Table,
+    VersionInfo, Wined3d,
     runtime::{
         Arch, append_cmdline_each, basename_of, effective_d3d9, effective_dxgi, env_value,
         wined3d_renderer_in,
@@ -57,14 +59,8 @@ fn load_table() -> (Table, Vec<String>) {
     // The built-in rules are compiled in; only the caller's rules travel in
     // the environment or a file it names (absent unless something set it).
     // They come after the built-in ones, so within a tier they fold later.
-    let chosen = rules_file::choose(read_env(FILE_ENV_VAR), read_env(ENV_VAR), rules_file::read);
-    let mut lines = chosen.lines;
-    let Some(text) = chosen.text else {
-        return (Table::builtin(), lines);
-    };
-    let (rules, diagnostics) = Table::parse_lenient(&text);
-    lines.extend(diagnostics.iter().map(|m| format!("  warning: {m}")));
-    (rules.with_builtin(), lines)
+    let variables = rules_file::Variables::read_with(read_env);
+    rules_file::choose(variables, rules_file::read).into_table()
 }
 
 extern "C" fn run() {

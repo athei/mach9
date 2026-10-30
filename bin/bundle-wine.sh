@@ -650,19 +650,19 @@ check_default_trees() {
 # smoke_test: run the bundled wine through the signed loader and check that
 # native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
-# hang rather than an error. The caller's WINE_COMPATDB and WINE_D3D_CONFIG
-# and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, MESA_*, MTL_*, METAL_* and
-# GST_* variable are dropped so that the built-in rules and the defaults of
-# Wine, FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp, Metal and
-# GStreamer decide; only vkd3d-proton's pipeline cache is moved into the
-# prefix.
+# hang rather than an error. The caller's WINE_COMPATDB, WINE_COMPATDB_FILE
+# and WINE_D3D_CONFIG and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, MESA_*,
+# MTL_*, METAL_* and GST_* variable are dropped so that the built-in rules
+# and the defaults of Wine, FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp,
+# Metal and GStreamer decide; only vkd3d-proton's pipeline cache is moved into
+# the prefix.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
 # checks.
 smoke_test() {
     local version log arch cc exe marker markers var dlls
-    local wine_env=(env -u WINE_COMPATDB -u WINE_D3D_CONFIG)
+    local wine_env=(env -u WINE_COMPATDB -u WINE_COMPATDB_FILE -u WINE_D3D_CONFIG)
     for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|MESA_|MTL_|METAL_|GST_)'); do
         wine_env+=(-u "$var")
     done
@@ -807,6 +807,7 @@ smoke_test() {
     check_tree_loads x86_64 "${wine_env[@]}"
     check_tree_loads i686 "${wine_env[@]}"
     check_tree_loads aarch64 "${wine_env[@]}"
+    check_rules_file "${wine_env[@]}"
     check_wgl_runs "${wine_env[@]}"
     check_vulkan_runs "${wine_env[@]}"
     check_d3d12_runs "${wine_env[@]}"
@@ -814,6 +815,29 @@ smoke_test() {
     check_wmadec_runs "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
+}
+
+# check_rules_file <env-command>...: run cmd.exe in the booted throwaway prefix
+# with a rule in the file WINE_COMPATDB_FILE names, and exit unless compatdb.so
+# reads it without a warning, logs the path and gives the rule the label of a
+# WINE_COMPATDB rule.
+check_rules_file() {
+    local file="$TMP_DIR/compatdb-rules" log="$TMP_DIR/rules-file.log" want
+    time_mark "smoke: rules file"
+    echo "  Reading a rule from WINE_COMPATDB_FILE..."
+    printf 'exe=cmd.exe;gcmouse=false\n' >"$file"
+    run_limited 120 "$log" "$@" WINE_COMPATDB_FILE="$file" "$WINE_DIR/bin/wine" cmd /c exit
+    smoke_check "cmd.exe with a rule from a file" 120 "$log"
+    check_rules_read "cmd.exe with a rule from a file" "$log"
+    for want in "compatdb:   WINE_COMPATDB_FILE = $file" \
+        "compatdb:   gcmouse = false, WINE_COMPATDB line 1"; do
+        if ! grep -qF "$want" "$log"; then
+            echo "Error: compatdb.so did not report '$want'"
+            grep "compatdb:" "$log" || echo "  (no compatdb lines at all)"
+            smoke_stop
+            exit 1
+        fi
+    done
 }
 
 # check_wined3d_device <env-command>...: build smoke/wined3d.c for x86_64 and

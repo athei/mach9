@@ -212,7 +212,7 @@ fn a_debug_channels_value_is_split_at_each_comma_and_each_part_is_scoped() -> Te
 }
 
 #[test]
-fn the_inherited_conflicts_are_the_variables_rules_decide_per_process() {
+fn the_inherited_conflicts_are_the_variables_a_launcher_removes() {
     assert_eq!(
         inherited_conflicts(),
         [

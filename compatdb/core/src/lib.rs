@@ -171,9 +171,10 @@
 //! starts, so a process started later in a running tree gets the rules the
 //! file holds by then.
 //!
-//! - Everything this page says about the value of [`ENV_VAR`] holds for the
-//!   file's text. Its rules keep their labels in the log,
-//!   `WINE_COMPATDB line <n>`.
+//! - The file's text is what [`ENV_VAR`] would hold, and it is read, matched
+//!   and folded the same way. Only `debug_channels` differs, see
+//!   [Launcher responsibilities](#launcher-responsibilities). Its rules keep
+//!   their labels in the log, `WINE_COMPATDB line <n>`.
 //! - An empty [`FILE_ENV_VAR`] counts as unset. Set, the file is the only
 //!   source of the caller's rules, and [`ENV_VAR`], if set too, is ignored
 //!   with a warning.
@@ -457,6 +458,9 @@
 //!   [`ENV_VAR`], so does everything else a running process starts, since
 //!   it inherits the old value; with [`FILE_ENV_VAR`] it reads the new
 //!   table.
+//! - Expect a change of `debug_channels` in such a file to show only in the
+//!   log: `WINEDEBUG` is fixed when the tree starts, so it takes a new tree
+//!   for the change to take effect.
 //!
 //! ```
 //! use compatdb_core::{Exe, FieldError, Key, Rule, Table, inherited_conflicts, retired_env};
