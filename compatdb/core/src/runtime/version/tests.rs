@@ -189,9 +189,9 @@ fn the_nostale_client_has_only_a_company() {
         original_filename: original_filename.map(Fingerprint::literal),
         ..Rule::default()
     };
-    assert!(pinned(None, None).matches("NostaleClientX.exe", &vi));
-    assert!(!pinned(Some("ProductVersion"), None).matches("NostaleClientX.exe", &vi));
-    assert!(!pinned(None, Some("ProductName")).matches("NostaleClientX.exe", &vi));
+    assert!(pinned(None, None).matches("NostaleClientX.exe", &vi, None));
+    assert!(!pinned(Some("ProductVersion"), None).matches("NostaleClientX.exe", &vi, None));
+    assert!(!pinned(None, Some("ProductName")).matches("NostaleClientX.exe", &vi, None));
 }
 
 #[test]

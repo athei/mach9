@@ -552,7 +552,7 @@ fn a_reset_round_trips_through_the_env_value() {
     let (parsed, diagnostics) = parse(&text);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert_eq!(parsed, table);
-    let r = table.resolve("a.exe", &VersionInfo::default());
+    let r = table.resolve("a.exe", &VersionInfo::default(), None);
     assert_eq!(r.dxgi(), Some(Dxgi::Wined3d));
     assert_eq!(r.scalar(Scalar::Dxgi).reset_by, None);
     assert_eq!(r.scalar(Scalar::OpenGl).reset_by, Some(Origin::Line(1)));
@@ -740,6 +740,64 @@ fn arguments_override_round_trips_and_an_empty_one_clears() {
         parsed.rules.first().and_then(Rule::arguments_override),
         Some(&[Argument::literal("-x")][..])
     );
+}
+
+#[test]
+fn a_steam_exe_reads_as_a_word_and_writes_in_lowercase() -> TestResult {
+    let table = Table::parse_strict("EXE=STEAM:0440;Product=Foo;DPI_Aware=False")?;
+    assert_eq!(
+        table.to_string(),
+        "exe=steam:440;product=Foo;dpi_aware=false"
+    );
+    assert_eq!(
+        table.rules().first().map(Rule::exe),
+        Some(&Exe::new("steam:440")?)
+    );
+    assert_eq!(Table::parse_strict(&table.to_string())?, table);
+    // An escape in the value decodes first, as in any other value.
+    let escaped = Table::parse_strict("exe=steam%3A440")?;
+    assert_eq!(escaped.to_string(), "exe=steam:440");
+    Ok(())
+}
+
+#[test]
+fn a_bad_steam_app_id_drops_the_field_and_so_the_line() {
+    for bad in [
+        "steam:",
+        "steam:0",
+        "steam:abc",
+        "steam:4294967296",
+        "STEAM:-1",
+    ] {
+        let (table, warnings) = parse(&format!("exe={bad};gcmouse=false"));
+        assert_eq!(table.rules(), [] as [Rule; 0], "{bad}");
+        assert_eq!(
+            warnings,
+            [
+                format!("WINE_COMPATDB line 1: ignoring invalid Steam app id {bad:?}"),
+                String::from("WINE_COMPATDB line 1: ignoring the line, it has no exe"),
+            ]
+        );
+        assert!(Table::parse_strict(&format!("exe={bad}")).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_steam_rule_on_the_wire_holds_what_a_star_rule_holds() -> TestResult {
+    // The refusal is `Rule::set`'s, as for `*`: a table a launcher pushed
+    // reads back as itself, whatever its `with_` methods put in a rule.
+    let table = sent(vec![
+        Rule::new(Exe::new("steam:440")?)
+            .with_arguments_override([])
+            .with_debug_channel(DebugChannel::new("+relay")?),
+    ]);
+    let text = table.to_string();
+    assert_eq!(
+        text,
+        "exe=steam:440;arguments_override=;debug_channels=+relay"
+    );
+    assert_eq!(Table::parse_strict(&text)?, table);
+    Ok(())
 }
 
 #[test]

@@ -75,6 +75,10 @@ fn a_diagnostic_says_what_lenient_parsing_did() {
             ),
             "WINE_COMPATDB line 3: ignoring DLL override \"a\" without '=' before its load order",
         ),
+        (
+            at("exe=steam:0", FieldError::BadSteamApp("steam:0".into())),
+            "WINE_COMPATDB line 3: ignoring invalid Steam app id \"steam:0\"",
+        ),
     ];
     for (diagnostic, said) in cases {
         assert_eq!(diagnostic.to_string(), said);

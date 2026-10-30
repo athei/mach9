@@ -10,7 +10,7 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 fn a_native_arm64_program_gets_dxmt_and_mtld3d_and_either_tree_a_rule_asks_for() {
     let native = Arch::Aarch64;
     // The built-in rules give it dxmt and mtld3d, as an x86 program.
-    let game = Table::builtin().resolve("game.exe", &VersionInfo::default());
+    let game = Table::builtin().resolve("game.exe", &VersionInfo::default(), None);
     assert_eq!(effective_dxgi(game.dxgi(), native), Dxgi::Dxmt);
     assert_eq!(effective_d3d9(game.d3d9(), native), D3d9::Mtld3d);
     // Without a rule, wined3d, as in upstream Wine.
@@ -273,7 +273,7 @@ fn the_metal_hud_and_debug_channels_lines_name_value_and_source() -> TestResult 
     )?
     .with_builtin();
     let none = VersionInfo::default();
-    let game = table.resolve("game.exe", &none);
+    let game = table.resolve("game.exe", &none, None);
     assert_eq!(
         metal_hud_line(&game),
         "  metal_hud = true, WINE_COMPATDB line 1"
@@ -283,7 +283,7 @@ fn the_metal_hud_and_debug_channels_lines_name_value_and_source() -> TestResult 
         "  debug_channels = +relay (WINE_COMPATDB line 1); -heap (WINE_COMPATDB line 1); \
          logged only: Wine reads WINEDEBUG before compatdb.so loads"
     );
-    let other = table.resolve("other.exe", &none);
+    let other = table.resolve("other.exe", &none, None);
     assert_eq!(
         metal_hud_line(&other),
         "  metal_hud = unset (upstream: the MTL_HUD_ variables of the environment the process \
@@ -293,13 +293,59 @@ fn the_metal_hud_and_debug_channels_lines_name_value_and_source() -> TestResult 
         debug_channels_line(&other),
         "  debug_channels = unset (upstream: the WINEDEBUG the process was started with)"
     );
-    let tool = table.resolve("tool.exe", &none);
+    let tool = table.resolve("tool.exe", &none, None);
     assert_eq!(
         metal_hud_line(&tool),
         "  metal_hud = unset (upstream: the MTL_HUD_ variables of the environment the process \
          was started with), reset by WINE_COMPATDB line 2"
     );
     Ok(())
+}
+
+#[test]
+fn the_steam_app_line_names_the_variable_and_the_id() {
+    assert_eq!(steam_app_line(220), "  SteamAppId = 220");
+}
+
+/// A process as [`Process::current`] leaves it, with the environment block
+/// `env`. Nothing here reads through the pointers.
+fn process(exe: &str, env: &str) -> Process {
+    Process {
+        params: std::ptr::null_mut(),
+        params32: None,
+        arch: Arch::X86_64,
+        exe: exe.into(),
+        version: VersionInfo::default(),
+        cmdline: Vec::new(),
+        env: env.encode_utf16().collect(),
+    }
+}
+
+#[test]
+fn a_process_resolves_with_the_app_id_of_its_environment_block() -> TestResult {
+    let table = Table::parse_strict("exe=steam:220;gcmouse=false")?.with_builtin();
+    let game = process("hl2.exe", "A=1\0SteamAppId=220\0\0");
+    assert_eq!(game.steam_app(), Some(220));
+    assert_eq!(game.resolve(&table).gcmouse(), Some(false));
+    // Steam's own processes have the variable empty.
+    let steam = process("steam.exe", "SteamAppId=\0\0");
+    assert_eq!(steam.steam_app(), None);
+    assert_eq!(steam.resolve(&table).gcmouse(), Some(true));
+    // Another app, and no variable at all.
+    let other = process("hl2.exe", "SteamAppId=221\0\0");
+    assert_eq!(other.resolve(&table).gcmouse(), Some(true));
+    let outside = process("hl2.exe", "A=1\0\0");
+    assert_eq!(outside.resolve(&table).gcmouse(), Some(true));
+    Ok(())
+}
+
+#[test]
+fn an_ignored_arguments_override_says_so_in_the_log() {
+    assert_eq!(
+        override_ignored_line(&Origin::Line(2)),
+        "  arguments_override, WINE_COMPATDB line 2: ignored, a Steam app id can match more than \
+         one program"
+    );
 }
 
 #[test]

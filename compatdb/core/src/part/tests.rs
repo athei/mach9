@@ -9,9 +9,9 @@ fn an_exe_is_any_or_a_name_and_never_empty() -> TestResult {
     assert_eq!(Exe::new("*")?, Exe::Any);
     let name = Exe::new("Game.EXE")?;
     assert_eq!(name.as_str(), "Game.EXE");
-    assert!(name.matches("game.exe"));
-    assert!(!name.matches("other.exe"));
-    assert!(Exe::Any.matches("anything.exe"));
+    assert!(name.matches("game.exe", None));
+    assert!(!name.matches("other.exe", None));
+    assert!(Exe::Any.matches("anything.exe", None));
     assert_eq!(Exe::new(""), Err(FieldError::MissingExe));
     assert_eq!(Exe::new("a\0b"), Err(FieldError::Nul));
     assert_eq!("x.exe".parse::<Exe>()?.to_string(), "x.exe");
@@ -19,6 +19,81 @@ fn an_exe_is_any_or_a_name_and_never_empty() -> TestResult {
     // `**` and ` *` are names like any other.
     assert!(!Exe::new("**")?.is_any());
     assert!(!Exe::new(" *")?.is_any());
+    Ok(())
+}
+
+#[test]
+fn a_steam_exe_reads_in_any_case_and_writes_its_canonical_text() -> TestResult {
+    for text in ["steam:440", "STEAM:440", "Steam:440", "sTeAm:0440"] {
+        let exe = Exe::new(text)?;
+        assert_eq!(exe.as_str(), "steam:440", "{text}");
+        assert_eq!(exe.to_string(), "steam:440", "{text}");
+        assert_eq!(exe, "steam:440", "{text}");
+        assert!(exe.is_steam_app(), "{text}");
+        assert!(!exe.is_any(), "{text}");
+        assert!(matches!(&exe, Exe::Steam(app) if app.id() == 440), "{text}");
+    }
+    let last = "steam:4294967295";
+    assert!(matches!(Exe::new(last)?, Exe::Steam(app) if app.id() == u32::MAX));
+    assert_eq!("STEAM:1".parse::<Exe>()?.to_string(), "steam:1");
+    Ok(())
+}
+
+#[test]
+fn a_steam_exe_needs_an_app_id_and_keeps_the_text_of_the_error() {
+    for bad in [
+        "steam:",
+        "steam:0",
+        "STEAM:000",
+        "steam:abc",
+        "steam:12a",
+        "steam:a12",
+        "steam:+1",
+        "steam:-1",
+        "steam: 1",
+        "steam:1 ",
+        "steam:1.0",
+        "steam:٣",
+        "steam:4294967296",
+        "steam:99999999999999999999",
+    ] {
+        assert_eq!(
+            Exe::new(bad),
+            Err(FieldError::BadSteamApp(bad.into())),
+            "{bad}"
+        );
+    }
+    assert_eq!(Exe::new("steam:\0"), Err(FieldError::Nul));
+    assert_eq!(
+        FieldError::BadSteamApp("steam:0".into()).to_string(),
+        "invalid Steam app id \"steam:0\""
+    );
+}
+
+#[test]
+fn only_a_steam_prefix_makes_a_steam_exe() -> TestResult {
+    // Names like any other, in the case they were written in: no `:`, or
+    // another word in front of it.
+    for name in ["steam", "Steam.exe", "steam.exe", "steamer:1", "c:steam:1"] {
+        let exe = Exe::new(name)?;
+        assert!(!exe.is_steam_app(), "{name}");
+        assert_eq!(exe.as_str(), name);
+    }
+    Ok(())
+}
+
+#[test]
+fn a_steam_exe_matches_its_app_id_and_not_a_basename() -> TestResult {
+    let exe = Exe::new("steam:440")?;
+    assert!(exe.matches("hl2.exe", Some(440)));
+    assert!(exe.matches("steam:440", Some(440)));
+    assert!(!exe.matches("hl2.exe", Some(441)));
+    assert!(!exe.matches("hl2.exe", None));
+    assert!(!exe.matches("steam:440", None));
+    // The other kinds of `exe` do not look at the id.
+    assert!(Exe::Any.matches("hl2.exe", Some(440)));
+    assert!(Exe::new("hl2.exe")?.matches("hl2.exe", Some(440)));
+    assert!(!Exe::new("other.exe")?.matches("hl2.exe", Some(440)));
     Ok(())
 }
 

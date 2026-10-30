@@ -134,7 +134,7 @@ fn a_bad_key_in_the_file_warns_after_the_path_and_the_rule_keeps_its_label() -> 
             String::from("  warning: WINE_COMPATDB line 1: ignoring unknown key \"bogus\""),
         ]
     );
-    let game = table.resolve("Game.exe", &VersionInfo::default());
+    let game = table.resolve("Game.exe", &VersionInfo::default(), None);
     assert_eq!(
         game.scalar(Scalar::DpiAware)
             .set_by

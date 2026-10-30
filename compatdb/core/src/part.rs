@@ -20,34 +20,76 @@ fn without_nul(text: String) -> Result<String, FieldError> {
     }
 }
 
-/// The executable a rule matches: every process, or the processes whose image
-/// basename is a name, compared ASCII-case-insensitively.
+/// The word in front of the app id of an [`Exe::Steam`], as the wire writes
+/// it. Like every word of the format it is read ASCII-case-insensitively.
+const STEAM_PREFIX: &str = "steam:";
+
+/// What follows a `steam:` in any case at the start of `text`, if one is
+/// there.
+fn after_steam_prefix(text: &str) -> Option<&str> {
+    let (word, rest) = text.split_at_checked(STEAM_PREFIX.len())?;
+    word.eq_ignore_ascii_case(STEAM_PREFIX).then_some(rest)
+}
+
+/// The Steam app id `digits` spell: ASCII digits only, which make a `u32`
+/// other than 0. 0 is no app.
+pub fn steam_app_id(digits: &str) -> Option<u32> {
+    if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok().filter(|&id| id != 0)
+}
+
+/// The executable a rule matches: every process, the processes whose image
+/// basename is a name, compared ASCII-case-insensitively, or the processes
+/// with a Steam app id.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Exe {
     /// `*`: every process.
     Any,
     /// The processes with this image basename.
     Name(ExeName),
+    /// `steam:<appid>`: the processes with this Steam app id, whatever their
+    /// image basename.
+    Steam(SteamApp),
 }
 
-/// The image basename of an [`Exe::Name`]: not empty, not `*` and without a
-/// NUL. [`Exe::new`] makes one.
+/// The image basename of an [`Exe::Name`]: not empty, not `*`, not a text
+/// that starts with `steam:` in any case and without a NUL. [`Exe::new`] makes
+/// one.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ExeName(String);
+
+/// The Steam app of an [`Exe::Steam`]: an id other than 0, with the text the
+/// wire writes for it. [`Exe::new`] makes one.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SteamApp {
+    /// The app id.
+    id: u32,
+    /// `steam:<id>`, in lowercase and without leading zeros.
+    text: String,
+}
 
 impl Exe {
     /// The spelling of [`Exe::Any`].
     pub const ANY: &'static str = "*";
 
-    /// The `exe` that `text` names: `*` is [`Exe::Any`], anything else the
-    /// basename as written.
+    /// The `exe` that `text` names: `*` is [`Exe::Any`], `steam:` in any case
+    /// and a decimal app id [`Exe::Steam`], anything else the basename as
+    /// written. A basename cannot hold a `:`, so no program is left out.
     ///
     /// # Errors
     ///
     /// [`FieldError::MissingExe`] for an empty `text`, [`FieldError::Nul`]
-    /// for one with a NUL.
+    /// for one with a NUL, [`FieldError::BadSteamApp`] for a `steam:` that
+    /// no app id follows: nothing, anything but ASCII digits, 0 or a value
+    /// over [`u32::MAX`].
     pub fn new(text: impl Into<String>) -> Result<Self, FieldError> {
         let text = without_nul(text.into())?;
+        if let Some(digits) = after_steam_prefix(&text) {
+            let app = steam_app_id(digits).map(SteamApp::of_id);
+            return app.map(Self::Steam).ok_or(FieldError::BadSteamApp(text));
+        }
         match text.as_str() {
             "" => Err(FieldError::MissingExe),
             Self::ANY => Ok(Self::Any),
@@ -65,12 +107,13 @@ impl Exe {
         }
     }
 
-    /// `*` or the basename, as the wire writes it.
+    /// `*`, the basename or `steam:<appid>`, as the wire writes it.
     #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Any => Self::ANY,
             Self::Name(name) => name.as_str(),
+            Self::Steam(app) => app.as_str(),
         }
     }
 
@@ -80,12 +123,20 @@ impl Exe {
         matches!(self, Self::Any)
     }
 
-    /// Whether a process with the image basename `basename` matches.
+    /// Whether this is [`Exe::Steam`].
     #[must_use]
-    pub fn matches(&self, basename: &str) -> bool {
+    pub const fn is_steam_app(&self) -> bool {
+        matches!(self, Self::Steam(_))
+    }
+
+    /// Whether a process with the image basename `basename` and the Steam
+    /// app id `steam_app`, if it has one, matches.
+    #[must_use]
+    pub fn matches(&self, basename: &str, steam_app: Option<u32>) -> bool {
         match self {
             Self::Any => true,
             Self::Name(name) => basename.eq_ignore_ascii_case(name.as_str()),
+            Self::Steam(app) => steam_app == Some(app.id()),
         }
     }
 }
@@ -95,6 +146,28 @@ impl ExeName {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl SteamApp {
+    /// The app with the id `id`, which is not 0.
+    fn of_id(id: u32) -> Self {
+        Self {
+            id,
+            text: format!("{STEAM_PREFIX}{id}"),
+        }
+    }
+
+    /// The app id.
+    #[must_use]
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// `steam:<id>`, as the wire writes it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
     }
 }
 
@@ -119,6 +192,12 @@ impl fmt::Display for ExeName {
     }
 }
 
+impl fmt::Display for SteamApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl PartialEq<&str> for Exe {
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == *other
@@ -134,9 +213,9 @@ pub enum Specificity {
     Any,
     /// `exe` `*` with a fingerprint.
     AnyWithFingerprint,
-    /// An executable name without a fingerprint.
+    /// An executable name or a Steam app id without a fingerprint.
     Exe,
-    /// An executable name with a fingerprint.
+    /// An executable name or a Steam app id with a fingerprint.
     ExeWithFingerprint,
 }
 

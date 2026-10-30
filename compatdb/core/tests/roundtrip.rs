@@ -27,6 +27,9 @@ const POOL: &[&str] = &[
 /// comes on top.
 const ORDERS: &[&str] = &["n,b", "b", "n", "", "default", "DEFAULT"];
 
+/// The Steam app ids of a generated `exe`.
+const STEAM_APPS: &[u32] = &[1, 220, 440, u32::MAX];
+
 /// A xorshift64* generator: small, fast and the same on every platform.
 struct Gen(u64);
 
@@ -78,8 +81,9 @@ impl Gen {
             .collect()
     }
 
-    /// The value `text` of `WINE_COMPATDB` with each key, and each value of
-    /// a scalar setting, in a random case. User data keeps its case.
+    /// The value `text` of `WINE_COMPATDB` with each key, each value of a
+    /// scalar setting and the `steam:` of an `exe` in a random case. User
+    /// data keeps its case.
     fn mangle_words(&mut self, text: &str) -> String {
         let mut lines = Vec::new();
         for line in text.lines() {
@@ -89,9 +93,10 @@ impl Gen {
                     fields.push(field.to_owned());
                     continue;
                 };
-                let is_word = key
-                    .parse::<Key>()
-                    .is_ok_and(|key| matches!(key.kind(), KeyKind::Scalar(_)));
+                let is_word = key.parse::<Key>().is_ok_and(|key| match key.kind() {
+                    KeyKind::Scalar(_) => true,
+                    _ => key == Key::Exe && value.starts_with("steam:"),
+                });
                 let value = if is_word {
                     self.mangle_case(value)
                 } else {
@@ -143,10 +148,13 @@ impl Gen {
     /// everything else goes through the typed parts and the `with_`
     /// methods.
     fn rule(&mut self) -> Result<Rule, Box<dyn std::error::Error>> {
-        let exe = if self.one_in(4) {
-            Exe::Any
-        } else {
-            self.part(Exe::new)?
+        let exe = match self.below(8) {
+            0 | 1 => Exe::Any,
+            2 => {
+                let app = self.pick(STEAM_APPS).ok_or("no app")?;
+                Exe::new(format!("{}:{app}", self.mangle_case("steam")))?
+            }
+            _ => self.part(Exe::new)?,
         };
         let mut rule = Rule::new(exe);
         if self.one_in(3) {
@@ -295,6 +303,7 @@ fn the_generator_reaches_every_key_and_setting_state() -> TestResult {
         }
     }
     assert!(text.contains("exe=*"));
+    assert!(text.contains("exe=steam:"));
     assert!(text.contains("arguments_override=\n") || text.contains("arguments_override=;"));
     assert!(text.lines().any(|line| {
         line.split(';')
@@ -329,6 +338,22 @@ fn every_text(alphabet: &[char], max: usize) -> Vec<String> {
         all.extend(last.iter().cloned());
     }
     all
+}
+
+#[test]
+fn a_steam_exe_round_trips_as_its_canonical_text() -> TestResult {
+    for (text, canonical) in [
+        ("steam:440", "steam:440"),
+        ("STEAM:440", "steam:440"),
+        ("Steam:0440", "steam:440"),
+        ("steam:4294967295", "steam:4294967295"),
+    ] {
+        let mut table = Table::new();
+        table.push(Rule::new(Exe::new(text)?));
+        assert_round_trips(&table, text);
+        assert_eq!(table.to_string(), format!("exe={canonical}"));
+    }
+    Ok(())
 }
 
 #[test]

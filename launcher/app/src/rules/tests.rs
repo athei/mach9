@@ -186,10 +186,10 @@ fn default_resets_a_setting() {
             &[exe_line("tool.exe"), flag(Key::DpiAware, false)],
         )),
     );
-    let tool = built.table.resolve("Tool.exe", &none());
+    let tool = built.table.resolve("Tool.exe", &none(), None);
     assert_eq!(tool.dpi_aware(), Some(false));
     assert_eq!(tool.scalar(Scalar::DpiAware).reset_by, None);
-    let other = built.table.resolve("Other.exe", &none());
+    let other = built.table.resolve("Other.exe", &none(), None);
     assert_eq!(other.dpi_aware(), None);
     assert_eq!(
         other.scalar(Scalar::DpiAware).reset_by,
@@ -283,6 +283,84 @@ fn a_field_a_rule_for_every_process_refuses_is_an_error() {
     }
     let rules = parsed(&block("a", &[list(key, &[])])).expect("no error");
     assert_eq!(rules.rules, Vec::<NamedRule>::new());
+}
+
+/// A Steam app takes no field of its own: a block names it through its
+/// [`Key::Exe`], with no warning that it matches a file name, and the table
+/// carries the canonical text.
+#[test]
+fn a_block_can_name_a_steam_app_through_its_exe() {
+    let rules = parsed(&block(
+        "tf2",
+        &[
+            exe_line("STEAM:440"),
+            text(Key::Dxgi, Dxgi::Wined3d.as_str()),
+        ],
+    ))
+    .expect("valid");
+    assert_eq!(rules.warnings, Vec::<String>::new());
+    let built = table(every(), rules.rules);
+    assert_eq!(built.table.to_string(), "exe=steam:440;dxgi=wined3d");
+    assert_eq!(
+        built.table.resolve("hl2.exe", &none(), Some(440)).dxgi(),
+        Some(Dxgi::Wined3d)
+    );
+    assert_eq!(
+        built.table.resolve("hl2.exe", &none(), Some(220)).dxgi(),
+        None
+    );
+    assert_eq!(built.table.resolve("hl2.exe", &none(), None).dxgi(), None);
+    assert_eq!(built.table.winedebug(), Vec::<String>::new());
+}
+
+/// A block that names a program warns, so the test above shows what the
+/// Steam app leaves out, and a fingerprint is taken as for a program.
+#[test]
+fn a_steam_block_takes_a_fingerprint_and_a_program_block_still_warns() {
+    let rules = parsed(&block(
+        "tf2",
+        &[exe_line("steam:440"), company_line("Valve")],
+    ))
+    .expect("valid");
+    assert_eq!(rules.warnings, Vec::<String>::new());
+    assert_eq!(
+        rules.rules[0].rule,
+        Rule::new(exe("steam:440")).with_company(fingerprint("Valve"))
+    );
+    let rules = parsed(&block("game", &[exe_line("Game.exe")])).expect("valid");
+    assert_eq!(rules.warnings.len(), 1, "{:?}", rules.warnings);
+    assert!(rules.warnings[0].contains("every program called Game.exe"));
+}
+
+/// The block is checked with its [`Key::Exe`] first, wherever the file writes
+/// it, so a Steam app refuses the fields the settings layer refuses for one.
+#[test]
+fn a_field_a_steam_rule_refuses_is_an_error() {
+    for key in [Key::DebugChannels, Key::ArgumentsOverride] {
+        let field = list(key, &["+relay"]);
+        let refused = describe(key.as_str(), &FieldError::RefusedOnSteamApp(key));
+        for lines in [
+            vec![exe_line("steam:440"), field.clone()],
+            vec![field.clone(), exe_line("steam:440")],
+        ] {
+            assert_eq!(
+                error_of(&block("a", &lines)),
+                format!("process rule `a`: {refused}")
+            );
+        }
+    }
+}
+
+/// An `exe` that says `steam:` without an app id refuses the file, with the
+/// text as written.
+#[test]
+fn a_bad_steam_app_id_is_an_error() {
+    let error = error_of(&block("a", &[exe_line("steam:0")]));
+    let refused = describe(
+        Key::Exe.as_str(),
+        &FieldError::BadSteamApp(String::from("steam:0")),
+    );
+    assert_eq!(error, format!("process rule `a`: {refused}"));
 }
 
 /// A field the settings layer only warns about goes to `ignored`, its value
@@ -706,7 +784,7 @@ fn a_value_resolved_here_names_its_block() {
         built.names,
         [None, Some(String::from("game")), Some(String::from("all"))]
     );
-    let game = built.table.resolve("game.exe", &none());
+    let game = built.table.resolve("game.exe", &none(), None);
     let describe = |scalar: Scalar| {
         let origin = game.scalar(scalar).set_by.as_ref();
         built.describe(origin.expect("set"))
@@ -728,7 +806,7 @@ fn a_wildcard_rule_is_folded_after_the_launchers_own_rule() {
             &[exe_line(Exe::ANY), flag(Key::DpiAware, false)],
         )),
     );
-    let resolved = built.table.resolve("a.exe", &none());
+    let resolved = built.table.resolve("a.exe", &none(), None);
     assert_eq!(resolved.dpi_aware(), Some(false));
 }
 

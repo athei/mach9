@@ -120,6 +120,9 @@ impl Table {
     ///
     /// Which env entries apply also depends on the environment the process
     /// starts with, which [`Resolution::env_steps`] takes.
+    ///
+    /// The process has no Steam app id here, so a rule for one
+    /// ([`Exe::Steam`]) does not apply.
     #[must_use]
     pub fn preview(&self, exe: &str, version: &VersionInfo) -> Resolution {
         let mut table = Self::builtin();
@@ -129,7 +132,7 @@ impl Table {
                 table.sources.push(source);
             }
         }
-        let mut resolution = table.resolve(exe, version);
+        let mut resolution = table.resolve(exe, version, None);
         resolution.fold_derived_env();
         resolution
     }
@@ -145,6 +148,10 @@ impl Table {
     /// of fingerprints, so the entry reaches every program of that name. An
     /// entry of a rule with `exe` `*` is unscoped. Wine lets a later entry
     /// win for the same channel.
+    ///
+    /// An entry of a rule for a Steam app id is left out: Wine has no scope
+    /// for an app id, and without one the entry would reach every process.
+    /// [`Rule::set`] refuses such an entry.
     #[must_use]
     pub fn winedebug(&self) -> Vec<String> {
         self.rules
@@ -152,9 +159,10 @@ impl Table {
             .flat_map(|rule| {
                 rule.debug_channels
                     .iter()
-                    .map(move |channel| match &rule.exe {
-                        Exe::Any => channel.to_string(),
-                        Exe::Name(name) => format!("{name}:{channel}"),
+                    .filter_map(move |channel| match &rule.exe {
+                        Exe::Any => Some(channel.to_string()),
+                        Exe::Name(name) => Some(format!("{name}:{channel}")),
+                        Exe::Steam(_) => None,
                     })
             })
             .collect()

@@ -553,14 +553,14 @@ mod tests {
             company: String::from("Acme Inc"),
             ..VersionInfo::default()
         };
-        let tool = config.rules.table.resolve("Tool.exe", &acme);
+        let tool = config.rules.table.resolve("Tool.exe", &acme, None);
         assert_eq!(tool.dxgi(), Some(Dxgi::Wined3d));
         assert_eq!(tool.d3d9(), Some(D3d9::Mtld3d));
         assert_eq!(tool.wined3d(), Some(Wined3d::Vulkan));
         let other = config
             .rules
             .table
-            .resolve("Other.exe", &VersionInfo::default());
+            .resolve("Other.exe", &VersionInfo::default(), None);
         assert_eq!(other.dxgi(), Some(Dxgi::Dxmt));
         assert_eq!(other.d3d9(), Some(D3d9::Wined3d));
         assert_eq!(other.wined3d(), Some(Wined3d::Gl));
@@ -924,7 +924,7 @@ mod tests {
         let other = file
             .rules
             .table
-            .resolve("Other.exe", &VersionInfo::default());
+            .resolve("Other.exe", &VersionInfo::default(), None);
         assert_eq!(other.dpi_aware(), Some(false));
 
         let cli = load(one(Key::DpiAware, "true"));
@@ -985,13 +985,13 @@ mod tests {
         let tool = config
             .rules
             .table
-            .resolve("Tool.exe", &VersionInfo::default());
+            .resolve("Tool.exe", &VersionInfo::default(), None);
         assert_eq!(tool.dpi_aware(), Some(false));
         assert_eq!(tool.dll_overrides, ["a=b"]);
         let other = config
             .rules
             .table
-            .resolve("Other.exe", &VersionInfo::default());
+            .resolve("Other.exe", &VersionInfo::default(), None);
         assert_eq!(other.dpi_aware(), Some(true));
         assert_eq!(other.dll_overrides, ["a=b"]);
     }
@@ -1044,13 +1044,13 @@ mod tests {
         let old = config
             .rules
             .table
-            .resolve("Old.exe", &VersionInfo::default());
+            .resolve("Old.exe", &VersionInfo::default(), None);
         assert_eq!(old.large_address_aware(), Some(false));
         assert_eq!(old.opengl(), Some(OpenGl::Egl));
         let other = config
             .rules
             .table
-            .resolve("Other.exe", &VersionInfo::default());
+            .resolve("Other.exe", &VersionInfo::default(), None);
         assert_eq!(other.large_address_aware(), Some(true));
         assert_eq!(other.opengl(), Some(OpenGl::Cgl));
 

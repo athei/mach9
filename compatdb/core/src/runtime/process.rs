@@ -1,7 +1,11 @@
 //! The process side: its arch, and the UTF-16 image path, command line and
 //! environment block as wine hands them over.
 
-use crate::EnvEntry;
+use crate::{EnvEntry, part::steam_app_id};
+
+/// The variable of the environment block that holds a process's Steam app id,
+/// which [`steam_app`] reads.
+pub const STEAM_APP_VAR: &str = "SteamAppId";
 
 /// The architecture of the program a process runs, which is that of its main
 /// executable.
@@ -113,6 +117,17 @@ pub fn env_value(block: &[u16], name: &str) -> Option<String> {
         .and_then(|i| seg.get(i.saturating_add(1)..))
         .unwrap_or(&[]);
     Some(String::from_utf16_lossy(value))
+}
+
+/// The Steam app id in a `NAME=value\0...\0\0` block, the value of
+/// [`STEAM_APP_VAR`]. A value that is empty, 0 or no number is no app id:
+/// Steam's own processes have the variable empty.
+///
+/// It has to come from the Windows block: Wine does not copy that to the unix
+/// environment, so `getenv` does not see what Steam sets for a game.
+#[must_use]
+pub fn steam_app(block: &[u16]) -> Option<u32> {
+    steam_app_id(&env_value(block, STEAM_APP_VAR)?)
 }
 
 /// Merge environment entries into a `NAME=value\0...\0\0` block.

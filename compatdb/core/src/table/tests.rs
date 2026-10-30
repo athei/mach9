@@ -21,7 +21,7 @@ fn preview_is_what_compatdb_so_resolves_with_the_table_in_the_variable() -> Test
     let expected = {
         let (sent, diagnostics) = Table::parse_lenient(&table.to_string());
         assert_eq!(diagnostics, []);
-        let mut resolution = sent.with_builtin().resolve("game.exe", &none);
+        let mut resolution = sent.with_builtin().resolve("game.exe", &none, None);
         resolution.fold_derived_env();
         resolution
     };
@@ -47,7 +47,7 @@ fn preview_is_what_compatdb_so_resolves_with_the_table_in_the_variable() -> Test
         game
     );
     // Without rules of its own, a process gets the built-in rules alone.
-    let mut plain = Table::builtin().resolve("other.exe", &none);
+    let mut plain = Table::builtin().resolve("other.exe", &none, None);
     plain.fold_derived_env();
     assert_eq!(Table::new().preview("other.exe", &none), plain);
     Ok(())
@@ -83,6 +83,47 @@ fn winedebug_scopes_the_channels_of_a_rule_for_an_exe_and_not_those_of_a_star_ru
     );
     assert_eq!(Table::new().winedebug(), [] as [&str; 0]);
     assert_eq!(Table::builtin().winedebug(), [] as [&str; 0]);
+    Ok(())
+}
+
+#[test]
+fn preview_knows_no_steam_app_id() -> TestResult {
+    let mut table = Table::new();
+    table.push(Rule::new(Exe::new("steam:440")?).with_dpi_aware(false));
+    let none = VersionInfo::default();
+    assert_eq!(
+        table.preview("game.exe", &none),
+        Table::new().preview("game.exe", &none)
+    );
+    Ok(())
+}
+
+#[test]
+fn winedebug_leaves_out_what_no_exe_scope_can_hold() -> TestResult {
+    // A rule read from text or built with a `with_` method can hold them;
+    // an unscoped entry would reach every process.
+    let mut table = Table::new();
+    table.push(Rule::new(Exe::new("steam:440")?).with_debug_channel(DebugChannel::new("+relay")?));
+    table.push(Rule::new(Exe::new("Game.exe")?).with_debug_channel(DebugChannel::new("+seh")?));
+    assert_eq!(table.winedebug(), ["Game.exe:+seh"]);
+    Ok(())
+}
+
+#[test]
+fn duplicate_matchers_finds_steam_rules_for_the_same_app() -> TestResult {
+    let steam = |text: &str| Exe::new(text).map(Rule::new);
+    let table = Table::parse_strict(
+        "exe=steam:440;dpi_aware=true\n\
+         exe=STEAM:0440;gcmouse=false\n\
+         exe=steam:220;dpi_aware=true\n\
+         exe=steam:440;product=Foo\n\
+         exe=steam:440;product=Foo\n\
+         exe=Game.exe;dpi_aware=true",
+    )?;
+    assert_eq!(table.duplicate_matchers(), vec![(0, 1), (3, 4)]);
+    assert!(steam("steam:440")?.matches_the_same_as(&steam("STEAM:440")?));
+    assert!(!steam("steam:440")?.matches_the_same_as(&steam("steam:220")?));
+    assert!(!steam("steam:440")?.matches_the_same_as(&steam("440")?));
     Ok(())
 }
 

@@ -37,6 +37,9 @@ pub enum FieldError {
     /// An `exe` that is empty, or a rule without one, which matches no
     /// process.
     MissingExe,
+    /// An `exe` that starts with `steam:` and has no app id after it, as it
+    /// was written (see [`Exe::new`](crate::Exe::new)).
+    BadSteamApp(String),
     /// An empty argument, which would append nothing.
     EmptyArgument,
     /// An empty `debug_channels` entry, which names no channel.
@@ -91,6 +94,9 @@ pub enum FieldError {
     },
     /// `arguments_override` in a rule whose `exe` is `*` (see [`Rule::set`]).
     ArgumentsOverrideOnAny,
+    /// A setting that a rule whose `exe` is a Steam app id refuses (see
+    /// [`Rule::set`]).
+    RefusedOnSteamApp(Key),
     /// A list of values for a key that holds one (see [`Rule::set_list`]).
     NotAList(Key),
 }
@@ -132,6 +138,7 @@ impl fmt::Display for FieldError {
             Self::BadValue { key, value, .. } => write!(f, "unknown {key} value {value:?}"),
             Self::Nul => f.write_str("a NUL in its value"),
             Self::MissingExe => f.write_str("no exe"),
+            Self::BadSteamApp(text) => write!(f, "invalid Steam app id {text:?}"),
             Self::EmptyArgument => f.write_str("an empty argument"),
             Self::EmptyDebugChannel => f.write_str("an empty debug channel"),
             Self::CommaInDebugChannel(text) => write!(f, "debug channel {text:?} with a ','"),
@@ -154,6 +161,16 @@ impl fmt::Display for FieldError {
                 "arguments_override needs an exe other than *: for every process it would also \
                  take away the arguments the built-in rules give single programs, which some of \
                  them need to work",
+            ),
+            Self::RefusedOnSteamApp(Key::DebugChannels) => f.write_str(
+                "debug_channels needs an exe that names a program: WINEDEBUG scopes an entry by \
+                 the image name, which a Steam app id does not give",
+            ),
+            Self::RefusedOnSteamApp(key) => write!(
+                f,
+                "{key} needs an exe that names a program: a Steam app id can match more than one \
+                 program, and it would take away the arguments the built-in rules give them, \
+                 which some of them need to work"
             ),
             Self::NotAList(key) => write!(f, "{key} holds one value, not a list"),
         }

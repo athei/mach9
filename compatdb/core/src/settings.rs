@@ -200,7 +200,11 @@ impl Key {
     ///
     /// [`Rule::set`] and [`Rule::set_list`] refuse a setting for which this
     /// is `false` in a `*` rule, and an `exe` of `*` in a rule that holds
-    /// one, with [`FieldError::ArgumentsOverrideOnAny`].
+    /// one, with [`FieldError::ArgumentsOverrideOnAny`]. A rule whose `exe`
+    /// is a Steam app id ([`Exe::Steam`]) can match more than one program,
+    /// so it refuses the same settings, and `debug_channels` too, with
+    /// [`FieldError::RefusedOnSteamApp`]. Reading a table from text refuses
+    /// neither (see [Matching](index.html#matching)).
     #[must_use]
     pub const fn allowed_on_any(self) -> bool {
         match self.kind() {
@@ -250,6 +254,19 @@ const fn refused_on_any(key: Key) -> bool {
     !matches!(key.kind(), KeyKind::Matcher) && !key.allowed_on_any()
 }
 
+/// Why a rule for `exe` refuses the field `key`, if it does. A Steam app id
+/// refuses what a `*` rule refuses, since it can match more than one program,
+/// and `debug_channels`, since `WINEDEBUG` scopes an entry by the image name.
+const fn refusal(exe: &Exe, key: Key) -> Option<FieldError> {
+    match exe {
+        Exe::Any if refused_on_any(key) => Some(FieldError::ArgumentsOverrideOnAny),
+        Exe::Steam(_) if refused_on_any(key) || matches!(key, Key::DebugChannels) => {
+            Some(FieldError::RefusedOnSteamApp(key))
+        }
+        _ => None,
+    }
+}
+
 impl Rule {
     /// Set the field `key` from `value`, as a launcher's setting gives it:
     /// the value of a matcher or a scalar setting, or one more entry of a
@@ -272,10 +289,13 @@ impl Rule {
     /// [`Key::allowed_on_any`] does not allow, `arguments_override`, in a
     /// rule whose `exe` is `*`, or an `exe` of `*` in a rule that holds one,
     /// is [`FieldError::ArgumentsOverrideOnAny`]: for every process it would
-    /// take away the arguments the built-in rules give single programs.
-    /// Make the rule with its `exe` first.
+    /// take away the arguments the built-in rules give single programs. A
+    /// rule whose `exe` is a Steam app id refuses it too, and `debug_channels`,
+    /// and so does an `exe` of that kind in a rule that holds one of them,
+    /// with [`FieldError::RefusedOnSteamApp`]. Make the rule with its `exe`
+    /// first.
     pub fn set(&mut self, key: Key, value: &str) -> Result<(), FieldError> {
-        self.refuse_on_any(key)?;
+        self.refuse_for_exe(key)?;
         if let Some(scalar) = key.scalar() {
             let setting = scalar_setting(scalar, value)?;
             self.put_scalar(scalar, setting);
@@ -284,12 +304,12 @@ impl Rule {
         match key {
             Key::Exe => {
                 let exe = Exe::new(value)?;
-                if exe.is_any()
-                    && Key::ALL
-                        .iter()
-                        .any(|&key| refused_on_any(key) && self.holds(key))
-                {
-                    return Err(FieldError::ArgumentsOverrideOnAny);
+                let refused = Key::ALL
+                    .iter()
+                    .filter(|&&key| self.holds(key))
+                    .find_map(|&key| refusal(&exe, key));
+                if let Some(error) = refused {
+                    return Err(error);
                 }
                 self.exe = exe;
             }
@@ -340,9 +360,9 @@ impl Rule {
     /// # Errors
     ///
     /// [`FieldError::NotAList`] for a key that holds one value,
-    /// [`FieldError::ArgumentsOverrideOnAny`] as for [`Rule::set`], even
-    /// with no values, and the first error [`Rule::set`] gives for one of
-    /// the values.
+    /// [`FieldError::ArgumentsOverrideOnAny`] and
+    /// [`FieldError::RefusedOnSteamApp`] as for [`Rule::set`], even with no
+    /// values, and the first error [`Rule::set`] gives for one of the values.
     pub fn set_list<T: AsRef<str>>(
         &mut self,
         key: Key,
@@ -357,7 +377,7 @@ impl Rule {
             Key::ArgumentsOverride => rule.arguments_override = Some(Vec::new()),
             _ => return Err(FieldError::NotAList(key)),
         }
-        self.refuse_on_any(key)?;
+        self.refuse_for_exe(key)?;
         for value in values {
             rule.set(key, value.as_ref())?;
         }
@@ -373,21 +393,16 @@ impl Rule {
     /// The errors of [`check_env_name`] for `name`, and of [`EnvEntry::new`]
     /// for `value`.
     pub fn set_env(&mut self, name: &str, value: &str) -> Result<(), FieldError> {
-        self.refuse_on_any(Key::Env)?;
+        self.refuse_for_exe(Key::Env)?;
         let entry = EnvEntry::new(env_name(name)?, value)?;
         self.env.push(entry);
         Ok(())
     }
 
-    /// [`FieldError::ArgumentsOverrideOnAny`] when the rule matches every
-    /// process by its `exe` and refuses the setting `key` there (see
+    /// The error of the setting `key` when the rule's `exe` refuses it (see
     /// [`Key::allowed_on_any`]).
-    const fn refuse_on_any(&self, key: Key) -> Result<(), FieldError> {
-        if self.exe.is_any() && refused_on_any(key) {
-            Err(FieldError::ArgumentsOverrideOnAny)
-        } else {
-            Ok(())
-        }
+    fn refuse_for_exe(&self, key: Key) -> Result<(), FieldError> {
+        refusal(&self.exe, key).map_or(Ok(()), Err)
     }
 
     /// Whether the rule holds the setting `key`: a scalar setting set or

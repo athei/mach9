@@ -820,7 +820,9 @@ smoke_test() {
 # check_rules_file <env-command>...: run cmd.exe in the booted throwaway prefix
 # with a rule in the file WINE_COMPATDB_FILE names, and exit unless compatdb.so
 # reads it without a warning, logs the path and gives the rule the label of a
-# WINE_COMPATDB rule.
+# WINE_COMPATDB rule. Then the same with a rule for a Steam app id: wine builds
+# the first process's environment block from the unix environment, so
+# SteamAppId in the run's environment reaches the block the library reads.
 check_rules_file() {
     local file="$TMP_DIR/compatdb-rules" log="$TMP_DIR/rules-file.log" want
     time_mark "smoke: rules file"
@@ -830,6 +832,23 @@ check_rules_file() {
     smoke_check "cmd.exe with a rule from a file" 120 "$log"
     check_rules_read "cmd.exe with a rule from a file" "$log"
     for want in "compatdb:   WINE_COMPATDB_FILE = $file" \
+        "compatdb:   gcmouse = false, WINE_COMPATDB line 1"; do
+        if ! grep -qF "$want" "$log"; then
+            echo "Error: compatdb.so did not report '$want'"
+            grep "compatdb:" "$log" || echo "  (no compatdb lines at all)"
+            smoke_stop
+            exit 1
+        fi
+    done
+
+    echo "  Matching a rule by a Steam app id..."
+    log="$TMP_DIR/steam-app.log"
+    printf 'exe=steam:440;gcmouse=false\n' >"$file"
+    run_limited 120 "$log" "$@" WINE_COMPATDB_FILE="$file" SteamAppId=440 \
+        "$WINE_DIR/bin/wine" cmd /c exit
+    smoke_check "cmd.exe with a rule for a Steam app id" 120 "$log"
+    check_rules_read "cmd.exe with a rule for a Steam app id" "$log"
+    for want in "compatdb:   SteamAppId = 440" \
         "compatdb:   gcmouse = false, WINE_COMPATDB line 1"; do
         if ! grep -qF "$want" "$log"; then
             echo "Error: compatdb.so did not report '$want'"

@@ -3,8 +3,8 @@
 //!
 //! `compatdb.so` is the unix library Wine's ntdll loads into every process
 //! of the bundle before any PE code runs. It reads the process's image
-//! name and version resource, takes the built-in rules of [`builtin`],
-//! appends the rules a launcher passed in the environment variable
+//! name, version resource and Steam app id, takes the built-in rules of
+//! [`builtin`], appends the rules a launcher passed in the environment variable
 //! [`ENV_VAR`] (`WINE_COMPATDB`) or in the file [`FILE_ENV_VAR`] names,
 //! folds every rule that matches the process into one [`Resolution`] and
 //! applies it: the Direct3D trees to load, the renderer of wined3d, which
@@ -142,11 +142,12 @@
 //!
 //! The case rule. Every word the format defines is read
 //! ASCII-case-insensitively and written in lowercase: the keys, the words
-//! of the scalar settings, `true`, `false`, `default`, and the `v` of a
-//! legacy header. User data is kept byte for byte: the `exe`, the
-//! fingerprint values, list entries and env names and values. So
-//! `DXGI=WineD3D` reads as `dxgi=wined3d`, while `exe=Game.EXE` keeps its
-//! case (matching ignores it, see [Matching](#matching)).
+//! of the scalar settings, `true`, `false`, `default`, the `steam:` of an
+//! `exe` and the `v` of a legacy header. User data is kept byte for byte: the
+//! `exe`, the fingerprint values, list entries and env names and values. So
+//! `DXGI=WineD3D` reads as `dxgi=wined3d`, and `exe=STEAM:440` as
+//! `exe=steam:440`, while `exe=Game.EXE` keeps its case (matching ignores it,
+//! see [Matching](#matching)).
 //!
 //! There is no format version. A first line of `v=` and ASCII digits, the
 //! header launchers wrote for an older format, is skipped without a
@@ -155,11 +156,14 @@
 //! whose value its key does not take, with a warning, and applies the rest
 //! of the record. A key added later is therefore only ever a setting: the
 //! matcher keys are a closed set, since a library that ignored an unknown
-//! matcher would apply the rule to more processes than it names. The
-//! `name` and `enabled` keys of the older format, where a line changed or
-//! dropped a built-in rule by its name, are unknown keys like any other,
-//! and a `compatdb.so` from before that change drops every line without
-//! `name`, so a table in this format does nothing on an older bundle.
+//! matcher would apply the rule to more processes than it names. So a Steam
+//! app is a value of `exe`, `steam:<appid>`, and no key of its own: a library
+//! from before it reads the value as a basename, which no process has, and
+//! the rule matches nothing, where `exe=*;steam_app=440` would apply to every
+//! process. The `name` and `enabled` keys of the older format, where a line
+//! changed or dropped a built-in rule by its name, are unknown keys like any
+//! other, and a `compatdb.so` from before that change drops every line
+//! without `name`, so a table in this format does nothing on an older bundle.
 //!
 //! `Display` writes the canonical text: one line per rule and no line
 //! break after the last, the fields in the order of [`Key::ALL`], every
@@ -243,16 +247,35 @@
 //!
 //! - `exe` matches the image basename ASCII-case-insensitively, or every
 //!   process when it is `*` ([`Exe::Any`]).
+//! - `exe=steam:<appid>` ([`Exe::Steam`]) matches a process by its Steam app
+//!   id instead, whatever its image name, for a launcher that drives
+//!   `steam.exe -applaunch <appid>` and knows the id but not the executable.
+//!   The id is the decimal value of `SteamAppId` in the process's environment
+//!   block ([`runtime::steam_app`]). A value that is empty, 0 or no number is
+//!   no id, so Steam's own processes, which have the variable empty, do not
+//!   match. A game started outside Steam has no id unless whoever started it
+//!   set the variable, so the rule does not match it, and neither does
+//!   [`Table::preview`], which knows no id. [`Exe::new`] refuses a `steam:`
+//!   that no id from 1 to [`u32::MAX`] follows.
 //! - `company`, `product` and `original_filename` are optional
 //!   ASCII-case-insensitive substrings of the image's version strings
 //!   `CompanyName`, `ProductName` and `OriginalFilename` ([`VersionInfo`]).
 //!   A string the image lacks reads as empty, so a rule that pins a value
-//!   for it does not match.
+//!   for it does not match. They combine with a Steam app id as with a
+//!   basename: `exe=steam:440;product=Foo`.
 //! - A rule whose `exe` matches but whose fingerprint does not does not
 //!   apply; nothing falls back to it, and the other rules that match still
 //!   apply.
 //! - [`Table::duplicate_matchers`] finds rules that match exactly the same
 //!   processes, which in a hand-written table is a mistake.
+//! - A process has its app id from its environment block, which it inherits,
+//!   so a rule for an app id can match more than one program. [`Rule::set`]
+//!   therefore refuses in such a rule what it refuses in a `*` rule
+//!   ([`Key::allowed_on_any`]), and `debug_channels`, since `WINEDEBUG` scopes
+//!   an entry by the image name ([`Table::winedebug`] leaves one out). Reading
+//!   text refuses neither, [`Table::parse_strict`] included: both stay in the
+//!   rule and its text, and the rule's `arguments_override` is ignored and its
+//!   `debug_channels` are only logged.
 //!
 //! # Folding
 //!
@@ -265,6 +288,16 @@
 //! 2. the `*` rules of [`ENV_VAR`];
 //! 3. the built-in rules that name an executable;
 //! 4. the rules of [`ENV_VAR`] that name an executable.
+//!
+//! A rule for a Steam app id counts as naming an executable: it adds no group
+//! to this order, and within one folds in table order with the rules for a
+//! basename ([`Specificity::Exe`], [`Specificity::ExeWithFingerprint`]). So it
+//! beats a built-in rule for a program in every process that holds the id,
+//! as a rule of the launcher for that program does: `exe=steam:12210;dxgi=dxmt`
+//! moves a Rockstar `Launcher.exe` that holds the id off the tree its built-in
+//! rule pins, and `exe=steam:12210;metal_hud=true` undoes the
+//! `MTL_HUD_ENABLED=0` of such a `SocialClubHelper.exe`. A fingerprint narrows
+//! the rule to the game: `exe=steam:12210;product=Grand Theft Auto IV;dxgi=dxmt`.
 //!
 //! So a launch-wide `*` rule replaces a built-in default but not what a
 //! built-in rule for one program sets: that fix survives launch-wide
@@ -282,7 +315,8 @@
 //! - `arguments_override` replaces the arguments the rules folded before it
 //!   gathered, the built-in ones included, with its own entries; the
 //!   rule's own `arguments` and those of the rules folded after it still
-//!   append.
+//!   append. In a rule for a Steam app id it is ignored
+//!   ([`Rule::arguments_override`]), and the rule's `arguments` still append.
 //! - A `dll_overrides` entry with the order `default`, such as
 //!   `mscoree,mshtml=default`, takes its modules out of the entries the
 //!   rules folded before it gave them and adds none, so the registry and
@@ -406,6 +440,8 @@
 //! | Replace the arguments the rules give one game | `exe=Game.exe;arguments_override=-windowed` |
 //! | Give one game no arguments from any rule | `exe=Game.exe;arguments_override=` |
 //! | Change what a built-in rule sets for one program | `exe=Launcher.exe;dxgi=dxmt` |
+//! | Give every program that holds a Steam app id wined3d | `exe=steam:440;dxgi=wined3d` |
+//! | Give one game wined3d by its app id, and not the programs around it | `exe=steam:440;product=<product>;dxgi=wined3d` |
 //!
 //! Most of them with `exe=*` do the same for every process, except where a
 //! built-in rule for one program sets the key. [`Rule::set`] refuses
@@ -524,7 +560,7 @@ pub use crate::{
     key::{Key, KeyKind, Scalar, ScalarValue, ValueKind},
     part::{
         Argument, DebugChannel, DllOverride, EnvEntry, EnvName, Exe, ExeName, Fingerprint,
-        Specificity,
+        Specificity, SteamApp,
     },
     resolve::{
         ArgumentsDropped, DllOverrideReset, EnvFrom, EnvStep, Origin, Resolution, ScalarState,

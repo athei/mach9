@@ -21,7 +21,7 @@ fn a_fingerprint_constraint_is_an_optional_extra_filter() {
     };
     // Matches by basename + fingerprint regardless of where it is installed.
     assert_eq!(
-        table.resolve("Launcher.exe", &rockstar).dxgi(),
+        table.resolve("Launcher.exe", &rockstar, None).dxgi(),
         Some(Dxgi::Wined3d)
     );
     // A different program that happens to be called Launcher.exe: same
@@ -29,7 +29,7 @@ fn a_fingerprint_constraint_is_an_optional_extra_filter() {
     // left alone.
     assert!(
         table
-            .resolve("launcher.exe", &VersionInfo::default())
+            .resolve("launcher.exe", &VersionInfo::default(), None)
             .is_empty()
     );
 }
@@ -41,7 +41,7 @@ fn a_bare_basename_rule_needs_no_fingerprint() {
         arguments: vec![Argument::literal("--in-process-gpu")],
         ..Rule::default()
     }]);
-    let r = table.resolve("steamwebhelper.exe", &VersionInfo::default());
+    let r = table.resolve("steamwebhelper.exe", &VersionInfo::default(), None);
     assert_eq!(r.arguments, ["--in-process-gpu"]);
 }
 
@@ -71,6 +71,44 @@ fn specificity_orders_wildcard_then_exe_then_fingerprint() {
     assert!(named.is_unfingerprinted());
     assert!(!named_pinned.is_unfingerprinted());
     assert!(!wildcard.is_unfingerprinted());
+}
+
+#[test]
+fn a_steam_rule_matches_the_app_id_with_or_without_a_fingerprint() -> TestResult {
+    let rule = Rule::new(Exe::new("steam:440")?);
+    let none = VersionInfo::default();
+    assert!(rule.matches("hl2.exe", &none, Some(440)));
+    assert!(!rule.matches("hl2.exe", &none, Some(220)));
+    assert!(!rule.matches("hl2.exe", &none, None));
+    // A rule for a basename or `*` does not depend on an id.
+    let named = Rule::new(Exe::new("hl2.exe")?);
+    assert!(named.matches("hl2.exe", &none, Some(440)));
+    assert!(named.matches("hl2.exe", &none, None));
+    assert!(Rule::new(Exe::Any).matches("hl2.exe", &none, None));
+
+    let pinned = rule.with_product(Fingerprint::new("Foo")?);
+    let foo = VersionInfo {
+        product: "Foo Game".into(),
+        ..VersionInfo::default()
+    };
+    assert!(pinned.matches("hl2.exe", &foo, Some(440)));
+    assert!(!pinned.matches("hl2.exe", &none, Some(440)));
+    assert!(!pinned.matches("hl2.exe", &foo, Some(220)));
+    assert!(!pinned.matches("hl2.exe", &foo, None));
+    Ok(())
+}
+
+#[test]
+fn a_steam_rule_sits_in_the_exe_tier_and_is_not_unfingerprinted() -> TestResult {
+    let rule = Rule::new(Exe::new("steam:440")?);
+    assert_eq!(rule.specificity(), Specificity::Exe);
+    assert!(!rule.is_unfingerprinted());
+    assert_eq!(rule.matchers(), "steam:440");
+    let pinned = rule.with_product(Fingerprint::new("Foo")?);
+    assert_eq!(pinned.specificity(), Specificity::ExeWithFingerprint);
+    assert!(!pinned.is_unfingerprinted());
+    assert_eq!(pinned.matchers(), "steam:440 (Foo)");
+    Ok(())
 }
 
 #[test]

@@ -314,6 +314,77 @@ fn arguments_override_is_refused_in_a_rule_for_every_process() -> TestResult {
 }
 
 #[test]
+fn a_steam_rule_refuses_what_a_star_rule_refuses_and_debug_channels() -> TestResult {
+    let steam = || Exe::new("steam:440").map(Rule::new);
+    for &key in Key::ALL {
+        if key.kind() == KeyKind::Matcher {
+            continue;
+        }
+        let refused = !key.allowed_on_any() || key == Key::DebugChannels;
+        let error = Err(FieldError::RefusedOnSteamApp(key));
+        // With or without a fingerprint, as for `*`.
+        for rule in [steam()?, steam()?.with_company(Fingerprint::new("Acme")?)] {
+            let mut set = rule.clone();
+            let result = set.set(key, sample(key));
+            assert_eq!(result.is_ok(), !refused, "{key}: {result:?}");
+            if refused {
+                assert_eq!(result, error, "{key}");
+                assert_eq!(set, rule, "{key}");
+            }
+            if key.kind() == KeyKind::List || key.kind() == KeyKind::Env {
+                let list = rule.clone().set_list(key, [] as [&str; 0]);
+                assert_eq!(list.is_ok(), !refused, "{key}: {list:?}");
+            }
+            // A rule that holds the setting cannot become a Steam rule
+            // unless the setting is allowed there, and stays as it was.
+            let mut named = game()?;
+            named.set(key, sample(key))?;
+            let before = named.clone();
+            let result = named.set(Key::Exe, "steam:440");
+            assert_eq!(result.is_ok(), !refused, "{key}: {result:?}");
+            if refused {
+                assert_eq!(result, error, "{key}");
+                assert_eq!(named, before, "{key}");
+            }
+        }
+    }
+    let error = FieldError::RefusedOnSteamApp(Key::DebugChannels);
+    assert_eq!(error.severity(), Severity::Error);
+    assert_eq!(
+        error.to_string(),
+        "debug_channels needs an exe that names a program: WINEDEBUG scopes an entry by the \
+         image name, which a Steam app id does not give"
+    );
+    assert_eq!(
+        FieldError::RefusedOnSteamApp(Key::ArgumentsOverride).to_string(),
+        "arguments_override needs an exe that names a program: a Steam app id can match more \
+         than one program, and it would take away the arguments the built-in rules give them, \
+         which some of them need to work"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_steam_rule_takes_the_fingerprints_and_a_bad_app_id_is_refused() -> TestResult {
+    let mut rule = Rule::new(Exe::new("steam:440")?);
+    for key in [Key::Company, Key::Product, Key::OriginalFilename] {
+        rule.set(key, "Acme")?;
+    }
+    rule.set(Key::Exe, "STEAM:220")?;
+    assert_eq!(rule.exe().as_str(), "steam:220");
+    // A rule can leave a Steam app id again: nothing it holds stands in
+    // the way.
+    rule.set(Key::Exe, "Game.exe")?;
+    rule.set(Key::DebugChannels, "+relay")?;
+    let before = rule.clone();
+    let error = rule.set(Key::Exe, "steam:0");
+    assert_eq!(error, Err(FieldError::BadSteamApp("steam:0".into())));
+    assert_eq!(error.map_err(|e| e.severity()), Err(Severity::Error));
+    assert_eq!(rule, before);
+    Ok(())
+}
+
+#[test]
 fn a_retired_environment_variable_names_the_setting_that_replaced_it() -> TestResult {
     for (name, key) in [
         ("WINEDEBUG", Key::DebugChannels),

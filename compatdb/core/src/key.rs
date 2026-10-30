@@ -16,7 +16,8 @@ use crate::{Exe, Rule, Setting, Table, metal_hud_env};
 /// the key's variant doc, and what [`Key::summary`] returns.
 macro_rules! summary {
     (Exe) => {
-        "The image basename a rule matches, in any case, or * for every process."
+        "The image basename a rule matches, in any case, * for every process, or steam:440 for \
+         that Steam app."
     };
     (Company) => {
         "A text the company name of the image's version resource must contain."

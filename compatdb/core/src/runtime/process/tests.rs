@@ -19,6 +19,52 @@ fn env_block(entries: &[&str]) -> Vec<u16> {
 }
 
 #[test]
+fn the_steam_app_id_is_a_decimal_value_in_the_block() {
+    assert_eq!(
+        steam_app(&env_block(&["A=1", "SteamAppId=220", "B=2"])),
+        Some(220)
+    );
+    assert_eq!(
+        steam_app(&env_block(&["SteamAppId=4294967295"])),
+        Some(u32::MAX)
+    );
+    // Windows names have no case.
+    for name in ["STEAMAPPID", "steamappid", "SteamAPPID"] {
+        let entry = format!("{name}=220");
+        assert_eq!(steam_app(&env_block(&[&entry])), Some(220), "{name}");
+    }
+}
+
+#[test]
+fn a_value_that_is_no_app_id_reads_as_none() {
+    assert_eq!(steam_app(&env_block(&[])), None);
+    assert_eq!(steam_app(&[]), None);
+    assert_eq!(steam_app(&env_block(&["PATH=C:\\windows"])), None);
+    // Steam's own processes have the variable empty.
+    for value in [
+        "",
+        "0",
+        "000",
+        "abc",
+        "220a",
+        " 220",
+        "220 ",
+        "+220",
+        "-220",
+        "2.5",
+        "4294967296",
+    ] {
+        let entry = format!("{STEAM_APP_VAR}={value}");
+        assert_eq!(steam_app(&env_block(&[&entry])), None, "{value:?}");
+    }
+    // Another variable that holds the name is not this one.
+    let others = ["SteamGameId=220", "XSteamAppId=220", "SteamAppId2=220"];
+    assert_eq!(steam_app(&env_block(&others)), None);
+    // A drive entry is no variable.
+    assert_eq!(steam_app(&env_block(&["=SteamAppId=220"])), None);
+}
+
+#[test]
 fn append_cmdline_is_idempotent() -> TestResult {
     let base = u16s("cmd.exe");
     let appends = vec!["--in-process-gpu".to_string()];

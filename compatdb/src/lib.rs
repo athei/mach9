@@ -41,8 +41,8 @@ use compatdb_core::{
     ArgumentsDropped, DllOverrideReset, EnvEntry, EnvStep, Key, Origin, Resolution, Scalar, Table,
     VersionInfo, Wined3d,
     runtime::{
-        Arch, append_cmdline_each, basename_of, effective_d3d9, effective_dxgi, env_value,
-        wined3d_renderer_in,
+        Arch, STEAM_APP_VAR, append_cmdline_each, basename_of, effective_d3d9, effective_dxgi,
+        env_value, steam_app, wined3d_renderer_in,
     },
 };
 
@@ -78,13 +78,16 @@ extern "C" fn run() {
         log_lines(&lines);
         return;
     };
-    let mut resolution = table.resolve(&process.exe, &process.version);
+    let mut resolution = process.resolve(&table);
     let arch = arch_name(process.arch);
     log::line(&format!(
         "{} [{arch}]{}",
         process.exe,
         fingerprint(&process.version)
     ));
+    if let Some(app) = process.steam_app() {
+        log::line(&steam_app_line(app));
+    }
     // Where the rules came from and what could not be read from them go in
     // the block of the process, next to the configuration they leave.
     log_lines(&lines);
@@ -155,6 +158,9 @@ extern "C" fn run() {
     ));
     for dropped in &resolution.arguments_dropped {
         log::line(&dropped_line(dropped));
+    }
+    for by in &resolution.arguments_override_ignored {
+        log::line(&override_ignored_line(by));
     }
     log::line(&debug_channels_line(&resolution));
     // A default env entry leaves a variable the process already has alone,
@@ -314,6 +320,15 @@ fn dropped_line(dropped: &ArgumentsDropped) -> String {
     )
 }
 
+/// The log line of an `arguments_override` that was ignored, in a rule for a
+/// Steam app id.
+fn override_ignored_line(by: &Origin) -> String {
+    format!(
+        "  arguments_override, {}: ignored, a Steam app id can match more than one program",
+        by.label()
+    )
+}
+
 /// The log line of the Metal HUD setting: its value and where it came from,
 /// like the other scalars. Its env lines show the variables it sets or
 /// removes.
@@ -362,6 +377,11 @@ fn env_line(step: &EnvStep, has: Option<&str>) -> String {
     };
     // The entry prints as `NAME=value`, and a removal as `NAME=`.
     format!("  env {}, {}: {what}", step.entry, step.origin.label())
+}
+
+/// The log line of the Steam app id of a process that has one.
+fn steam_app_line(app: u32) -> String {
+    format!("  {STEAM_APP_VAR} = {app}")
 }
 
 /// Log the lines [`load_table`] left for the block of the process.
@@ -457,6 +477,16 @@ pub(crate) struct Process {
 }
 
 impl Process {
+    /// The process's Steam app id, read from its environment block.
+    fn steam_app(&self) -> Option<u32> {
+        steam_app(&self.env)
+    }
+
+    /// What the rules of `table` give the process.
+    fn resolve(&self, table: &Table) -> Resolution {
+        table.resolve(&self.exe, &self.version, self.steam_app())
+    }
+
     /// The current process.
     fn current(nt: &Ntdll) -> Option<Self> {
         let teb = nt.current_teb();
@@ -492,7 +522,7 @@ impl Process {
         // main image's machine tells an x86_64 program from a native ARM64
         // one; see Arch::of_process. An x86_64 program stays Arch::X86_64, for
         // the log and the Direct3D defaults; the rules themselves match on
-        // the image name and version alone.
+        // the image name, version and Steam app id alone.
         let params32 = match nt.wow64_information() {
             Some(w) if w != 0 => {
                 let peb32 = w as *const Peb32;

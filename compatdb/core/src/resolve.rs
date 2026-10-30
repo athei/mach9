@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 #[cfg(doc)]
-use crate::runtime::basename_of;
+use crate::runtime::{basename_of, steam_app};
 use crate::{
     Argument, D3d9, DebugChannel, DllOverride, Dxgi, ENV_VAR, EnvEntry, OpenGl, Rule, Scalar,
     ScalarValue, Setting, Source, Specificity, Table, VersionInfo, Wined3d, metal_hud_env, runtime,
@@ -39,6 +39,9 @@ pub struct Resolution {
     /// Each `arguments_override` that dropped entries from the argument
     /// list, in fold order.
     pub arguments_dropped: Vec<ArgumentsDropped>,
+    /// The rule of each `arguments_override` that was ignored, in fold order:
+    /// that of a rule for a Steam app id (see [`Rule::arguments_override`]).
+    pub arguments_override_ignored: Vec<Origin>,
     /// The `debug_channels` entries of every matching rule in fold order,
     /// which `compatdb.so` only logs (see [`Rule::debug_channels`]).
     pub debug_channels: Vec<DebugChannel>,
@@ -426,23 +429,29 @@ impl Resolution {
     }
 
     /// Fold the arguments of `rule` into the list: its `arguments_override`,
-    /// when set, replaces what the rules folded before it accumulated, and
-    /// its `arguments` append.
+    /// when set, replaces what the rules folded before it accumulated, unless
+    /// `rule` is for a Steam app id, and its `arguments` append.
     fn fold_arguments(&mut self, rule: &Rule, origin: &Origin) {
-        if let Some(over) = &rule.arguments_override {
-            let entries: Vec<(Argument, Origin)> = std::mem::take(&mut self.arguments)
-                .into_iter()
-                .zip(std::mem::take(&mut self.arguments_from))
-                .collect();
-            if !entries.is_empty() {
-                self.arguments_dropped.push(ArgumentsDropped {
-                    by: origin.clone(),
-                    entries,
-                });
+        match &rule.arguments_override {
+            Some(_) if rule.exe.is_steam_app() => {
+                self.arguments_override_ignored.push(origin.clone());
             }
-            self.arguments.extend(over.iter().cloned());
-            self.arguments_from
-                .extend(over.iter().map(|_| origin.clone()));
+            Some(over) => {
+                let entries: Vec<(Argument, Origin)> = std::mem::take(&mut self.arguments)
+                    .into_iter()
+                    .zip(std::mem::take(&mut self.arguments_from))
+                    .collect();
+                if !entries.is_empty() {
+                    self.arguments_dropped.push(ArgumentsDropped {
+                        by: origin.clone(),
+                        entries,
+                    });
+                }
+                self.arguments.extend(over.iter().cloned());
+                self.arguments_from
+                    .extend(over.iter().map(|_| origin.clone()));
+            }
+            None => {}
         }
         self.arguments.extend(rule.arguments.iter().cloned());
         self.arguments_from
@@ -513,7 +522,9 @@ impl Resolution {
 impl Table {
     /// Fold every matching rule into one [`Resolution`]. `exe` is the image
     /// basename (see [`basename_of`]); `version` is the image's version
-    /// resource, for the optional fingerprint constraints.
+    /// resource, for the optional fingerprint constraints; `steam_app` is the
+    /// process's Steam app id, if it has one (see [`steam_app`]), for the
+    /// rules that name one.
     ///
     /// The rules fold in this order, each group in table order, which is
     /// line order for the rules of [`ENV_VAR`]:
@@ -547,11 +558,15 @@ impl Table {
     /// A rule whose executable matches but whose fingerprint does not simply
     /// does not apply; nothing falls back to it, and the rules that do match
     /// still apply.
+    ///
+    /// A rule for a Steam app id counts as naming an executable: it folds in
+    /// the same groups, in table order with the rules for a basename. Its
+    /// `arguments_override` is ignored (see [`Rule::arguments_override`]).
     #[must_use]
-    pub fn resolve(&self, exe: &str, version: &VersionInfo) -> Resolution {
+    pub fn resolve(&self, exe: &str, version: &VersionInfo, steam_app: Option<u32>) -> Resolution {
         let mut matching: Vec<(Source, &Rule)> = self
             .entries()
-            .filter(|(_, rule)| rule.matches(exe, version))
+            .filter(|(_, rule)| rule.matches(exe, version, steam_app))
             .collect();
         matching.sort_by_key(|(source, rule)| {
             let specificity = rule.specificity();

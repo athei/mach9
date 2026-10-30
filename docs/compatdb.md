@@ -9,8 +9,9 @@
 - Installed as `lib/wine/aarch64-unix/compatdb.so`, next to ntdll's unix
   half. Wine's ntdll dlopens `<ntdll_dir>/compatdb.so` in every process
   before any PE code runs, the slot CrossOver's own compat database uses.
-- At load it reads the process's image name and version resource, takes
-  the built-in rules (`Table::builtin`) and the caller's rules
+- At load it reads the process's image name, version resource and Steam
+  app id ([matching][matching]), takes the built-in rules
+  (`Table::builtin`) and the caller's rules
   (`Table::parse_lenient`), resolves those that match and applies them
   through ntdll's hooks
   ([Wine-side contract](maintenance.md#wine-side-contract)).
@@ -77,6 +78,7 @@ with `compatdb:`.
 | Line | What it shows |
 |------|---------------|
 | `<exe> [<arch>]` | The image name, arch and version fingerprint. The arch is `x86_64 (arm64ec)` for an x86_64 program, `aarch64` for a native ARM64 one and `i386` for a wow64 one |
+| `SteamAppId = <id>` | The Steam app id rules can match ([matching][matching]); only when the process has one |
 | `WINE_COMPATDB_FILE = <path>` | The file named as the source of the rules; only when the variable is set |
 | `warning: WINE_COMPATDB_FILE replaces WINE_COMPATDB, ...` | Both variables are set, and the value of `WINE_COMPATDB` is ignored |
 | `warning: WINE_COMPATDB_FILE not read: <reason>; ...` | The file cannot be used, and the process gets the built-in rules alone |
@@ -88,6 +90,7 @@ with `compatdb:`.
 | `debug_channels` | Each entry with its source; only logged |
 | `dll_overrides <module>=default, <source>: ...` | The overrides an entry with the order `default` removed, or that there was none |
 | `arguments_override, <source>: dropped ...` | The arguments it dropped, each with its source |
+| `arguments_override, <source>: ignored, ...` | The rule is for a Steam app id, where the override does not apply ([`Rule::arguments_override`][arguments-override]) |
 | `dpi_aware`, `large_address_aware`, `gcmouse`, `force_nx`, `opengl` | The value; `large_address_aware` and `force_nx` note that they do nothing in a 64-bit process |
 | `env NAME=value, <source>: ...` | Whether the entry was set, removed, left alone because the process had the variable ([`Rule::env`][env]), or replaced by a later entry, with the sources involved |
 | `<setting> = <value>, <source>: ntdll lacks <hook>, ignored` | ntdll lacks the hook; the setting is ignored |
@@ -99,6 +102,7 @@ for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
 [spec]: https://docs.mach9.app
 [format]: https://docs.mach9.app/compatdb_core/#format
 [parsing]: https://docs.mach9.app/compatdb_core/#strict-and-lenient-parsing
+[matching]: https://docs.mach9.app/compatdb_core/#matching
 [launcher]: https://docs.mach9.app/compatdb_core/#launcher-responsibilities
 [recipes]: https://docs.mach9.app/compatdb_core/#recipes
 [upstream]: https://docs.mach9.app/compatdb_core/enum.Key.html#method.upstream
@@ -106,3 +110,4 @@ for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
 [dxgi]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.dxgi
 [d3d9]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.d3d9
 [env]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.env
+[arguments-override]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.arguments_override

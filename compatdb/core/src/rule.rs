@@ -429,7 +429,9 @@ impl Rule {
     /// `WINEDEBUG` entries for the processes the rule names. Wine reads
     /// `WINEDEBUG` before `compatdb.so` loads, so the library only logs
     /// them; a launcher puts them into the variable it starts Wine with
-    /// (see [`Table::winedebug`]).
+    /// (see [`Table::winedebug`]). Those of a rule for a Steam app id are
+    /// only logged: `WINEDEBUG` has no scope for an app id, so they reach no
+    /// process.
     #[must_use]
     pub fn debug_channels(&self) -> &[DebugChannel] {
         &self.debug_channels
@@ -467,6 +469,11 @@ impl Rule {
     /// this one accumulated (see [`Table::resolve`]); `Some` with no entries
     /// clears it. This rule's own [`Rule::arguments`] and those of the rules
     /// folded after it still append.
+    ///
+    /// In a rule for a Steam app id it is ignored, and `compatdb.so` logs
+    /// that: such a rule folds after the built-in rules for a program and
+    /// matches every program that holds the id, so it would take away the
+    /// arguments they need ([`Resolution::arguments_override_ignored`]).
     #[must_use]
     pub fn arguments_override(&self) -> Option<&[Argument]> {
         self.arguments_override.as_deref()
@@ -567,16 +574,17 @@ impl Rule {
         }
     }
 
-    /// Whether this rule applies to a process with the given image basename
-    /// and version resource. `exe` matches the basename case-insensitively, or
-    /// every basename when it is [`Exe::Any`]; a fingerprint field, when
+    /// Whether this rule applies to a process with the given image basename,
+    /// version resource and Steam app id, if it has one. `exe` matches the
+    /// basename case-insensitively, every basename when it is [`Exe::Any`], or
+    /// the app id when it is [`Exe::Steam`]; a fingerprint field, when
     /// present, is an additional case-insensitive substring constraint on the
-    /// corresponding version string (so a rule with none matches on the
-    /// basename alone).
+    /// corresponding version string (so a rule with none matches on its `exe`
+    /// alone).
     #[must_use]
-    pub fn matches(&self, exe: &str, version: &VersionInfo) -> bool {
+    pub fn matches(&self, exe: &str, version: &VersionInfo, steam_app: Option<u32>) -> bool {
         let pin = |pin: Option<&Fingerprint>, actual: &str| pin.is_none_or(|p| p.matches(actual));
-        self.exe.matches(exe)
+        self.exe.matches(exe, steam_app)
             && pin(self.company.as_ref(), &version.company)
             && pin(self.product.as_ref(), &version.product)
             && pin(self.original_filename.as_ref(), &version.original_filename)
@@ -587,7 +595,8 @@ impl Rule {
     /// fingerprint. [`Table::resolve`] folds a wildcard rule before one
     /// naming an executable whatever their source, and within each the
     /// built-in rules before the others, a rule without a fingerprint before
-    /// one with.
+    /// one with. A rule for a Steam app id ([`Exe::Steam`]) counts as naming
+    /// an executable.
     #[must_use]
     pub const fn specificity(&self) -> Specificity {
         let fingerprinted =
@@ -600,12 +609,13 @@ impl Rule {
         }
     }
 
-    /// Whether this rule matches on its executable alone. Such a rule catches
-    /// every program with that file name, which is worth a warning for all but
-    /// the few basenames that are unique in practice.
+    /// Whether this rule matches on its executable's file name alone. Such a
+    /// rule catches every program with that file name, which is worth a
+    /// warning for all but the few basenames that are unique in practice. A
+    /// rule for a Steam app id names no file, so this is `false` for one.
     #[must_use]
     pub const fn is_unfingerprinted(&self) -> bool {
-        matches!(self.specificity(), Specificity::Exe)
+        matches!(self.specificity(), Specificity::Exe) && !self.exe.is_steam_app()
     }
 
     /// Whether two rules would match exactly the same processes, which can only
