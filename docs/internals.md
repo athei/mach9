@@ -294,7 +294,8 @@ can, per game.
   stays relocatable. ntdll sets `VK_DRIVER_FILES` to that directory unless
   the caller set `VK_DRIVER_FILES`, `VK_ICD_FILENAMES` or
   `VK_ADD_DRIVER_FILES`. A caller that sets one chooses the drivers
-  itself, and has to name the bundled one to use it.
+  itself, and has to name the bundled one to use it. A portability driver
+  loads through `VK_DRIVER_FILES` with its stock manifest.
 - The features our commits add (device-generated commands, transform
   feedback, sparse resources), which D3D12 and Zink need, are always
   advertised. `MESA_KK_EXPERIMENTAL` keeps only Mesa's own experimental
