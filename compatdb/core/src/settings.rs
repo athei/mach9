@@ -19,8 +19,8 @@
 //! refuses ([`check_env_name`]).
 
 use crate::{
-    Argument, DEFAULT_VALUE, DebugChannel, DllOverride, EnvEntry, EnvName, Exe, FieldError,
-    Fingerprint, Key, KeyKind, Rule, Scalar, ScalarValue, Setting, Severity,
+    Argument, DEFAULT_VALUE, DebugChannel, DllOverride, EnvEntry, EnvName, Exe, FILE_ENV_VAR,
+    FieldError, Fingerprint, Key, KeyKind, Rule, Scalar, ScalarValue, Setting, Severity,
 };
 
 /// The keys that are no longer read, each with why and what to do instead
@@ -145,13 +145,16 @@ fn env_name(name: &str) -> Result<EnvName, FieldError> {
 ///   would hand Mono and Gecko to it.
 /// - `WINE_LARGE_ADDRESS_AWARE`: it gives every 32-bit process the 4 GB
 ///   address space, which `large_address_aware` decides per process.
+/// - [`FILE_ENV_VAR`]: an inherited path would replace the rules the
+///   launcher writes to [`ENV_VAR`](crate::ENV_VAR).
 ///
-/// `WINE_LARGE_ADDRESS_AWARE` is not retired, so a launcher may still set
-/// it for the whole launch on purpose. `WINEDLLOVERRIDES` is (see
-/// [`retired_env`]): a rule's `dll_overrides` does its job.
+/// `WINE_LARGE_ADDRESS_AWARE` and [`FILE_ENV_VAR`] are not retired, so a
+/// launcher may still set them for the whole launch on purpose.
+/// `WINEDLLOVERRIDES` is (see [`retired_env`]): a rule's `dll_overrides` does
+/// its job.
 #[must_use]
 pub const fn inherited_conflicts() -> &'static [&'static str] {
-    &["WINEDLLOVERRIDES", "WINE_LARGE_ADDRESS_AWARE"]
+    &["WINEDLLOVERRIDES", "WINE_LARGE_ADDRESS_AWARE", FILE_ENV_VAR]
 }
 
 impl Key {

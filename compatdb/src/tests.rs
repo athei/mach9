@@ -311,12 +311,12 @@ fn the_log_labels_each_arch() {
 
 #[test]
 fn without_wine_compatdb_the_table_is_the_builtin_one() {
-    // load_table reads WINE_COMPATDB, which a developer's shell may set;
-    // the answer is only predictable without it.
-    if std::env::var_os(ENV_VAR).is_some() {
+    // load_table reads the variables a developer's shell may set; the answer
+    // is only predictable without them.
+    if std::env::var_os(ENV_VAR).is_some() || std::env::var_os(FILE_ENV_VAR).is_some() {
         return;
     }
-    let (table, messages) = load_table();
+    let (table, lines) = load_table();
     assert_eq!(table, Table::builtin());
-    assert_eq!(messages, []);
+    assert_eq!(lines, [] as [String; 0]);
 }

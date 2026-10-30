@@ -215,12 +215,17 @@ fn a_debug_channels_value_is_split_at_each_comma_and_each_part_is_scoped() -> Te
 fn the_inherited_conflicts_are_the_variables_rules_decide_per_process() {
     assert_eq!(
         inherited_conflicts(),
-        ["WINEDLLOVERRIDES", "WINE_LARGE_ADDRESS_AWARE"]
+        [
+            "WINEDLLOVERRIDES",
+            "WINE_LARGE_ADDRESS_AWARE",
+            "WINE_COMPATDB_FILE"
+        ]
     );
-    // Only WINEDLLOVERRIDES is retired: a launcher may still set the other
+    // Only WINEDLLOVERRIDES is retired: a launcher may still set the others
     // for a launch on purpose.
     assert_eq!(retired_env("WINEDLLOVERRIDES"), Some(Key::DllOverrides));
     assert_eq!(retired_env("WINE_LARGE_ADDRESS_AWARE"), None);
+    assert_eq!(retired_env(FILE_ENV_VAR), None);
 }
 
 #[test]

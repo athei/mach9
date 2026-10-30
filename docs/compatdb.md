@@ -10,10 +10,17 @@
   half. Wine's ntdll dlopens `<ntdll_dir>/compatdb.so` in every process
   before any PE code runs, the slot CrossOver's own compat database uses.
 - At load it reads the process's image name and version resource, takes
-  the built-in rules (`Table::builtin`) and the rules of `WINE_COMPATDB`
+  the built-in rules (`Table::builtin`) and the caller's rules
   (`Table::parse_lenient`), resolves those that match and applies them
   through ntdll's hooks
   ([Wine-side contract](maintenance.md#wine-side-contract)).
+- The caller's rules are the file `WINE_COMPATDB_FILE` names or, without
+  that variable, the value of `WINE_COMPATDB`. The file is read at each
+  process start, so a process started later in a running tree gets a
+  changed file, while a running process keeps the rules it read. The
+  [format][format] has what the file must be and what happens when it
+  cannot be read; [launcher responsibilities][launcher] has how to write
+  it. The reader is [`rules_file.rs`](../compatdb/src/rules_file.rs).
 
 ## Direct3D backends
 
@@ -67,13 +74,16 @@ with `compatdb:`.
   `reset by <source>` when the last rule for it set it to `default`.
 - A source is `built-in` for a built-in rule for every process,
   `built-in for <exe> (<fingerprint values>)` for a built-in rule for one
-  program, and `WINE_COMPATDB line <n>` for a rule from that variable
-  ([format][format]).
+  program, and `WINE_COMPATDB line <n>` for a rule from that variable or
+  from the file `WINE_COMPATDB_FILE` names ([format][format]).
 
 | Line | What it shows |
 |------|---------------|
 | `<exe> [<arch>]` | The image name, arch and version fingerprint. The arch is `x86_64 (arm64ec)` for an x86_64 program, `aarch64` for a native ARM64 one and `i386` for a wow64 one |
-| `warning: WINE_COMPATDB line <n>: ...` | A field or line of `WINE_COMPATDB` it ignored ([parsing][parsing]) |
+| `WINE_COMPATDB_FILE = <path>` | The file named as the source of the rules; only when the variable is set |
+| `warning: WINE_COMPATDB_FILE replaces WINE_COMPATDB, ...` | Both variables are set, and the value of `WINE_COMPATDB` is ignored |
+| `warning: WINE_COMPATDB_FILE not read: <reason>; ...` | The file cannot be used, and the process gets the built-in rules alone |
+| `warning: WINE_COMPATDB line <n>: ...` | A field or line of the rules it ignored ([parsing][parsing]) |
 | `dxgi = <impl> (from <path>), <source>`, `d3d9 = ...` | The trees it prepended; a family no rule chose gets `wined3d` |
 | `wined3d = ...` | The wined3d renderer a rule set, or the one a `WINE_D3D_CONFIG` from a rule's `env` or inherited asks for; unset, wined3d's registry settings or its default decide |
 | `metal_hud = <value>, <source>` | The HUD setting; its variables are in the `env` lines |
@@ -92,6 +102,7 @@ for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
 [spec]: https://docs.mach9.app
 [format]: https://docs.mach9.app/compatdb_core/#format
 [parsing]: https://docs.mach9.app/compatdb_core/#strict-and-lenient-parsing
+[launcher]: https://docs.mach9.app/compatdb_core/#launcher-responsibilities
 [recipes]: https://docs.mach9.app/compatdb_core/#recipes
 [upstream]: https://docs.mach9.app/compatdb_core/enum.Key.html#method.upstream
 [runtime]: https://docs.mach9.app/compatdb_core/runtime/index.html

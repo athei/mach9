@@ -7,15 +7,15 @@
 //! emulation and native ARM64 ones.
 //!
 //! It takes the built-in rules of [`compatdb_core::builtin`], which are
-//! compiled in, appends the ones passed in [`ENV_VAR`], resolves the rules
-//! that match this process and applies them: the D3D9 and DXGI trees, the
-//! wined3d renderer, DLL load-order overrides, the DPI awareness, large
-//! address awareness, whether the Mac driver reads raw mouse input from
-//! GameController, the Metal HUD, and command-line/environment rewrites. It
-//! logs a rule's `WINEDEBUG` channels, which Wine has read already. All the
-//! decision logic lives in [`compatdb_core`]; this crate only moves bytes in
-//! and out of the running process, so its `unsafe` is confined to a thin
-//! ntdll shell.
+//! compiled in, appends the ones passed in [`ENV_VAR`] or in the file
+//! [`FILE_ENV_VAR`] names, resolves the rules that match this process and
+//! applies them: the D3D9 and DXGI trees, the wined3d renderer, DLL
+//! load-order overrides, the DPI awareness, large address awareness, whether
+//! the Mac driver reads raw mouse input from GameController, the Metal HUD,
+//! and command-line/environment rewrites. It logs a rule's `WINEDEBUG`
+//! channels, which Wine has read already. All the decision logic lives in
+//! [`compatdb_core`]; this crate only moves bytes in and out of the running
+//! process, so its `unsafe` is confined to a thin ntdll shell.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -27,6 +27,7 @@
 mod apply;
 mod log;
 mod ntdll;
+mod rules_file;
 mod version;
 
 use std::{
@@ -35,7 +36,7 @@ use std::{
 };
 
 use compatdb_core::{
-    ArgumentsDropped, Diagnostic, DllOverrideReset, ENV_VAR, EnvEntry, EnvStep, Key, Origin,
+    ArgumentsDropped, DllOverrideReset, ENV_VAR, EnvEntry, EnvStep, FILE_ENV_VAR, Key, Origin,
     Resolution, Scalar, Table, VersionInfo, Wined3d,
     runtime::{
         Arch, append_cmdline_each, basename_of, effective_d3d9, effective_dxgi, env_value,
@@ -50,17 +51,20 @@ use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TE
 #[unsafe(link_section = "__DATA,__mod_init_func")]
 static INIT: extern "C" fn() = run;
 
-/// The built-in rules followed by the rules from [`ENV_VAR`], plus what
-/// could not be read from that variable, for the log.
-fn load_table() -> (Table, Vec<Diagnostic>) {
+/// The built-in rules followed by the caller's rules, plus the lines for the
+/// log: which file they came from, if one did, and what could not be read.
+fn load_table() -> (Table, Vec<String>) {
     // The built-in rules are compiled in; only the caller's rules travel in
-    // the environment (absent unless something set it). They come after the
-    // built-in ones, so within a tier they fold later.
-    let Some(text) = read_env() else {
-        return (Table::builtin(), Vec::new());
+    // the environment or a file it names (absent unless something set it).
+    // They come after the built-in ones, so within a tier they fold later.
+    let chosen = rules_file::choose(read_env(FILE_ENV_VAR), read_env(ENV_VAR), rules_file::read);
+    let mut lines = chosen.lines;
+    let Some(text) = chosen.text else {
+        return (Table::builtin(), lines);
     };
     let (rules, diagnostics) = Table::parse_lenient(&text);
-    (rules.with_builtin(), diagnostics)
+    lines.extend(diagnostics.iter().map(|m| format!("  warning: {m}")));
+    (rules.with_builtin(), lines)
 }
 
 extern "C" fn run() {
@@ -73,9 +77,9 @@ extern "C" fn run() {
         log::line("required ntdll symbols missing, doing nothing");
         return;
     };
-    let (table, messages) = load_table();
+    let (table, lines) = load_table();
     let Some(process) = Process::current(&nt) else {
-        log_warnings(&messages);
+        log_lines(&lines);
         return;
     };
     let mut resolution = table.resolve(&process.exe, &process.version);
@@ -85,9 +89,9 @@ extern "C" fn run() {
         process.exe,
         fingerprint(&process.version)
     ));
-    // What could not be read from WINE_COMPATDB goes in the block of the
-    // process, next to the configuration it leaves.
-    log_warnings(&messages);
+    // Where the rules came from and what could not be read from them go in
+    // the block of the process, next to the configuration they leave.
+    log_lines(&lines);
 
     // Every process gets one tree of each family prepended: a rule's choice,
     // which for most is a built-in `*` rule's, or wined3d, upstream Wine's,
@@ -364,11 +368,10 @@ fn env_line(step: &EnvStep, has: Option<&str>) -> String {
     format!("  env {}, {}: {what}", step.entry, step.origin.label())
 }
 
-/// Log each problem with the rules from [`ENV_VAR`] as a warning: a field
-/// or a line that was ignored.
-fn log_warnings(messages: &[Diagnostic]) {
-    for m in messages {
-        log::line(&format!("  warning: {m}"));
+/// Log the lines [`load_table`] left for the block of the process.
+fn log_lines(lines: &[String]) {
+    for line in lines {
+        log::line(line);
     }
 }
 
@@ -428,10 +431,10 @@ fn fingerprint(v: &VersionInfo) -> String {
     parts
 }
 
-/// The value of [`ENV_VAR`], read straight from the C environment so the
-/// no-op path allocates nothing beyond the small variable name.
-fn read_env() -> Option<String> {
-    let name = CString::new(ENV_VAR).ok()?;
+/// The value of the variable `name`, read straight from the C environment so
+/// the no-op path allocates nothing beyond the small variable name.
+fn read_env(name: &str) -> Option<String> {
+    let name = CString::new(name).ok()?;
     // SAFETY: `name` is a valid NUL-terminated string; getenv returns a pointer
     // into the environment or null, and we copy it out immediately.
     let ptr = unsafe { libc::getenv(name.as_ptr()) };
@@ -442,7 +445,7 @@ fn read_env() -> Option<String> {
     let value = unsafe { CStr::from_ptr(ptr) }
         .to_string_lossy()
         .into_owned();
-    (!value.is_empty()).then_some(value)
+    Some(value)
 }
 
 /// An owned snapshot of the process identity and the two strings the library
