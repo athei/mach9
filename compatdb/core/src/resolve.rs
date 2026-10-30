@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 #[cfg(doc)]
 use crate::runtime::{basename_of, steam_app};
 use crate::{
-    Argument, D3d9, DebugChannel, DllOverride, Dxgi, ENV_VAR, EnvEntry, OpenGl, Rule, Scalar,
-    ScalarValue, Setting, Source, Specificity, Table, VersionInfo, Wined3d, metal_hud_env, runtime,
+    Argument, D3d9, DebugChannel, DllOverride, Dxgi, ENV_VAR, EnvEntry, FILE_ENV_VAR, OpenGl, Rule,
+    Scalar, ScalarValue, Setting, Source, Specificity, Table, VersionInfo, Wined3d, metal_hud_env,
+    runtime,
 };
 
 /// The settings that apply to one process.
@@ -107,6 +108,8 @@ pub enum Origin {
     BuiltInFor(String),
     /// Line `n` of [`ENV_VAR`].
     Line(usize),
+    /// Line `n` of the file [`FILE_ENV_VAR`] names.
+    FileLine(usize),
 }
 
 impl Origin {
@@ -116,6 +119,7 @@ impl Origin {
     pub fn of(source: Source, rule: &Rule) -> Self {
         match source {
             Source::Line(n) => Self::Line(n),
+            Source::FileLine(n) => Self::FileLine(n),
             Source::BuiltIn if rule.specificity() == Specificity::Any => Self::BuiltIn,
             Source::BuiltIn => Self::BuiltInFor(rule.matchers()),
         }
@@ -129,14 +133,15 @@ impl Origin {
         matches!(self, Self::BuiltIn)
     }
 
-    /// How the log names it: `built-in`, `built-in for <matchers>` or
-    /// `WINE_COMPATDB line <n>`.
+    /// How the log names it: `built-in`, `built-in for <matchers>`,
+    /// `WINE_COMPATDB line <n>` or `WINE_COMPATDB_FILE line <n>`.
     #[must_use]
     pub fn label(&self) -> String {
         match self {
             Self::BuiltIn => String::from("built-in"),
             Self::BuiltInFor(matchers) => format!("built-in for {matchers}"),
             Self::Line(n) => format!("{ENV_VAR} line {n}"),
+            Self::FileLine(n) => format!("{FILE_ENV_VAR} line {n}"),
         }
     }
 }
@@ -527,22 +532,27 @@ impl Table {
     /// rules that name one.
     ///
     /// The rules fold in this order, each group in table order, which is
-    /// line order for the rules of [`ENV_VAR`]:
+    /// line order for the rules of [`ENV_VAR`] and then line order for those
+    /// of the file [`FILE_ENV_VAR`] names:
     ///
     /// 1. built-in `*` rules, those without a fingerprint first;
-    /// 2. `*` rules of the variable, those without a fingerprint first;
+    /// 2. the caller's `*` rules, those without a fingerprint first;
     /// 3. built-in rules naming an executable, those without a fingerprint
     ///    first;
-    /// 4. rules of the variable naming an executable, those without a
+    /// 4. the caller's rules naming an executable, those without a
     ///    fingerprint first.
     ///
     /// So a scalar field ends up holding the value of the last rule that
     /// sets it. Whether a rule names an executable decides first, then where
     /// it comes from, then whether it pins a fingerprint (see
-    /// [`Rule::specificity`]). A launch-wide `*` rule from the variable
-    /// replaces a built-in default but not what a built-in rule for one
-    /// program sets, so that fix survives launch-wide settings, and a rule
-    /// from the variable for the program beats it, with or without a
+    /// [`Rule::specificity`]). The variable and the file are one place in
+    /// that order, so only table order tells them apart: a rule of the file
+    /// beats a rule of the variable of equal specificity, because it is
+    /// declared later, and a `*` rule of the file does not beat a rule of
+    /// the variable that names an executable. A launch-wide `*` rule of the
+    /// caller replaces a built-in default but not what a built-in rule for
+    /// one program sets, so that fix survives launch-wide settings, and a
+    /// rule of the caller for the program beats it, with or without a
     /// fingerprint. The lists accumulate across every rule that matched, in
     /// the same order. The exceptions are a
     /// rule's `arguments_override`, which replaces the arguments the rules
@@ -574,6 +584,7 @@ impl Table {
                 specificity,
                 Specificity::Exe | Specificity::ExeWithFingerprint
             );
+            // The two sources of the caller's rules compare equal here.
             (names_exe, *source != Source::BuiltIn, specificity)
         });
         let mut r = Resolution::default();

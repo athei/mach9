@@ -145,8 +145,9 @@ fn env_name(name: &str) -> Result<EnvName, FieldError> {
 ///   would hand Mono and Gecko to it.
 /// - `WINE_LARGE_ADDRESS_AWARE`: it gives every 32-bit process the 4 GB
 ///   address space, which `large_address_aware` decides per process.
-/// - [`FILE_ENV_VAR`]: an inherited path would replace the rules the
-///   launcher writes to [`ENV_VAR`](crate::ENV_VAR).
+/// - [`FILE_ENV_VAR`]: an inherited path would add rules after the ones the
+///   launcher writes to [`ENV_VAR`](crate::ENV_VAR), and they beat the
+///   launcher's at equal specificity.
 ///
 /// `WINE_LARGE_ADDRESS_AWARE` and [`FILE_ENV_VAR`] are not retired, so a
 /// launcher may still set them for the whole launch on purpose.

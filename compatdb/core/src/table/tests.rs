@@ -54,6 +54,22 @@ fn preview_is_what_compatdb_so_resolves_with_the_table_in_the_variable() -> Test
 }
 
 #[test]
+fn preview_keeps_the_rules_of_the_file_with_their_labels() {
+    let (mut table, _) = Table::parse_lenient("exe=Game.exe;gcmouse=false");
+    let (file, _) = Table::parse_file_lenient("exe=Game.exe;dpi_aware=false");
+    table.append(file);
+    let game = table.preview("Game.exe", &VersionInfo::default());
+    assert_eq!(
+        game.scalar(crate::Scalar::Gcmouse).set_by,
+        Some(crate::Origin::Line(1))
+    );
+    assert_eq!(
+        game.scalar(crate::Scalar::DpiAware).set_by,
+        Some(crate::Origin::FileLine(1))
+    );
+}
+
+#[test]
 fn winedebug_scopes_the_channels_of_a_rule_for_an_exe_and_not_those_of_a_star_rule() -> TestResult {
     let channel = |text: &str| DebugChannel::new(text);
     let mut table = Table::new();

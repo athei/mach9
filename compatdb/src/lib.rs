@@ -8,7 +8,7 @@
 //!
 //! It takes the built-in rules of [`compatdb_core::builtin`], which are
 //! compiled in, appends the ones passed in
-//! [`ENV_VAR`](compatdb_core::ENV_VAR) or in the file
+//! [`ENV_VAR`](compatdb_core::ENV_VAR), then those of the file
 //! [`FILE_ENV_VAR`](compatdb_core::FILE_ENV_VAR) names, resolves the rules
 //! that match this process and applies them: the D3D9 and DXGI trees, the
 //! wined3d renderer, DLL load-order overrides, the DPI awareness, large
@@ -54,13 +54,14 @@ use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TE
 static INIT: extern "C" fn() = run;
 
 /// The built-in rules followed by the caller's rules, plus the lines for the
-/// log: which file they came from, if one did, and what could not be read.
+/// log: the file named, if one is, and what could not be read.
 fn load_table() -> (Table, Vec<String>) {
     // The built-in rules are compiled in; only the caller's rules travel in
-    // the environment or a file it names (absent unless something set it).
-    // They come after the built-in ones, so within a tier they fold later.
+    // the environment and a file it names (absent unless something set
+    // them). They come after the built-in ones, so within a tier they fold
+    // later, and the file's come after those of the environment.
     let variables = rules_file::Variables::read_with(read_env);
-    rules_file::choose(variables, rules_file::read).into_table()
+    rules_file::gather(variables, rules_file::read).into_table()
 }
 
 extern "C" fn run() {
@@ -88,8 +89,8 @@ extern "C" fn run() {
     if let Some(app) = process.steam_app() {
         log::line(&steam_app_line(app));
     }
-    // Where the rules came from and what could not be read from them go in
-    // the block of the process, next to the configuration they leave.
+    // The file named, if one is, and what could not be read go in the block
+    // of the process, next to the configuration they leave.
     log_lines(&lines);
 
     // Every process gets one tree of each family prepended: a rule's choice,

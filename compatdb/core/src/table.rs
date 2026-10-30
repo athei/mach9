@@ -1,8 +1,8 @@
 //! The table of rules, each with where it comes from.
 
 #[cfg(doc)]
-use crate::{ENV_VAR, Origin};
-use crate::{Exe, Resolution, Rule, Specificity, VersionInfo, builtin};
+use crate::Origin;
+use crate::{ENV_VAR, Exe, FILE_ENV_VAR, Resolution, Rule, Specificity, VersionInfo, builtin};
 
 /// Where a rule of a [`Table`] comes from. It decides how the log names the
 /// rule's values (see [`Origin`]) and whether its `env` entries are defaults
@@ -14,10 +14,43 @@ pub enum Source {
     /// Line `n` of [`ENV_VAR`], counted from 1 as [`Table::parse_lenient`]
     /// reads the value, blank lines and a legacy header included.
     Line(usize),
+    /// Line `n` of the file [`FILE_ENV_VAR`] names, counted from 1 as
+    /// [`Table::parse_file_lenient`] reads the file. The file counts its own
+    /// lines, so a rule here can share its number with a [`Source::Line`].
+    FileLine(usize),
+}
+
+/// Which of the two texts of the caller's rules a line is in. Each counts its
+/// own lines, so a line number alone does not say where a problem is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RulesText {
+    /// The value of [`ENV_VAR`].
+    Variable,
+    /// The file [`FILE_ENV_VAR`] names.
+    File,
+}
+
+impl RulesText {
+    /// How the log names the text: by its variable.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Variable => ENV_VAR,
+            Self::File => FILE_ENV_VAR,
+        }
+    }
+
+    /// The source of a rule on line `line` of the text.
+    pub(crate) const fn source(self, line: usize) -> Source {
+        match self {
+            Self::Variable => Source::Line(line),
+            Self::File => Source::FileLine(line),
+        }
+    }
 }
 
 /// The whole database: the built-in rules followed by the rules of
-/// [`ENV_VAR`], in the order they were declared, each with its [`Source`].
+/// [`ENV_VAR`] and then those of the file [`FILE_ENV_VAR`] names, in the
+/// order they were declared, each with its [`Source`].
 ///
 /// A launcher builds the rules it sends with [`Table::new`] and
 /// [`Table::push`] and writes them with `to_string()`, which is the value of
@@ -66,33 +99,39 @@ impl Table {
         table
     }
 
-    /// Add the rules of `other` after these, with their sources.
-    pub(crate) fn append(&mut self, other: Self) {
+    /// Add the rules of `other` after these, with their sources, as
+    /// `compatdb.so` adds the rules of the file [`FILE_ENV_VAR`] names after
+    /// those of [`ENV_VAR`].
+    ///
+    /// A table that holds a file's rules is for [`Table::resolve`] and
+    /// [`Table::preview`]. `Display` writes those rules too, so its text is
+    /// no value for [`ENV_VAR`] beside the file: they would fold twice.
+    pub fn append(&mut self, other: Self) {
         self.rules.extend(other.rules);
         self.sources.extend(other.sources);
     }
 
-    /// Add `rule` after the others as the rule of line `line` of
-    /// [`ENV_VAR`].
-    pub(crate) fn push_line(&mut self, rule: Rule, line: usize) {
+    /// Add `rule` after the others, with the source `source`.
+    pub(crate) fn push_from(&mut self, rule: Rule, source: Source) {
         self.rules.push(rule);
-        self.sources.push(Source::Line(line));
+        self.sources.push(source);
     }
 
     /// Add `rule` after the others, as a rule of [`ENV_VAR`] on the line
-    /// after the last line of the table, which for a table built with this
-    /// method alone is its line in the value the table writes.
+    /// after the last line of that variable in the table, which for a table
+    /// built with this method alone is its line in the value the table
+    /// writes.
     pub fn push(&mut self, rule: Rule) {
         let last = self
             .sources
             .iter()
             .filter_map(|source| match source {
                 Source::Line(n) => Some(*n),
-                Source::BuiltIn => None,
+                Source::BuiltIn | Source::FileLine(_) => None,
             })
             .max()
             .unwrap_or(0);
-        self.push_line(rule, last.saturating_add(1));
+        self.push_from(rule, Source::Line(last.saturating_add(1)));
     }
 
     /// The rules, in the order they were declared.

@@ -16,12 +16,13 @@ use std::{
     str::FromStr,
 };
 
-#[cfg(doc)]
-use crate::ENV_VAR;
 use crate::{
     Argument, DEFAULT_VALUE, DebugChannel, Diagnostic, DllOverride, EnvEntry, EnvName, Exe,
-    FieldError, Fingerprint, Key, KeyKind, ParseError, Rule, Scalar, Setting, Source, Table,
+    FieldError, Fingerprint, Key, KeyKind, ParseError, Rule, RulesText, Scalar, Setting, Source,
+    Table,
 };
+#[cfg(doc)]
+use crate::{ENV_VAR, FILE_ENV_VAR};
 
 /// Whether `line` is a version header of the old format, `v=` and nothing
 /// but ASCII digits, which launchers wrote as the first line of a table. The
@@ -56,7 +57,22 @@ impl Table {
     /// still writes one keeps working; it still counts as a line.
     #[must_use]
     pub fn parse_lenient(text: &str) -> (Self, Vec<Diagnostic>) {
-        let mut lines = text.lines().enumerate().peekable();
+        Self::parse_text(text, RulesText::Variable)
+    }
+
+    /// Read the text of the file [`FILE_ENV_VAR`] names the way
+    /// `compatdb.so` does: as [`Table::parse_lenient`] reads the value of
+    /// [`ENV_VAR`], except that each rule's [`Source`] is a
+    /// [`Source::FileLine`] and each [`Diagnostic`] names the file. Reading
+    /// the file is up to the caller.
+    #[must_use]
+    pub fn parse_file_lenient(text: &str) -> (Self, Vec<Diagnostic>) {
+        Self::parse_text(text, RulesText::File)
+    }
+
+    /// Read `value`, the whole of the text `text`.
+    fn parse_text(value: &str, text: RulesText) -> (Self, Vec<Diagnostic>) {
+        let mut lines = value.lines().enumerate().peekable();
         lines.next_if(|(_, line)| is_legacy_header(line));
         let mut table = Self::new();
         let mut diagnostics = Vec::new();
@@ -65,9 +81,10 @@ impl Table {
                 continue;
             }
             let n = i.saturating_add(1);
-            match read_record(line, n, &mut diagnostics) {
-                Some(rule) => table.push_line(rule, n),
+            match read_record(line, text, n, &mut diagnostics) {
+                Some(rule) => table.push_from(rule, text.source(n)),
                 None => diagnostics.push(Diagnostic {
+                    text,
                     line: n,
                     field: None,
                     error: FieldError::MissingExe,
@@ -190,7 +207,8 @@ fn rule_to_record(rule: &Rule) -> String {
 /// Read one record into a rule, or `None` for a record without an `exe`,
 /// which matches no process. Every problem with a field goes to
 /// `diagnostics`; a field that cannot be read is left out, and the other
-/// fields still apply. `line` is the record's line, for the diagnostics.
+/// fields still apply. `text` and `line` say where the record is, for the
+/// diagnostics.
 ///
 /// The matcher keys are a closed set (see [`rule_to_record`]), so an unknown
 /// key is a setting this library does not know, or a typo. A misspelt
@@ -198,7 +216,12 @@ fn rule_to_record(rule: &Rule) -> String {
 /// rule then matches more processes than it meant to. The `name` and
 /// `enabled` keys of the old format, where an override merged into or
 /// dropped a rule by name, are unknown keys too.
-fn read_record(record: &str, line: usize, diagnostics: &mut Vec<Diagnostic>) -> Option<Rule> {
+fn read_record(
+    record: &str,
+    text: RulesText,
+    line: usize,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Rule> {
     let mut rule = Rule::new(Exe::Any);
     // The rule's `exe`, which every rule needs; an empty one is none.
     let mut exe = None;
@@ -210,6 +233,7 @@ fn read_record(record: &str, line: usize, diagnostics: &mut Vec<Diagnostic>) -> 
         }
         let mut report = |error| {
             diagnostics.push(Diagnostic {
+                text,
                 line,
                 field: Some(raw.to_owned()),
                 error,

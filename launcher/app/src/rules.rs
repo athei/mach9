@@ -181,7 +181,7 @@ impl LaunchRules {
     pub fn describe(&self, origin: &Origin) -> String {
         let name = match origin {
             Origin::Line(n) => n.checked_sub(1).and_then(|index| self.names.get(index)),
-            Origin::BuiltIn | Origin::BuiltInFor(_) => None,
+            Origin::BuiltIn | Origin::BuiltInFor(_) | Origin::FileLine(_) => None,
         };
         match name {
             Some(None) => String::from("top level"),

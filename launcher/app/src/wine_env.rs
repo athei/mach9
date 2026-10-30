@@ -49,9 +49,10 @@ pub fn apply(prefix: &Path, rules: &Table) {
 /// inherited it. None of these is a setting. `WINEPREFIX` and `WINEMSYNC` are
 /// prefix-wide, and [`COMPATDB_ENV`] carries the config's rules, written by
 /// the table itself. A config without rules has an empty table, and the
-/// variable is left out rather than set empty, so `compatdb.so` applies its
-/// built-in rules alone, as it does for a process tree the launcher did not
-/// start.
+/// variable is left out rather than set empty, so `compatdb.so` gets no rules
+/// from the launcher and applies its built-in rules, as it does for a process
+/// tree the launcher did not start. A `WINE_COMPATDB_FILE` in `[env]` adds the
+/// file's rules to them.
 fn launcher_env(prefix: &Path, rules: &Table) -> [(&'static str, Option<OsString>); 3] {
     let compatdb = (!rules.rules().is_empty()).then(|| OsString::from(rules.to_string()));
     [

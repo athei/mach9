@@ -7,8 +7,8 @@
 A relocatable, signed Wine for Apple Silicon Macs, focused on Direct3D 9
 games and made to be embedded in a launcher. The launcher configures it
 with rules that match processes, passed in the environment variable
-`WINE_COMPATDB` or in a file `WINE_COMPATDB_FILE` names, so each game gets
-the Direct3D implementation
+`WINE_COMPATDB`, in a file `WINE_COMPATDB_FILE` names, or both, so each
+game gets the Direct3D implementation
 ([backends](docs/compatdb.md#direct3d-backends)) and the settings it
 needs. The API that writes the rules is [published][spec], so a launcher
 generates them in code.
@@ -107,7 +107,7 @@ Variables the bundle reads besides `WINE_COMPATDB`:
 
 | Variable | Explained in |
 |----------|--------------|
-| `WINE_COMPATDB_FILE` | [format][format] |
+| `WINE_COMPATDB_FILE` | [format][format], [launcher responsibilities][launcher] |
 | `WINEMSYNC`, `WINENCPU` | [runtime](docs/internals.md#runtime) |
 | `FEX_HARDWARE_TSO`, `FEX_HOSTFEATURES` | [FEX](docs/internals.md#fex) |
 | `VK_DRIVER_FILES`, `VK_ICD_FILENAMES`, `VK_ADD_DRIVER_FILES`, `MESA_KK_EXPERIMENTAL` | [Vulkan](docs/internals.md#vulkan) |

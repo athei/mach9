@@ -29,6 +29,16 @@ fn with_lines(table: &Table, text: &str) -> Table {
     table
 }
 
+/// `table` with the rules of the file `text` appended, as `compatdb.so` adds
+/// them after those of the variable; `text` must parse cleanly.
+fn with_file(table: &Table, text: &str) -> Table {
+    let (parsed, diagnostics) = Table::parse_file_lenient(text);
+    assert_eq!(diagnostics, []);
+    let mut table = table.clone();
+    table.append(parsed);
+    table
+}
+
 /// The env entry that sets `name` to `value`, or removes it when `value`
 /// is empty.
 fn pair(name: &str, value: &str) -> EnvEntry {
@@ -628,6 +638,7 @@ fn the_resolution_says_where_every_value_came_from() {
     assert_eq!(pinned.label(), "built-in for game.exe (Acme, Game)");
     assert_eq!(Origin::BuiltIn.label(), "built-in");
     assert_eq!(Origin::Line(3).label(), "WINE_COMPATDB line 3");
+    assert_eq!(Origin::FileLine(3).label(), "WINE_COMPATDB_FILE line 3");
     // Lists say it for each entry.
     assert_eq!(r.dll_overrides_from, [Origin::BuiltIn]);
     assert_eq!(r.arguments, ["-a", "-b"]);
@@ -1375,4 +1386,136 @@ fn debug_channels_accumulate_in_fold_order_with_their_origin() -> TestResult {
             .is_empty()
     );
     Ok(())
+}
+
+#[test]
+fn the_variable_and_the_file_fold_in_one_place_after_the_builtin_rules_of_their_group() {
+    let table = with_lines(
+        &argument_rules(),
+        "exe=game.exe;arguments=-variable-exe\nexe=*;arguments=-variable-any",
+    );
+    let table = with_file(
+        &table,
+        "exe=game.exe;arguments=-file-exe\nexe=*;arguments=-file-any",
+    );
+    let r = table.resolve("game.exe", &acme(), None);
+    assert_eq!(
+        r.arguments,
+        [
+            "-all",
+            "-variable-any",
+            "-file-any",
+            "-game",
+            "-variable-exe",
+            "-file-exe"
+        ]
+    );
+    assert_eq!(
+        r.arguments_from,
+        [
+            Origin::BuiltIn,
+            Origin::Line(2),
+            Origin::FileLine(2),
+            Origin::BuiltInFor("game.exe (Acme)".into()),
+            Origin::Line(1),
+            Origin::FileLine(1)
+        ]
+    );
+}
+
+#[test]
+fn a_rule_of_the_file_beats_a_rule_of_the_variable_of_equal_specificity() {
+    for matchers in [
+        "exe=*",
+        "exe=*;company=Acme",
+        "exe=game.exe",
+        "exe=game.exe;company=Acme",
+    ] {
+        let table = with_lines(&Table::new(), &format!("{matchers};dpi_aware=false"));
+        let table = with_file(&table, &format!("{matchers};dpi_aware=true"));
+        let r = table.resolve("game.exe", &acme(), None);
+        assert_eq!(r.dpi_aware(), Some(true), "{matchers}");
+        assert_eq!(
+            r.scalar(Scalar::DpiAware).set_by,
+            Some(Origin::FileLine(1)),
+            "{matchers}"
+        );
+    }
+}
+
+#[test]
+fn a_rule_of_the_file_does_not_beat_a_more_specific_rule_of_the_variable() {
+    for (variable, file) in [
+        ("exe=game.exe", "exe=*"),
+        ("exe=game.exe", "exe=*;company=Acme"),
+        ("exe=*;company=Acme", "exe=*"),
+        ("exe=game.exe;company=Acme", "exe=game.exe"),
+    ] {
+        let table = with_lines(&Table::new(), &format!("{variable};dpi_aware=false"));
+        let table = with_file(&table, &format!("{file};dpi_aware=true"));
+        let r = table.resolve("game.exe", &acme(), None);
+        assert_eq!(r.dpi_aware(), Some(false), "{variable} {file}");
+        assert_eq!(
+            r.scalar(Scalar::DpiAware).set_by,
+            Some(Origin::Line(1)),
+            "{variable} {file}"
+        );
+    }
+}
+
+#[test]
+fn a_rule_of_the_file_stands_to_the_builtin_rules_as_one_of_the_variable() {
+    let base = Table::of_builtin(vec![
+        Rule {
+            exe: Exe::Any,
+            dpi_aware: Setting::Set(true),
+            ..Rule::default()
+        },
+        Rule {
+            exe: Exe::literal("game.exe"),
+            company: Some(Fingerprint::literal("Acme")),
+            gcmouse: Setting::Set(true),
+            ..Rule::default()
+        },
+    ]);
+    // A `*` rule replaces a built-in default but not a fix for one program.
+    let table = with_file(&base, "exe=*;dpi_aware=false;gcmouse=false");
+    let r = table.resolve("game.exe", &acme(), None);
+    assert_eq!(r.dpi_aware(), Some(false));
+    assert_eq!(r.scalar(Scalar::DpiAware).set_by, Some(Origin::FileLine(1)));
+    assert_eq!(r.gcmouse(), Some(true));
+    // A rule for the program changes the fix, even without a fingerprint.
+    let table = with_file(&base, "exe=game.exe;gcmouse=false");
+    let r = table.resolve("game.exe", &acme(), None);
+    assert_eq!(r.gcmouse(), Some(false));
+    assert_eq!(r.scalar(Scalar::Gcmouse).set_by, Some(Origin::FileLine(1)));
+}
+
+#[test]
+fn an_arguments_override_for_a_steam_app_in_the_file_is_ignored_with_its_label() {
+    let table = with_file(&argument_rules(), "exe=steam:440;arguments_override=-x");
+    let r = table.resolve("game.exe", &VersionInfo::default(), Some(440));
+    assert_eq!(r.arguments_override_ignored, [Origin::FileLine(1)]);
+    assert_eq!(r.arguments, ["-all"]);
+}
+
+#[test]
+fn the_env_entries_of_a_star_rule_of_the_file_are_no_defaults() {
+    let base = Table::of_builtin(vec![Rule {
+        exe: Exe::Any,
+        env: vec![EnvEntry::literal("A", "1")],
+        ..Rule::default()
+    }]);
+    let table = with_file(&base, "exe=*;env=A=2");
+    let r = table.resolve("game.exe", &VersionInfo::default(), None);
+    let applied: Vec<(&Origin, bool)> = r
+        .env_from
+        .iter()
+        .map(|from| &from.origin)
+        .zip(r.env_steps(|_| true).iter().map(|step| step.applied))
+        .collect();
+    assert_eq!(
+        applied,
+        [(&Origin::BuiltIn, false), (&Origin::FileLine(1), true)]
+    );
 }

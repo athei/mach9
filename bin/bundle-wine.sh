@@ -616,13 +616,13 @@ run_limited() {
         || RUN_STATUS=$?
 }
 
-# check_rules_read <label> <log>: exit unless compatdb.so read the
-# WINE_COMPATDB rules of the run <label> logged in <log> without a warning.
+# check_rules_read <label> <log>: exit unless compatdb.so read every rule of
+# the run <label> logged in <log> without a warning.
 # It ignores a field it cannot read and applies the rest of the record, so a
 # smoke rule with a key or value it does not know would otherwise still run.
 check_rules_read() {
     if grep -q "compatdb: .*warning:" "$2"; then
-        echo "Error: compatdb.so could not read every WINE_COMPATDB rule of $1"
+        echo "Error: compatdb.so could not read every rule of $1"
         grep "compatdb: .*warning:" "$2"
         smoke_stop
         exit 1
@@ -818,21 +818,39 @@ smoke_test() {
 }
 
 # check_rules_file <env-command>...: run cmd.exe in the booted throwaway prefix
-# with a rule in the file WINE_COMPATDB_FILE names, and exit unless compatdb.so
-# reads it without a warning, logs the path and gives the rule the label of a
-# WINE_COMPATDB rule. Then the same with a rule for a Steam app id: wine builds
-# the first process's environment block from the unix environment, so
-# SteamAppId in the run's environment reaches the block the library reads.
+# with a rule in WINE_COMPATDB and one in the file WINE_COMPATDB_FILE names, and
+# exit unless compatdb.so reads both without a warning, logs the path and
+# applies each rule with the label of its own source. Then the same with the
+# file alone, and with a rule for a Steam app id: wine builds the first
+# process's environment block from the unix environment, so SteamAppId in the
+# run's environment reaches the block the library reads.
 check_rules_file() {
-    local file="$TMP_DIR/compatdb-rules" log="$TMP_DIR/rules-file.log" want
+    local file="$TMP_DIR/compatdb-rules" log="$TMP_DIR/rules-both.log" want
     time_mark "smoke: rules file"
-    echo "  Reading a rule from WINE_COMPATDB_FILE..."
+    echo "  Reading rules from WINE_COMPATDB and WINE_COMPATDB_FILE..."
     printf 'exe=cmd.exe;gcmouse=false\n' >"$file"
+    run_limited 120 "$log" "$@" WINE_COMPATDB='exe=cmd.exe;dpi_aware=false' \
+        WINE_COMPATDB_FILE="$file" "$WINE_DIR/bin/wine" cmd /c exit
+    smoke_check "cmd.exe with a rule from each source" 120 "$log"
+    check_rules_read "cmd.exe with a rule from each source" "$log"
+    for want in "compatdb:   WINE_COMPATDB_FILE = $file" \
+        "compatdb:   gcmouse = false, WINE_COMPATDB_FILE line 1" \
+        "compatdb:   dpi_aware = false, WINE_COMPATDB line 1"; do
+        if ! grep -qF "$want" "$log"; then
+            echo "Error: compatdb.so did not report '$want'"
+            grep "compatdb:" "$log" || echo "  (no compatdb lines at all)"
+            smoke_stop
+            exit 1
+        fi
+    done
+
+    echo "  Reading a rule from WINE_COMPATDB_FILE alone..."
+    log="$TMP_DIR/rules-file.log"
     run_limited 120 "$log" "$@" WINE_COMPATDB_FILE="$file" "$WINE_DIR/bin/wine" cmd /c exit
     smoke_check "cmd.exe with a rule from a file" 120 "$log"
     check_rules_read "cmd.exe with a rule from a file" "$log"
     for want in "compatdb:   WINE_COMPATDB_FILE = $file" \
-        "compatdb:   gcmouse = false, WINE_COMPATDB line 1"; do
+        "compatdb:   gcmouse = false, WINE_COMPATDB_FILE line 1"; do
         if ! grep -qF "$want" "$log"; then
             echo "Error: compatdb.so did not report '$want'"
             grep "compatdb:" "$log" || echo "  (no compatdb lines at all)"
@@ -849,7 +867,7 @@ check_rules_file() {
     smoke_check "cmd.exe with a rule for a Steam app id" 120 "$log"
     check_rules_read "cmd.exe with a rule for a Steam app id" "$log"
     for want in "compatdb:   SteamAppId = 440" \
-        "compatdb:   gcmouse = false, WINE_COMPATDB line 1"; do
+        "compatdb:   gcmouse = false, WINE_COMPATDB_FILE line 1"; do
         if ! grep -qF "$want" "$log"; then
             echo "Error: compatdb.so did not report '$want'"
             grep "compatdb:" "$log" || echo "  (no compatdb lines at all)"
@@ -2899,8 +2917,8 @@ done
 # compatdb.so is what turns the trees above into a working Direct3D: ntdll
 # dlopens <ntdll_dir>/compatdb.so in every process and the library prepends
 # one dxgi/ and one d3d9/ tree, chosen per process from its built-in rules
-# plus whatever WINE_COMPATDB carries. Built here from the compatdb/ crate
-# for RUST_TARGET.
+# plus whatever WINE_COMPATDB and the file WINE_COMPATDB_FILE names carry.
+# Built here from the compatdb/ crate for RUST_TARGET.
 time_mark "Step 4b: Compat database"
 echo "==> Step 4b: Compat database"
 build_compatdb

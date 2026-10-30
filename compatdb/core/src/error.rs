@@ -1,11 +1,11 @@
 //! What can be wrong with one field of a rule, and with a line of
-//! [`ENV_VAR`].
+//! [`ENV_VAR`] or of the file [`FILE_ENV_VAR`] names.
 
 use std::fmt;
 
-use crate::{ENV_VAR, Key};
 #[cfg(doc)]
-use crate::{Rule, Table, retired_env};
+use crate::{ENV_VAR, FILE_ENV_VAR, Rule, Table, retired_env};
+use crate::{Key, RulesText};
 
 /// Why a field of a rule cannot be read, or a value cannot be set.
 ///
@@ -179,14 +179,18 @@ impl fmt::Display for FieldError {
 
 impl std::error::Error for FieldError {}
 
-/// One problem with the value of [`ENV_VAR`]: the line, the field as it was
-/// written, if the problem is with one, and what is wrong.
+/// One problem with the value of [`ENV_VAR`] or the file [`FILE_ENV_VAR`]
+/// names: the text and the line, the field as it was written, if the problem
+/// is with one, and what is wrong.
 ///
 /// Its [`Display`](fmt::Display) form is the warning `compatdb.so` logs, for
-/// example `WINE_COMPATDB line 2: ignoring unknown key "bogus"`, which also
-/// says what [`Table::parse_lenient`] did about it.
+/// example `WINE_COMPATDB line 2: ignoring unknown key "bogus"`, or
+/// `WINE_COMPATDB_FILE line 2: ...` for the file, which also says what
+/// [`Table::parse_lenient`] or [`Table::parse_file_lenient`] did about it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
+    /// The text the line is in.
+    pub text: RulesText,
     /// The line, counted from 1, blank lines and a legacy header included.
     pub line: usize,
     /// The field as it was written, or `None` for a problem with the whole
@@ -199,7 +203,7 @@ pub struct Diagnostic {
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let field = self.field.as_deref().unwrap_or_default();
-        write!(f, "{ENV_VAR} line {}: ", self.line)?;
+        write!(f, "{} line {}: ", self.text.name(), self.line)?;
         match &self.error {
             FieldError::MissingExe => f.write_str("ignoring the line, it has no exe"),
             FieldError::MissingEquals => write!(f, "ignoring field {field:?} without '='"),

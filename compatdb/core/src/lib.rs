@@ -5,8 +5,8 @@
 //! of the bundle before any PE code runs. It reads the process's image
 //! name, version resource and Steam app id, takes the built-in rules of
 //! [`builtin`], appends the rules a launcher passed in the environment variable
-//! [`ENV_VAR`] (`WINE_COMPATDB`) or in the file [`FILE_ENV_VAR`] names,
-//! folds every rule that matches the process into one [`Resolution`] and
+//! [`ENV_VAR`] (`WINE_COMPATDB`), then those of the file [`FILE_ENV_VAR`]
+//! names, folds every rule that matches the process into one [`Resolution`] and
 //! applies it: the Direct3D trees to load, the renderer of wined3d, which
 //! OpenGL the Mac driver gives, DLL load-order overrides, the DPI awareness,
 //! large address awareness, whether the Mac driver reads raw mouse input
@@ -21,8 +21,9 @@
 //! launcher uses it to build its rules ([`Rule`], [`Table`]), to write the
 //! value of [`ENV_VAR`] (`Table`'s `Display`) and to show what a program
 //! would get ([`Table::preview`]). `compatdb.so` uses the same crate to
-//! read the value ([`Table::parse_lenient`]) and resolve it
-//! ([`Table::resolve`]); the [`runtime`] module holds what only it needs.
+//! read the value ([`Table::parse_lenient`]) and the file
+//! ([`Table::parse_file_lenient`]) and resolve them ([`Table::resolve`]);
+//! the [`runtime`] module holds what only it needs.
 //!
 //! Everything here is pure: it works on `&str`, `&[u16]` (UTF-16 as Wine
 //! hands it over) and owned values, with no unsafe and no I/O, so the
@@ -37,8 +38,8 @@
 //! inherits the variable, so a rule for a program the game starts reaches
 //! it too. The value is fixed when the tree starts, so a game started by a
 //! program that is already running, such as a store client, gets that
-//! program's value. For rules that change while a tree runs, see
-//! [`FILE_ENV_VAR`] under [Format](#format).
+//! program's value. For rules that change while a tree runs, a launcher adds
+//! a file with [`FILE_ENV_VAR`], see [Format](#format).
 //!
 //! The settings layer fills a rule from text without the launcher knowing
 //! any key: [`Key::from_setting`] names the key, [`Key::kind`] says whether
@@ -111,7 +112,7 @@
 //! - A line ends at LF, and a CR before the LF is dropped. A line of
 //!   whitespace alone is skipped. Lines are counted from 1, blank lines
 //!   included; that number is the rule's [`Source::Line`], and the line
-//!   of each [`Diagnostic`].
+//!   of each [`Diagnostic`]. The file below counts its own lines.
 //! - A record is fields joined by `;`. An empty field is skipped.
 //! - A field is `key=value`, and the key ends at the first `=`. The keys
 //!   are those of [`Key`].
@@ -170,25 +171,27 @@
 //! word in lowercase, and none of the built-in rules, which `compatdb.so`
 //! has compiled in.
 //!
-//! [`FILE_ENV_VAR`] (`WINE_COMPATDB_FILE`) passes the same text in a file:
-//! the variable holds the path and each process reads the file when it
-//! starts, so a process started later in a running tree gets the rules the
-//! file holds by then.
+//! [`FILE_ENV_VAR`] (`WINE_COMPATDB_FILE`) adds rules in a file: the variable
+//! holds the path and each process reads the file when it starts, so a
+//! process started later in a running tree gets the rules the file holds by
+//! then. The table of `compatdb.so` is the built-in rules, then the rules of
+//! [`ENV_VAR`], then the rules of the file, so a launcher may send its own
+//! rules in [`ENV_VAR`] and point a stable file at the rules that change.
 //!
 //! - The file's text is what [`ENV_VAR`] would hold, and it is read, matched
-//!   and folded the same way. Only `debug_channels` differs, see
-//!   [Launcher responsibilities](#launcher-responsibilities). Its rules keep
-//!   their labels in the log, `WINE_COMPATDB line <n>`.
-//! - An empty [`FILE_ENV_VAR`] counts as unset. Set, the file is the only
-//!   source of the caller's rules, and [`ENV_VAR`], if set too, is ignored
-//!   with a warning.
+//!   and folded the same way ([Folding](#folding)). Only `debug_channels`
+//!   differs, see [Launcher responsibilities](#launcher-responsibilities).
+//! - The file counts its own lines. A rule of the file is a
+//!   [`Source::FileLine`] and [`Table::parse_file_lenient`] reads it, so the
+//!   log calls its rules and problems `WINE_COMPATDB_FILE line <n>`, and
+//!   those of the variable stay `WINE_COMPATDB line <n>`.
+//! - An empty [`FILE_ENV_VAR`] counts as unset.
 //! - The path must be absolute and name a regular file within the size
 //!   limit (`MAX_BYTES` in
 //!   [`rules_file.rs`](https://github.com/athei/mach9/blob/main/compatdb/src/rules_file.rs)).
 //!   Bytes that are not UTF-8 are replaced, as in the variable.
-//! - A file that cannot be read gives the process the built-in rules alone,
-//!   with a warning. [`ENV_VAR`] is not a fallback: it would hide a broken
-//!   path behind rules that may be stale.
+//! - A file that cannot be used adds no rules, with a warning. The rules of
+//!   [`ENV_VAR`] and the built-in rules still apply.
 //!
 //! ## Strict and lenient parsing
 //!
@@ -282,12 +285,20 @@
 //! Every rule that matches a process applies; no rule removes or replaces
 //! another. [`Table::resolve`] folds them in this order, and within each
 //! group a rule without a fingerprint before one with, otherwise in table
-//! order (line order for [`ENV_VAR`]):
+//! order (line order for [`ENV_VAR`], then line order for the file
+//! [`FILE_ENV_VAR`] names):
 //!
 //! 1. the built-in `*` rules;
-//! 2. the `*` rules of [`ENV_VAR`];
+//! 2. the `*` rules of [`ENV_VAR`] and the file;
 //! 3. the built-in rules that name an executable;
-//! 4. the rules of [`ENV_VAR`] that name an executable.
+//! 4. the rules of [`ENV_VAR`] and the file that name an executable.
+//!
+//! The variable and the file are one place in this order, so only table
+//! order tells them apart. A rule of the file beats a rule of [`ENV_VAR`] of
+//! equal specificity, because it is declared later. A `*` rule of the file
+//! does not beat a rule of [`ENV_VAR`] that names an executable, and a rule
+//! of the file without a fingerprint does not beat one of [`ENV_VAR`] with a
+//! fingerprint.
 //!
 //! A rule for a Steam app id counts as naming an executable: it adds no group
 //! to this order, and within one folds in table order with the rules for a
@@ -302,8 +313,8 @@
 //! So a launch-wide `*` rule replaces a built-in default but not what a
 //! built-in rule for one program sets: that fix survives launch-wide
 //! settings, and a rule of the launcher for that program changes it, with
-//! or without a fingerprint. Within [`ENV_VAR`], a rule for an executable
-//! beats a `*` rule whatever their line order.
+//! or without a fingerprint. Within the caller's rules, a rule for an
+//! executable beats a `*` rule whatever their line order.
 //!
 //! - A scalar setting ends up with the value of the last rule that sets it.
 //!   `default` resets it: from that rule on it is unset, as if no rule had
@@ -325,8 +336,8 @@
 //!   defaults: one sets its variable only where the process does not have
 //!   it, so a value whoever started the process exported wins, an empty
 //!   one included.
-//!   Every other entry, a `*` rule's of [`ENV_VAR`] included, replaces the
-//!   variable, and an entry without a value removes it.
+//!   Every other entry, a `*` rule's of [`ENV_VAR`] or the file included,
+//!   replaces the variable, and an entry without a value removes it.
 //!   [`Resolution::env_steps`] says what each entry does in a process.
 //! - `wined3d` and `metal_hud` become env entries too
 //!   ([`Resolution::fold_derived_env`]): `wined3d` the `WINE_D3D_CONFIG`
@@ -480,20 +491,24 @@
 //!   client: the games it starts inherit them.
 //! - Name a former built-in rule with [`builtin::former`], which says what
 //!   to do instead; such a name reaches nothing any more.
-//! - When passing the rules in a file, set [`FILE_ENV_VAR`] in the
-//!   environment the root of the process tree starts with: a program that
-//!   is already running does not get a variable set later, and neither do
-//!   the programs it starts.
+//! - Send the rules that hold for the whole launch in [`ENV_VAR`] and point
+//!   [`FILE_ENV_VAR`] at a stable file for the rules that change. The file
+//!   adds to [`ENV_VAR`] and does not replace it, and [Folding](#folding)
+//!   says which rule wins where both set a value.
+//! - When passing rules in a file, set [`FILE_ENV_VAR`] in the environment
+//!   the root of the process tree starts with: a program that is already
+//!   running does not get a variable set later, and neither do the programs
+//!   it starts.
 //! - Write such a file to a temporary file in the same directory and rename
 //!   it over the path. A process that reads a file while it is being written
 //!   gets a partial table, without a warning.
 //! - Expect a changed table to reach only the processes that start after
 //!   the change: a running process keeps the rules it read. So the
 //!   processes that outlive one launch, such as `explorer.exe` and
-//!   `services.exe`, get it only in the next wineserver session. With
-//!   [`ENV_VAR`], so does everything else a running process starts, since
-//!   it inherits the old value; with [`FILE_ENV_VAR`] it reads the new
-//!   table.
+//!   `services.exe`, get it only in the next wineserver session. [`ENV_VAR`]
+//!   itself stays fixed for a running tree, since a process inherits the old
+//!   value; only the rules of the file change, and a process started later
+//!   reads the new ones.
 //! - Expect a change of `debug_channels` in such a file to show only in the
 //!   log: `WINEDEBUG` is fixed when the tree starts, so it takes a new tree
 //!   for the change to take effect.
@@ -570,7 +585,7 @@ pub use crate::{
         check_env_name, inherited_conflicts, retired_env, retired_envs, retired_keys,
         retired_values,
     },
-    table::{Source, Table},
+    table::{RulesText, Source, Table},
     value::{D3d9, Dxgi, METAL_HUD_ENV, OpenGl, Wined3d, metal_hud_env},
     version::VersionInfo,
 };
@@ -581,8 +596,9 @@ pub use crate::{
 pub const ENV_VAR: &str = "WINE_COMPATDB";
 
 /// The environment variable naming a file that holds what [`ENV_VAR`] would
-/// hold, which takes its place: see [Format](index.html#format). Like
-/// [`ENV_VAR`], it is only read by `compatdb.so`.
+/// hold, whose rules come after those of [`ENV_VAR`]: see
+/// [Format](index.html#format). Like [`ENV_VAR`], it is only read by
+/// `compatdb.so`.
 pub const FILE_ENV_VAR: &str = "WINE_COMPATDB_FILE";
 
 /// Where this crate's rustdoc is published. [`Key::docs_url`] and

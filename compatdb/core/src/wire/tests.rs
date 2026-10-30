@@ -222,6 +222,42 @@ fn parse_numbers_the_lines_and_counts_blank_ones() {
 }
 
 #[test]
+fn the_file_reads_like_the_variable_with_its_own_sources() {
+    let text = "v=7\n\nexe=a.exe;gcmouse=false\n  \nexe=*;dpi_aware=true";
+    let (variable, diagnostics) = Table::parse_lenient(text);
+    assert_eq!(diagnostics, []);
+    let (file, diagnostics) = Table::parse_file_lenient(text);
+    assert_eq!(diagnostics, []);
+    assert_eq!(file.rules(), variable.rules());
+    assert_eq!(variable.sources(), [Source::Line(3), Source::Line(5)]);
+    assert_eq!(file.sources(), [Source::FileLine(3), Source::FileLine(5)]);
+    assert_eq!(file.to_string(), variable.to_string());
+}
+
+#[test]
+fn a_diagnostic_names_the_text_of_its_line() {
+    let text = "exe=a.exe;bogus=1\ngcmouse=false";
+    let (_, variable) = Table::parse_lenient(text);
+    let (_, file) = Table::parse_file_lenient(text);
+    let lines = |diagnostics: &[Diagnostic]| -> Vec<(RulesText, usize)> {
+        diagnostics.iter().map(|d| (d.text, d.line)).collect()
+    };
+    assert_eq!(
+        lines(&variable),
+        [(RulesText::Variable, 1), (RulesText::Variable, 2)]
+    );
+    assert_eq!(lines(&file), [(RulesText::File, 1), (RulesText::File, 2)]);
+    let said: Vec<String> = file.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        said,
+        [
+            "WINE_COMPATDB_FILE line 1: ignoring unknown key \"bogus\"",
+            "WINE_COMPATDB_FILE line 2: ignoring the line, it has no exe",
+        ]
+    );
+}
+
+#[test]
 fn parse_ignores_a_line_without_an_exe_and_keeps_the_rest() {
     // What a launcher wrote to change a built-in rule by name in the old
     // format: it has no exe, so it matches no process.
@@ -1157,5 +1193,21 @@ fn the_text_leaves_the_builtin_rules_out_and_push_numbers_the_lines() -> TestRes
     let (mut parsed, _) = Table::parse_lenient("\n\nexe=a.exe");
     parsed.push(Rule::new(Exe::Any));
     assert_eq!(parsed.sources(), [Source::Line(3), Source::Line(4)]);
+    // A line of the file is no line of the variable.
+    let (file, _) = Table::parse_file_lenient("\n\n\n\n\nexe=a.exe");
+    parsed.append(file);
+    parsed.push(Rule::new(Exe::Any));
+    assert_eq!(
+        parsed.sources(),
+        [
+            Source::Line(3),
+            Source::Line(4),
+            Source::FileLine(6),
+            Source::Line(5)
+        ]
+    );
+    let (mut file, _) = Table::parse_file_lenient("exe=a.exe");
+    file.push(Rule::new(Exe::Any));
+    assert_eq!(file.sources(), [Source::FileLine(1), Source::Line(1)]);
     Ok(())
 }

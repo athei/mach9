@@ -794,6 +794,11 @@ fn a_value_resolved_here_names_its_block() {
     assert_eq!(describe(Scalar::ForceNx), "rule `all`");
     assert_eq!(built.describe(&Origin::Line(9)), Origin::Line(9).label());
     assert_eq!(built.describe(&Origin::BuiltIn), Origin::BuiltIn.label());
+    // A line of a rules file is no block of the config.
+    assert_eq!(
+        built.describe(&Origin::FileLine(1)),
+        Origin::FileLine(1).label()
+    );
 }
 
 /// A `[process]` block for [`Exe::Any`] folds after the top level.

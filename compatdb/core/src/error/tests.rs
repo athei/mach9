@@ -1,8 +1,9 @@
 use super::*;
 
-/// A diagnostic for line 3 about `field`.
+/// A diagnostic for line 3 of the value about `field`.
 fn at(field: &str, error: FieldError) -> Diagnostic {
     Diagnostic {
+        text: RulesText::Variable,
         line: 3,
         field: Some(field.into()),
         error,
@@ -33,11 +34,19 @@ fn a_diagnostic_says_what_lenient_parsing_did() {
         ),
         (
             Diagnostic {
+                text: RulesText::Variable,
                 line: 3,
                 field: None,
                 error: FieldError::MissingExe,
             },
             "WINE_COMPATDB line 3: ignoring the line, it has no exe",
+        ),
+        (
+            Diagnostic {
+                text: RulesText::File,
+                ..at("bogus=1", FieldError::UnknownKey("bogus".into()))
+            },
+            "WINE_COMPATDB_FILE line 3: ignoring unknown key \"bogus\"",
         ),
         (
             at("gcmouse=true", FieldError::Duplicate(Key::Gcmouse)),
@@ -90,6 +99,7 @@ fn a_parse_error_lists_every_diagnostic() {
     let error = ParseError(vec![
         at("bogus", FieldError::MissingEquals),
         Diagnostic {
+            text: RulesText::Variable,
             line: 4,
             field: None,
             error: FieldError::MissingExe,

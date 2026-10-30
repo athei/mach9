@@ -1,6 +1,6 @@
-//! Where the caller's rules come from: the file [`FILE_ENV_VAR`] names, or
-//! else the value of [`ENV_VAR`]. [`choose`] decides and takes no input but
-//! its arguments; [`read`] is the I/O, which `compatdb-core` does not do.
+//! The caller's rules: the value of [`ENV_VAR`], then the rules of the file
+//! [`FILE_ENV_VAR`] names. [`gather`] takes no input but its arguments;
+//! [`read`] is the I/O, which `compatdb-core` does not do.
 
 use std::{
     fs::{self, File},
@@ -33,57 +33,64 @@ impl Variables {
 }
 
 /// The caller's rules for this process and what the log says about them.
-pub struct Chosen {
-    /// The text to parse, or `None` for the built-in rules alone.
-    pub text: Option<String>,
+pub struct Gathered {
+    /// The value of [`ENV_VAR`], if it has one.
+    pub inline: Option<String>,
+    /// The text of the file, if there is one and it could be read.
+    pub file: Option<String>,
     /// The lines for the block of the process, each as [`crate::log::line`]
     /// takes it.
     pub lines: Vec<String>,
 }
 
-impl Chosen {
-    /// The built-in rules followed by the chosen ones, and the lines for the
-    /// log, which end with a warning for each problem with the chosen text.
+impl Gathered {
+    /// The built-in rules followed by the rules of the variable and those of
+    /// the file, and the lines for the log, which end with a warning for
+    /// each problem with either text.
     pub fn into_table(self) -> (Table, Vec<String>) {
-        let Self { text, mut lines } = self;
-        let Some(text) = text else {
-            return (Table::builtin(), lines);
-        };
-        let (rules, diagnostics) = Table::parse_lenient(&text);
+        let Self {
+            inline,
+            file,
+            mut lines,
+        } = self;
+        let (mut table, mut diagnostics) = Table::parse_lenient(&inline.unwrap_or_default());
+        let (from_file, file_diagnostics) = Table::parse_file_lenient(&file.unwrap_or_default());
+        table.append(from_file);
+        diagnostics.extend(file_diagnostics);
         lines.extend(diagnostics.iter().map(|m| format!("  warning: {m}")));
-        (rules.with_builtin(), lines)
+        (table.with_builtin(), lines)
     }
 }
 
-/// The source of the caller's rules; an empty value counts as unset. A set
-/// `file` is the only source, read with `read`: when that fails the process
-/// gets the built-in rules alone, since falling back to `inline` would hide a
-/// broken path behind rules that may be stale.
-pub fn choose(variables: Variables, read: impl FnOnce(&str) -> io::Result<String>) -> Chosen {
+/// The two sources of the caller's rules; an empty value counts as unset. A
+/// set `file` is read with `read`, and when that fails it adds no rules, with
+/// a warning: `inline` is a source of its own and not a fallback, so it
+/// applies either way.
+pub fn gather(variables: Variables, read: impl FnOnce(&str) -> io::Result<String>) -> Gathered {
     let Variables { file, inline } = variables;
     let inline = inline.filter(|text| !text.is_empty());
     let Some(path) = file.filter(|path| !path.is_empty()) else {
-        return Chosen {
-            text: inline,
+        return Gathered {
+            inline,
+            file: None,
             lines: Vec::new(),
         };
     };
     let mut lines = vec![format!("  {FILE_ENV_VAR} = {path}")];
-    if inline.is_some() {
-        lines.push(format!(
-            "  warning: {FILE_ENV_VAR} replaces {ENV_VAR}, which is ignored"
-        ));
-    }
-    let text = match read(&path) {
+    let file = match read(&path) {
         Ok(text) => Some(text),
         Err(error) => {
             lines.push(format!(
-                "  warning: {FILE_ENV_VAR} not read: {error}; only the built-in rules apply"
+                "  warning: {FILE_ENV_VAR} not read: {error}; the file adds no rules"
             ));
             None
         }
     };
-    Chosen { text, lines }
+    Gathered {
+        inline,
+        file,
+        lines,
+    }
 }
 
 /// The text of the rules file at `path`, with invalid UTF-8 replaced as for
