@@ -234,6 +234,8 @@ setting; the bundle step checks the `force_nx` and `opengl` hooks
 - ntdll sets `VK_DRIVER_FILES` ([Vulkan](internals.md#vulkan)) and the
   GStreamer variables ([GStreamer](internals.md#gstreamer)) unless the
   caller chose them; the bundle step checks both.
+- `wine.inf` aliases Segoe MDL2 Assets and Segoe Fluent Icons to the
+  [icon font](internals.md#icon-font); the bundle step checks both.
 - The WMA decoder DMO's stream info and input status calls return `S_OK`;
   `smoke/wmadec.c` checks them.
 - The wineserver runs CrossOver's msync and prints the lines the smoke

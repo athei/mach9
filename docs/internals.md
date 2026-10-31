@@ -357,6 +357,27 @@ GStreamer the bundle carries, so no GStreamer needs to be installed.
 - There is no `gst-plugin-scanner`: the first process of a new bundle that
   uses GStreamer reads the plugins itself.
 
+## Icon font
+
+Programs name Segoe MDL2 Assets and Segoe Fluent Icons for window controls
+and toolbars. Those fonts are Windows', not Wine's, so without a replacement
+the icons draw as boxes.
+
+- The bundle carries Uno Fluent Icons, pinned in
+  [`redist.env`](../pins/redist.env), in Wine's data directory. win32u
+  loads every font there and lists it in the Fonts key dwrite reads, so
+  each prefix has it.
+- Its family name is `Symbols`. wine.inf aliases both Windows names to it
+  under `HKCU\Software\Wine\Fonts\Replacements`, the key win32u and dwrite
+  read; dwrite does not read `FontSubstitutes`.
+- The alias reaches an existing prefix when `wine.inf` is reinstalled
+  ([upgrade checklist](maintenance.md#upgrade-checklist)).
+- An icon the font does not have draws as it does without the font.
+- There is no switch: a program that names neither font sees more font
+  families.
+- Its licences are in [`licenses/`](../licenses), installed into
+  `share/licenses/`.
+
 ## Loader app
 
 The loader needs `com.apple.developer.cross-architecture-support`, and Wine
@@ -425,7 +446,7 @@ function's comment says what it checks and why; each program in
 | macOS SDK, formulae, Wine SDK, each staged component current against its pin (which needs the network), llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
 | Inherited `com.apple.quarantine` removed, nothing else | Step 4f |
 | No reference to `LEAK_PREFIXES`, no `@rpath` dependency outside the bundle, every dylib loads ([`smoke/dlopen.c`](../smoke/dlopen.c)), GStreamer loads only from the bundle | `check_no_leaks`, `check_rpath_deps`, `check_dylibs_load`, `check_gstreamer` |
-| Copied-in components in place, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
+| Copied-in components in place, the [icon font](#icon-font)'s aliases in `wine.inf`, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
 | No PE debug sections or symbol tables (stripped by Step 4e), no dangling symlinks | Step 5 |
 | Vulkan driver and manifest, EGL with Zink, ntdll's compatdb hooks | `check_vulkan`, `check_egl`, `check_compat_hooks` |
 | `wine.app` signature, entitlements and `Info.plist` | `check_loader_app` |
@@ -495,6 +516,7 @@ A `*-src.ref` file names a branch, tag or commit of the component's
 | DXMT | [`dxmt-src.ref`](../pins/dxmt-src.ref) |
 | vkd3d-proton | [`vkd3d-proton-src.ref`](../pins/vkd3d-proton-src.ref); its submodules at the commits that ref records |
 | mtld3d | [`redist.env`](../pins/redist.env): URL and SHA-256 of the release tarball |
+| Icon font | [`redist.env`](../pins/redist.env): URL at a commit of its repository and SHA-256 |
 | LLVM for `winemetal.so` | [`redist.env`](../pins/redist.env): tag and commit |
 | Vulkan loader and headers | [`redist.env`](../pins/redist.env): tag and commit of each, from one SDK release |
 | Python modules of Mesa's build scripts | [`redist.env`](../pins/redist.env): pip requirements with exact versions |

@@ -37,6 +37,7 @@ scripts also run alone ([commands](internals.md#commands)).
 | [`compatdb/`](../compatdb) | The crates of `compatdb.so` and `compatdb-core` ([compatdb.md](compatdb.md)); the Cargo workspace is the repository root, so run cargo there |
 | [`launcher/`](../launcher) | The source of [Mach9.app](app.md)'s launcher (`app`), its Dock tile plug-in (`docktile`) and the code both share (`core`); nothing the bundle step builds depends on it. Without `SPARKLE_DIR` naming the directory that holds `Sparkle.framework`, the launcher builds without its updater ([`build.rs`](../launcher/app/build.rs)) |
 | [`smoke/`](../smoke) | The programs the bundle step builds and runs to check the bundle |
+| [`licenses/`](../licenses) | The licence texts the bundle step installs |
 | [`signing/`](../signing) | The loader's provisioning profile |
 | [`docs/`](.) | The documentation the README links to |
 
@@ -86,6 +87,8 @@ The libraries built here that configure finds are described with them:
 | `lib/external/` | Bundled dylibs, the Vulkan loader, KosmicKrisp, Mesa's EGL with Zink ([OpenGL](internals.md#opengl)), and GStreamer with glib and FFmpeg, which `winegstreamer.so` links ([GStreamer](internals.md#gstreamer)) |
 | `lib/external/gstreamer-1.0/` | GStreamer's plugins, gst-libav with FFmpeg's decoders among them ([GStreamer](internals.md#gstreamer)) |
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
+| `share/wine/fonts/` | Wine's fonts and the [icon font](internals.md#icon-font) |
+| `share/licenses/` | The licences of the [icon font](internals.md#icon-font) |
 
 What the Direct3D trees and the default directories hold, and why, is in
 [Direct3D trees](maintenance.md#direct3d-trees).

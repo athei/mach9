@@ -33,6 +33,7 @@ on:
       - 'Cargo.lock'
       - 'clippy.toml'
       - 'rustfmt.toml'
+      - 'licenses/**'
       - 'pins/**'
       - 'signing/**'
       - 'smoke/**'
@@ -182,7 +183,7 @@ jobs:
           . scripts/pins/redist.env
           xcode=$(xcodebuild -version | awk 'NR == 1 { print $2 }')
           llvm15=$(scripts/bin/ci/pins-key.sh LLVM15_)
-          redist=$(scripts/bin/ci/pins-key.sh MTLD3D_ LLVM_MINGW_)
+          redist=$(scripts/bin/ci/pins-key.sh MTLD3D_ UNO_FLUENT_ICONS_ LLVM_MINGW_)
           {
             echo "llvm15=dxmt-llvm15-$LLVM15_GIT_COMMIT-floor$MACOS_FLOOR-xcode$xcode-$ImageOS-$llvm15"
             echo "redist=redist-$redist"
@@ -195,8 +196,9 @@ jobs:
             echo "CCACHE_MAXSIZE=3G"
           } >> "$GITHUB_ENV"
 
-      # The downloads redist.env pins: llvm-mingw here, mtld3d in the bundle
-      # step. Each is checked against its SHA-256 whether it was cached or not.
+      # The downloads redist.env pins: llvm-mingw here, mtld3d and the icon font
+      # in the bundle step. Each is checked against its SHA-256 whether it was
+      # cached or not.
       # Saved at the end of the job, after the bundle step.
       - name: Restore the pinned downloads
         id: redist

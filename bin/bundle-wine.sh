@@ -2733,6 +2733,7 @@ echo "  Fetching artifacts into $CACHE_DIR..."
 if in_list mtld3d "$D3D9_IMPLS"; then
     MTLD3D_TAR=$(fetch "$MTLD3D_URL" "$MTLD3D_SHA256")
 fi
+ICON_FONT_TTF=$(fetch "$UNO_FLUENT_ICONS_URL" "$UNO_FLUENT_ICONS_SHA256")
 
 WINEBUILD="$BUILD_DIR/tools/winebuild/winebuild"
 d3d64="$WINE_DIR/lib/wine/$PE64_DIR"
@@ -2923,6 +2924,19 @@ time_mark "Step 4b: Compat database"
 echo "==> Step 4b: Compat database"
 build_compatdb
 
+# ── Step 4c: Icon font ──────────────────────────────────────────────────
+# Windows' icon fonts, which programs name for their window controls and
+# toolbars, have no copy in Wine. This replacement goes into the data
+# directory: win32u loads every font there and lists it in the Fonts key
+# dwrite reads. wine.inf aliases the Windows names to its family.
+time_mark "Step 4c: Icon font"
+echo "==> Step 4c: Icon font"
+ICON_FONT="share/wine/fonts/$(basename "$ICON_FONT_TTF")"
+ICON_FONT_LICENSE="share/licenses/uno-fluent-icons.txt"
+mkdir -p "$WINE_DIR/share/wine/fonts" "$WINE_DIR/share/licenses"
+cp "$ICON_FONT_TTF" "$WINE_DIR/$ICON_FONT"
+cp "$REPO_DIR/licenses/uno-fluent-icons.txt" "$WINE_DIR/$ICON_FONT_LICENSE"
+
 # ── Step 4d: FEX ────────────────────────────────────────────────────────
 # FEX as build-fex.sh staged it in FEX_DIST, as the preflight checked: its
 # emulator DLLs and their unix halves. Wine loads its x86 emulators as
@@ -3063,6 +3077,7 @@ WANT=("lib/wine/$UNIX_DIR/compatdb.so"
       "lib/wine/$UNIX_DIR/winegstreamer.so"
       "lib/wine/$PE64_DIR/winegstreamer.dll" "lib/wine/i386-windows/winegstreamer.dll"
       "lib/external/$GST_LIBGSTREAMER" "lib/external/gstreamer-1.0"
+      "$ICON_FONT" "$ICON_FONT_LICENSE"
       "lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine"
       "lib/wine/$UNIX_DIR/wine.app/Contents/Info.plist"
       "lib/wine/$UNIX_DIR/wine.app/Contents/embedded.provisionprofile")
@@ -3107,6 +3122,13 @@ for want in "${WANT[@]}"; do
     # -e follows symlinks, so this also proves the tree .so links resolve.
     if [ ! -e "$WINE_DIR/$want" ]; then
         echo "  ERROR: missing $want"
+        MISSING=1
+    fi
+done
+# The icon font serves only the names wine.inf aliases to its family.
+for name in "Segoe MDL2 Assets" "Segoe Fluent Icons"; do
+    if ! grep -qF "HKCU,Software\\Wine\\Fonts\\Replacements,\"$name\",,\"Symbols\"" "$WINE_DIR/share/wine/wine.inf"; then
+        echo "  ERROR: wine.inf does not alias $name to the icon font"
         MISSING=1
     fi
 done
