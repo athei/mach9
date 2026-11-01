@@ -1,17 +1,18 @@
 //! The check-in that hands this process to a profiler.
 //!
 //! The hardened `wine.app` drops `DYLD_INSERT_LIBRARIES`, so a profiler starts
-//! the process with the name of its bootstrap service in [`SERVICE_VAR`] and
-//! this library sends the service one message with the task port and the
-//! image name. Without the variable nothing here runs. On a failure the
-//! process logs a line and carries on unprofiled; it never retries and no
-//! answer comes back.
+//! the process with the name of its bootstrap service in
+//! [`PROF_SERVICE_VAR`] and this library sends the service one message with
+//! the task port and the image name. Without the variable nothing here runs.
+//! On a failure the process logs a line and carries on unprofiled; it never
+//! retries and no answer comes back.
 //!
 //! The message is the control port by `COPY_SEND`. A task's read port is not
 //! movable: sending it ends the process with `EXC_GUARD`.
 
 use std::ffi::CString;
 
+use compatdb_core::PROF_SERVICE_VAR;
 use mach2::{
     bootstrap::{BOOTSTRAP_MAX_NAME_LEN, BOOTSTRAP_SUCCESS, bootstrap_look_up, bootstrap_port},
     mach_port::mach_port_deallocate,
@@ -27,8 +28,6 @@ use mach2::{
 
 use crate::{log, read_env};
 
-/// The variable that names the profiler's bootstrap service.
-const SERVICE_VAR: &str = "WINE_PROF_SERVICE";
 /// Identifies the message.
 const MESSAGE_ID: mach_msg_id_t = 0x5750_0001;
 /// The version of the layout of [`CheckIn`], which a change to it raises.
@@ -146,15 +145,17 @@ fn hand_over(name: &str, exe: &str) -> Result<(), String> {
     }
 }
 
-/// Check in with the service [`SERVICE_VAR`] names, if it names one. An empty
-/// value counts as unset, as for the rules. The process is `exe`.
+/// Check in with the service [`PROF_SERVICE_VAR`] names, if it names one. An
+/// empty value counts as unset, as for the rules. The process is `exe`.
 pub fn check_in(exe: &str) {
-    let Some(name) = read_env(SERVICE_VAR).filter(|name| !name.is_empty()) else {
+    let Some(name) = read_env(PROF_SERVICE_VAR).filter(|name| !name.is_empty()) else {
         return;
     };
     match hand_over(&name, exe) {
-        Ok(()) => log::line(&format!("  {SERVICE_VAR} = {name}: checked in")),
-        Err(why) => log::line(&format!("  {SERVICE_VAR} = {name}: {why}, not profiled")),
+        Ok(()) => log::line(&format!("  {PROF_SERVICE_VAR} = {name}: checked in")),
+        Err(why) => log::line(&format!(
+            "  {PROF_SERVICE_VAR} = {name}: {why}, not profiled"
+        )),
     }
 }
 

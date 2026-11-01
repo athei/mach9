@@ -218,7 +218,8 @@ fn the_inherited_conflicts_are_the_variables_a_launcher_removes() {
         [
             "WINEDLLOVERRIDES",
             "WINE_LARGE_ADDRESS_AWARE",
-            "WINE_COMPATDB_FILE"
+            "WINE_COMPATDB_FILE",
+            "WINE_PROF_SERVICE"
         ]
     );
     // Only WINEDLLOVERRIDES is retired: a launcher may still set the others
@@ -226,6 +227,7 @@ fn the_inherited_conflicts_are_the_variables_a_launcher_removes() {
     assert_eq!(retired_env("WINEDLLOVERRIDES"), Some(Key::DllOverrides));
     assert_eq!(retired_env("WINE_LARGE_ADDRESS_AWARE"), None);
     assert_eq!(retired_env(FILE_ENV_VAR), None);
+    assert_eq!(retired_env(PROF_SERVICE_VAR), None);
 }
 
 #[test]

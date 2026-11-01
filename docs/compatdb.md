@@ -78,8 +78,11 @@ name ([`prof.rs`](../compatdb/src/prof.rs) has the message).
   A message that waits in the queue of the service can outlive its process.
 - The send has a timeout. A process that cannot check in logs why and runs
   unprofiled.
-- The control port gives full control of the process, so a launcher must
-  not pass this variable on from a source it does not trust.
+- The control port gives full control of the process, so a launch must not
+  take the variable from where the launcher was started. A launcher clears
+  it when it inherited it ([launcher responsibilities][launcher]). Setting
+  it in Mach9.app's `[env]`, or a launcher's own equivalent, is the
+  deliberate route, and it reaches Wine.
 
 ## Logging and verification
 

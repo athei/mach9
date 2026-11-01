@@ -1,12 +1,14 @@
-use std::process::Command;
+use std::{fs, process::Command};
 
-use compatdb_core::{DebugChannel, Exe, Rule};
+use compatdb_core::{DebugChannel, Exe, PROF_SERVICE_VAR, Rule};
 
 use super::*;
+use crate::{bundle, config::Settings};
 
 /// Set for the copy of this test binary that runs
 /// `apply_in_an_inherited_environment`, naming what it applies: `empty` for a
-/// table without rules, `rules` for one with a rule.
+/// table without rules, `rules` for one with a rule, `config` for a config
+/// that sets [`PROF_SERVICE_VAR`] in `[env]`.
 const APPLY_ENV: &str = "GAMELAUNCHER_TEST_APPLY";
 
 /// What `apply_in_an_inherited_environment` prints, followed by the value
@@ -21,7 +23,8 @@ fn one_rule() -> Table {
 }
 
 /// What `apply_in_an_inherited_environment` prints, followed by the
-/// variables of [`inherited_conflicts`] that `apply` left in place.
+/// variables of [`inherited_conflicts`] the launch ends up with, each as
+/// `NAME=value`.
 const APPLY_KEPT: &str = "apply kept: ";
 
 /// Run [`apply`] in a copy of this test binary that inherited
@@ -69,6 +72,35 @@ fn apply_removes_the_inherited_variables_that_conflict_with_the_rules() {
     assert_eq!(apply_with_an_inherited_table("rules").1, "");
 }
 
+/// The inherited value goes, and the one the config asks for reaches Wine.
+#[test]
+fn a_config_sets_the_profiler_service_over_an_inherited_one() {
+    assert_eq!(
+        apply_with_an_inherited_table("config").1,
+        format!("{PROF_SERVICE_VAR}=from-config")
+    );
+}
+
+/// Do what a launch does for a config whose `[env]` sets
+/// [`PROF_SERVICE_VAR`].
+fn apply_a_config_with_a_service() {
+    let support = env::temp_dir().join(format!("gamelauncher-apply-{}", std::process::id()));
+    fs::create_dir(&support).unwrap();
+    fs::write(
+        bundle::config_path(&support),
+        format!("[env]\n{PROF_SERVICE_VAR} = \"from-config\"\n"),
+    )
+    .unwrap();
+    let settings = Settings {
+        executable: Some(env::current_exe().unwrap().display().to_string()),
+        ..Settings::default()
+    };
+    let config = Config::load_or_setup(&support, settings).unwrap();
+    apply(Path::new("/tmp/prefix"), &config.rules.table);
+    apply_user(&config);
+    fs::remove_dir_all(&support).unwrap();
+}
+
 /// The child's side of `apply_with_an_inherited_table`; without `APPLY_ENV`
 /// it does nothing.
 #[test]
@@ -77,17 +109,17 @@ fn apply_in_an_inherited_environment() {
     let Some(table) = env::var_os(APPLY_ENV) else {
         return;
     };
-    let rules = if table == "rules" {
-        one_rule()
+    if table == "config" {
+        apply_a_config_with_a_service();
+    } else if table == "rules" {
+        apply(Path::new("/tmp/prefix"), &one_rule());
     } else {
-        Table::new()
-    };
-    apply(Path::new("/tmp/prefix"), &rules);
+        apply(Path::new("/tmp/prefix"), &Table::new());
+    }
     let value = env::var(COMPATDB_ENV).unwrap_or_else(|_| String::from("<unset>"));
-    let kept: Vec<&str> = inherited_conflicts()
+    let kept: Vec<String> = inherited_conflicts()
         .iter()
-        .copied()
-        .filter(|name| env::var_os(name).is_some())
+        .filter_map(|name| Some(format!("{name}={}", env::var(name).ok()?)))
         .collect();
     println!("\n{APPLY_SAYS}{value}\n{APPLY_KEPT}{}", kept.join(","));
 }

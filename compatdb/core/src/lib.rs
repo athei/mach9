@@ -472,6 +472,9 @@
 //! - Remove the variables of [`inherited_conflicts`] from the environment
 //!   Wine starts with when the launcher inherited them, so a launch does
 //!   not depend on where the launcher was started from.
+//! - Set [`PROF_SERVICE_VAR`] only on purpose, for a launch a profiler
+//!   started: every process of the launch sends the service it names its
+//!   task control port. An inherited value is one of the variables above.
 //! - Build `WINEDEBUG` itself: Wine reads it before `compatdb.so` loads.
 //!   Its own entries come first, then [`Table::winedebug`], joined with
 //!   `,`.
@@ -600,6 +603,13 @@ pub const ENV_VAR: &str = "WINE_COMPATDB";
 /// [Format](index.html#format). Like [`ENV_VAR`], it is only read by
 /// `compatdb.so`.
 pub const FILE_ENV_VAR: &str = "WINE_COMPATDB_FILE";
+
+/// The environment variable naming the bootstrap service of a profiler.
+///
+/// Each process that has it sends that service its task control port, so it
+/// is for a launch a profiler started: see
+/// [Launcher responsibilities](index.html#launcher-responsibilities).
+pub const PROF_SERVICE_VAR: &str = "WINE_PROF_SERVICE";
 
 /// Where this crate's rustdoc is published. [`Key::docs_url`] and
 /// [`DocSection::url`] link into it.

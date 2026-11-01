@@ -20,7 +20,8 @@
 
 use crate::{
     Argument, DEFAULT_VALUE, DebugChannel, DllOverride, EnvEntry, EnvName, Exe, FILE_ENV_VAR,
-    FieldError, Fingerprint, Key, KeyKind, Rule, Scalar, ScalarValue, Setting, Severity,
+    FieldError, Fingerprint, Key, KeyKind, PROF_SERVICE_VAR, Rule, Scalar, ScalarValue, Setting,
+    Severity,
 };
 
 /// The keys that are no longer read, each with why and what to do instead
@@ -148,14 +149,21 @@ fn env_name(name: &str) -> Result<EnvName, FieldError> {
 /// - [`FILE_ENV_VAR`]: an inherited path would add rules after the ones the
 ///   launcher writes to [`ENV_VAR`](crate::ENV_VAR), and they beat the
 ///   launcher's at equal specificity.
+/// - [`PROF_SERVICE_VAR`]: every process of the launch would hand its task
+///   control port to the service it names, so a launch must not take it from
+///   where the launcher was started.
 ///
-/// `WINE_LARGE_ADDRESS_AWARE` and [`FILE_ENV_VAR`] are not retired, so a
-/// launcher may still set them for the whole launch on purpose.
-/// `WINEDLLOVERRIDES` is (see [`retired_env`]): a rule's `dll_overrides` does
-/// its job.
+/// All but `WINEDLLOVERRIDES` are not retired, so a launcher may still set
+/// them for the whole launch on purpose. `WINEDLLOVERRIDES` is (see
+/// [`retired_env`]): a rule's `dll_overrides` does its job.
 #[must_use]
 pub const fn inherited_conflicts() -> &'static [&'static str] {
-    &["WINEDLLOVERRIDES", "WINE_LARGE_ADDRESS_AWARE", FILE_ENV_VAR]
+    &[
+        "WINEDLLOVERRIDES",
+        "WINE_LARGE_ADDRESS_AWARE",
+        FILE_ENV_VAR,
+        PROF_SERVICE_VAR,
+    ]
 }
 
 impl Key {
