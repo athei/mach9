@@ -1,5 +1,6 @@
 use std::{
     env,
+    ffi::c_void,
     fs::OpenOptions,
     io,
     os::fd::{AsRawFd, IntoRawFd, RawFd},
@@ -10,7 +11,9 @@ use std::{
 };
 
 pub use gamelauncher_core::bundle::*;
-use log::info;
+use log::{info, warn};
+use objc2::rc::Retained;
+use objc2_foundation::{NSString, NSURL};
 
 pub fn resources_dir() -> io::Result<PathBuf> {
     let exe = env::current_exe()?;
@@ -45,6 +48,36 @@ pub fn app_name() -> String {
 /// The enclosing `.app`, or `None` when the launcher runs outside a bundle.
 fn app_bundle() -> Option<PathBuf> {
     enclosing_app(&env::current_exe().ok()?)
+}
+
+/// Register this app's opener ([`opener_app`]) with Launch Services, so
+/// Finder offers it for the Windows file types. Launch Services registers an
+/// app copied into place, but not the apps nested in it, so the launcher
+/// does it on every launch; once registered, a call costs well under a
+/// millisecond. Nothing when the bundle has no opener, as in a build of the
+/// launcher alone.
+pub fn register_opener() {
+    let Some(opener) = app_bundle().as_deref().and_then(opener_app) else {
+        return;
+    };
+    if !opener.is_dir() {
+        return;
+    }
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&opener.to_string_lossy()));
+    // SAFETY: an NSURL is toll-free bridged to the CFURLRef the call takes,
+    // and `url` outlives it.
+    let status = unsafe { LSRegisterURL(Retained::as_ptr(&url).cast(), false) };
+    if status != 0 {
+        warn!(
+            "could not register {} with Launch Services: OSStatus {status}",
+            opener.display()
+        );
+    }
+}
+
+#[link(name = "CoreServices", kind = "framework")]
+unsafe extern "C" {
+    fn LSRegisterURL(url: *const c_void, update: bool) -> i32;
 }
 
 /// Start a fresh instance of this app through Launch Services, with `args`

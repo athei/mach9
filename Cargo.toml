@@ -1,7 +1,8 @@
 # Every Rust crate of the repository: compatdb.so (compatdb), the rule
 # table it is built on (compatdb/core), and Mach9.app's launcher
-# (launcher/app), its Dock tile plug-in (launcher/docktile) and the code
-# both share (launcher/core). A plain cargo command here acts on all of them.
+# (launcher/app), its Dock tile plug-in (launcher/docktile), its opener
+# (launcher/opener) and the code they share (launcher/core). A plain cargo
+# command here acts on all of them.
 [workspace]
 resolver = "3"
 members = [
@@ -10,6 +11,7 @@ members = [
     "launcher/app",
     "launcher/core",
     "launcher/docktile",
+    "launcher/opener",
 ]
 
 [workspace.package]

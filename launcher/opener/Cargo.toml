@@ -1,0 +1,15 @@
+[package]
+name = "gamelauncher-opener"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+gamelauncher-core = { workspace = true }
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = ["std", "NSApplication", "NSResponder"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerator", "NSNotification", "NSString", "NSURL"] }
+
+[lints]
+workspace = true

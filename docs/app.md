@@ -39,6 +39,11 @@ Choose New Executable… in the Dock menu. The window has these fields:
 
 Run starts it.
 
+Opening a `.exe` or `.msi` in Finder runs it once, as Save as new game
+off does: double-click it, or choose Open With, Mach9. An `.msi` runs
+through `msiexec`. To make that the default, select a `.exe`, choose Get
+Info, pick Mach9 under Open with and click Change All….
+
 Install games into a normal macOS folder such as `~/Games`, not into the
 prefix's `C:` drive, so they survive a prefix reset. Windows installers see
 the root of your Mac as drive `Z:`, so that folder is

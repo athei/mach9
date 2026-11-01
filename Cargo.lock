@@ -270,6 +270,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gamelauncher-opener"
+version = "0.1.0"
+dependencies = [
+ "gamelauncher-core",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -64,6 +64,7 @@ fn run(args: cli::Args) -> io::Result<()> {
     // Before the config is read, so config failures reach the log too.
     let log_fd = maybe_redirect_stdio(&support)?;
     init_logger();
+    bundle::register_opener();
 
     match setup(&support, args)? {
         Some(cfg) => match launch(&cfg, &support, &resources, log_fd)? {},

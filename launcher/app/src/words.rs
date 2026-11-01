@@ -2,6 +2,8 @@
 //! into the New Executable window, are split into words, how a word is quoted
 //! so it reads back whole, and how a list of names reads in a message.
 
+pub use gamelauncher_core::words::quote;
+
 /// Split a command line into words the way a shell would: whitespace
 /// separates, single quotes are literal, double quotes group while `\"` and
 /// `\\` stand for the character they escape, and outside quotes a backslash
@@ -57,30 +59,6 @@ pub fn split(line: &str) -> Result<Vec<String>, String> {
         words.push(word);
     }
     Ok(words)
-}
-
-/// Quote a word so that reading the command line back yields it unchanged,
-/// also as part of a `--config` batch, which is split at unquoted semicolons.
-/// Left alone when it needs no quoting, which is the usual case.
-#[must_use]
-pub fn quote(word: &str) -> String {
-    let needs_quoting = word.is_empty()
-        || word
-            .chars()
-            .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\' | ';'));
-    if !needs_quoting {
-        return word.to_owned();
-    }
-    let mut quoted = String::with_capacity(word.len() + 2);
-    quoted.push('"');
-    for ch in word.chars() {
-        if ch == '"' || ch == '\\' {
-            quoted.push('\\');
-        }
-        quoted.push(ch);
-    }
-    quoted.push('"');
-    quoted
 }
 
 /// Names in running text, `a`, `b` and `c`, each wrapped in `quote`: a

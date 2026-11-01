@@ -101,6 +101,14 @@ pub fn enclosing_app(path: &Path) -> Option<PathBuf> {
     (app.extension().is_some_and(|ext| ext == "app")).then(|| app.to_path_buf())
 }
 
+/// The opener of the `.app` at `app`: the helper app that declares the
+/// Windows file types and hands each file Finder opens with it to the app.
+/// It carries the app's own name, which is what Open With lists.
+#[must_use]
+pub fn opener_app(app: &Path) -> Option<PathBuf> {
+    Some(app.join("Contents/Helpers").join(app.file_name()?))
+}
+
 /// A string value out of an `Info.plist`.
 ///
 /// # Errors
@@ -152,6 +160,18 @@ mod tests {
         ] {
             assert!(enclosing_app(Path::new(outside)).is_none(), "{outside}");
         }
+    }
+
+    #[test]
+    fn the_opener_is_named_after_its_app() {
+        let app = Path::new("/Applications/Game.app");
+        let opener = opener_app(app).unwrap();
+        assert_eq!(
+            opener,
+            Path::new("/Applications/Game.app/Contents/Helpers/Game.app")
+        );
+        // And the opener finds its app the other way.
+        assert_eq!(enclosing_app(&opener).as_deref(), Some(app));
     }
 
     #[test]
