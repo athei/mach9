@@ -655,7 +655,7 @@ check_default_trees() {
 # MTL_*, METAL_* and GST_* variable are dropped so that the built-in rules
 # and the defaults of Wine, FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp,
 # Metal and GStreamer decide; only vkd3d-proton's pipeline cache is moved into
-# the prefix.
+# the prefix, and check_fex_runs sets FEX_SMCCHECKS=full on one run per arch.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
@@ -813,6 +813,7 @@ smoke_test() {
     check_d3d12_runs "${wine_env[@]}"
     check_wined3d_device "${wine_env[@]}"
     check_wmadec_runs "${wine_env[@]}"
+    check_fex_runs "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
 }
@@ -1359,6 +1360,45 @@ check_wmadec_runs() {
         exit 1
     fi
     echo "    ntdll put GStreamer's registry under XDG_CACHE_HOME."
+}
+
+# check_fex_runs <env-command>...: build smoke/fex.c for x86_64 and i686 and run
+# it in the booted throwaway prefix (run_fex), in FEX's default mode and with
+# FEX_SMCCHECKS=full, under which FEX tracks writes to code another way.
+# <env-command> drops the caller's FEX_* variables, so each run gets the mode it
+# names and only that run has it. A hang is how these cases usually fail, so the
+# limits are lower than the 120 seconds of the other runs. The slowest clean runs
+# took about 1 and 4 seconds on a busy current Mac, and small programs take up to
+# 4 times as long on a hosted runner, so the limits are 2 to 3 times that.
+check_fex_runs() {
+    local arch
+    for arch in x86_64 i686; do
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/fex-$arch.exe" "$REPO_DIR/smoke/fex.c"
+        run_fex "$arch" "default mode" 10 "$@"
+        run_fex "$arch" FEX_SMCCHECKS=full 40 "$@" FEX_SMCCHECKS=full
+    done
+}
+
+# run_fex <arch> <mode> <seconds> <env-command>...: run fex.exe for <arch> and
+# exit with the log unless it ended within <seconds> with every case passed.
+# The program prints each case's name as it starts it, so the last of those is
+# the case that hung or failed.
+run_fex() {
+    local arch="$1" mode="$2" secs="$3" log="$TMP_DIR/fex-$1.log" last want
+    shift 3
+    time_mark "smoke: fex.exe $arch ($mode)"
+    echo "  Running fex.exe for $arch ($mode)..."
+    run_limited "$secs" "$log" "$@" "$WINE_DIR/bin/wine" "$TMP_DIR/fex-$arch.exe"
+    last=$(grep "wine-build smoke test: $arch case " "$log" | tail -n 1 | tr -d '\r' | sed 's/.* case //')
+    smoke_check "fex.exe for $arch ($mode), in case '$last'," "$secs" "$log"
+    want="wine-build smoke test: $arch FEX cases passed"
+    if ! grep -q "$want" "$log"; then
+        echo "Error: fex.exe for $arch ($mode) did not print '$want'"
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
+    grep "$want" "$log" | sed 's/^/    /'
 }
 
 # check_wgl_runs <env-command>...: build smoke/wgl.c for each arch of
