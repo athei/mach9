@@ -63,6 +63,24 @@
   on an arm64 host loads its builtins from there. An i386 process uses
   `i386-windows`.
 
+## Profiler check-in
+
+The hardened `wine.app` drops `DYLD_INSERT_LIBRARIES`, so a profiler gets a
+process through the library instead. It registers a bootstrap service,
+starts Wine with the service's name in `WINE_PROF_SERVICE`, and each
+process sends that service one message with its task control port and image
+name ([`prof.rs`](../compatdb/src/prof.rs) has the message).
+
+- Without the variable, or with an empty one, the library makes no
+  bootstrap call.
+- Every process that inherits the variable checks in, Wine's own such as
+  `services.exe` too, so a profiler receives until it has the one it wants.
+  A message that waits in the queue of the service can outlive its process.
+- The send has a timeout. A process that cannot check in logs why and runs
+  unprofiled.
+- The control port gives full control of the process, so a launcher must
+  not pass this variable on from a source it does not trust.
+
 ## Logging and verification
 
 The library writes to Wine's stderr, once in every process at load, a
@@ -86,6 +104,7 @@ with `compatdb:`.
 | `WINE_COMPATDB_FILE = <path>` | The file that adds rules; only when the variable is set |
 | `warning: WINE_COMPATDB_FILE not read: <reason>; ...` | The file cannot be used and adds no rules; `WINE_COMPATDB` and the built-in rules still apply |
 | `warning: WINE_COMPATDB line <n>: ...`, `warning: WINE_COMPATDB_FILE line <n>: ...` | A field or line of the rules it ignored, in the variable or the file ([parsing][parsing]) |
+| `WINE_PROF_SERVICE = <name>: ...` | Whether the process [checked in](#profiler-check-in), or why it did not; only when the variable is set |
 | `dxgi = <impl> (from <path>), <source>`, `d3d9 = ...` | The trees it prepended; a family no rule chose gets `wined3d` |
 | `wined3d = ...` | The wined3d renderer a rule set, or the one a `WINE_D3D_CONFIG` from a rule's `env` or inherited asks for; unset, wined3d's registry settings or its default decide |
 | `metal_hud = <value>, <source>` | The HUD setting; its variables are in the `env` lines |

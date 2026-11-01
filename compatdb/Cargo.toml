@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 compatdb-core = { workspace = true }
 libc = { workspace = true }
+mach2 = { workspace = true }
 
 [lints]
 workspace = true

@@ -17,7 +17,8 @@
 //! logs a rule's `WINEDEBUG` channels, which Wine has read already. All the
 //! decision logic lives in [`compatdb_core`]; this crate only moves bytes in
 //! and out of the running process, so its `unsafe` is confined to a thin
-//! ntdll shell.
+//! shell over ntdll and, for the check-in with a profiler that asks for the
+//! process (`prof`), Mach.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -29,6 +30,7 @@
 mod apply;
 mod log;
 mod ntdll;
+mod prof;
 mod rules_file;
 mod version;
 
@@ -77,6 +79,8 @@ extern "C" fn run() {
     let (table, lines) = load_table();
     let Some(process) = Process::current(&nt) else {
         log_lines(&lines);
+        // A profiler still gets a process that cannot name itself.
+        prof::check_in("");
         return;
     };
     let mut resolution = process.resolve(&table);
@@ -92,6 +96,7 @@ extern "C" fn run() {
     // The file named, if one is, and what could not be read go in the block
     // of the process, next to the configuration they leave.
     log_lines(&lines);
+    prof::check_in(&process.exe);
 
     // Every process gets one tree of each family prepended: a rule's choice,
     // which for most is a built-in `*` rule's, or wined3d, upstream Wine's,
