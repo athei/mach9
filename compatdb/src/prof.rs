@@ -12,7 +12,7 @@
 
 use std::ffi::CString;
 
-use compatdb_core::PROF_SERVICE_VAR;
+use compatdb_core::{PROF_SERVICE_VAR, Resolution};
 use mach2::{
     bootstrap::{BOOTSTRAP_MAX_NAME_LEN, BOOTSTRAP_SUCCESS, bootstrap_look_up, bootstrap_port},
     mach_port::mach_port_deallocate,
@@ -145,13 +145,31 @@ fn hand_over(name: &str, exe: &str) -> Result<(), String> {
     }
 }
 
-/// Check in with the service [`PROF_SERVICE_VAR`] names, if it names one. An
-/// empty value counts as unset, as for the rules. The process is `exe`.
-pub fn check_in(exe: &str) {
-    let Some(name) = read_env(PROF_SERVICE_VAR).filter(|name| !name.is_empty()) else {
+/// The service `value`, the value of [`PROF_SERVICE_VAR`], names. An empty
+/// value counts as unset, as for the rules.
+fn named(value: Option<String>) -> Option<String> {
+    value.filter(|name| !name.is_empty())
+}
+
+/// The profiler's service, if the process has one.
+pub fn service() -> Option<String> {
+    named(read_env(PROF_SERVICE_VAR))
+}
+
+/// Add to `resolution` what a process with a `service` needs. `block` is its
+/// environment block.
+pub fn fold_env(service: Option<&str>, resolution: &mut Resolution, block: &[u16]) {
+    if service.is_some() {
+        resolution.fold_profiler_env(block, read_env);
+    }
+}
+
+/// Check in with `service`, if there is one, as the process `exe`.
+pub fn check_in(service: Option<&str>, exe: &str) {
+    let Some(name) = service else {
         return;
     };
-    match hand_over(&name, exe) {
+    match hand_over(name, exe) {
         Ok(()) => log::line(&format!("  {PROF_SERVICE_VAR} = {name}: checked in")),
         Err(why) => log::line(&format!(
             "  {PROF_SERVICE_VAR} = {name}: {why}, not profiled"

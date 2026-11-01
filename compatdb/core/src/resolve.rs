@@ -6,10 +6,13 @@ use std::collections::BTreeMap;
 #[cfg(doc)]
 use crate::runtime::{basename_of, steam_app};
 use crate::{
-    Argument, D3d9, DebugChannel, DllOverride, Dxgi, ENV_VAR, EnvEntry, FILE_ENV_VAR, OpenGl, Rule,
-    Scalar, ScalarValue, Setting, Source, Specificity, Table, VersionInfo, Wined3d, metal_hud_env,
-    runtime,
+    Argument, D3d9, DebugChannel, DllOverride, Dxgi, ENV_VAR, EnvEntry, FILE_ENV_VAR, OpenGl,
+    PROF_SERVICE_VAR, Rule, Scalar, ScalarValue, Setting, Source, Specificity, Table, VersionInfo,
+    Wined3d, metal_hud_env, runtime,
 };
+
+/// FEX's option for the extended debug info of [`Resolution::fold_profiler_env`].
+const FEX_DEBUG_INFO_VAR: &str = "FEX_EXTENDEDDEBUGINFO";
 
 /// The settings that apply to one process.
 ///
@@ -49,8 +52,9 @@ pub struct Resolution {
     /// Where each entry of [`Resolution::debug_channels`] came from, at the
     /// same index.
     pub debug_channels_from: Vec<Origin>,
-    /// The `env` entries of every matching rule in fold order, followed by
-    /// those [`Resolution::fold_derived_env`] adds.
+    /// The entry of [`Resolution::fold_profiler_env`], when it ran, then the
+    /// `env` entries of every matching rule in fold order, followed by those
+    /// [`Resolution::fold_derived_env`] adds.
     /// [`Resolution::env_steps`] says which of them apply in a process.
     pub env: Vec<EnvEntry>,
     /// Where each entry of [`Resolution::env`] came from, at the same index.
@@ -98,7 +102,7 @@ pub struct DllOverrideReset {
 
 /// Where a value of a [`Resolution`] came from: the rule that set it, by its
 /// [`Source`] and, for a built-in rule that does not match every process,
-/// its matchers.
+/// its matchers, or a profiler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Origin {
     /// A built-in rule that matches every process.
@@ -110,6 +114,8 @@ pub enum Origin {
     Line(usize),
     /// Line `n` of the file [`FILE_ENV_VAR`] names.
     FileLine(usize),
+    /// [`PROF_SERVICE_VAR`], see [`Resolution::fold_profiler_env`].
+    Profiler,
 }
 
 impl Origin {
@@ -134,7 +140,8 @@ impl Origin {
     }
 
     /// How the log names it: `built-in`, `built-in for <matchers>`,
-    /// `WINE_COMPATDB line <n>` or `WINE_COMPATDB_FILE line <n>`.
+    /// `WINE_COMPATDB line <n>`, `WINE_COMPATDB_FILE line <n>` or
+    /// `WINE_PROF_SERVICE`.
     #[must_use]
     pub fn label(&self) -> String {
         match self {
@@ -142,6 +149,7 @@ impl Origin {
             Self::BuiltInFor(matchers) => format!("built-in for {matchers}"),
             Self::Line(n) => format!("{ENV_VAR} line {n}"),
             Self::FileLine(n) => format!("{FILE_ENV_VAR} line {n}"),
+            Self::Profiler => String::from(PROF_SERVICE_VAR),
         }
     }
 }
@@ -159,7 +167,7 @@ pub struct ArgumentsDropped {
 /// Where an env entry of a [`Resolution`] came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvFrom {
-    /// The rule that set it.
+    /// The rule that set it, or [`Origin::Profiler`].
     pub origin: Origin,
     /// Whether it is a default (see [`Origin::env_is_default`]), which leaves
     /// a variable the process already has alone.
@@ -171,7 +179,7 @@ pub struct EnvFrom {
 pub struct EnvStep {
     /// The entry: the variable and the value it sets, or none to remove it.
     pub entry: EnvEntry,
-    /// The rule that set it.
+    /// The rule that set it, or [`Origin::Profiler`].
     pub origin: Origin,
     /// False for a default whose variable the process already had, which it
     /// leaves alone.
@@ -349,6 +357,40 @@ impl Resolution {
             self.env.splice(at..at, entries);
             self.env_from.splice(at..at, from);
         }
+    }
+
+    /// Add the env entry a process with [`PROF_SERVICE_VAR`] gets: FEX's
+    /// extended debug info, which a profiler needs to map host code to every
+    /// guest instruction. A second call changes nothing.
+    ///
+    /// FEX reads its options from `block`, the process's environment block,
+    /// and not from the unix environment, which `unix` reads. So only a value
+    /// in `block` makes the entry a default that leaves the variable alone. A
+    /// value only `unix` has is what a child started with a block of its own
+    /// inherits, and it goes into `block`: without that the log would name a
+    /// value FEX does not get. It comes ahead of every other entry, so a
+    /// rule's entry for the variable wins. A FEX without the option ignores
+    /// the variable.
+    pub fn fold_profiler_env(&mut self, block: &[u16], unix: impl Fn(&str) -> Option<String>) {
+        self.fold_derived_env();
+        if self
+            .env_from
+            .iter()
+            .any(|from| from.origin == Origin::Profiler)
+        {
+            return;
+        }
+        let inherited = unix(FEX_DEBUG_INFO_VAR).filter(|value| !value.is_empty());
+        let value = inherited.as_deref().unwrap_or("1");
+        self.env
+            .insert(0, EnvEntry::literal(FEX_DEBUG_INFO_VAR, value));
+        self.env_from.insert(
+            0,
+            EnvFrom {
+                origin: Origin::Profiler,
+                default: runtime::env_value(block, FEX_DEBUG_INFO_VAR).is_some(),
+            },
+        );
     }
 
     /// Add `entry`, which a setting from `origin` stands for, after the

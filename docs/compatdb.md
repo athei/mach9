@@ -78,6 +78,15 @@ name ([`prof.rs`](../compatdb/src/prof.rs) has the message).
   A message that waits in the queue of the service can outlive its process.
 - The send has a timeout. A process that cannot check in logs why and runs
   unprofiled.
+- The variable also turns on FEX's extended debug info, an `env` entry with
+  the source `WINE_PROF_SERVICE`
+  ([`Resolution::fold_profiler_env`][fold-profiler]). It goes into the
+  environment block, where FEX reads its options. A value in the block and
+  a rule's entry win, and a FEX without the option ignores the variable.
+- A child usually inherits both variables with the block. A child started
+  with a block of its own still has them in the unix environment, so it
+  checks in, and the library puts the unix value of the FEX option into its
+  block.
 - The control port gives full control of the process, so a launch must not
   take the variable from where the launcher was started. A launcher clears
   it when it inherited it ([launcher responsibilities][launcher]). Setting
@@ -96,9 +105,11 @@ with `compatdb:`.
   `reset by <source>` when the last rule for it set it to `default`.
 - A source is `built-in` for a built-in rule for every process,
   `built-in for <exe> (<fingerprint values>)` for a built-in rule for one
-  program, `WINE_COMPATDB line <n>` for a rule from that variable and
+  program, `WINE_COMPATDB line <n>` for a rule from that variable,
   `WINE_COMPATDB_FILE line <n>` for a rule from the file that variable
-  names. Each counts its own lines ([format][format]).
+  names and `WINE_PROF_SERVICE` for what a
+  [profiler](#profiler-check-in) turns on. Each counts its own lines
+  ([format][format]).
 
 | Line | What it shows |
 |------|---------------|
@@ -137,3 +148,4 @@ for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
 [d3d9]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.d3d9
 [env]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.env
 [arguments-override]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.arguments_override
+[fold-profiler]: https://docs.mach9.app/compatdb_core/struct.Resolution.html#method.fold_profiler_env

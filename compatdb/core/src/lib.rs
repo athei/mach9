@@ -608,7 +608,8 @@ pub const FILE_ENV_VAR: &str = "WINE_COMPATDB_FILE";
 ///
 /// Each process that has it sends that service its task control port, so it
 /// is for a launch a profiler started: see
-/// [Launcher responsibilities](index.html#launcher-responsibilities).
+/// [Launcher responsibilities](index.html#launcher-responsibilities). It also
+/// gets FEX's debug info: see [`Resolution::fold_profiler_env`].
 pub const PROF_SERVICE_VAR: &str = "WINE_PROF_SERVICE";
 
 /// Where this crate's rustdoc is published. [`Key::docs_url`] and

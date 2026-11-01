@@ -32,6 +32,34 @@ fn wow() -> Origin {
 }
 
 #[test]
+fn the_env_line_of_a_profiled_process_says_what_fex_gets() {
+    let name = "FEX_EXTENDEDDEBUGINFO";
+    // The line of a process whose block is `block` and whose variable reads
+    // `value` from either environment.
+    let line = |block: &str, value: Option<&str>| {
+        let block: Vec<u16> = block.encode_utf16().collect();
+        let mut resolution = Table::builtin().resolve("game.exe", &VersionInfo::default(), None);
+        resolution.fold_profiler_env(&block, |_| None);
+        let steps = resolution.env_steps(|variable| value.is_some() && variable == name);
+        steps
+            .iter()
+            .find(|step| step.entry.name().as_str() == name)
+            .map(|step| env_line(step, value))
+    };
+    let set = Some("  env FEX_EXTENDEDDEBUGINFO=1, WINE_PROF_SERVICE: set");
+    assert_eq!(line("OTHER=x\0\0", None).as_deref(), set);
+    // Only the unix environment has it, which FEX does not read.
+    assert_eq!(line("OTHER=x\0\0", Some("1")).as_deref(), set);
+    assert_eq!(
+        line("FEX_EXTENDEDDEBUGINFO=0\0\0", Some("0")).as_deref(),
+        Some(
+            "  env FEX_EXTENDEDDEBUGINFO=1, WINE_PROF_SERVICE: \
+             left alone, the process has FEX_EXTENDEDDEBUGINFO=0"
+        )
+    );
+}
+
+#[test]
 fn the_wined3d_line_names_the_renderer() {
     let unset = source(Key::Wined3d, None, None);
     let line = Origin::Line(2);

@@ -1,3 +1,4 @@
+use compatdb_core::{Table, VersionInfo};
 use mach2::{
     kern_return::{KERN_SUCCESS, kern_return_t},
     mach_port::{mach_port_allocate, mach_port_insert_right, mach_port_mod_refs},
@@ -87,6 +88,29 @@ fn a_bootstrap_name_has_at_most_127_bytes_and_no_nul() {
     assert!(bootstrap_name(&"x".repeat(127)).is_some());
     assert!(bootstrap_name(&"x".repeat(128)).is_none());
     assert!(bootstrap_name("x\0y").is_none());
+}
+
+#[test]
+fn an_empty_value_names_no_service() {
+    assert_eq!(named(None), None);
+    assert_eq!(named(Some(String::new())), None);
+    assert_eq!(named(Some(String::from("x"))).as_deref(), Some("x"));
+}
+
+#[test]
+fn only_a_process_with_a_service_gets_an_env_entry() {
+    let resolution = || Table::builtin().resolve("game.exe", &VersionInfo::default(), None);
+    let block = [0, 0];
+
+    let mut without = resolution();
+    let untouched = without.env.clone();
+    fold_env(None, &mut without, &block);
+    assert_eq!(without.env, untouched);
+    assert_eq!(without.env_from, resolution().env_from);
+
+    let mut with = resolution();
+    fold_env(Some("x"), &mut with, &block);
+    assert_eq!(with.env.len(), untouched.len() + 1);
 }
 
 /// The send rights this task holds to `port`, in user references.

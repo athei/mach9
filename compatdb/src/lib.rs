@@ -77,10 +77,11 @@ extern "C" fn run() {
         return;
     };
     let (table, lines) = load_table();
+    let service = prof::service();
     let Some(process) = Process::current(&nt) else {
         log_lines(&lines);
         // A profiler still gets a process that cannot name itself.
-        prof::check_in("");
+        prof::check_in(service.as_deref(), "");
         return;
     };
     let mut resolution = process.resolve(&table);
@@ -96,7 +97,7 @@ extern "C" fn run() {
     // The file named, if one is, and what could not be read go in the block
     // of the process, next to the configuration they leave.
     log_lines(&lines);
-    prof::check_in(&process.exe);
+    prof::check_in(service.as_deref(), &process.exe);
 
     // Every process gets one tree of each family prepended: a rule's choice,
     // which for most is a built-in `*` rule's, or wined3d, upstream Wine's,
@@ -129,8 +130,10 @@ extern "C" fn run() {
     // entry, applied with the rest below, whose line shows it. Without one,
     // the log names the renderer the WINE_D3D_CONFIG the process ends up
     // with asks for: a rule's env, or else the one it inherited. The Metal
-    // HUD setting travels as env entries the same way.
+    // HUD setting travels as env entries the same way, and so does what a
+    // profiler needs.
     resolution.fold_derived_env();
+    prof::fold_env(service.as_deref(), &mut resolution, &process.env);
     let wined3d = resolution.wined3d();
     let config = match resolution.d3d_config() {
         Some(value) => Some((value.to_owned(), resolution.d3d_config_origin())),

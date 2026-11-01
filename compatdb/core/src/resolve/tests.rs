@@ -790,6 +790,117 @@ fn a_removal_names_the_value_it_undoes() {
     );
 }
 
+/// FEX's option for a profiled process.
+const FEX_OPTION: &str = "FEX_EXTENDEDDEBUGINFO";
+
+/// An environment block without [`FEX_OPTION`].
+const BLOCK: &str = "OTHER=x\0\0";
+
+/// The steps the rule `text` and a profiler give `game.exe`, whose block is
+/// `block` and whose unix environment has [`FEX_OPTION`] at `unix`. As in
+/// `compatdb.so`, a process has a variable in either place.
+fn profiled(text: &str, block: &str, unix: Option<&str>) -> Vec<EnvStep> {
+    let table = with_lines(&Table::builtin(), text);
+    let mut r = table.resolve("game.exe", &VersionInfo::default(), None);
+    let in_block = u16s(block);
+    r.fold_profiler_env(&in_block, |_| unix.map(str::to_owned));
+    assert_eq!(r.env.len(), r.env_from.len());
+    r.env_steps(|name| {
+        name == FEX_OPTION && (unix.is_some() || runtime::env_value(&in_block, name).is_some())
+    })
+}
+
+/// The value of [`FEX_OPTION`] FEX reads: that of `block` with the entries of
+/// `steps` that apply.
+fn fex_reads(block: &str, steps: &[EnvStep]) -> Option<String> {
+    let entries: Vec<EnvEntry> = steps
+        .iter()
+        .filter(|step| step.applied)
+        .map(|step| step.entry.clone())
+        .collect();
+    let block = u16s(block);
+    let merged = merge_env(&block, &entries).unwrap_or(block);
+    runtime::env_value(&merged, FEX_OPTION)
+}
+
+#[test]
+fn a_profiler_turns_on_fex_debug_info_ahead_of_every_other_entry() {
+    let steps = profiled("", BLOCK, None);
+    let first = steps.first();
+    assert_eq!(first.map(|s| s.entry.clone()), Some(pair(FEX_OPTION, "1")));
+    assert_eq!(first.map(|s| s.origin.clone()), Some(Origin::Profiler));
+    assert_eq!(fex_reads(BLOCK, &steps).as_deref(), Some("1"));
+    assert_eq!(Origin::Profiler.label(), PROF_SERVICE_VAR);
+}
+
+#[test]
+fn a_value_in_the_block_wins_over_the_profiler_whatever_the_unix_environment_has() {
+    let block = "FEX_EXTENDEDDEBUGINFO=0\0OTHER=x\0\0";
+    for unix in [None, Some("1")] {
+        let steps = profiled("", block, unix);
+        assert!(
+            !steps
+                .iter()
+                .any(|s| *s.entry.name() == FEX_OPTION && s.applied)
+        );
+        assert_eq!(fex_reads(block, &steps).as_deref(), Some("0"), "{unix:?}");
+    }
+}
+
+/// A child started with a block of its own: the variable is in its unix
+/// environment, inherited through exec, which FEX does not read.
+#[test]
+fn a_value_only_the_unix_environment_has_goes_into_the_block() {
+    for value in ["1", "0"] {
+        let steps = profiled("", BLOCK, Some(value));
+        assert_eq!(fex_reads(BLOCK, &steps).as_deref(), Some(value));
+    }
+    // An empty value says nothing, and the option goes on.
+    let steps = profiled("", BLOCK, Some(""));
+    assert_eq!(fex_reads(BLOCK, &steps).as_deref(), Some("1"));
+}
+
+#[test]
+fn a_rule_wins_over_the_profiler() {
+    // A rule's value replaces the entry, for one program or for all.
+    for text in [
+        "exe=game.exe;env=FEX_EXTENDEDDEBUGINFO=0",
+        "exe=*;env=FEX_EXTENDEDDEBUGINFO=0",
+    ] {
+        let steps = profiled(text, BLOCK, None);
+        assert_eq!(fex_reads(BLOCK, &steps).as_deref(), Some("0"), "{text}");
+        assert_eq!(
+            steps.first().and_then(|s| s.replaced_by.clone()),
+            Some(Origin::Line(1)),
+            "{text}"
+        );
+    }
+
+    // So does a rule's removal.
+    let steps = profiled("exe=game.exe;env=FEX_EXTENDEDDEBUGINFO=", BLOCK, None);
+    assert_eq!(fex_reads(BLOCK, &steps), None);
+    assert!(steps.iter().any(|s| s.removes == Some(Origin::Profiler)));
+}
+
+#[test]
+fn the_profiler_entry_leaves_the_metal_hud_entries_where_they_go_and_folds_once() {
+    let table = with_lines(
+        &Table::builtin(),
+        "exe=game.exe;metal_hud=true;env=MTL_HUD_ENABLED=0",
+    );
+    let resolve = || table.resolve("game.exe", &VersionInfo::default(), None);
+    let mut derived = resolve();
+    derived.fold_derived_env();
+    // Before the derived entries or after them, and however often.
+    let mut first = resolve();
+    first.fold_profiler_env(&u16s(BLOCK), |_| None);
+    first.fold_profiler_env(&u16s(BLOCK), |_| None);
+    first.fold_derived_env();
+    assert_eq!(first.env.get(1..), Some(derived.env.as_slice()));
+    derived.fold_profiler_env(&u16s(BLOCK), |_| None);
+    assert_eq!(first.env, derived.env);
+}
+
 #[test]
 fn a_rule_for_the_same_exe_does_not_take_another_rules_fingerprint() {
     // Each rule stands on its own matchers. A rule from WINE_COMPATDB
