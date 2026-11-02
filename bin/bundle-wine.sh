@@ -16,6 +16,7 @@ DIST_DIR=""
 RUNTIME_ONLY=0
 STRICT_FLOOR=0
 WITH_SYMBOLS=0
+KEEP_SYMBOLS=0
 ASSUME_YES=0
 # Whether wine.app gets a secure timestamp, which needs Apple's timestamp
 # server. LOADER_TIMESTAMP=0 signs without one, for an offline local build;
@@ -32,7 +33,7 @@ if [ -d "$MINGW_DIR/bin" ]; then
 fi
 
 usage() {
-    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--strict-floor] [--symbols] [--yes]"
+    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--strict-floor] [--symbols | --keep-symbols] [--yes]"
     exit 1
 }
 
@@ -46,17 +47,24 @@ usage() {
 # newer bottles and is not distributed, so a warning is enough there.
 # --symbols keeps the PE files as they were before Step 4e stripped them in
 # <dir>/wine-symbols. --yes deletes an existing bundle at <dir>/wine without
-# asking first, for a run nobody watches.
+# asking first, for a run nobody watches. --keep-symbols skips the stripping in
+# Step 4e, so the PE files in the bundle keep their DWARF and COFF symbols, for
+# a local bundle that gets debugged or profiled. It excludes --symbols, which
+# would have nothing to split off.
 while [ $# -gt 0 ]; do
     case "$1" in
         --dest) [ $# -ge 2 ] || usage; DIST_DIR="$2"; shift 2 ;;
         --runtime-only) RUNTIME_ONLY=1; shift ;;
         --strict-floor) STRICT_FLOOR=1; shift ;;
         --symbols) WITH_SYMBOLS=1; shift ;;
+        --keep-symbols) KEEP_SYMBOLS=1; shift ;;
         --yes) ASSUME_YES=1; shift ;;
         *) usage ;;
     esac
 done
+if [ "$KEEP_SYMBOLS" -eq 1 ] && [ "$WITH_SYMBOLS" -eq 1 ]; then
+    usage
+fi
 
 if [ -z "$DIST_DIR" ]; then
     DIST_DIR="$BUNDLE_DEST"
@@ -284,9 +292,11 @@ strip_pe() {
 pe_debug_files() {
     local out f
     if out=$("$MINGW_DIR/bin/llvm-objdump" -h "$@" 2>&1); then
+        # fflush: awk block-buffers a redirected stdout, and batches run in
+        # parallel under xargs, so unflushed output of two batches tears lines.
         awk '
             /:\tfile format / { cur = $0; sub(/:\tfile format .*/, "", cur); seen = 0; next }
-            / \.debug_/ && !seen { print cur; seen = 1 }
+            / \.debug_/ && !seen { print cur; fflush(); seen = 1 }
         ' <<< "$out"
         return 0
     fi
@@ -3012,7 +3022,8 @@ cp "$fexunix/libwow64fex.so" "$fexunix/libarm64ecfex.so" "$unixdir/"
 # marker, and handles ARM64X images. It cannot read the symbol table GNU ld
 # writes for some i386 DLLs; there the table and its strings, which end the
 # file, are cut off instead (drop_coff_symtab). Step 5 checks that no PE
-# file kept either.
+# file kept either. With --keep-symbols the stripping is skipped: the PE
+# files keep their symbols, and Step 5 counts them instead of failing.
 time_mark "Step 4e: Split off PE symbols"
 echo "==> Step 4e: Split off PE symbols"
 # mtld3d's DLLs as installed, for Step 5's comparison with the release.
@@ -3022,33 +3033,37 @@ if in_list mtld3d "$D3D9_IMPLS"; then
         cp -p "$d3d9tree/mtld3d/$arch/d3d9.dll" "$d3d9tree/mtld3d/$arch/mtld3d.dll" "$TMP_DIR/installed/$arch/"
     done
 fi
-# Every PE file, in parallel batches.
-STRIP_WORK="$TMP_DIR/strip"
-STRIP_ERRORS="$TMP_DIR/strip-errors"
-mkdir -p "$STRIP_WORK" "$STRIP_ERRORS"
-export WINE_DIR MINGW_DIR SYMBOLS_DIR WITH_SYMBOLS STRIP_WORK STRIP_ERRORS
-export -f strip_pe drop_coff_symtab coff_symtab
-# pipefail in a subshell, so a failing find or perl stops the step instead
-# of handing xargs an empty list.
-(
-    set -o pipefail
-    find "$WINE_DIR/lib/wine" -type f ! -name '*.a' -print0 | pe_scan | cut -f1 \
-        | while IFS= read -r f; do
-              printf '%s\0' "${f#"$WINE_DIR"/}"
-          done \
-        | xargs -0 -n 32 -P "$(sysctl -n hw.ncpu)" /bin/bash -c 'strip_pe "$@"' _ > "$TMP_DIR/stripped.list"
-)
-if [ -n "$(ls "$STRIP_ERRORS")" ]; then
-    for e in $(ls "$STRIP_ERRORS" | LC_ALL=C sort); do
-        cat "$STRIP_ERRORS/$e"
-    done
-    exit 1
-fi
-split=$(wc -l < "$TMP_DIR/stripped.list" | tr -d ' ')
-if [ "$WITH_SYMBOLS" -eq 1 ]; then
-    echo "    $split PE files stripped, their symbols in $SYMBOLS_DIR"
+if [ "$KEEP_SYMBOLS" -eq 1 ]; then
+    echo "    --keep-symbols: the PE files keep their DWARF and COFF symbols"
 else
-    echo "    $split PE files stripped (--symbols keeps a copy with their symbols)"
+    # Every PE file, in parallel batches.
+    STRIP_WORK="$TMP_DIR/strip"
+    STRIP_ERRORS="$TMP_DIR/strip-errors"
+    mkdir -p "$STRIP_WORK" "$STRIP_ERRORS"
+    export WINE_DIR MINGW_DIR SYMBOLS_DIR WITH_SYMBOLS STRIP_WORK STRIP_ERRORS
+    export -f strip_pe drop_coff_symtab coff_symtab
+    # pipefail in a subshell, so a failing find or perl stops the step instead
+    # of handing xargs an empty list.
+    (
+        set -o pipefail
+        find "$WINE_DIR/lib/wine" -type f ! -name '*.a' -print0 | pe_scan | cut -f1 \
+            | while IFS= read -r f; do
+                  printf '%s\0' "${f#"$WINE_DIR"/}"
+              done \
+            | xargs -0 -n 32 -P "$(sysctl -n hw.ncpu)" /bin/bash -c 'strip_pe "$@"' _ > "$TMP_DIR/stripped.list"
+    )
+    if [ -n "$(ls "$STRIP_ERRORS")" ]; then
+        for e in $(ls "$STRIP_ERRORS" | LC_ALL=C sort); do
+            cat "$STRIP_ERRORS/$e"
+        done
+        exit 1
+    fi
+    split=$(wc -l < "$TMP_DIR/stripped.list" | tr -d ' ')
+    if [ "$WITH_SYMBOLS" -eq 1 ]; then
+        echo "    $split PE files stripped, their symbols in $SYMBOLS_DIR"
+    else
+        echo "    $split PE files stripped (--symbols keeps a copy with their symbols)"
+    fi
 fi
 
 # ── Step 4f: Remove inherited quarantine ──────────────────────────────
@@ -3257,7 +3272,8 @@ if ! check_pe64_native "$WINE_DIR"; then
     exit 1
 fi
 
-# Step 4e stripped every PE file's symbols; none may be left. One header scan
+# Step 4e stripped every PE file's symbols; none may be left, except with
+# --keep-symbols, which reports how many files carry them. One header scan
 # (pe_scan) finds the PE files and their COFF symbol tables, and llvm-objdump
 # reads their section tables in parallel batches (pe_debug_files).
 time_mark "Step 5: PE symbol check"
@@ -3293,12 +3309,16 @@ fi
 while IFS= read -r f; do
     echo "${f#"$WINE_DIR"/}" >> "$TMP_DIR/pe-symboled"
 done < "$TMP_DIR/pe-debug"
-if [ -s "$TMP_DIR/pe-symboled" ]; then
+if [ "$KEEP_SYMBOLS" -eq 1 ]; then
+    symboled=$(LC_ALL=C sort -u "$TMP_DIR/pe-symboled" | wc -l | tr -d ' ')
+    echo "  --keep-symbols: $symboled PE files carry debug sections or a symbol table."
+elif [ -s "$TMP_DIR/pe-symboled" ]; then
     echo "  ERROR: PE files with debug sections or a symbol table:"
     LC_ALL=C sort -u "$TMP_DIR/pe-symboled" | sed 's/^/    /'
     exit 1
+else
+    echo "  No PE file carries debug sections or a symbol table."
 fi
-echo "  No PE file carries debug sections or a symbol table."
 
 # A symlink whose target a step removed or never installed fails only at run
 # time, or, inside wine.app, as a signature that does not verify.

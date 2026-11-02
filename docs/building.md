@@ -21,6 +21,7 @@ bin/bundle-wine.sh   # assemble the bundle (see Bundle layout)
 | `bundle-wine.sh` | `--runtime-only` | No development files; the flavor to put into an application |
 | `bundle-wine.sh` | `--strict-floor` | A Mach-O above the floor is an error, not a warning ([Homebrew libraries and the floor](internals.md#homebrew-libraries-and-the-floor)) |
 | `bundle-wine.sh` | `--symbols` | Also keeps the unstripped PE files in `wine-symbols` next to the bundle |
+| `bundle-wine.sh` | `--keep-symbols` | Skips the stripping in Step 4e, so the PE files keep their DWARF and COFF symbols; for local bundles that get debugged or profiled, and excludes `--symbols` |
 
 `usage()` and the argument parsing in
 [`build-wine.sh`](../bin/build-wine.sh) and
