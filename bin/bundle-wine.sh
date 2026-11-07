@@ -14,6 +14,7 @@ MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 . "$PINS_DIR/redist.env"
 DIST_DIR=""
 RUNTIME_ONLY=0
+RUNTIME_DEST=""
 STRICT_FLOOR=0
 WITH_SYMBOLS=0
 KEEP_SYMBOLS=0
@@ -33,7 +34,7 @@ if [ -d "$MINGW_DIR/bin" ]; then
 fi
 
 usage() {
-    echo "Usage: $0 [--dest <dir>] [--runtime-only] [--strict-floor] [--symbols | --keep-symbols] [--yes]"
+    echo "Usage: $0 [--dest <dir>] [--runtime-only | --runtime-dest <dir>] [--strict-floor] [--symbols | --keep-symbols] [--yes]"
     exit 1
 }
 
@@ -50,11 +51,17 @@ usage() {
 # asking first, for a run nobody watches. --keep-symbols skips the stripping in
 # Step 4e, so the PE files in the bundle keep their DWARF and COFF symbols, for
 # a local bundle that gets debugged or profiled. It excludes --symbols, which
-# would have nothing to split off.
+# would have nothing to split off. --runtime-dest also writes the runtime-only
+# bundle, the one --runtime-only would write, to <dir>/wine: Step 6 copies
+# the finished full bundle there, after the smoke test, and removes what the
+# full bundle has beyond it, so one run and one smoke test give both. The
+# copy has the PE files in the state the full bundle has them in, and no
+# wine-symbols of its own. It excludes --runtime-only.
 while [ $# -gt 0 ]; do
     case "$1" in
         --dest) [ $# -ge 2 ] || usage; DIST_DIR="$2"; shift 2 ;;
         --runtime-only) RUNTIME_ONLY=1; shift ;;
+        --runtime-dest) [ $# -ge 2 ] && [ -n "$2" ] || usage; RUNTIME_DEST="$2"; shift 2 ;;
         --strict-floor) STRICT_FLOOR=1; shift ;;
         --symbols) WITH_SYMBOLS=1; shift ;;
         --keep-symbols) KEEP_SYMBOLS=1; shift ;;
@@ -63,6 +70,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 if [ "$KEEP_SYMBOLS" -eq 1 ] && [ "$WITH_SYMBOLS" -eq 1 ]; then
+    usage
+fi
+if [ "$RUNTIME_ONLY" -eq 1 ] && [ -n "$RUNTIME_DEST" ]; then
     usage
 fi
 
@@ -82,6 +92,29 @@ WINE_DIR="$DIST_DIR/wine"
 # never in it.
 SYMBOLS_DIR="$DIST_DIR/wine-symbols"
 unixdir="$WINE_DIR/lib/wine/$UNIX_DIR"
+# make install writes the tree under <dest>/<INSTALL_PREFIX>, whose top
+# directory (/usr of /usr/local) Step 2 removes once it moved the tree away.
+INSTALL_TOP="${INSTALL_PREFIX#/}"
+INSTALL_TOP="${INSTALL_TOP%%/*}"
+# The runtime-only copy (Step 6, with --runtime-dest), spelled like
+# DIST_DIR. Step 0 deletes it and Step 6 fills it, so it must not lie in,
+# or hold, a tree the run writes. A stale wine-symbols next to it goes too
+# (Step 0). absolute_path keeps the slash of /, hence the %/.
+RUNTIME_WINE_DIR=""
+RUNTIME_SYMBOLS_DIR=""
+if [ -n "$RUNTIME_DEST" ]; then
+    RUNTIME_DEST=$(absolute_path "$RUNTIME_DEST")
+    RUNTIME_WINE_DIR="${RUNTIME_DEST%/}/wine"
+    RUNTIME_SYMBOLS_DIR="${RUNTIME_DEST%/}/wine-symbols"
+    for dir in "$WINE_DIR" "$SYMBOLS_DIR" "$DIST_DIR/$INSTALL_TOP"; do
+        case "$RUNTIME_WINE_DIR/" in
+            "$dir"/*) ;;
+            *) case "$dir/" in "$RUNTIME_WINE_DIR"/*) ;; *) continue ;; esac ;;
+        esac
+        echo "Error: --runtime-dest gives $RUNTIME_WINE_DIR, which overlaps $dir"
+        exit 1
+    done
+fi
 # cargo's target directory for compatdb.so: one per checkout of this
 # repository, under BUILD_DIR/compatdb, named after the start of the
 # SHA-256 of REPO_DIR. cargo identifies a workspace's own packages by their
@@ -2317,11 +2350,12 @@ loader_timestamp_flag() {
     if [ "$LOADER_TIMESTAMP" = 1 ]; then echo --timestamp; else echo --timestamp=none; fi
 }
 
-# check_loader_app: fail unless wine.app carries a valid signature by the
-# profile's team with the entitlements package_loader gave it, and both entry
-# points lead to it.
+# check_loader_app [<bundle>]: fail unless wine.app carries a valid signature
+# by the profile's team with the entitlements package_loader gave it, and
+# both entry points lead to it, in <bundle>, or WINE_DIR without one.
 check_loader_app() {
-    local app="$unixdir/wine.app" info signed="$TMP_DIR/signed-entitlements.plist" key want got pair
+    local bundle="${1:-$WINE_DIR}"
+    local app="$bundle/lib/wine/$UNIX_DIR/wine.app" info signed="$TMP_DIR/signed-entitlements.plist" key want got pair
     if ! codesign --verify --strict "$app" 2>"$TMP_DIR/codesign.log"; then
         echo "Error: wine.app does not verify:"
         cat "$TMP_DIR/codesign.log"
@@ -2371,8 +2405,8 @@ check_loader_app() {
         echo "Error: wine.app's team identifier is not $LOADER_TEAM"
         exit 1
     fi
-    if [ "$(readlink "$WINE_DIR/bin/wine")" != "../lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine" ] \
-        || [ "$(readlink "$unixdir/wine")" != "wine.app/Contents/MacOS/wine" ]; then
+    if [ "$(readlink "$bundle/bin/wine")" != "../lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine" ] \
+        || [ "$(readlink "$bundle/lib/wine/$UNIX_DIR/wine")" != "wine.app/Contents/MacOS/wine" ]; then
         echo "Error: bin/wine and $UNIX_DIR/wine must be the symlinks into wine.app"
         exit 1
     fi
@@ -2395,6 +2429,79 @@ check_loader_app() {
         echo "  (LOADER_TIMESTAMP=0: it cannot be notarized)"
     fi
     echo "  and the cross-architecture entitlement."
+}
+
+# check_bundle <dir>: exit unless <dir> is missing, empty, or a directory
+# that looks like a bundle, one with a bin/wine, which Step 0 may delete.
+check_bundle() {
+    if { [ -e "$1" ] || [ -L "$1" ]; } && [ ! -d "$1" ]; then
+        echo "Error: $1 exists and is not a directory; not deleting what is not a bundle"
+        exit 1
+    fi
+    if [ -d "$1" ] && [ ! -e "$1/bin/wine" ] && [ ! -L "$1/bin/wine" ] && [ -n "$(ls -A "$1")" ]; then
+        echo "Error: $1 is not empty and has no bin/wine; not deleting what is not a bundle"
+        exit 1
+    fi
+}
+
+# tree_entries <dir>: print the path of everything under <dir>, relative to
+# it, sorted bytewise.
+tree_entries() {
+    (
+        set -o pipefail
+        cd "$1"
+        find . -mindepth 1 | sed 's|^\./||' | LC_ALL=C sort
+    )
+}
+
+# copy_runtime: copy the finished bundle to RUNTIME_WINE_DIR and remove from
+# the copy what DEV_ONLY lists, then check the copy. ditto keeps the
+# symlinks, modes and extended attributes, and clones the files on APFS; the
+# copy of wine.app is byte for byte the one Step 4g signed, so its signature
+# holds without signing it again. Only the topmost of the listed paths are
+# removed, which takes everything under them along.
+copy_runtime() {
+    local wine_cd runtime_cd dangling f
+    ditto --clone "$WINE_DIR" "$RUNTIME_WINE_DIR"
+    awk '{
+        n = split($0, p, "/"); a = ""
+        for (i = 1; i < n; i++) { a = a (i > 1 ? "/" : "") p[i]; if (a in top) next }
+        top[$0] = 1; print
+    }' "$DEV_ONLY" > "$TMP_DIR/dev-only-top.list"
+    (
+        set -o pipefail
+        cd "$RUNTIME_WINE_DIR"
+        tr '\n' '\0' < "$TMP_DIR/dev-only-top.list" | xargs -0 rm -rf
+    )
+    echo "  $(wc -l < "$TMP_DIR/dev-only-top.list" | tr -d ' ') development paths removed from the copy."
+    # What is left has to be the bundle without those paths, nothing more
+    # or less.
+    tree_entries "$WINE_DIR" > "$TMP_DIR/full-final.list"
+    tree_entries "$RUNTIME_WINE_DIR" > "$TMP_DIR/runtime-final.list"
+    if ! LC_ALL=C comm -23 "$TMP_DIR/full-final.list" "$DEV_ONLY" \
+            | cmp -s - "$TMP_DIR/runtime-final.list"; then
+        echo "Error: $RUNTIME_WINE_DIR is not the bundle without its development files:"
+        LC_ALL=C comm -23 "$TMP_DIR/full-final.list" "$DEV_ONLY" \
+            | diff - "$TMP_DIR/runtime-final.list" | head -20 | sed 's/^/    /'
+        exit 1
+    fi
+    dangling=$(find "$RUNTIME_WINE_DIR" -type l ! -exec test -e {} \; -print)
+    if [ -n "$dangling" ]; then
+        echo "  ERROR: dangling symlinks in the copy:"
+        while IFS= read -r f; do
+            echo "    ${f#"$RUNTIME_WINE_DIR"/}"
+        done <<< "$dangling"
+        exit 1
+    fi
+    # The loader checks of Step 5, on the copy.
+    check_loader_app "$RUNTIME_WINE_DIR"
+    wine_cd=$(codesign -dvvv "$unixdir/wine.app" 2>&1 | sed -n 's/^CDHash=//p')
+    runtime_cd=$(codesign -dvvv "$RUNTIME_WINE_DIR/lib/wine/$UNIX_DIR/wine.app" 2>&1 | sed -n 's/^CDHash=//p')
+    if [ -z "$wine_cd" ] || [ "$wine_cd" != "$runtime_cd" ]; then
+        echo "Error: the copy of wine.app has the CDHash '$runtime_cd', the bundle's '$wine_cd'"
+        exit 1
+    fi
+    echo "  The copy's wine.app verifies, with the bundle's CDHash $wine_cd."
 }
 
 # The bundle's dylibs.
@@ -2434,52 +2541,78 @@ loader_preflight
 time_mark "Step 0: Clean previous bundle"
 # ── Step 0: Clean previous bundle ──────────────────────────────────────
 # The bundle ships, so it carries no tree marker. Only a directory that looks
-# like a bundle, one with a bin/wine, is offered for deletion. make install
-# writes the tree under <dest>/<INSTALL_PREFIX>, which Step 2 moves away and
-# then removes, so that directory must not be there already.
-INSTALL_TOP="${INSTALL_PREFIX#/}"
-INSTALL_TOP="${INSTALL_TOP%%/*}"
+# like a bundle, one with a bin/wine, is offered for deletion, and with
+# --runtime-dest the runtime-only copy is cleared the same way, so a run that
+# fails leaves no copy of an older bundle there. make install writes the tree
+# under <dest>/<INSTALL_PREFIX>, which Step 2 moves away and then removes,
+# so that directory must not be there already. Everything that refuses runs
+# before anything is deleted, and one question covers every deletion.
 if [ -e "$DIST_DIR/$INSTALL_TOP" ]; then
     echo "Error: $DIST_DIR/$INSTALL_TOP exists and the staged install would go into it;"
     echo "remove it first if an interrupted run left it"
     exit 1
 fi
-if [ -d "$WINE_DIR" ]; then
-    if [ ! -e "$WINE_DIR/bin/wine" ] && [ ! -L "$WINE_DIR/bin/wine" ] \
-        && [ -n "$(ls -A "$WINE_DIR")" ]; then
-        echo "Error: $WINE_DIR is not empty and has no bin/wine; not deleting what is not a bundle"
-        exit 1
-    fi
-    echo "Will delete existing bundle: $WINE_DIR"
-    if [ "$ASSUME_YES" -eq 0 ]; then
-        read -r -p "Continue? [y/N] " confirm
-        case "$confirm" in
-            [yY]) ;;
-            *) echo "Aborted."; exit 1 ;;
-        esac
-    fi
-    remove_tree "$WINE_DIR"
-fi
+check_bundle "$WINE_DIR"
 # The previous bundle's symbols go too, so a run that fails before Step 4e,
 # or one without --symbols, cannot leave them next to a bundle they do not
-# belong to.
+# belong to. The runtime-only copy gets none. claim_tree without wiping
+# refuses a tree that is not symbols, and deletes nothing.
+if [ -e "$SYMBOLS_DIR" ]; then
+    claim_tree "$SYMBOLS_DIR" symbols
+fi
+if [ -n "$RUNTIME_DEST" ]; then
+    check_bundle "$RUNTIME_WINE_DIR"
+    if [ -e "$RUNTIME_SYMBOLS_DIR" ]; then
+        claim_tree "$RUNTIME_SYMBOLS_DIR" symbols
+    fi
+    # Step 6 writes here at the very end, so a destination it cannot write
+    # fails now instead.
+    if ! mkdir -p "$RUNTIME_DEST" 2>/dev/null || [ ! -w "$RUNTIME_DEST" ]; then
+        echo "Error: cannot write to $RUNTIME_DEST, the --runtime-dest directory"
+        exit 1
+    fi
+fi
+DOOMED=()
+for dir in "$WINE_DIR" "$RUNTIME_WINE_DIR"; do
+    if [ -n "$dir" ] && [ -d "$dir" ]; then
+        echo "Will delete existing bundle: $dir"
+        DOOMED+=("$dir")
+    fi
+done
+if [ ${#DOOMED[@]} -gt 0 ] && [ "$ASSUME_YES" -eq 0 ]; then
+    read -r -p "Continue? [y/N] " confirm
+    case "$confirm" in
+        [yY]) ;;
+        *) echo "Aborted."; exit 1 ;;
+    esac
+fi
+if [ ${#DOOMED[@]} -gt 0 ]; then
+    remove_tree "${DOOMED[@]}"
+fi
 if [ "$WITH_SYMBOLS" -eq 1 ]; then
     claim_tree "$SYMBOLS_DIR" symbols 1
 elif [ -e "$SYMBOLS_DIR" ]; then
-    claim_tree "$SYMBOLS_DIR" symbols 1
     remove_tree "$SYMBOLS_DIR"
+fi
+if [ -n "$RUNTIME_SYMBOLS_DIR" ] && [ -e "$RUNTIME_SYMBOLS_DIR" ]; then
+    remove_tree "$RUNTIME_SYMBOLS_DIR"
 fi
 mkdir -p "$DIST_DIR"
 
 # ── Step 1: Staged install ──────────────────────────────────────────────
 time_mark "Step 1: Staged install"
 cd "$BUILD_DIR"
+# A full bundle installs in two parts, which together are `make install`:
+# install-lib, all a runtime-only bundle installs, then install-dev. What
+# the second adds is noted, for Step 6.
 if [ "$RUNTIME_ONLY" -eq 1 ]; then
     echo "==> Step 1: Staged install (runtime only)"
     make install-lib DESTDIR="$DIST_DIR"
 else
     echo "==> Step 1: Staged install with DESTDIR"
-    make install DESTDIR="$DIST_DIR"
+    make install-lib DESTDIR="$DIST_DIR"
+    tree_entries "$DIST_DIR$INSTALL_PREFIX" > "$TMP_DIR/install-lib.list"
+    make install-dev DESTDIR="$DIST_DIR"
 fi
 
 # ── Step 2: Flatten prefix ──────────────────────────────────────────────
@@ -2533,6 +2666,21 @@ if [ "$RUNTIME_ONLY" -eq 0 ]; then
     done
     echo "    tests/VERSION"
     cp "$WINE_SDK_DIR/lib/wine/tests/VERSION" "$WINE_DIR/lib/wine/tests/"
+fi
+
+# What a full bundle has beyond a runtime-only one, for Step 6: everything
+# install-dev, Step 2c and Step 2d added. The steps after this one do the
+# same in both. A list without the headers or the tests read nothing.
+DEV_ONLY="$TMP_DIR/dev-only.list"
+if [ "$RUNTIME_ONLY" -eq 0 ]; then
+    tree_entries "$WINE_DIR" > "$TMP_DIR/full.list"
+    LC_ALL=C comm -13 "$TMP_DIR/install-lib.list" "$TMP_DIR/full.list" > "$DEV_ONLY"
+    for want in include lib/wine/tests lib/wine/x86_64-windows; do
+        if ! grep -qxF "$want" "$DEV_ONLY"; then
+            echo "Error: the list of development files has no $want"
+            exit 1
+        fi
+    done
 fi
 
 # ── Step 3: Bundle dynamic libraries ────────────────────────────────────
@@ -3348,10 +3496,23 @@ fi
 
 smoke_test
 
+# ── Step 6: Runtime-only copy ───────────────────────────────────────────
+# With --runtime-dest, the runtime-only bundle from the full one, after the
+# smoke test, so that a bundle that fails it is not copied.
+if [ -n "$RUNTIME_DEST" ]; then
+    time_mark "Step 6: Runtime-only copy"
+    echo "==> Step 6: Runtime-only copy"
+    copy_runtime
+fi
+
 echo ""
 print_timings
 echo "==> Done! Distribution is at:"
 echo "    $DIST_DIR/wine/"
 if [ "$RUNTIME_ONLY" -eq 1 ]; then
+    echo "    (runtime only, no development files)"
+fi
+if [ -n "$RUNTIME_DEST" ]; then
+    echo "    $RUNTIME_WINE_DIR/"
     echo "    (runtime only, no development files)"
 fi

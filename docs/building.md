@@ -19,6 +19,7 @@ bin/bundle-wine.sh   # assemble the bundle (see Bundle layout)
 | `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the bundle in the [layout](#layout) |
 | `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking; a non-empty directory without `bin/wine` is still refused |
 | `bundle-wine.sh` | `--runtime-only` | No development files; the flavor to put into an application |
+| `bundle-wine.sh` | `--runtime-dest <dir>` | Also writes the `--runtime-only` bundle to `<dir>/wine`, copied from the full bundle after the smoke test; the copy gets no `wine-symbols`, even with `--symbols`; excludes `--runtime-only` |
 | `bundle-wine.sh` | `--strict-floor` | A Mach-O above the floor is an error, not a warning ([Homebrew libraries and the floor](internals.md#homebrew-libraries-and-the-floor)) |
 | `bundle-wine.sh` | `--symbols` | Also keeps the unstripped PE files in `wine-symbols` next to the bundle |
 | `bundle-wine.sh` | `--keep-symbols` | Skips the stripping in Step 4e, so the PE files keep their DWARF and COFF symbols; for local bundles that get debugged or profiled, and excludes `--symbols` |
