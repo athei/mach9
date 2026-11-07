@@ -89,6 +89,37 @@ bundle_version() {
   esac
 }
 
+# Compare two CFBundleVersions the way Sparkle does and print 1, 0 or -1 for
+# $1 above, equal to or below $2. Only the forms bundle_version produces, and
+# any count of numbers, are accepted (N(.N)* with an optional rcN), for which
+# this matches SUStandardVersionComparator: missing numbers count as 0, and
+# the same numbers with rcN sort below them without it.
+compare_bundle_versions() {
+  local a="$1" b="$2" a_rc="" b_rc="" i x y n
+  local -a an bn
+  [[ "$a" =~ ^[0-9]+(\.[0-9]+)*(rc[0-9]+)?$ ]] || die "cannot compare the version '$a'"
+  [[ "$b" =~ ^[0-9]+(\.[0-9]+)*(rc[0-9]+)?$ ]] || die "cannot compare the version '$b'"
+  if [[ "$a" == *rc* ]]; then a_rc="${a##*rc}"; a="${a%rc*}"; fi
+  if [[ "$b" == *rc* ]]; then b_rc="${b##*rc}"; b="${b%rc*}"; fi
+  IFS=. read -r -a an <<<"$a"
+  IFS=. read -r -a bn <<<"$b"
+  n="${#an[@]}"
+  if (( ${#bn[@]} > n )); then n="${#bn[@]}"; fi
+  for ((i = 0; i < n; i++)); do
+    x="$((10#${an[i]:-0}))"
+    y="$((10#${bn[i]:-0}))"
+    if (( x > y )); then echo 1; return; fi
+    if (( x < y )); then echo -1; return; fi
+  done
+  if [[ -z "$a_rc" && -z "$b_rc" ]]; then echo 0
+  elif [[ -z "$a_rc" ]]; then echo 1
+  elif [[ -z "$b_rc" ]]; then echo -1
+  elif (( 10#$a_rc > 10#$b_rc )); then echo 1
+  elif (( 10#$a_rc < 10#$b_rc )); then echo -1
+  else echo 0
+  fi
+}
+
 # The workspace version in the root Cargo.toml, which every crate inherits,
 # read through cargo so that whatever cargo accepts is read correctly.
 workspace_version() {
