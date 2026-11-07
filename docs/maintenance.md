@@ -306,6 +306,23 @@ branches read `main`'s caches and write none.
   after 60 days without activity. Re-enable `release.yml` and
   `brew-cache.yml` in the Actions tab then.
 
+After a run on `main` saves the ccache directory, the Homebrew kegs, the
+pinned downloads or the cargo registry, the `prune` job of the workflow
+deletes the caches of `main` the new one replaces with
+[`prune-caches.sh`](../bin/ci/prune-caches.sh): the other caches of the
+same family of keys created before the run started. The families are the
+prefixes the build jobs pass to it as outputs.
+
+- Each pruned family keeps one cache, and also one a run at the same time
+  saved after this run started, such as `brew-cache.yml` next to
+  `release.yml`.
+- A cache whose save failed prunes nothing, and a failed prune only warns.
+- The `prune` job alone may write actions. The build jobs run third-party
+  code (Wine, Mesa, FEX, bottles, crates) and cannot delete caches.
+- The other caches are small, and pruning them would make runs on another
+  runner image, unrebased pull requests and tags on older commits build
+  again; GitHub's eviction removes them.
+
 ### Signing identity
 
 `release.yml` signs the loader and the app with the identity of the

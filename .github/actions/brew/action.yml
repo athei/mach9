@@ -6,6 +6,19 @@ description: >-
   result when the cache was not for this exact manifest. Expects this
   repository checked out at scripts/ in the workspace.
 
+# For the workflow's prune job (bin/ci/prune-caches.sh), which deletes the
+# kegs a save replaced in a job of its own: this job runs Homebrew's code
+# and may not write actions.
+outputs:
+  prefix:
+    description: >-
+      The prefix every key of the kegs on this runner image starts with,
+      whatever the scripts and the manifest.
+    value: ${{ steps.key.outputs.family }}
+  saved-key:
+    description: The key the kegs were saved under, empty when no save succeeded.
+    value: ${{ steps.save.outcome == 'success' && steps.key.outputs.key || '' }}
+
 # release.yml and brew-cache.yml run these steps. A local composite action
 # and not a reusable workflow, because the release job needs the kegs on its
 # own runner.
@@ -21,7 +34,9 @@ runs:
     # The key ends in the manifest's hash. A run whose manifest has no cache
     # yet restores the newest one with the same prefix, made by the same
     # scripts (the list, brew.sh and this action) on the same macOS, and
-    # brew.sh installs only what changed.
+    # brew.sh installs only what changed. The family, without the scripts'
+    # hash, is what the prune job deletes from, so kegs of earlier scripts
+    # go too.
     - name: Compute the cache key
       id: key
       shell: bash
@@ -29,8 +44,11 @@ runs:
         scripts=$(cat scripts/pins/brew-formulae scripts/bin/ci/brew.sh scripts/.github/actions/brew/action.yml |
           shasum -a 256 | awk '{ print $1 }')
         manifest=$(shasum -a 256 "$RUNNER_TEMP/brew-manifest" | awk '{ print $1 }')
-        echo "prefix=brew-$RUNNER_OS-$ImageOS-$scripts-" >> "$GITHUB_OUTPUT"
-        echo "key=brew-$RUNNER_OS-$ImageOS-$scripts-$manifest" >> "$GITHUB_OUTPUT"
+        {
+          echo "family=brew-$RUNNER_OS-$ImageOS-"
+          echo "prefix=brew-$RUNNER_OS-$ImageOS-$scripts-"
+          echo "key=brew-$RUNNER_OS-$ImageOS-$scripts-$manifest"
+        } >> "$GITHUB_OUTPUT"
 
     # Restored and saved separately, so the kegs are saved right after
     # brew.sh wrote them, even when a later step of the job fails. brew.sh
@@ -51,6 +69,7 @@ runs:
       run: scripts/bin/ci/brew.sh install "$RUNNER_TEMP/brew" "$RUNNER_TEMP/brew-manifest"
 
     - name: Save the Homebrew kegs
+      id: save
       if: github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:

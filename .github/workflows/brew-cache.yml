@@ -20,9 +20,6 @@ on:
       - .github/actions/brew/**
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
   group: brew-cache
 
@@ -34,6 +31,13 @@ jobs:
   brew:
     runs-on: macos-26
     timeout-minutes: 60
+    # Not actions: this job runs Homebrew's code, so the prune job below
+    # deletes caches.
+    permissions:
+      contents: read
+    outputs:
+      brew-prefix: ${{ steps.brew.outputs.prefix }}
+      brew-key: ${{ steps.brew.outputs.saved-key }}
     steps:
       - name: Checkout build scripts
         uses: actions/checkout@v7
@@ -65,4 +69,31 @@ jobs:
           key: ${{ steps.xcode-key.outputs.key }}
 
       - name: Install the Homebrew formulae
+        id: brew
         uses: ./scripts/.github/actions/brew
+
+  # Deletes the kegs of main this run's save replaced, as the prune job of
+  # release.yml does (bin/ci/prune-caches.sh).
+  prune:
+    needs: brew
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout the script
+        uses: actions/checkout@v7
+        with:
+          path: scripts
+          sparse-checkout: bin/ci
+          persist-credentials: false
+
+      - name: Prune the kegs the save replaced
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BREW_PREFIX: ${{ needs.brew.outputs.brew-prefix }}
+          BREW: ${{ needs.brew.outputs.brew-key }}
+        run: scripts/bin/ci/prune-caches.sh "$BREW_PREFIX" "$BREW"

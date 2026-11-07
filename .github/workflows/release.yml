@@ -19,9 +19,12 @@ name: Release
 # branches restore the caches of main and save none, and what a change that
 # is not merged built never reaches another run. The branch is named
 # because the payload of a scheduled run has no repository to read the
-# default branch from. GitHub evicts a cache that no run used for a week;
-# the scheduled runs, twice a week, use the current ones on main, so a
-# release after a quiet week still finds them.
+# default branch from. After a run on main, the prune job deletes the
+# ccache directories, Homebrew kegs, pinned downloads and cargo registries
+# of main that the build's saves replaced (bin/ci/prune-caches.sh). GitHub
+# evicts a cache that no run used for a week; the scheduled runs, twice a
+# week, use the current ones on main, so a release after a quiet week still
+# finds them.
 
 on:
   push:
@@ -60,9 +63,6 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: write
-
 # A push to main cancels the build of main that is still running, which a
 # newer commit makes pointless, and a push to a pull request cancels the run
 # of that pull request the same way; its ref is refs/pull/<number>/merge. A
@@ -84,6 +84,21 @@ jobs:
   build:
     runs-on: macos-26
     timeout-minutes: 360
+    # contents for the draft release. Not actions: this job runs the code of
+    # Wine, Mesa, FEX, bottles and crates, so the prune job below deletes
+    # caches. For it, each family of keys it prunes and the key a save
+    # succeeded under, empty when none did.
+    permissions:
+      contents: write
+    outputs:
+      brew-prefix: ${{ steps.brew.outputs.prefix }}
+      brew-key: ${{ steps.brew.outputs.saved-key }}
+      ccache-prefix: ${{ steps.keys.outputs.ccache-prefix }}
+      ccache-key: ${{ steps.save-ccache.outcome == 'success' && steps.keys.outputs.ccache || '' }}
+      redist-prefix: ${{ steps.keys.outputs.redist-prefix }}
+      redist-key: ${{ steps.save-redist.outcome == 'success' && steps.keys.outputs.redist || '' }}
+      cargo-prefix: ${{ steps.keys.outputs.cargo-prefix }}
+      cargo-key: ${{ steps.save-cargo.outcome == 'success' && steps.cargo.outputs.cache-primary-key || '' }}
     # Holds the secrets MACOS_SIGNING_P12 and MACOS_SIGNING_P12_PASSWORD. A
     # run on a pull request uses pull-request, which holds a copy of them
     # and waits for the owner to approve each run. Every other run uses
@@ -237,6 +252,7 @@ jobs:
       # cache brew-cache.yml keeps current on main. Only a run on main saves
       # the kegs (the action).
       - name: Install the Homebrew formulae
+        id: brew
         uses: ./scripts/.github/actions/brew
 
       # Each key changes with the pins of what its cache holds, not with the
@@ -245,7 +261,8 @@ jobs:
       # default branch saves its own.
       # The compilers go through the ccache of the Homebrew formulae
       # (WINE_BUILD_CCACHE in profile.sh), with its directory and size limit
-      # here.
+      # here. The prefixes name the families the prune job deletes from,
+      # here since ImageOS is this runner's.
       - name: Compute the cache keys
         id: keys
         run: |
@@ -256,7 +273,9 @@ jobs:
           redist=$(scripts/bin/ci/pins-key.sh MTLD3D_ UNO_FLUENT_ICONS_ LLVM_MINGW_)
           {
             echo "llvm15=dxmt-llvm15-$LLVM15_GIT_COMMIT-floor$MACOS_FLOOR-xcode$xcode-$ImageOS-$llvm15"
+            echo "redist-prefix=redist-"
             echo "redist=redist-$redist"
+            echo "cargo-prefix=cargo-"
             echo "ccache-prefix=ccache-$ImageOS-"
             echo "ccache=ccache-$ImageOS-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           } >> "$GITHUB_OUTPUT"
@@ -295,7 +314,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ hashFiles('scripts/Cargo.lock') }}
+          key: ${{ steps.keys.outputs.cargo-prefix }}${{ hashFiles('scripts/Cargo.lock') }}
 
       # The tests and lints of every crate of the workspace. compatdb.so runs
       # from a Mach-O initializer inside Wine's ntdll and the launcher crates
@@ -404,6 +423,7 @@ jobs:
       # Only on main, as every cache: runs on tags, pull requests and other
       # branches restore the newest one main saved.
       - name: Save the ccache directory
+        id: save-ccache
         if: always() && steps.build.conclusion != 'skipped' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
@@ -543,6 +563,7 @@ jobs:
       # restored under their key, by a run on main only. As actions/cache
       # does in its post step, only when every step before succeeded.
       - name: Save the pinned downloads
+        id: save-redist
         if: github.ref == 'refs/heads/main' && steps.redist.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
@@ -550,6 +571,7 @@ jobs:
           key: ${{ steps.keys.outputs.redist }}
 
       - name: Save the cargo registry
+        id: save-cargo
         if: github.ref == 'refs/heads/main' && steps.cargo.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
@@ -678,3 +700,45 @@ jobs:
           if [ -x scripts/bin/ci/keychain.sh ]; then
             scripts/bin/ci/keychain.sh cleanup
           fi
+
+  # Deletes the caches of main that the build's saves replaced, for the
+  # families that weigh on the cache budget (bin/ci/prune-caches.sh, header):
+  # the ccache directories, the Homebrew kegs, the pinned downloads and the
+  # cargo registries. A family is pruned only when its save succeeded, also
+  # after a build that failed later. The other caches are small and left to
+  # GitHub's eviction. The only job that may write actions, and it runs no
+  # code but this repository's script.
+  prune:
+    needs: build
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout the script
+        uses: actions/checkout@v7
+        with:
+          path: scripts
+          sparse-checkout: bin/ci
+          persist-credentials: false
+
+      - name: Prune the caches the build replaced
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BREW_PREFIX: ${{ needs.build.outputs.brew-prefix }}
+          BREW: ${{ needs.build.outputs.brew-key }}
+          CCACHE_PREFIX: ${{ needs.build.outputs.ccache-prefix }}
+          CCACHE: ${{ needs.build.outputs.ccache-key }}
+          REDIST_PREFIX: ${{ needs.build.outputs.redist-prefix }}
+          REDIST: ${{ needs.build.outputs.redist-key }}
+          CARGO_PREFIX: ${{ needs.build.outputs.cargo-prefix }}
+          CARGO: ${{ needs.build.outputs.cargo-key }}
+        run: |
+          scripts/bin/ci/prune-caches.sh \
+            "$BREW_PREFIX" "$BREW" \
+            "$CCACHE_PREFIX" "$CCACHE" \
+            "$REDIST_PREFIX" "$REDIST" \
+            "$CARGO_PREFIX" "$CARGO"
