@@ -105,7 +105,7 @@ built before, which runs under Rosetta.
 | Trigger | What the run does |
 |---------|-------------------|
 | `v[0-9]*` tag | Builds the engine and the app, notarizes the app, builds its appcast and attaches everything to a draft release; never cancelled |
-| Push to `main` that changes a file the build or the app reads, the schedule, by hand | Builds and bundles, assembles and signs the app and its DMG, runs `package.sh --notes-only`, saves its caches, publishes nothing |
+| Push to `main` that changes a file the build or the app reads, the schedule, by hand | Builds and bundles, assembles and signs the app and its DMG, runs `package.sh --notes-only`, saves its caches when on `main`, publishes nothing |
 | Pull request to `main` (no `paths` filter, since its check is required) | As on `main`, in the environment `pull-request` after the owner approves it ([signing identity](#signing-identity)); saves no cache |
 
 - Every run is on a hosted runner of the floor's major macOS version,
@@ -272,25 +272,25 @@ the check.
 - The step fails when a formula of the manifest is not installed and
   linked at its version, or `brew outdated` names one.
 - [`brew-cache.yml`](../.github/workflows/brew-cache.yml) keeps the keg
-  cache current from the default branch, so a release build usually
-  downloads little. A pull request saves no kegs.
+  cache current from `main`, so a release build usually downloads little.
 
 ### Other caches
 
-| Cache | Key | Saved by |
-|-------|-----|----------|
-| Each staged directory | Runner image and the hash of its `KEY` ([commands](internals.md#commands)) | Runs on tags and `main`, under the `KEY` the build wrote |
-| ccache directory | Runner image, run ID and attempt; every run restores the newest by prefix | Runs on `main` only |
-| DXMT's LLVM | The LLVM pin, the floor, the Xcode version and the runner image | Runs on tags and `main` |
-| Pinned downloads | The `redist.env` lines that `pins-key.sh` hashes for it in `release.yml` | Runs on tags and `main` |
-| cargo's registry | `Cargo.lock` | Runs on tags and `main` |
-| Sparkle | `fetch-sparkle.sh`, which pins the release | Runs on tags and `main` |
-| Xcode choice | Runner image, its version, and the hashes of `host.sh` and `profile.sh`; `brew-cache.yml` shares it | Runs on tags and `main` |
+| Cache | Key |
+|-------|-----|
+| Each staged directory | Runner image and the hash of its `KEY` ([commands](internals.md#commands)), saved under the `KEY` the build wrote |
+| ccache directory | Runner image, run ID and attempt; every run restores the newest by prefix |
+| DXMT's LLVM | The LLVM pin, the floor, the Xcode version and the runner image |
+| Pinned downloads | The `redist.env` lines that `pins-key.sh` hashes for it in `release.yml` |
+| cargo's registry | `Cargo.lock` |
+| Sparkle | `fetch-sparkle.sh`, which pins the release |
+| Xcode choice | Runner image, its version, and the hashes of `host.sh` and `profile.sh`; `brew-cache.yml` shares it |
 
-A run on a tag writes caches only later runs on that tag can read. A run
-on `main` writes caches every run can read, so a tag build builds only what
-changed since the last run on `main`. A pull request reads `main`'s caches
-and writes none.
+Only runs on `main` save caches, the Homebrew kegs included. Every run can
+read what `main` saved, so a tag build builds only what changed since the
+last run on `main`. A cache saved on a tag or another branch would serve
+only later runs on that ref, so runs on tags, pull requests and other
+branches read `main`'s caches and write none.
 
 - The LLVM key does not change with how `build-dxmt.sh` builds LLVM. To
   rebuild it after such a change, delete the `dxmt-llvm15-*` caches

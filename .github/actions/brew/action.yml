@@ -2,16 +2,9 @@ name: Homebrew formulae
 description: >-
   Installs the formulae of pins/brew-formulae and their runtime dependencies
   at the newest versions Homebrew has, starting from the cache of the kegs an
-  earlier run installed (bin/ci/brew.sh), and saves the result when the
-  cache was not for this exact manifest, unless save is 'false'. Expects
-  this repository checked out at scripts/ in the workspace.
-
-inputs:
-  save:
-    description: >-
-      'false' restores the cache but never saves one, for a run whose kegs
-      no later run should read.
-    default: 'true'
+  earlier run installed (bin/ci/brew.sh), and on refs/heads/main saves the
+  result when the cache was not for this exact manifest. Expects this
+  repository checked out at scripts/ in the workspace.
 
 # release.yml and brew-cache.yml run these steps. A local composite action
 # and not a reusable workflow, because the release job needs the kegs on its
@@ -43,7 +36,8 @@ runs:
     # brew.sh wrote them, even when a later step of the job fails. brew.sh
     # ends with its check, which fails the step when a formula of the
     # manifest is not at the version Homebrew has, so a bad install is never
-    # saved.
+    # saved. Only a run on main saves, as every cache of the workflows: a
+    # cache saved on another ref serves only later runs on that ref.
     - name: Restore the Homebrew kegs
       id: restore
       uses: actions/cache/restore@v6
@@ -57,7 +51,7 @@ runs:
       run: scripts/bin/ci/brew.sh install "$RUNNER_TEMP/brew" "$RUNNER_TEMP/brew-manifest"
 
     - name: Save the Homebrew kegs
-      if: inputs.save == 'true' && steps.restore.outputs.cache-hit != 'true'
+      if: github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
       uses: actions/cache/save@v6
       with:
         path: ${{ runner.temp }}/brew

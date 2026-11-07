@@ -12,12 +12,14 @@ name: Release
 # and publish nothing.
 #
 # The logic lives in bin/, bin/ci/ and launcher/scripts/, which also run on
-# a Mac. The caches a run on a tag writes serve only later runs on that
-# tag. A run on main saves every cache it builds, which every later run can
-# read, so a release finds the components the newest build of main built
-# and its ccache directory. A run on a pull request restores the caches of
-# main and saves none, so what a change that is not merged built never
-# reaches another run. GitHub evicts a cache that no run used for a week;
+# a Mac. Only a run on main saves caches: every later run can read those, so
+# a release finds the components the newest build of main built and its
+# ccache directory. A cache saved on a tag or another branch would serve
+# only later runs on that ref, so runs on tags, pull requests and other
+# branches restore the caches of main and save none, and what a change that
+# is not merged built never reaches another run. The branch is named
+# because the payload of a scheduled run has no repository to read the
+# default branch from. GitHub evicts a cache that no run used for a week;
 # the scheduled runs, twice a week, use the current ones on main, so a
 # release after a quiet week still finds them.
 
@@ -208,8 +210,8 @@ jobs:
       # so it need not ask every Xcode for its SDK again (host.sh, header).
       # The key changes with the image and with host.sh and profile.sh,
       # which decide the choice; a runner that names no image version gets a
-      # key no other run has. A run on a pull request saves no choice, as it
-      # saves no cache below.
+      # key no other run has. Only a run on main saves it, as every cache
+      # below.
       - name: Compute the Xcode choice key
         id: xcode-key
         run: echo "key=xcode-choice-$RUNNER_OS-$ImageOS-${ImageVersion:-run$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT}-${{ hashFiles('scripts/bin/ci/host.sh', 'scripts/bin/lib/profile.sh') }}" >> "$GITHUB_OUTPUT"
@@ -225,19 +227,17 @@ jobs:
         run: scripts/bin/ci/host.sh --metal --xcode-choice "$RUNNER_TEMP/xcode-choice"
 
       - name: Save the Xcode choice
-        if: github.event_name != 'pull_request' && steps.xcode-choice.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/main' && steps.xcode-choice.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/xcode-choice
           key: ${{ steps.xcode-key.outputs.key }}
 
       # The formulae at the newest versions Homebrew has, from and into the
-      # cache brew-cache.yml keeps current on the default branch. A run on a
-      # pull request only reads it.
+      # cache brew-cache.yml keeps current on main. Only a run on main saves
+      # the kegs (the action).
       - name: Install the Homebrew formulae
         uses: ./scripts/.github/actions/brew
-        with:
-          save: ${{ github.event_name != 'pull_request' }}
 
       # Each key changes with the pins of what its cache holds, not with the
       # rest of redist.env. The ccache key rolls:
@@ -321,7 +321,7 @@ jobs:
       # it otherwise; the bundle step checks every COMMIT against its ref
       # again. Restored before the build step and saved right after it, even
       # when that fails later, when the dist was built here and the run is
-      # not on a pull request: under the hash of the KEY the build wrote, so
+      # on main: under the hash of the KEY the build wrote, so
       # a ref that moved in between cannot file a dist under another
       # commit's key.
       - name: Compute the dist cache keys
@@ -370,8 +370,8 @@ jobs:
 
       # The LLVM 15 libraries DXMT's winemetal.so links, which build-dxmt.sh
       # builds only when this directory holds no build of the pinned commit.
-      # Saved right after the build step, even when that fails later, unless
-      # the run is on a pull request.
+      # Saved right after the build step, even when that fails later, when
+      # the run is on main.
       - name: Restore DXMT's LLVM
         id: llvm15-cache
         uses: actions/cache/restore@v6
@@ -401,13 +401,8 @@ jobs:
         if: always() && steps.build.conclusion != 'skipped'
         run: '"$WINE_BUILD_CCACHE" --show-stats'
 
-      # Only on main, the default branch: every saved directory is a full
-      # one, and a tag run's could only be read by later runs on that tag, so
-      # saving them would fill the repository's cache budget for little. Tag
-      # runs and runs on a pull request, whose ref is not main either,
-      # restore the newest one main saved. The branch is named here because
-      # the payload of a scheduled run has no repository to read the default
-      # branch from.
+      # Only on main, as every cache: runs on tags, pull requests and other
+      # branches restore the newest one main saved.
       - name: Save the ccache directory
         if: always() && steps.build.conclusion != 'skipped' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
@@ -430,42 +425,42 @@ jobs:
 
       # Saved when the dist was not restored under the key it has now.
       - name: Save Mesa's dist
-        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.mesa != '' && (steps.mesa-dist.outputs.cache-hit != 'true' || steps.saves.outputs.mesa != steps.dists.outputs.mesa)
+        if: always() && github.ref == 'refs/heads/main' && steps.saves.outputs.mesa != '' && (steps.mesa-dist.outputs.cache-hit != 'true' || steps.saves.outputs.mesa != steps.dists.outputs.mesa)
         uses: actions/cache/save@v6
         with:
           path: build/mesa/dist
           key: ${{ steps.saves.outputs.mesa }}
 
       - name: Save GStreamer's dist
-        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.gstreamer != '' && (steps.gstreamer-dist.outputs.cache-hit != 'true' || steps.saves.outputs.gstreamer != steps.dists.outputs.gstreamer)
+        if: always() && github.ref == 'refs/heads/main' && steps.saves.outputs.gstreamer != '' && (steps.gstreamer-dist.outputs.cache-hit != 'true' || steps.saves.outputs.gstreamer != steps.dists.outputs.gstreamer)
         uses: actions/cache/save@v6
         with:
           path: build/gstreamer/dist
           key: ${{ steps.saves.outputs.gstreamer }}
 
       - name: Save FEX's dist
-        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.fex != '' && (steps.fex-dist.outputs.cache-hit != 'true' || steps.saves.outputs.fex != steps.dists.outputs.fex)
+        if: always() && github.ref == 'refs/heads/main' && steps.saves.outputs.fex != '' && (steps.fex-dist.outputs.cache-hit != 'true' || steps.saves.outputs.fex != steps.dists.outputs.fex)
         uses: actions/cache/save@v6
         with:
           path: build/fex/dist
           key: ${{ steps.saves.outputs.fex }}
 
       - name: Save DXMT's dist
-        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.dxmt != '' && (steps.dxmt-dist.outputs.cache-hit != 'true' || steps.saves.outputs.dxmt != steps.dists.outputs.dxmt)
+        if: always() && github.ref == 'refs/heads/main' && steps.saves.outputs.dxmt != '' && (steps.dxmt-dist.outputs.cache-hit != 'true' || steps.saves.outputs.dxmt != steps.dists.outputs.dxmt)
         uses: actions/cache/save@v6
         with:
           path: build/dxmt/dist
           key: ${{ steps.saves.outputs.dxmt }}
 
       - name: Save vkd3d-proton's dist
-        if: always() && github.event_name != 'pull_request' && steps.saves.outputs.vkd3d != '' && (steps.vkd3d-dist.outputs.cache-hit != 'true' || steps.saves.outputs.vkd3d != steps.dists.outputs.vkd3d)
+        if: always() && github.ref == 'refs/heads/main' && steps.saves.outputs.vkd3d != '' && (steps.vkd3d-dist.outputs.cache-hit != 'true' || steps.saves.outputs.vkd3d != steps.dists.outputs.vkd3d)
         uses: actions/cache/save@v6
         with:
           path: build/vkd3d-proton/dist
           key: ${{ steps.saves.outputs.vkd3d }}
 
       - name: Save DXMT's LLVM
-        if: always() && github.event_name != 'pull_request' && steps.llvm15-cache.outputs.cache-hit != 'true' && hashFiles('build/dxmt/llvm15/COMMIT') != ''
+        if: always() && github.ref == 'refs/heads/main' && steps.llvm15-cache.outputs.cache-hit != 'true' && hashFiles('build/dxmt/llvm15/COMMIT') != ''
         uses: actions/cache/save@v6
         with:
           path: build/dxmt/llvm15
@@ -545,19 +540,17 @@ jobs:
 
       # The pinned downloads, the cargo registry and Sparkle, which the
       # bundle step and the app's assembly complete, saved when they were not
-      # restored under their key. As actions/cache does in its post step,
-      # only when every step before succeeded, but before a tag run frees
-      # disk space and publishes, so a failed notarization does not lose
-      # them. A run on a pull request saves none.
+      # restored under their key, by a run on main only. As actions/cache
+      # does in its post step, only when every step before succeeded.
       - name: Save the pinned downloads
-        if: github.event_name != 'pull_request' && steps.redist.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/main' && steps.redist.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: cache
           key: ${{ steps.keys.outputs.redist }}
 
       - name: Save the cargo registry
-        if: github.event_name != 'pull_request' && steps.cargo.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/main' && steps.cargo.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
@@ -566,7 +559,7 @@ jobs:
           key: ${{ steps.cargo.outputs.cache-primary-key }}
 
       - name: Save Sparkle
-        if: github.event_name != 'pull_request' && steps.sparkle.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/main' && steps.sparkle.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: scripts/target/launcher/sparkle
@@ -596,8 +589,7 @@ jobs:
       # generate_appcast unpacks each to make the deltas. Nothing reads the
       # Wine source, the build trees, the staged dists, the bundles, whose
       # tarballs are packed, the runtime-only copy, which the app holds, the
-      # ccache directory or the test build of the crates any more, and their
-      # caches are saved.
+      # ccache directory or the test build of the crates any more.
       - name: Free disk space
         if: startsWith(github.ref, 'refs/tags/')
         run: |
