@@ -1,4 +1,4 @@
-name: Release
+name: Build
 
 # Builds the bundle and Mach9.app around it on a hosted runner, from the
 # Wine branch in pins/wine-src.ref and the pins of this commit, and signs
