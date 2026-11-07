@@ -48,10 +48,14 @@ SPARKLE_FW    := $(SPARKLE_DIR)/Sparkle.framework
 SPARKLE_STAMP := $(SPARKLE_DIR)/.version
 
 # The app's Info.plist. There is one bundle, so this file is the whole truth
-# about it and it is copied in as it stands. It carries the identifier, the
-# games category and Game Mode keys, the Sparkle feed and public key, and the
-# version.
+# about it, apart from the version. It carries the identifier, the games
+# category and Game Mode keys, and the Sparkle feed and public key.
 INFO_SRC := $(LAUNCHER)/app/Info.plist
+
+# The version stamped into the app and the plug-in (scripts/version.sh): the
+# workspace version in the root Cargo.toml unless given here. A release run
+# passes the tag's, X.Y.Z or X.Y.Z-rc.N.
+VERSION :=
 ICON     := $(LAUNCHER)/app/mach9.icns
 APP_NAME := $(shell $(PLIST) -c 'Print :CFBundleName' "$(INFO_SRC)")
 STAGE_APP = $(STAGE)/$(APP_NAME).app
@@ -94,8 +98,9 @@ $(PLUGIN_BIN): cargo-build $(PLUGIN_PLIST)
 	cp $(PLUGIN_PLIST) $(PLUGIN)/Contents/Info.plist
 
 # Puts the launcher's parts into the bundle $(1): the launcher, the Dock tile
-# plug-in, Sparkle, the icon and the Info.plist. The executable is removed
-# before the copy for the reason given at $(BIN).
+# plug-in, Sparkle, the icon and the Info.plist, with the version stamped
+# into both Info.plists. The executable is removed before the copy for the
+# reason given at $(BIN).
 #
 # The plug-in's principal class has to be unique per installed bundle,
 # because every pinned copy of the app loads into the same Dock plug-in host,
@@ -112,6 +117,8 @@ define populate
 	ditto "$(SPARKLE_FW)" "$(1)/Contents/Frameworks/Sparkle.framework"
 	cp "$(ICON)" "$(1)/Contents/Resources/"
 	cp "$(INFO_SRC)" "$(1)/Contents/Info.plist"
+	$(SCRIPTS)/version.sh --stamp "$(1)" $(VERSION)
+	$(SCRIPTS)/version.sh --stamp "$(1)/Contents/PlugIns/$(PLUGIN_NAME).docktileplugin" $(VERSION)
 	@set -e; \
 	app_id="$$($(PLIST) -c 'Print :CFBundleIdentifier' "$(1)/Contents/Info.plist")"; \
 	class="$(PLUGIN_NAME)_$$(printf '%s' "$$app_id" | tr -c '[:alnum:]' '_')"; \

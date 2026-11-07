@@ -14,14 +14,12 @@
 	<string>GameLauncherDockTile</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
-	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<!-- No version keys: the Makefile stamps the app's version into the
+	     plug-in it installs (launcher/scripts/version.sh). -->
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>MacOSX</string>
 	</array>
-	<key>CFBundleVersion</key>
-	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.4</string>
 	<key>NSPrincipalClass</key>

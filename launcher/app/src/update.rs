@@ -20,9 +20,9 @@
 //! a process that has talked to the window server stays registered with it.
 //!
 //! A local build installed into a bundle checks like any installed copy. It
-//! carries the version and the public key committed in
-//! `launcher/app/Info.plist`, the ones the latest release was cut from, so it
-//! is never behind the feed it polls.
+//! carries the public key committed in `launcher/app/Info.plist` and the
+//! workspace version, which the Makefile stamps into the bundle and the
+//! latest release was cut from, so it is never behind the feed it polls.
 
 use std::{
     ffi::CString,

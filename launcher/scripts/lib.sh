@@ -3,8 +3,9 @@
 #   source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 #
 # Sets REPO_ROOT, LAUNCHER_DIR, BUILD_DIR, SPARKLE_DIR, SPARKLE_BIN, PLIST,
-# INFO_REL and INFO_SRC and defines usage, die and require_macos. Written for
-# the bash 3.2 that ships with macOS, like the scripts that source it.
+# INFO_REL and INFO_SRC and defines usage, die, require_macos and the version
+# helpers. Written for the bash 3.2 that ships with macOS, like the scripts
+# that source it.
 
 LAUNCHER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$LAUNCHER_DIR/.." && pwd)"
@@ -51,4 +52,50 @@ die() {
 # needs from it, for the message.
 require_macos() {
   [[ "$(uname)" == "Darwin" ]] || die "this script requires macOS${1:+ ($1)}"
+}
+
+# --- versions -------------------------------------------------------------------
+#
+# A release version is X.Y.Z, or X.Y.Z-rc.N for a release candidate of X.Y.Z,
+# and is the tag vX.Y.Z or vX.Y.Z-rc.N without the v. Its one source is the
+# workspace version in the root Cargo.toml, which the release commit sets to
+# X.Y.Z; a release candidate of X.Y.Z is cut while it says X.Y.Z.
+#
+# The bundle carries the release version as CFBundleShortVersionString and
+# bundle_version's form of it as CFBundleVersion, which is what Sparkle
+# compares.
+
+# Exit unless $1 is a release version.
+check_version() {
+  [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$ ]] \
+    || die "'$1' is not a release version (X.Y.Z or X.Y.Z-rc.N)"
+}
+
+# The X.Y.Z a release version is, or is a release candidate of.
+base_version() {
+  printf '%s' "${1%-rc.*}"
+}
+
+# The CFBundleVersion of a release version: X.Y.Z as it is, X.Y.Z-rc.N as
+# X.Y.ZrcN. Sparkle's comparator (SUStandardVersionComparator) stops reading
+# a version at its first dash, so X.Y.Z-rc.N would compare equal to X.Y.Z.
+# In X.Y.ZrcN, "rc" is a string part after the numbers, and a version with
+# such a part sorts below the same numbers without it, so
+# X.Y.Z-rc.N < X.Y.Z and earlier releases sort below both.
+bundle_version() {
+  case "$1" in
+    *-rc.*) printf '%src%s' "${1%-rc.*}" "${1##*-rc.}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# The workspace version in the root Cargo.toml, which every crate inherits,
+# read through cargo so that whatever cargo accepts is read correctly.
+workspace_version() {
+  local json version
+  json="$(cargo metadata --no-deps --format-version 1 --manifest-path "$REPO_ROOT/Cargo.toml")" \
+    || die "cargo metadata failed in $REPO_ROOT"
+  version="$(jq -r '.packages[] | select(.name == "gamelauncher") | .version' <<<"$json")"
+  [[ -n "$version" ]] || die "cargo metadata names no gamelauncher package"
+  printf '%s' "$version"
 }

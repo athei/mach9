@@ -16,16 +16,9 @@
 	<string>Mach9</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
-	<!-- The release version. Apple splits it into a marketing version
-	     (CFBundleShortVersionString) and a build number (CFBundleVersion),
-	     and Sparkle compares the build number; the two are kept equal. Both
-	     are bumped and committed before each release, by editing these lines,
-	     since PlistBuddy would drop this comment. The release build reads the
-	     version from here, and a local build carries the committed one. -->
-	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
-	<key>CFBundleVersion</key>
-	<string>0.1.0</string>
+	<!-- No CFBundleShortVersionString or CFBundleVersion: the Makefile
+	     stamps both into the bundle from the workspace version in the root
+	     Cargo.toml (launcher/scripts/version.sh). -->
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>MacOSX</string>
