@@ -92,17 +92,20 @@ What is pinned, and where, is in [internals.md](internals.md#pinned-inputs).
 
 ## Releases
 
-An `arm64-<Wine version>-<n>` tag makes
-[`release.yml`](../.github/workflows/release.yml) build the bundle and
-attach it and its symbols to a draft release of the tag. Its steps call the
-build and bundle scripts and the scripts in [`bin/ci/`](../bin/ci), each of
-which says in its header what it does. The `cx-*` releases are the frozen
-x86_64 Wine this repository built before, which runs under Rosetta.
+A `vX.Y.Z` tag makes [`release.yml`](../.github/workflows/release.yml)
+build the engine bundle and Mach9.app from one commit and attach both to a
+draft release of the tag; `vX.Y.Z-rc.N` does the same for a release
+candidate. Its steps call the build and bundle scripts, the scripts in
+[`bin/ci/`](../bin/ci) and those in
+[`launcher/scripts/`](../launcher/scripts), each of which says in its
+header what it does. The `arm64-*` releases are earlier ones of the engine
+alone, and the `cx-*` releases the frozen x86_64 Wine this repository
+built before, which runs under Rosetta.
 
 | Trigger | What the run does |
 |---------|-------------------|
-| `arm64-*` tag | Builds, packs the trees and attaches them to a draft release; never cancelled |
-| Push to `main` that changes a file the build reads, the schedule, by hand | Builds and bundles, runs `package.sh --notes-only`, saves its caches, publishes nothing |
+| `v*` tag | Builds the engine and the app, notarizes the app, builds its appcast and attaches everything to a draft release; never cancelled |
+| Push to `main` that changes a file the build or the app reads, the schedule, by hand | Builds and bundles, assembles and signs the app and its DMG, runs `package.sh --notes-only`, saves its caches, publishes nothing |
 | Pull request to `main` (no `paths` filter, since its check is required) | As on `main`, in the environment `pull-request` after the owner approves it ([signing identity](#signing-identity)); saves no cache |
 
 - Every run is on a hosted runner of the floor's major macOS version,
@@ -111,9 +114,9 @@ x86_64 Wine this repository built before, which runs under Rosetta.
   `release.yml` have the details.
 - A pull request from a fork gets no secrets and fails at its first step;
   push the branch to this repository instead.
-- A release's notes start with one bullet per source it was built from
-  (`package.sh`). Add the changes by hand below them, as short bullets,
-  before publishing the draft.
+- A release's notes are its `release-notes/X.Y.Z.md`, then one bullet per
+  source it was built from (`package.sh`). Add what else the release page
+  should say by hand, as short bullets, before publishing the draft.
 - [`docs.yml`](../.github/workflows/docs.yml) publishes the rustdoc of
   `compatdb-core` to [GitHub Pages](https://docs.mach9.app), whose
   root redirects to the crate's page; its header says when it runs and
@@ -126,6 +129,132 @@ x86_64 Wine this repository built before, which runs under Rosetta.
   formatting and lints and tests the launcher crates on macOS, so a change
   to the launcher alone does not start a Wine build; its header says when
   it runs.
+
+### Cutting a release
+
+1. Commit the version bump to `main`: the workspace `version` in
+   [`Cargo.toml`](../Cargo.toml), `Cargo.lock` (any cargo command updates
+   it), and the notes `release-notes/X.Y.Z.md`
+   ([README](../release-notes/README.md)).
+2. Optionally tag a [release candidate](#release-candidates) first.
+3. Push the tag `vX.Y.Z`.
+4. Check the draft, add to its notes, and publish it with "Set as the
+   latest release" checked. Only then do copies in the field and the
+   download link see it ([updates in the field](#updates-in-the-field)).
+
+Only a `v*` release that carries `appcast.xml` and `Mach9.dmg` may be
+marked Latest. Any other one makes every copy in the field and the
+download link get a 404, and the next tag run's preflight fails.
+
+A tag run fails before the expensive build when:
+
+- the tag is neither `vX.Y.Z` nor `vX.Y.Z-rc.N`;
+- another `v*` draft exists;
+- `appcast.sh --preflight` refuses: the tag is not the workspace version,
+  the notes are missing, the version is not above the latest appcast's, or
+  `SPARKLE_ED_KEY` is not the key the app ships with.
+
+After the build, a tag run frees disk space, then signs, notarizes and
+staples the app, packs its DMG, and builds the appcast with the deltas
+into this release ([`make-release.sh`](../launcher/scripts/make-release.sh),
+[`appcast.sh`](../launcher/scripts/appcast.sh)). The draft holds:
+
+- the engine's tarballs, named after the tag;
+- `Mach9-X.Y.Z.dmg`, and the same file as `Mach9.dmg`, the name the
+  download link asks `releases/latest/download` for;
+- the deltas from earlier releases into this one;
+- `appcast.xml`, which lists this release and the earlier ones, each
+  pointing at the DMG in its own release.
+
+The appcast is built on the one of the latest published release, so
+drafts have to be published in the order they were made, and a draft that
+is not published blocks the next tag run until it is deleted.
+
+- `appcast.sh` downloads the DMG of every release a delta is made from,
+  and `generate_appcast` unpacks each of them and diffs it against the new
+  app. Disk use and time grow with the number of deltas; the log shows
+  `df -h` before and after.
+- A release that rebuilds Wine changes most files of the bundle, so its
+  deltas are much larger than those of a release that changes only the
+  launcher. `generate_appcast` leaves out a delta it cannot make and one
+  larger than 7/8 of the new DMG, and a copy on that release downloads the
+  whole DMG.
+- A release that raises `LSMinimumSystemVersion` makes `generate_appcast`
+  also build deltas into the newest release of the old floor, which belong
+  to that earlier release. `appcast.sh` stops on them, since it attaches
+  files to the new release only.
+
+### Release candidates
+
+A tag `vX.Y.Z-rc.N` runs the same steps on the commit with the version
+bump to X.Y.Z and its notes. Its draft is a prerelease, which
+`releases/latest/download` never serves, so copies in the field never see
+it. Its `CFBundleVersion` sorts above every earlier release and below
+X.Y.Z (`bundle_version` in [`lib.sh`](../launcher/scripts/lib.sh)), so a
+copy updated to it is offered X.Y.Z later.
+
+To check the update path before users see it, update a copy of the latest
+release to the candidate:
+
+1. Install the latest release's DMG into a scratch folder.
+2. Point every copy of the app on this Mac at the candidate's appcast:
+
+   ```bash
+   defaults write app.mach9 SUFeedURL https://github.com/athei/mach9/releases/download/vX.Y.Z-rc.N/appcast.xml
+   ```
+
+   Sparkle takes the feed URL from the app's user defaults before its
+   Info.plist, and logs a warning that it does.
+3. Choose Check for Updates in the Dock menu of the scratch copy: the update
+   is offered, the delta applies, the app relaunches as the candidate and
+   starts a game.
+4. `defaults delete app.mach9 SUFeedURL`. The key is shared with the
+   installed app.
+
+### Updates in the field
+
+Every copy polls `SUFeedURL` in
+[`launcher/app/Info.plist`](../launcher/app/Info.plist),
+`https://updates.mach9.app/appcast.xml`. Every copy ever shipped polls that
+URL, so it has to keep working; the domain is the stable name in front of
+wherever the appcast is.
+
+- `updates.mach9.app` is a web forward of every path to
+  `https://github.com/athei/mach9/releases/latest/download/appcast.xml`,
+  set up in the DNS of `mach9.app` at Gandi LiveDNS, where it is changed.
+  Gandi's forwarder drops the path, so the domain serves the appcast and
+  nothing else.
+- The download link points at GitHub directly,
+  `https://github.com/athei/mach9/releases/latest/download/Mach9.dmg`, and
+  every DMG and delta URL in the appcast at a release download on GitHub,
+  so nothing else depends on the domain.
+- After a change to the DNS or the forward, check with `curl -sIL` that
+  `https://updates.mach9.app/appcast.xml` ends at the latest release's
+  appcast.
+- A copy installs an update only when it is signed with the EdDSA key
+  whose public half is `SUPublicEDKey`, by the Developer ID team the copy
+  was signed by, for the bundle id `app.mach9`, with a higher
+  `CFBundleVersion`. `appcast.sh` checks the key and the version;
+  `codesign-bundle.sh` signs with the identity of the
+  [signing identity](#signing-identity) secrets.
+- The EdDSA key pair was generated once. Without its private half no copy
+  ever accepts another update, so keep a backup of it off the Mac it lives
+  on. It lives in that Mac's login keychain, and Sparkle's tools come from
+  [`fetch-sparkle.sh`](../launcher/scripts/fetch-sparkle.sh). Export it to
+  a file outside the checkout, copy that to the backup, and delete it:
+
+  ```bash
+  target/launcher/sparkle/bin/generate_keys -x ~/sparkle-key.txt   # export
+  target/launcher/sparkle/bin/generate_keys -f ~/sparkle-key.txt   # import
+  rm ~/sparkle-key.txt
+  ```
+
+- An update window without notes means the release's appcast item has no
+  `<description>`; `appcast.sh` carries each one over from the previous
+  appcast.
+- How the launcher runs the check is in the header of
+  [`update.rs`](../launcher/app/src/update.rs); each skipped check logs
+  `update check skipped: <reason>` in `gamelauncher.log`.
 
 ### Homebrew formulae
 
@@ -175,14 +304,16 @@ and writes none.
 
 ### Signing identity
 
-`release.yml` signs the loader with the identity of the
+`release.yml` signs the loader and the app with the identity of the
 [provisioning profile](internals.md#loader-app)'s team, from the secrets of
 the GitHub environment `release`, or of `pull-request` on a pull request.
 `bin/ci/keychain.sh` imports it into a keychain of its own for the bundle
-step and deletes that keychain at the end of the job.
+step and deletes that keychain at the end of the job. It has to be the
+Developer ID Application certificate of the team that signed the releases
+in the field ([updates in the field](#updates-in-the-field)).
 
 - Create the environment `release` and limit its deployments to the tag
-  pattern `arm64-*` and the branch `main`. A pull request that edits the
+  pattern `v*` and the branch `main`. A pull request that edits the
   job's `environment` line to name `release` then gets no secrets.
 - Create the environment `pull-request` with the owner as its required
   reviewer, so each pull request run waits for approval. It holds a copy
@@ -204,6 +335,38 @@ step and deletes that keychain at the end of the job.
   The commands that set the password ask for it.
 - Repeat this when the certificate is renewed or the profile is replaced
   with one that lists another certificate.
+
+### Notarization and update keys
+
+A tag run also needs these secrets in the environment `release`, and no
+other run does:
+
+| Secret | What it holds |
+|--------|---------------|
+| `NOTARY_API_KEY` | An App Store Connect API key's `.p8` file, base64 |
+| `NOTARY_KEY_ID` | That key's ID |
+| `NOTARY_ISSUER` | The issuer ID of the account's API keys |
+| `SPARKLE_ED_KEY` | Sparkle's private EdDSA key, as `generate_keys -x` exports it |
+
+- Create the API key in App Store Connect, Users and Access,
+  Integrations, App Store Connect API, Team Keys, with the Developer role.
+  The page shows the issuer ID; the `.p8` file downloads once.
+  `codesign-bundle.sh notarize` passes it to `notarytool`.
+- Store them, with the exported key outside the checkout, and delete both
+  files once the secrets are set:
+
+  ```bash
+  base64 -i ~/Downloads/AuthKey_<key id>.p8 | gh secret set NOTARY_API_KEY --env release
+  gh secret set NOTARY_KEY_ID --env release
+  gh secret set NOTARY_ISSUER --env release
+  target/launcher/sparkle/bin/generate_keys -x ~/sparkle-key.txt
+  gh secret set SPARKLE_ED_KEY --env release < ~/sparkle-key.txt
+  rm ~/Downloads/AuthKey_<key id>.p8 ~/sparkle-key.txt
+  ```
+
+- `SPARKLE_ED_KEY` is the key pair the releases in the field were signed
+  with, never a new one ([updates in the field](#updates-in-the-field)).
+  The tag run refuses a key whose public half is not `SUPublicEDKey`.
 
 ## Wine-side contract
 

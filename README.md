@@ -21,7 +21,7 @@ the engine is included, so newer D3D10, D3D11 and D3D12 games run too,
 but those already run well under CrossOver, which is why older games are
 the focus.
 
-**[Download Mach9.app](https://updates.mach9.app/Mach9.dmg)**
+**[Download Mach9.app](https://github.com/athei/mach9/releases/latest/download/Mach9.dmg)**
 
 - Runs the Windows version of Steam, so Steam games install and start
   from there.
@@ -31,8 +31,10 @@ the focus.
 
 Setup and use: [docs/app.md](docs/app.md).
 
-The app's source is in [`launcher/`](launcher); the engine does not depend
-on it.
+The app's source, and what builds and releases it, is in
+[`launcher/`](launcher) ([building](docs/building.md#mach9app)); the
+engine does not depend on it. Each release of the engine is a release of
+the app too.
 
 ## The engine
 
@@ -73,10 +75,11 @@ Other defaults that differ from Wine, besides the built-in rules
 
 ## Using it from a launcher
 
-- Get a bundle from the `arm64-*`
-  [releases](https://github.com/athei/mach9/releases)
+- Get a bundle from a `v*`
+  [release](https://github.com/athei/mach9/releases)
   ([releases](docs/maintenance.md#releases)) or a local build
-  ([building](docs/building.md)).
+  ([building](docs/building.md)). Builds from before the app joined the
+  releases are the `arm64-*` releases.
 - Copy the `wine/` tree into the app
   ([bundle layout](docs/building.md#bundle-layout)).
 - Sign the app without touching `wine.app`
@@ -92,7 +95,7 @@ used at the same release as the bundle:
 
 ```toml
 [dependencies]
-compatdb-core = { git = "https://github.com/athei/mach9", tag = "<the bundle's arm64-* tag>" }
+compatdb-core = { git = "https://github.com/athei/mach9", tag = "<the bundle's v* tag>" }
 ```
 
 - The [crate documentation][spec] is the spec; it has only a Rust API.

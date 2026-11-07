@@ -7,9 +7,10 @@ tells you when yours is too old to open it.
 
 ## Install
 
-1. Download [Mach9.dmg](https://updates.mach9.app/Mach9.dmg) and drag
-   Mach9 to Applications. It does not update itself when started from the
-   disk image.
+1. Download
+   [Mach9.dmg](https://github.com/athei/mach9/releases/latest/download/Mach9.dmg)
+   and drag Mach9 to Applications. It does not update itself when started
+   from the disk image.
 2. Open it from Applications. macOS shows "Background Items Added", which
    means the Dock menu is set up. With no game added yet, Mach9 asks for
    one (see [Add a game](#add-a-game)).

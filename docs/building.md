@@ -36,7 +36,8 @@ scripts also run alone ([commands](internals.md#commands)).
 | [`pins/`](../pins) | The pinned inputs: [`redist.env`](../pins/redist.env), the refs of the sources the build checks out, and the Homebrew formulae a CI build installs |
 | [`.github/workflows/`](../.github/workflows) | The CI workflows ([releases](maintenance.md#releases)) |
 | [`compatdb/`](../compatdb) | The crates of `compatdb.so` and `compatdb-core` ([compatdb.md](compatdb.md)); the Cargo workspace is the repository root, so run cargo there |
-| [`launcher/`](../launcher) | The source of [Mach9.app](app.md)'s launcher (`app`), its Dock tile plug-in (`docktile`) and the code both share (`core`); nothing the bundle step builds depends on it. Without `SPARKLE_DIR` naming the directory that holds `Sparkle.framework`, the launcher builds without its updater ([`build.rs`](../launcher/app/build.rs)) |
+| [`launcher/`](../launcher) | The source of [Mach9.app](app.md)'s launcher (`app`), its Dock tile plug-in (`docktile`) and the code both share (`core`), and the Makefile and scripts that assemble, sign and release the app ([Mach9.app](#mach9app)); nothing the bundle step builds depends on it |
+| [`release-notes/`](../release-notes) | The notes the app's update window shows, one file per release ([README](../release-notes/README.md)) |
 | [`smoke/`](../smoke) | The programs the bundle step builds and runs to check the bundle |
 | [`licenses/`](../licenses) | The licence texts the bundle step installs |
 | [`signing/`](../signing) | The loader's provisioning profile |
@@ -93,3 +94,32 @@ The libraries built here that configure finds are described with them:
 
 What the Direct3D trees and the default directories hold, and why, is in
 [Direct3D trees](maintenance.md#direct3d-trees).
+
+## Mach9.app
+
+```bash
+bin/bundle-wine.sh --runtime-only --dest <dir>
+make -C launcher app WINE_RUNTIME=<dir>/wine   # a complete Mach9.app, unsigned
+make -C launcher install                       # the launcher's parts into an installed Mach9.app, signed
+```
+
+- `app` assembles the bundle from nothing: the Wine runtime, the launcher,
+  the Dock tile plug-in, Sparkle, the icon and the Info.plist. It refuses a
+  Wine tree with development files.
+- `install` is for development. It replaces the launcher's parts in an
+  existing bundle (`APP=` names another than the one in `/Applications`)
+  and signs it with the Developer ID identity in the keychain.
+- Both stamp the workspace version of [`Cargo.toml`](../Cargo.toml) into
+  the bundle; `VERSION=` overrides it
+  ([`version.sh`](../launcher/scripts/version.sh)).
+- Both link the launcher against the pinned Sparkle release that
+  [`fetch-sparkle.sh`](../launcher/scripts/fetch-sparkle.sh) downloads. A
+  plain `cargo build` has no updater
+  ([`build.rs`](../launcher/app/build.rs)).
+- [`codesign-bundle.sh`](../launcher/scripts/codesign-bundle.sh) signs a
+  bundle `app` made: `sign --adhoc` for a local test, `sign` with a
+  Developer ID identity for one to give away. It leaves `wine.app` as it is
+  ([loader app](internals.md#loader-app)).
+- The [`Makefile`](../launcher/Makefile) documents every target and
+  variable; releasing the app is in
+  [releases](maintenance.md#releases).
