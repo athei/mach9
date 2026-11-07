@@ -8,7 +8,8 @@ set -e
 #   wine-<tag>-macos-arm64.tar.xz          the bundle, as wine/
 #   wine-<tag>-macos-arm64-symbols.tar.xz  wine-symbols/ (bundle-wine.sh
 #                                          --symbols), without its tree marker
-#   notes.md                               the start of the release notes
+#   notes.md                               the components section of the
+#                                          release notes (release.yml)
 #
 # The bundle is compressed at xz's default preset, since it is what people
 # download. The symbols, more than twice the size, take a faster preset,
@@ -213,7 +214,7 @@ else
 fi
 {
     echo "- Wine: $wine_repo@$wine_ref ($(short "$wine_commit"), $describe)"
-    echo "- Scripts: $self"
+    echo "- Mach9: $self"
     echo "- FEX: $(github_name "$FEX_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/fex-src.ref") ($(short "$(cat "$FEX_DIST/COMMIT")"))"
     echo "- Mesa: $(github_name "$MESA_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref") ($(short "$(cat "$MESA_DIST/COMMIT")"))"
     echo "- DXMT: $(github_name "$DXMT_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref") ($(short "$(cat "$DXMT_DIST/COMMIT")"))"

@@ -1,31 +1,38 @@
 name: Release
 
-# Builds the bundle on a hosted runner, from the Wine branch in
-# pins/wine-src.ref and the pins of this commit, and signs its loader with
-# the identity in the secrets of the job's environment. An arm64-* tag
-# attaches the bundle and its symbols to a draft release of that tag. A
-# push to main that changes a file the build reads, the schedule, a manual
-# run and a pull request to main build and bundle the same, check what
-# packaging needs without packing, and publish nothing.
+# Builds the bundle and Mach9.app around it on a hosted runner, from the
+# Wine branch in pins/wine-src.ref and the pins of this commit, and signs
+# the loader and the app with the identity in the secrets of the job's
+# environment. A tag vX.Y.Z or vX.Y.Z-rc.N also notarizes the app, builds
+# its DMG, appcast and deltas, and attaches them, the bundle and its
+# symbols to a draft release of that tag (docs/maintenance.md, releases).
+# A push to main that changes a file the build reads, the schedule, a
+# manual run and a pull request to main build, bundle, assemble and sign
+# the same, pack the app's DMG, check what packaging needs without packing,
+# and publish nothing.
 #
-# The logic lives in bin/ and bin/ci/, which also run on a Mac. The caches
-# a run on a tag writes serve only later runs on that tag. A run on main
-# saves every cache it builds, which every later run can read, so a release
-# finds the components the newest build of main built and its ccache
-# directory. A run on a pull request restores the caches of main and saves
-# none, so what a change that is not merged built never reaches another
-# run. GitHub evicts a cache that no run used for a week; the scheduled
-# runs, twice a week, use the current ones on main, so a release after a
-# quiet week still finds them.
+# The logic lives in bin/, bin/ci/ and launcher/scripts/, which also run on
+# a Mac. The caches a run on a tag writes serve only later runs on that
+# tag. A run on main saves every cache it builds, which every later run can
+# read, so a release finds the components the newest build of main built
+# and its ccache directory. A run on a pull request restores the caches of
+# main and saves none, so what a change that is not merged built never
+# reaches another run. GitHub evicts a cache that no run used for a week;
+# the scheduled runs, twice a week, use the current ones on main, so a
+# release after a quiet week still finds them.
 
 on:
   push:
-    tags: ['arm64-*']
+    # A v and a digit, so a stray tag such as vfoo starts no run and cannot
+    # take the place of a waiting release in the concurrency group below.
+    tags: ['v[0-9]*']
     branches: [main]
-    # What the build and bundle steps read. A change to the launcher alone
-    # runs launcher.yml instead. GitHub applies path filters to branch
-    # pushes only, so every arm64-* tag still runs.
+    # What the build, bundle and app steps read. launcher.yml checks the
+    # launcher crates in minutes; this run assembles the app. GitHub applies
+    # path filters to branch pushes only, so every v[0-9]* tag still runs.
     paths:
+      - 'launcher/**'
+      - 'release-notes/**'
       - 'bin/**'
       - 'compatdb/**'
       - '.cargo/**'
@@ -57,10 +64,13 @@ permissions:
 # A push to main cancels the build of main that is still running, which a
 # newer commit makes pointless, and a push to a pull request cancels the run
 # of that pull request the same way; its ref is refs/pull/<number>/merge. A
-# release is never cancelled, and a run on a tag shares its group with
-# nothing but runs on that tag.
+# release is never cancelled. All runs on v tags share one group, so a
+# second tag waits for the first run and then meets its draft instead of
+# building an appcast on the same latest release. GitHub keeps only one
+# waiting run per group: a third tag pushed meanwhile cancels the waiting
+# one, which then has to be re-run.
 concurrency:
-  group: release-${{ github.ref }}
+  group: ${{ startsWith(github.ref, 'refs/tags/v') && 'release-tags' || format('release-{0}', github.ref) }}
   cancel-in-progress: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request' }}
 
 # bash -eo pipefail, so a failure inside a pipe fails the step.
@@ -76,11 +86,53 @@ jobs:
     # run on a pull request uses pull-request, which holds a copy of them
     # and waits for the owner to approve each run. Every other run uses
     # release, whose deployment policy refuses the ref of a pull request, so
-    # a pull request that changes this line gets no secrets from it. A pull
-    # request from a fork gets no secrets at all, and its run stops at the
-    # first step.
+    # a pull request that changes this line gets no secrets from it. Only
+    # release holds the secrets of a tag run's own steps, NOTARY_API_KEY,
+    # NOTARY_KEY_ID, NOTARY_ISSUER and SPARKLE_ED_KEY. A pull request from a
+    # fork gets no secrets at all, and its run stops at the first step.
     environment: ${{ github.event_name == 'pull_request' && 'pull-request' || 'release' }}
     steps:
+      # A tag is a release version, as check_version in
+      # launcher/scripts/lib.sh has it: vX.Y.Z, or vX.Y.Z-rc.N for a release
+      # candidate of X.Y.Z, whose draft is a prerelease. Any other tag stops
+      # here. Every later step takes a run on a tag for a release.
+      - name: Check the tag
+        id: tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'
+          if ! [[ "$GITHUB_REF_NAME" =~ $re ]]; then
+            echo "The tag $GITHUB_REF_NAME is neither vX.Y.Z nor vX.Y.Z-rc.N."
+            exit 1
+          fi
+          version=${GITHUB_REF_NAME#v}
+          {
+            echo "version=$version"
+            echo "base=${version%-rc.*}"
+            if [[ "$version" == *-rc.* ]]; then
+              echo "prerelease=true"
+            else
+              echo "prerelease=false"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      # The appcast of a release is built on the one of the latest published
+      # release, so drafts have to be published in the order they were made.
+      # A draft of an earlier run of this tag has to be deleted before the
+      # run is repeated, as gh release create would refuse it at the end.
+      - name: Refuse while a v* draft exists
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          drafts=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[] | select(.draft and (.tag_name | startswith("v"))) | .tag_name')
+          if [ -n "$drafts" ]; then
+            echo "These v* releases are drafts; publish or delete them first:"
+            echo "$drafts"
+            exit 1
+          fi
+
       # A pull request from a fork gets no secrets, so the bundle step could
       # not sign the loader. Stop before the build instead of after it.
       - name: Refuse a pull request from a fork
@@ -99,6 +151,24 @@ jobs:
         with:
           path: scripts
           persist-credentials: false
+
+      # The checks of a release that need nothing built (appcast.sh, header):
+      # the version against the workspace version and the appcast of the
+      # latest release, the release notes, and SPARKLE_ED_KEY against the key
+      # the app ships with. The notarization secrets are only used after the
+      # build, so their presence is checked here, without their values.
+      - name: Check the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          SPARKLE_ED_KEY: ${{ secrets.SPARKLE_ED_KEY }}
+          HAVE_NOTARY: ${{ secrets.NOTARY_API_KEY != '' && secrets.NOTARY_KEY_ID != '' && secrets.NOTARY_ISSUER != '' }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          if [ "$HAVE_NOTARY" != true ]; then
+            echo "NOTARY_API_KEY, NOTARY_KEY_ID and NOTARY_ISSUER must all be set in the environment release."
+            exit 1
+          fi
+          scripts/launcher/scripts/appcast.sh --preflight "$VERSION"
 
       # An empty ref would make the checkout below take the default branch.
       - name: Read the Wine source ref
@@ -401,15 +471,18 @@ jobs:
           path: build/dxmt/llvm15
           key: ${{ steps.keys.outputs.llvm15 }}
 
-      # The secrets reach this step only.
+      # The secrets reach this step only. The keychain it sets up signs the
+      # loader in the bundle step and the app further down.
       - name: Import the signing identity
         env:
           MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
           MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
         run: scripts/bin/ci/keychain.sh setup
 
+      # Also writes the runtime-only bundle the app ships to runtime/wine in
+      # RUNNER_TEMP, copied from the full one after its smoke test.
       - name: Bundle
-        run: scripts/bin/bundle-wine.sh --strict-floor --symbols --yes
+        run: scripts/bin/bundle-wine.sh --strict-floor --symbols --yes --runtime-dest "$RUNNER_TEMP/runtime"
 
       # Only a release packs the trees, naming the tarballs after its tag.
       # Any other run passes --notes-only: package.sh runs every check it
@@ -424,7 +497,7 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.number }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/arm64-* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             scripts/bin/ci/package.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"
           elif [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             scripts/bin/ci/package.sh --notes-only "pr$PR_NUMBER-${GITHUB_SHA:0:11}" "$RUNNER_TEMP/release"
@@ -432,25 +505,50 @@ jobs:
             scripts/bin/ci/package.sh --notes-only "main-${GITHUB_SHA:0:11}" "$RUNNER_TEMP/release"
           fi
 
-      - name: Create draft release
-        if: startsWith(github.ref, 'refs/tags/arm64-')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft \
-            --verify-tag \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file "$RUNNER_TEMP/release/notes.md" \
-            "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64.tar.xz" \
-            "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64-symbols.tar.xz"
+      # The pinned Sparkle release the launcher links and the app ships, and
+      # the tools that build the appcast (fetch-sparkle.sh), in the place
+      # launcher/Makefile looks for them. Saved below once the app is
+      # assembled.
+      - name: Restore Sparkle
+        id: sparkle
+        uses: actions/cache/restore@v6
+        with:
+          path: scripts/target/launcher/sparkle
+          key: sparkle-${{ hashFiles('scripts/launcher/scripts/fetch-sparkle.sh') }}
 
-      # The pinned downloads and the cargo registry, which the bundle step
-      # completes, saved when they were not restored under their key. As
-      # actions/cache does in its post step, they are saved at the end of the
-      # job and only when every step before succeeded. A run on a pull
-      # request saves neither.
+      # Mach9.app around the runtime-only bundle, in target/launcher/stage of
+      # the checkout, unsigned (launcher/Makefile). A run on a tag stamps the
+      # tag's version into it, any other run the workspace version.
+      - name: Assemble Mach9.app
+        id: app
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          if [ -n "$TAG_VERSION" ]; then
+            version=$TAG_VERSION
+            make -C scripts/launcher app WINE_RUNTIME="$RUNNER_TEMP/runtime/wine" VERSION="$version"
+          else
+            version=$(scripts/launcher/scripts/version.sh)
+            make -C scripts/launcher app WINE_RUNTIME="$RUNNER_TEMP/runtime/wine"
+          fi
+          name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' scripts/launcher/app/Info.plist)
+          app="$GITHUB_WORKSPACE/scripts/target/launcher/stage/$name.app"
+          if [ ! -d "$app" ]; then
+            echo "make app left no $app"
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "name=$name"
+            echo "path=$app"
+          } >> "$GITHUB_OUTPUT"
+
+      # The pinned downloads, the cargo registry and Sparkle, which the
+      # bundle step and the app's assembly complete, saved when they were not
+      # restored under their key. As actions/cache does in its post step,
+      # only when every step before succeeded, but before a tag run frees
+      # disk space and publishes, so a failed notarization does not lose
+      # them. A run on a pull request saves none.
       - name: Save the pinned downloads
         if: github.event_name != 'pull_request' && steps.redist.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -466,6 +564,121 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: ${{ steps.cargo.outputs.cache-primary-key }}
+
+      - name: Save Sparkle
+        if: github.event_name != 'pull_request' && steps.sparkle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: scripts/target/launcher/sparkle
+          key: sparkle-${{ hashFiles('scripts/launcher/scripts/fetch-sparkle.sh') }}
+
+      # What a release does with the app short of notarizing it: sign it with
+      # the Developer ID identity of the keychain above, then pack its DMG on
+      # the runner, Finder styling included. A change that breaks either
+      # fails on main or in its pull request before a tag needs it.
+      - name: Sign Mach9.app
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        env:
+          APP: ${{ steps.app.outputs.path }}
+        run: scripts/launcher/scripts/codesign-bundle.sh sign "$APP"
+
+      - name: Pack the DMG
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        env:
+          APP: ${{ steps.app.outputs.path }}
+          NAME: ${{ steps.app.outputs.name }}
+          VERSION: ${{ steps.app.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/app"
+          scripts/launcher/scripts/make-dmg.sh --out "$RUNNER_TEMP/app/$NAME-$VERSION.dmg" "$APP"
+
+      # appcast.sh downloads the DMG of every release the appcast keeps, and
+      # generate_appcast unpacks each to make the deltas. Nothing reads the
+      # Wine source, the build trees, the staged dists, the bundles, whose
+      # tarballs are packed, the runtime-only copy, which the app holds, the
+      # ccache directory or the test build of the crates any more, and their
+      # caches are saved.
+      - name: Free disk space
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          df -h "$GITHUB_WORKSPACE"
+          rm -rf src build dist scripts/target/debug "$RUNNER_TEMP/runtime" "$CCACHE_DIR"
+          df -h "$GITHUB_WORKSPACE"
+
+      # notarytool reads the App Store Connect API key from a file. Only this
+      # step and the next get the notarization secrets; the file is deleted
+      # at the end of the job.
+      - name: Write the notarization key
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+        run: |
+          umask 077
+          printf '%s' "$NOTARY_API_KEY" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/notary-key.p8"
+          if [ ! -s "$RUNNER_TEMP/notary-key.p8" ]; then
+            echo "NOTARY_API_KEY is not set in the environment release."
+            exit 1
+          fi
+
+      # Signs, notarizes and staples the app, packs its DMG, and builds the
+      # appcast and the deltas into this release on the appcast of the latest
+      # one (make-release.sh, appcast.sh). The download link asks
+      # releases/latest/download for the DMG under the app's name alone, so
+      # it goes up twice, the second time through a hard link.
+      - name: Release Mach9.app
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          APP: ${{ steps.app.outputs.path }}
+          NAME: ${{ steps.app.outputs.name }}
+          VERSION: ${{ steps.app.outputs.version }}
+          SPARKLE_ED_KEY: ${{ secrets.SPARKLE_ED_KEY }}
+          NOTARY_KEY_PATH: ${{ runner.temp }}/notary-key.p8
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=$RUNNER_TEMP/app-release
+          scripts/launcher/scripts/make-release.sh --version "$VERSION" --out "$out" "$APP"
+          ln "$out/$NAME-$VERSION.dmg" "$out/$NAME.dmg"
+
+      # The body is the release notes the app shows, the file of X.Y.Z for a
+      # release candidate of it too, then the sources the bundle was built
+      # from (package.sh). Both are one paragraph per line, which GitHub
+      # renders as they are.
+      - name: Create draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.app.outputs.name }}
+          VERSION: ${{ steps.app.outputs.version }}
+          BASE: ${{ steps.tag.outputs.base }}
+          PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+        run: |
+          app=$RUNNER_TEMP/app-release
+          body=$RUNNER_TEMP/release-body.md
+          {
+            cat "scripts/release-notes/$BASE.md"
+            printf '\n\n## Components\n\n'
+            cat "$RUNNER_TEMP/release/notes.md"
+          } > "$body"
+          flags=(--draft --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$body")
+          if [ "$PRERELEASE" = true ]; then
+            flags+=(--prerelease)
+          fi
+          shopt -s nullglob
+          deltas=("$app"/*.delta)
+          echo "Deltas: ${#deltas[@]}"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
+            "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64.tar.xz" \
+            "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64-symbols.tar.xz" \
+            "$app/$NAME-$VERSION.dmg" \
+            "$app/$NAME.dmg" \
+            "${deltas[@]}" \
+            "$app/appcast.xml"
+
+      - name: Remove the notarization key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/notary-key.p8"
 
       - name: Remove the signing identity
         if: always()

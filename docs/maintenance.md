@@ -104,7 +104,7 @@ built before, which runs under Rosetta.
 
 | Trigger | What the run does |
 |---------|-------------------|
-| `v*` tag | Builds the engine and the app, notarizes the app, builds its appcast and attaches everything to a draft release; never cancelled |
+| `v[0-9]*` tag | Builds the engine and the app, notarizes the app, builds its appcast and attaches everything to a draft release; never cancelled |
 | Push to `main` that changes a file the build or the app reads, the schedule, by hand | Builds and bundles, assembles and signs the app and its DMG, runs `package.sh --notes-only`, saves its caches, publishes nothing |
 | Pull request to `main` (no `paths` filter, since its check is required) | As on `main`, in the environment `pull-request` after the owner approves it ([signing identity](#signing-identity)); saves no cache |
 
@@ -126,9 +126,9 @@ built before, which runs under Rosetta.
   not proxied) and the domain set as the custom domain in the
   repository's Pages settings.
 - [`launcher.yml`](../.github/workflows/launcher.yml) checks the
-  formatting and lints and tests the launcher crates on macOS, so a change
-  to the launcher alone does not start a Wine build; its header says when
-  it runs.
+  formatting and lints and tests the launcher crates on macOS in minutes;
+  its header says when it runs. A change to the launcher on `main` also
+  runs `release.yml`, which assembles the app.
 
 ### Cutting a release
 
@@ -167,8 +167,11 @@ into this release ([`make-release.sh`](../launcher/scripts/make-release.sh),
   pointing at the DMG in its own release.
 
 The appcast is built on the one of the latest published release, so
-drafts have to be published in the order they were made, and a draft that
-is not published blocks the next tag run until it is deleted.
+drafts have to be published in the order they were made, and a draft
+blocks the next tag run until it is published or deleted. Tag runs wait
+for each other, so a second tag pushed during a run meets its draft. To
+re-run a failed tag run that already created its draft, delete that draft
+first.
 
 - `appcast.sh` downloads the DMG of every release a delta is made from,
   and `generate_appcast` unpacks each of them and diffs it against the new
@@ -281,6 +284,7 @@ the check.
 | DXMT's LLVM | The LLVM pin, the floor, the Xcode version and the runner image | Runs on tags and `main` |
 | Pinned downloads | The `redist.env` lines that `pins-key.sh` hashes for it in `release.yml` | Runs on tags and `main` |
 | cargo's registry | `Cargo.lock` | Runs on tags and `main` |
+| Sparkle | `fetch-sparkle.sh`, which pins the release | Runs on tags and `main` |
 | Xcode choice | Runner image, its version, and the hashes of `host.sh` and `profile.sh`; `brew-cache.yml` shares it | Runs on tags and `main` |
 
 A run on a tag writes caches only later runs on that tag can read. A run
@@ -308,7 +312,8 @@ and writes none.
 [provisioning profile](internals.md#loader-app)'s team, from the secrets of
 the GitHub environment `release`, or of `pull-request` on a pull request.
 `bin/ci/keychain.sh` imports it into a keychain of its own for the bundle
-step and deletes that keychain at the end of the job. It has to be the
+step and the app's signature, and deletes that keychain at the end of the
+job. It has to be the
 Developer ID Application certificate of the team that signed the releases
 in the field ([updates in the field](#updates-in-the-field)).
 
