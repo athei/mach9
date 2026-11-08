@@ -527,11 +527,13 @@ from one upstream `wine-X.Y` tag to the next. To move FEX to a newer tag:
 
 - Rebase our commits onto the new tag with `git rerere` enabled, as for
   Mesa, and drop the ones upstream has merged.
-- `FormatVersion` in `FEXCore/Source/Interface/Core/DiskCache.h` has to
-  stay above upstream's after a rebase, and `BinaryCacheVersion` in the
-  InstructionCountCI JSON files follows it. Several of our commits raise
-  it, so each rebase conflicts there. The message of our "DiskCache: Bump
-  version" commit says how far to raise it.
+- Only our "DiskCache: Bump version" commit raises `FormatVersion` in
+  `FEXCore/Source/Interface/Core/DiskCache.h` and `BinaryCacheVersion` in
+  the InstructionCountCI JSON files; all other commits leave them at
+  upstream's value. Keep that commit last in the series and set the
+  version above both the new upstream value and our previous one, as its
+  message describes. New commits that change code generation need no
+  bump of their own.
 - FEX depends on these parts of Wine's layout and interfaces. Recheck
   them when either side changes:
   - the loader's low reserve and Wine's top-down area;
