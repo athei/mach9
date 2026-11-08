@@ -59,5 +59,11 @@
 	<string>I3lqkTv6m+kA6p2XlMNfNItk32X19llHw9qFJc+3DX8=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<!-- No automatic downloads and installs, and no checkbox in the update
+	     window to turn them on: a background check before a game launch
+	     can download within its timeout and install on quit while the
+	     game runs from this bundle. -->
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
 </dict>
 </plist>
