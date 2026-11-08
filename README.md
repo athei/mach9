@@ -4,8 +4,10 @@
 
 <h1 align="center">Mach9</h1>
 
-A relocatable, signed Wine for Apple Silicon Macs, focused on Direct3D 9
-games and made to be embedded in a launcher. The launcher configures it
+A relocatable, signed Wine for games on Apple silicon Macs, made to be
+embedded in a launcher. 32-bit Direct3D 9 games run better on it than on
+other solutions because of [mtld3d](docs/internals.md#mtld3d), its
+Direct3D 9 implementation on Metal. The launcher configures the engine
 with rules that match processes, passed in the environment variable
 `WINE_COMPATDB`, in a file `WINE_COMPATDB_FILE` names, or both, so each
 game gets the Direct3D implementation
@@ -16,10 +18,8 @@ generates them in code.
 ## Mach9.app
 
 The easy way to play games on Mach9 today, until other launchers embed it.
-It is made for older games and runs them with mtld3d. Everything else in
-the engine is included, so newer D3D10, D3D11 and D3D12 games run too,
-but those already run well under CrossOver, which is why older games are
-the focus.
+It runs D3D9 games with mtld3d, and everything else in the engine is
+included, so D3D10, D3D11 and D3D12 games run as well.
 
 **[Download Mach9.app](https://github.com/athei/mach9/releases/latest/download/Mach9.dmg)**
 
@@ -49,12 +49,10 @@ mtld3d; the [format][format] and the [recipes][recipes] show the rest.
 
 - Wine is built for arm64 and runs without Rosetta.
   [FEX](docs/internals.md#fex) runs the x86 code of Windows programs.
-- It is aimed at old games. D3D9 runs on
-  [mtld3d](docs/internals.md#mtld3d), a D3D9 on Metal, and x87 code runs
-  fast because FEX's reduced x87 precision is on by default
+- D3D9 runs on [mtld3d](docs/internals.md#mtld3d), a D3D9 on Metal, and
+  x87 code runs fast because FEX's reduced x87 precision is on by default
   ([`builtin::fex_reduced_x87_precision`][x87]).
-- Modern games run too: D3D10 and D3D11 on
-  [DXMT](docs/internals.md#dxmt), D3D12 on
+- D3D10 and D3D11 run on [DXMT](docs/internals.md#dxmt), D3D12 on
   [vkd3d-proton](docs/internals.md#vkd3d-proton). x64 programs run as
   ARM64EC: Wine and the graphics stack are ARM64X and run natively, and
   only the game's own code is emulated. Unlike upstream FEX, our FEX runs

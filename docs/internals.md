@@ -31,7 +31,7 @@ script's header says what it builds and stages.
 
 ## Requirements
 
-- An Apple Silicon Mac and a macOS SDK at least as new as `MACOS_FLOOR`.
+- An Apple silicon Mac and a macOS SDK at least as new as `MACOS_FLOOR`.
 - Homebrew at `DEPS_PREFIX` with the formulae in
   [`brew-formulae`](../pins/brew-formulae), which a CI build installs.
   Only a host on the floor's major macOS version gets bottles that meet

@@ -1,9 +1,10 @@
 # Mach9.app
 
-Mach9.app runs Windows games on Mach9 ([README](../README.md)). It is made
-for older games; newer ones run too, but they already run well under
-CrossOver. It needs a Mac with Apple silicon and a recent macOS; macOS
-tells you when yours is too old to open it.
+Mach9.app runs Windows games on Mach9 ([README](../README.md)). 32-bit
+Direct3D 9 games run better on it than on other solutions because of
+[mtld3d](internals.md#mtld3d), its Direct3D 9 implementation on Metal. It
+needs a Mac with Apple silicon and a recent macOS; macOS tells you when
+yours is too old to open it.
 
 ## Install
 
