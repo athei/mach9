@@ -318,7 +318,7 @@ jobs:
 
       # The tests and lints of every crate of the workspace. compatdb.so runs
       # from a Mach-O initializer inside Wine's ntdll and the launcher crates
-      # are macOS only, so their tests run here and not in docs.yml; the
+      # are macOS only, so their tests run here and not in compatdb.yml; the
       # launcher builds without Sparkle, since SPARKLE_DIR is unset. From
       # the repository root, as bundle-wine.sh builds compatdb.so, so cargo
       # reads .cargo/config.toml. Before the build, so a failure costs

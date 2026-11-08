@@ -81,11 +81,16 @@ creates a new one. Games installed outside it keep working.
 Mach9 checks for updates from time to time when it starts. Check for
 Updates… in the Dock menu checks right away.
 
-Mach9 0.1.0 and 0.2.0-rc.1 do not update themselves and always say they
-are up to date. To update one of them, download
+Mach9 0.1.0, 0.2.0-rc.1 and 0.2.0-rc.2 do not update themselves, and
+Check for Updates… in them shows an error. To update one of them,
+download
 [Mach9.dmg](https://github.com/athei/mach9/releases/latest/download/Mach9.dmg)
 and replace Mach9 in Applications with the new one. Your games and
 settings stay.
+
+The comments in config files an earlier Mach9 wrote link to
+`docs.mach9.app`, which no longer exists. The same pages are on
+`mach9.app`: replace the host in the link.
 
 ## When something goes wrong
 

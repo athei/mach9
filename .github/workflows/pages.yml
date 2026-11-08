@@ -1,0 +1,173 @@
+name: Pages
+
+# Deploys the repository's GitHub Pages site, served at
+# https://mach9.app (the custom domain in the repository's Pages
+# settings). It holds:
+#   - appcast.xml, the appcast of the latest release, which Mach9.app
+#     polls: its SUFeedURL in launcher/app/Info.plist. Sparkle follows no
+#     HTML or JavaScript redirect, so the site has to hold the file
+#     itself;
+#   - compatdb_core/, the rustdoc of compatdb-core from main, the spec of
+#     WINE_COMPATDB, which DOCS_URL in compatdb/core/src/lib.rs links
+#     into;
+#   - index.html, which sends a browser to the repository.
+#
+# The latest release is the one GitHub marks Latest, never a draft or a
+# prerelease. Publishing a release or a prerelease starts this workflow
+# on main by hand (workflow_dispatch), so the site is always built by
+# main's copy of this file from main's sources, never from a tag.
+# Publishing a full release sends both published and released, which
+# starts two runs on main; the second deploys the same site again.
+# Marking another release Latest by hand starts nothing: run this
+# workflow by hand then (docs/maintenance.md, updates in the field).
+#
+# Pages has to have "GitHub Actions" as its source in the repository
+# settings, or the deploy job fails. Without the custom domain the site
+# is served at https://athei.github.io/mach9/ instead, where no copy of
+# the app looks for it.
+
+on:
+  release:
+    types: [published, released]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'compatdb/core/**'
+      - '.cargo/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/pages.yml'
+
+permissions:
+  contents: read
+
+# One deployment at a time, and a newer run waits for a running one
+# instead of cancelling it halfway. A release run only starts a run on
+# main, so it takes a group of its own and never waits for a deployment.
+concurrency:
+  group: ${{ github.event_name == 'release' && format('pages-release-{0}', github.run_id) || 'pages' }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # A run on a release runs on the release's tag. GITHUB_TOKEN may start a
+  # workflow_dispatch run, so this hands the deployment to main.
+  dispatch:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Run this workflow on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref main --repo "$GITHUB_REPOSITORY"
+
+  build:
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      # A Latest release without appcast.xml fails here, and nothing is
+      # deployed.
+      - name: Download the appcast of the latest release
+        id: appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          echo "The latest release is $tag."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/appcast"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern appcast.xml --dir "$RUNNER_TEMP/appcast"
+
+      # Every copy of the app polls this file, so a file that is not an
+      # appcast, or one without the latest release, is never deployed.
+      # appcast.sh writes each release's version without the v of its tag
+      # as the item's sparkle:shortVersionString.
+      - name: Check the appcast
+        env:
+          TAG: ${{ steps.appcast.outputs.tag }}
+        run: |
+          python3 -I - "$RUNNER_TEMP/appcast/appcast.xml" "${TAG#v}" <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          SPARKLE = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+          path, latest = sys.argv[1], sys.argv[2]
+          try:
+              root = ET.parse(path).getroot()
+          except ET.ParseError as error:
+              sys.exit(f"appcast.xml is not well-formed XML: {error}")
+          if root.tag != "rss":
+              sys.exit(f"appcast.xml has the root element {root.tag}, not rss")
+          versions = []
+          shorts = []
+          for item in root.iter("item"):
+              version = item.findtext(SPARKLE + "version")
+              enclosure = item.find("enclosure")
+              if version is None and enclosure is not None:
+                  version = enclosure.get(SPARKLE + "version")
+              if version and version.strip():
+                  versions.append(version.strip())
+              short = item.findtext(SPARKLE + "shortVersionString")
+              if short:
+                  shorts.append(short.strip())
+          if not versions:
+              sys.exit("appcast.xml has no item with a sparkle:version")
+          print("Versions in appcast.xml:", " ".join(versions))
+          if latest not in shorts:
+              sys.exit(f"appcast.xml has no item for {latest}, the latest release")
+          EOF
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      # compatdb.yml checks the rustdoc with warnings as errors, so a
+      # warning does not keep a new appcast from being deployed here.
+      - name: Build the docs
+        run: cargo doc --locked -p compatdb-core --no-deps
+
+      - name: Assemble the site
+        run: |
+          cp -R target/doc "$RUNNER_TEMP/site"
+          cp "$RUNNER_TEMP/appcast/appcast.xml" "$RUNNER_TEMP/site/"
+          printf '%s\n' '<!doctype html>' \
+            '<meta http-equiv="refresh" content="0; url=https://github.com/athei/mach9">' \
+            '<a href="https://github.com/athei/mach9">athei/mach9 on GitHub</a>' \
+            > "$RUNNER_TEMP/site/index.html"
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    needs: build
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

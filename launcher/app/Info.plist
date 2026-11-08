@@ -48,15 +48,15 @@
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 	<!-- Sparkle. Every copy polls the SUFeedURL it shipped with for good,
-	     so the URL is on a host we control: it is the stable name, and
-	     where its forward points can change. 0.1.0 and 0.2.0-rc.1 shipped
-	     with another host, see "Updates in the field" in
-	     docs/maintenance.md.
+	     so the URL is on a host we control: mach9.app, the repository's
+	     GitHub Pages site, which serves the appcast of the latest release.
+	     0.1.0 to 0.2.0-rc.2 shipped with hosts that no longer exist; see
+	     "Updates in the field" in docs/maintenance.md.
 	     SUPublicEDKey is the public half of Sparkle's EdDSA signing key;
 	     the private half is kept outside the repository. PlistBuddy strips
 	     these comments, so edit this file by hand. -->
 	<key>SUFeedURL</key>
-	<string>https://sparkle.mach9.app/appcast.xml</string>
+	<string>https://mach9.app/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>I3lqkTv6m+kA6p2XlMNfNItk32X19llHw9qFJc+3DX8=</string>
 	<key>SUEnableAutomaticChecks</key>

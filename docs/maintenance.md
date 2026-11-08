@@ -117,14 +117,14 @@ built before, which runs under Rosetta.
 - A release's notes are its `release-notes/X.Y.Z.md`, then one bullet per
   source it was built from (`package.sh`). Add what else the release page
   should say by hand, as short bullets, before publishing the draft.
-- [`docs.yml`](../.github/workflows/docs.yml) publishes the rustdoc of
-  `compatdb-core` to [GitHub Pages](https://docs.mach9.app), whose
-  root redirects to the crate's page; its header says when it runs and
-  what Pages needs.
-- The site uses the custom domain `docs.mach9.app`. It needs a CNAME
-  record `docs` -> `athei.github.io` in the DNS of `mach9.app` (DNS only,
-  not proxied) and the domain set as the custom domain in the
-  repository's Pages settings.
+- [`pages.yml`](../.github/workflows/pages.yml) deploys the GitHub Pages
+  site at `mach9.app` ([updates in the field](#updates-in-the-field)),
+  which also serves the [spec](https://mach9.app/compatdb_core/). Its
+  header says what the site holds and when it runs.
+- [`compatdb.yml`](../.github/workflows/compatdb.yml) checks the
+  formatting of the compatdb crates and tests, lints and builds the
+  rustdoc of `compatdb-core` on Linux in minutes; its header says when it
+  runs.
 - [`launcher.yml`](../.github/workflows/launcher.yml) checks the
   formatting and lints and tests the launcher crates on macOS in minutes;
   its header says when it runs. A change to the launcher on `main` also
@@ -139,12 +139,14 @@ built before, which runs under Rosetta.
 2. Optionally tag a [release candidate](#release-candidates) first.
 3. Push the tag `vX.Y.Z`.
 4. Check the draft, add to its notes, and publish it with "Set as the
-   latest release" checked. Only then do copies of 0.2.0 and later and
-   the download link see it ([updates in the field](#updates-in-the-field)).
+   latest release" checked. Publishing runs `pages.yml`, and only then
+   do the copies in the field and the download link see it
+   ([updates in the field](#updates-in-the-field)).
 
 Only a `v*` release that carries `appcast.xml` and `Mach9.dmg` may be
-marked Latest. Any other one makes every copy of 0.2.0 and later and the
-download link get a 404, and the next tag run's preflight fails.
+marked Latest. With any other one, the download link gets a 404,
+`pages.yml` fails and leaves the previous site deployed, and the next tag
+run's preflight fails.
 
 A tag run fails before the expensive build when:
 
@@ -190,11 +192,11 @@ first.
 ### Release candidates
 
 A tag `vX.Y.Z-rc.N` runs the same steps on the commit with the version
-bump to X.Y.Z and its notes. Its draft is a prerelease, which
-`releases/latest/download` never serves, so copies in the field never see
-it. Its `CFBundleVersion` sorts above every earlier release and below
-X.Y.Z (`bundle_version` in [`lib.sh`](../launcher/scripts/lib.sh)), so a
-copy updated to it is offered X.Y.Z later.
+bump to X.Y.Z and its notes. Its draft is a prerelease, which is never
+Latest, so `pages.yml` never deploys its appcast and copies in the field
+never see it. Its `CFBundleVersion` sorts above every earlier release and
+below X.Y.Z (`bundle_version` in [`lib.sh`](../launcher/scripts/lib.sh)),
+so a copy updated to it is offered X.Y.Z later.
 
 To check the update path before users see it, update a copy of the latest
 release to the candidate:
@@ -219,39 +221,42 @@ release to the candidate:
 
 ### Updates in the field
 
-Every copy polls the `SUFeedURL` it shipped with, for good, so each feed
-URL that ever shipped has to keep working. Each is on a host of
-`mach9.app` that is a web forward, the stable name in front of wherever
-the appcast is. The forwards are set up by hand in the DNS of `mach9.app`
-at Gandi LiveDNS; nothing in this repository deploys them. Gandi's
-forwarders drop the path, so each host serves one appcast.
+Every copy polls the `SUFeedURL` of its
+[`Info.plist`](../launcher/app/Info.plist), for good. Every release after
+0.2.0-rc.2 polls the appcast on `mach9.app`, this repository's GitHub
+Pages site, which [`pages.yml`](../.github/workflows/pages.yml) deploys;
+its header says what the site holds and when it runs.
 
-| Host | Polled by | Forwards to |
-|------|-----------|-------------|
-| `sparkle.mach9.app` | 0.2.0-rc.2 and later ([`Info.plist`](../launcher/app/Info.plist)) | `https://github.com/athei/mach9/releases/latest/download/appcast.xml` |
-| `updates.mach9.app` | 0.1.0, 0.2.0-rc.1 | `https://github.com/athei/mach9/releases/download/v0.1.0/appcast.xml` |
-
-- `sparkle.mach9.app` forwards both HTTPS and HTTP, to the HTTPS target.
-- 0.1.0 and 0.2.0-rc.1 cannot handle the update window: the app hangs as
-  soon as it shows one. So they are never offered an update: the `v0.1.0`
-  appcast lists only 0.1.0, and both always report that they are up to
-  date. Their users update by downloading the DMG
-  ([app docs](app.md#updates)).
-- Never point `updates.mach9.app` at `releases/latest`: both would be
-  offered an update, and the update window hangs them, also on the
+- The site needs the custom domain `mach9.app` and enforced HTTPS in the
+  repository's Pages settings, the domain verified on the GitHub account,
+  and the apex records of
+  [GitHub's apex domain setup](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site#configuring-an-apex-domain)
+  in the DNS of `mach9.app` at Gandi LiveDNS. No host of `mach9.app` is a
+  web forward.
+- Check what the copies see: `curl -sI https://mach9.app/appcast.xml`
+  for the status, `curl -s https://mach9.app/appcast.xml | head` for the
+  content. Pages' CDN caches the file for a few minutes (its
+  `cache-control` header), so a new deployment takes that long to show.
+- Marking another release Latest by hand starts no deployment. Redeploy
+  then, or whenever the site is wrong:
+  `gh workflow run pages.yml --repo athei/mach9`.
+- `sparkle.mach9.app`, `updates.mach9.app` and `docs.mach9.app` no longer
+  exist. 0.1.0 and 0.2.0-rc.1 poll `updates.mach9.app` and 0.2.0-rc.2
+  polls `sparkle.mach9.app`, so Check for Updates shows them an error and
+  their background checks fail silently. Their users update by
+  downloading the DMG ([app docs](app.md#updates)).
+- Never serve an appcast at `updates.mach9.app` again: 0.1.0 and
+  0.2.0-rc.1 hang as soon as they show the update window, also on the
   background check before each game launch.
-- Never replace or delete the `v0.1.0` release's `appcast.xml`:
-  `updates.mach9.app` serves it.
-- After a change to the DNS or a forward, check each forward's own
-  redirect: `curl -sI https://<host>/appcast.xml` must show
-  `location:` with the target in the table. Gandi's forwarders drop some
-  connections, so retry when it fails.
+- The config files an earlier Mach9 wrote link to the `compatdb-core`
+  docs on `docs.mach9.app`, which are dead; the same pages are on
+  `mach9.app`.
 - The download link points at GitHub directly,
   `https://github.com/athei/mach9/releases/latest/download/Mach9.dmg`.
   In the appcasts `appcast.sh` builds, from 0.2.0 on, every DMG and delta
   URL points at a release download on GitHub. The `v0.1.0` appcast's DMG
-  URL is on `updates.mach9.app`, which is never downloaded from, since
-  the copies that poll it are never offered an update.
+  URL is on `updates.mach9.app`; no copy downloads it, since every copy
+  that polls `mach9.app` is newer than 0.1.0.
 - A copy installs an update only when it is signed with the EdDSA key
   whose public half is `SUPublicEDKey`, by the Developer ID team the copy
   was signed by, for the bundle id `app.mach9`, with a higher
@@ -446,9 +451,9 @@ setting; the bundle step checks the `force_nx` and `opengl` hooks
 - The loader checks for its entitlement and re-execs itself with 4K pages
   ([loader app](internals.md#loader-app)).
 
-[gcmouse]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.gcmouse
-[force_nx]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.force_nx
-[opengl]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.opengl
+[gcmouse]: https://mach9.app/compatdb_core/struct.Rule.html#method.gcmouse
+[force_nx]: https://mach9.app/compatdb_core/struct.Rule.html#method.force_nx
+[opengl]: https://mach9.app/compatdb_core/struct.Rule.html#method.opengl
 
 ## Upgrade checklist
 

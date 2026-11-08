@@ -1,0 +1,74 @@
+name: Compatdb
+
+# Checks the compatdb crates in minutes, without the Wine build of
+# release.yml.
+#
+# The tests, the lints and the rustdoc build run on Linux for compatdb-core
+# alone. It is pure Rust with no platform code, and its rustdoc is the spec
+# of WINE_COMPATDB, so a rustdoc warning such as a broken link fails the
+# run. compatdb is a macOS cdylib: release.yml tests and lints it on its
+# macOS runner before it builds, on every push to main that changes it and
+# on every pull request. rustfmt checks both compatdb crates here, since
+# formatting does not depend on the target. The launcher crates have their
+# own checks in launcher.yml.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'compatdb/**'
+      - '.cargo/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+      - 'rustfmt.toml'
+      - '.github/workflows/compatdb.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to main cancels the run it makes pointless.
+concurrency:
+  group: compatdb-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      MANIFEST: Cargo.toml
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # rustfmt.toml uses options that only nightly rustfmt applies.
+      - name: Install the toolchains
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup toolchain install nightly --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Check the formatting
+        run: cargo +nightly fmt --manifest-path "$MANIFEST" -p compatdb -p compatdb-core --check
+
+      # Before the tests: the tests of DOCS_URL's links check each anchor
+      # against the built pages when they exist (compatdb/core/src/docs).
+      - name: Build the docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --manifest-path "$MANIFEST" -p compatdb-core --no-deps
+
+      - name: Test
+        run: cargo test --locked --manifest-path "$MANIFEST" -p compatdb-core
+
+      - name: Clippy
+        run: cargo clippy --locked --manifest-path "$MANIFEST" -p compatdb-core --all-targets -- -D warnings
