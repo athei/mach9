@@ -23,16 +23,18 @@ use std::{
 
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message as _, define_class, msg_send,
-    rc::Retained,
+    rc::{Retained, autoreleasepool},
     runtime::{AnyObject, NSObject, NSObjectProtocol},
     sel,
 };
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
-    NSButton, NSControlStateValueOn, NSModalResponseOK, NSOpenPanel, NSScrollView, NSTextAlignment,
-    NSTextField, NSTextView, NSView, NSWindow, NSWindowStyleMask,
+    NSButton, NSControlStateValueOn, NSEventMask, NSModalResponseOK, NSOpenPanel, NSScrollView,
+    NSTextAlignment, NSTextField, NSTextView, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString, NSURL, ns_string};
+use objc2_foundation::{
+    NSArray, NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize, NSString, NSURL, ns_string,
+};
 
 /// Set once anything here has talked to `AppKit`.
 static USED_GUI: AtomicBool = AtomicBool::new(false);
@@ -477,6 +479,47 @@ pub fn activate_app() {
     if let Some(mtm) = MainThreadMarker::new() {
         activate(&NSApplication::sharedApplication(mtm));
     }
+}
+
+/// Whether any window of this process is on screen. Only call this after
+/// `check_in_as_app`.
+pub fn window_on_screen() -> bool {
+    MainThreadMarker::new().is_some_and(|mtm| {
+        NSApplication::sharedApplication(mtm)
+            .windows()
+            .iter()
+            .any(|window| window.isVisible())
+    })
+}
+
+/// Handle the window server's events for up to `timeout` seconds: one turn of
+/// what `-[NSApplication run]` does, for a window that runs no modal of its
+/// own. The run loop alone is not enough. It queues the events but never
+/// hands them to `AppKit`, so the window takes no clicks, the launch never
+/// completes in the Dock and the window server marks the app as not
+/// responding. Only call this after `check_in_as_app`.
+pub fn handle_events(timeout: f64) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    // SAFETY: an immutable constant of Foundation.
+    let mode = unsafe { NSDefaultRunLoopMode };
+    autoreleasepool(|_| {
+        // Wait for the first event, then take what else is queued without
+        // waiting, so a burst is handled in one turn.
+        let mut until = NSDate::dateWithTimeIntervalSinceNow(timeout);
+        while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+            NSEventMask::Any,
+            Some(&until),
+            mode,
+            true,
+        ) {
+            app.sendEvent(&event);
+            until = NSDate::distantPast();
+        }
+        app.updateWindows();
+    });
 }
 
 /// Call once the dialog's window is already on screen, never before.

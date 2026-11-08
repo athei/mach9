@@ -57,7 +57,7 @@ static SHOWING_UI: AtomicBool = AtomicBool::new(false);
 
 define_class!(
     // SAFETY: NSObject has no subclassing requirements, the class holds no
-    // ivars, and the one method is an optional protocol method Sparkle only
+    // ivars, and both methods are optional protocol methods Sparkle only
     // ever calls on the main thread.
     #[unsafe(super(NSObject))]
     #[name = "GameLauncherUpdaterDriverDelegate"]
@@ -82,6 +82,16 @@ define_class!(
             // everything outside its own window. Focus comes later, once there
             // is something on screen to focus; see the note in `ui`.
             ui::check_in_as_app();
+        }
+
+        #[unsafe(method(standardUserDriverWillShowModalAlert))]
+        fn will_show_modal_alert(&self) {
+            // The up-to-date and error alerts run their own modal, during
+            // which the pump never gets to take focus, so take it here, just
+            // before Sparkle runs the alert. A result that comes back within
+            // the pump's first turn would otherwise leave the alert without
+            // focus.
+            ui::activate_app();
         }
     }
 );
@@ -252,21 +262,33 @@ fn interval_elapsed(updater: &AnyObject) -> bool {
 
 /// Turn the run loop until Sparkle is done, or until a silent check has taken
 /// long enough that the game should just start.
+///
+/// A silent check only turns the run loop, which runs Sparkle's network and
+/// timer callbacks without touching `AppKit`. Once a window is coming, each
+/// turn also hands the window server's events to `AppKit`, as
+/// `-[NSApplication run]` would: Sparkle's update window is no modal, so
+/// nothing else would, and the app would stay unresponsive with the window
+/// never taking a click.
 fn pump_until_done(updater: &AnyObject) {
     let run_loop = NSRunLoop::mainRunLoop();
     let started = Instant::now();
     let mut activated = false;
 
     loop {
-        let until = NSDate::dateWithTimeIntervalSinceNow(PUMP_INTERVAL);
-        // SAFETY: main thread, default mode, a date in the near future.
-        unsafe { run_loop.runMode_beforeDate(NSDefaultRunLoopMode, &until) };
-
+        // Read before the turn: the delegate sets it during one, and the
+        // events are only handled once it has checked in.
         let showing = SHOWING_UI.load(Ordering::Relaxed);
-        if showing && !activated {
-            // The window is up now, so this is the moment focus lands.
-            ui::activate_app();
-            activated = true;
+        if showing {
+            ui::handle_events(PUMP_INTERVAL);
+            if !activated && ui::window_on_screen() {
+                // The window is up now, so this is the moment focus lands.
+                ui::activate_app();
+                activated = true;
+            }
+        } else {
+            let until = NSDate::dateWithTimeIntervalSinceNow(PUMP_INTERVAL);
+            // SAFETY: main thread, default mode, a date in the near future.
+            unsafe { run_loop.runMode_beforeDate(NSDefaultRunLoopMode, &until) };
         }
 
         // SAFETY: readonly property on SPUUpdater.
@@ -274,7 +296,9 @@ fn pump_until_done(updater: &AnyObject) {
         if !in_progress {
             return;
         }
-        if !showing && started.elapsed() > SILENT_TIMEOUT {
+        // Read again: a window that was committed to during this turn
+        // waits on the user, not on the clock.
+        if !SHOWING_UI.load(Ordering::Relaxed) && started.elapsed() > SILENT_TIMEOUT {
             info!(
                 "update check gave up after {SILENT_TIMEOUT:?}; a fresh instance will start the game"
             );
