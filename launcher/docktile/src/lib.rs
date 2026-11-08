@@ -1,10 +1,11 @@
 //! The Dock icon's context menu: the saved games with the selected one
-//! checked, "New Executable", "Open Config Folder" and "Check for Updates".
-//! Clicking a game writes the `game` file and starts the app; "New
+//! checked, "New Executable", "Open Config Folder", "Check for Updates" and
+//! "Website". Clicking a game writes the `game` file and starts the app; "New
 //! Executable" opens the app with `--add-game`, which shows the window that
 //! saves a new game or runs something once; "Open Config Folder" shows the
 //! support directory in Finder; "Check for Updates" opens the app with
-//! `--check-updates`.
+//! `--check-updates`; "Website" opens <https://mach9.app> in the default
+//! browser.
 //!
 //! This is an `NSDockTilePlugIn` bundle. The Dock loads it into its plug-in
 //! host while the app is pinned and not running, so the launcher itself never
@@ -52,6 +53,10 @@ use objc2_foundation::{NSArray, NSBundle, NSString, NSURL, ns_string};
 const RUN_EXECUTABLE_TAG: isize = 1_000_000;
 const OPEN_CONFIG_TAG: isize = 1_000_001;
 const CHECK_UPDATES_TAG: isize = 1_000_002;
+const OPEN_WEBSITE_TAG: isize = 1_000_003;
+
+/// What "Website" opens.
+const WEBSITE: &str = "https://mach9.app";
 
 thread_local! {
     /// The menu most recently handed to the Dock. The Dock shows a serialized
@@ -129,6 +134,17 @@ define_class!(
                 log(&format!("Finder did not open {}", host.support.display()));
             }
         }
+
+        #[unsafe(method(openWebsite:))]
+        fn open_website(&self, _sender: Option<&NSMenuItem>) {
+            let Some(url) = NSURL::URLWithString(&NSString::from_str(WEBSITE)) else {
+                log(&format!("{WEBSITE}: not a URL"));
+                return;
+            };
+            if !NSWorkspace::sharedWorkspace().openURL(&url) {
+                log(&format!("the default browser did not open {WEBSITE}"));
+            }
+        }
     }
 );
 
@@ -192,6 +208,7 @@ impl DockTile {
             sel!(checkUpdates:),
             CHECK_UPDATES_TAG,
         ));
+        menu.addItem(&self.item(mtm, "Website", sel!(openWebsite:), OPEN_WEBSITE_TAG));
         LAST_MENU.with(|last| *last.borrow_mut() = Some(menu.clone()));
         Some(menu)
     }

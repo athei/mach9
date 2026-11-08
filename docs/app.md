@@ -80,7 +80,9 @@ creates a new one. Games installed outside it keep working.
 ## Updates
 
 Mach9 checks for updates from time to time when it starts. Check for
-Updates… in the Dock menu checks right away.
+Updates… in the Dock menu checks right away. Website in the Dock menu
+opens [mach9.app](https://mach9.app), which links the latest download and
+its release notes.
 
 Mach9 0.1.0, 0.2.0-rc.1 and 0.2.0-rc.2 do not update themselves, and
 Check for Updates… in them shows an error. To update one of them,
