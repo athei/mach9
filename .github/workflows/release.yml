@@ -602,10 +602,9 @@ jobs:
         env:
           APP: ${{ steps.app.outputs.path }}
           NAME: ${{ steps.app.outputs.name }}
-          VERSION: ${{ steps.app.outputs.version }}
         run: |
           mkdir -p "$RUNNER_TEMP/app"
-          scripts/launcher/scripts/make-dmg.sh --out "$RUNNER_TEMP/app/$NAME-$VERSION.dmg" "$APP"
+          scripts/launcher/scripts/make-dmg.sh --out "$RUNNER_TEMP/app/$NAME.dmg" "$APP"
 
       # appcast.sh downloads the DMG of every release the appcast keeps, and
       # generate_appcast unpacks each to make the deltas. Nothing reads the
@@ -636,14 +635,13 @@ jobs:
 
       # Signs, notarizes and staples the app, packs its DMG, and builds the
       # appcast and the deltas into this release on the appcast of the latest
-      # one (make-release.sh, appcast.sh). The download link asks
-      # releases/latest/download for the DMG under the app's name alone, so
-      # it goes up twice, the second time through a hard link.
+      # one (make-release.sh, appcast.sh). The DMG has the app's name alone,
+      # which the download link asks releases/latest/download for and every
+      # appcast item points at in its own release.
       - name: Release Mach9.app
         if: startsWith(github.ref, 'refs/tags/')
         env:
           APP: ${{ steps.app.outputs.path }}
-          NAME: ${{ steps.app.outputs.name }}
           VERSION: ${{ steps.app.outputs.version }}
           SPARKLE_ED_KEY: ${{ secrets.SPARKLE_ED_KEY }}
           NOTARY_KEY_PATH: ${{ runner.temp }}/notary-key.p8
@@ -651,9 +649,7 @@ jobs:
           NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          out=$RUNNER_TEMP/app-release
-          scripts/launcher/scripts/make-release.sh --version "$VERSION" --out "$out" "$APP"
-          ln "$out/$NAME-$VERSION.dmg" "$out/$NAME.dmg"
+          scripts/launcher/scripts/make-release.sh --version "$VERSION" --out "$RUNNER_TEMP/app-release" "$APP"
 
       # The body is the release notes the app shows, the file of X.Y.Z for a
       # release candidate of it too, then the sources the bundle was built
@@ -664,7 +660,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NAME: ${{ steps.app.outputs.name }}
-          VERSION: ${{ steps.app.outputs.version }}
           BASE: ${{ steps.tag.outputs.base }}
           PRERELEASE: ${{ steps.tag.outputs.prerelease }}
         run: |
@@ -685,7 +680,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
             "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64.tar.xz" \
             "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64-symbols.tar.xz" \
-            "$app/$NAME-$VERSION.dmg" \
             "$app/$NAME.dmg" \
             "${deltas[@]}" \
             "$app/appcast.xml"

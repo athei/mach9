@@ -28,9 +28,11 @@
 #     the release notes, SPARKLE_ED_KEY and the current appcast.
 #
 # Then it signs the bundle (codesign-bundle.sh sign), notarizes and staples
-# it (codesign-bundle.sh notarize), packs <out>/Mach9-<version>.dmg around
-# the stapled bundle (make-dmg.sh) and adds the appcast and the deltas
-# (appcast.sh). <out> then holds exactly the files to attach to the release.
+# it (codesign-bundle.sh notarize), packs <out>/Mach9.dmg around the stapled
+# bundle (make-dmg.sh) and adds the appcast and the deltas (appcast.sh).
+# <out> then holds exactly the files to attach to the release. Every release
+# has its DMG under that one name, which the download link asks
+# releases/latest/download for.
 #
 # Options:
 #   --version <version>   The release version, X.Y.Z or X.Y.Z-rc.N.
@@ -184,7 +186,7 @@ fi
 # --- release -----------------------------------------------------------------------
 
 APP_NAME="$(plist_get CFBundleName "$APP_PLIST")"
-DMG="$OUT/$APP_NAME-$VERSION.dmg"
+DMG="$OUT/$APP_NAME.dmg"
 
 echo "==> Releasing $VERSION from $COMMIT"
 

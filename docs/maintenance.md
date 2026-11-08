@@ -163,11 +163,11 @@ into this release ([`make-release.sh`](../launcher/scripts/make-release.sh),
 [`appcast.sh`](../launcher/scripts/appcast.sh)). The draft holds:
 
 - the engine's tarballs, named after the tag;
-- `Mach9-X.Y.Z.dmg`, and the same file as `Mach9.dmg`, the name the
-  download link asks `releases/latest/download` for;
+- `Mach9.dmg`, the name the download link asks
+  `releases/latest/download` for;
 - the deltas from earlier releases into this one;
 - `appcast.xml`, which lists this release and the earlier ones, each
-  pointing at the DMG in its own release.
+  pointing at `Mach9.dmg` in its own release.
 
 The appcast is built on the one of the latest published release, so
 drafts have to be published in the order they were made, and a draft
@@ -255,9 +255,12 @@ its header says what the site holds and when it runs.
 - The download link points at GitHub directly,
   `https://github.com/athei/mach9/releases/latest/download/Mach9.dmg`.
   In the appcasts `appcast.sh` builds, from 0.2.0 on, every DMG and delta
-  URL points at a release download on GitHub. The `v0.1.0` appcast's DMG
-  URL is on `updates.mach9.app`; no copy downloads it, since every copy
-  that polls `mach9.app` is newer than 0.1.0.
+  URL points at a release download on GitHub. From the release after
+  0.2.0 on, every DMG URL points at the `Mach9.dmg` of its release.
+  0.1.0 and 0.2.0 also carry the same DMG as `Mach9-X.Y.Z.dmg`, which the
+  `v0.2.0` appcast points at. The `v0.1.0` appcast's DMG URL is on
+  `updates.mach9.app`; no copy downloads it, since every copy that polls
+  `mach9.app` is newer than 0.1.0.
 - A copy installs an update only when it is signed with the EdDSA key
   whose public half is `SUPublicEDKey`, by the Developer ID team the copy
   was signed by, for the bundle id `app.mach9`, with a higher

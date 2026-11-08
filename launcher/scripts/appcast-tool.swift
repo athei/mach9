@@ -13,20 +13,22 @@
 //   items <appcast>
 //       One line per item: sparkle:version, sparkle:shortVersionString and
 //       the file name of its enclosure, separated by tabs.
-//   notes <appcast> <dir>
+//   notes <appcast> <dir> <app>
 //       Writes the description of each item that has one to
-//       <dir>/<archive name>.<ext>, the archive name being the enclosure's
-//       file name without its extension and <ext> md, txt or html after the
-//       description's sparkle:format, so generate_appcast embeds it again
-//       as it was. Prints the files written.
+//       <dir>/<app>-<short version>.<ext>, <ext> being md, txt or html after
+//       the description's sparkle:format. That is the name appcast.sh gives
+//       the item's DMG in its work directory, so generate_appcast embeds the
+//       notes again as they were. Prints the files written.
 //   enclosures <appcast>
 //       One line per enclosure, deltas included: the item's short version,
 //       full or delta, the file name, the sparkle:edSignature and the URL,
 //       separated by tabs.
-//   rewrite <appcast> <prefix>
-//       Sets the URL of every enclosure, deltas included, to
+//   rewrite <appcast> <prefix> <app>
+//       Sets the URL of every item's own enclosure to
+//       <prefix>/v<short version>/<app>.dmg and that of every delta to
 //       <prefix>/v<short version>/<file name>: each archive is an asset of
-//       the release of the item it belongs to. Writes the file in place.
+//       the release of the item it belongs to, and every release has its DMG
+//       under the app's name alone. Writes the file in place.
 //
 // Sparkle's own elements and attributes are matched by namespace, so the
 // prefix a feed binds to it does not matter.
@@ -142,7 +144,7 @@ func listItems(_ path: String) {
     }
 }
 
-func writeNotes(_ path: String, _ dir: String) {
+func writeNotes(_ path: String, _ dir: String, _ app: String) {
     for item in items(load(path)) {
         guard let description = item.elements(forName: "description").first,
             let text = description.stringValue
@@ -155,7 +157,8 @@ func writeNotes(_ path: String, _ dir: String) {
         case "plain-text": ext = "txt"
         default: ext = "html"
         }
-        let archive = (fileName(enclosure(item)) as NSString).deletingPathExtension
+        // Not the enclosure's file name: every release's DMG has the same one.
+        let archive = "\(app)-\(shortVersion(item))"
         let out = URL(fileURLWithPath: dir).appendingPathComponent("\(archive).\(ext)")
         do {
             try Data(text.utf8).write(to: out)
@@ -177,16 +180,17 @@ func listEnclosures(_ path: String) {
     }
 }
 
-func rewrite(_ path: String, _ prefix: String) {
+func rewrite(_ path: String, _ prefix: String, _ app: String) {
     let doc = load(path)
     let base = prefix.hasSuffix("/") ? String(prefix.dropLast()) : prefix
     for item in items(doc) {
         let short = shortVersion(item)
-        for (_, element) in enclosures(item) {
+        for (kind, element) in enclosures(item) {
             guard let url = element.attribute(forName: "url") else {
                 fail("an enclosure of \(short) has no URL")
             }
-            url.stringValue = "\(base)/v\(short)/\(fileName(element))"
+            let file = kind == "full" ? "\(app).dmg" : fileName(element)
+            url.stringValue = "\(base)/v\(short)/\(file)"
         }
     }
     // The options generate_appcast writes with.
@@ -203,8 +207,11 @@ let args = Array(CommandLine.arguments.dropFirst())
 switch (args.first, args.count) {
 case ("public-key", 1): publicKey()
 case ("items", 2): listItems(args[1])
-case ("notes", 3): writeNotes(args[1], args[2])
+case ("notes", 4): writeNotes(args[1], args[2], args[3])
 case ("enclosures", 2): listEnclosures(args[1])
-case ("rewrite", 3): rewrite(args[1], args[2])
-default: fail("usage: public-key | items <appcast> | notes <appcast> <dir> | enclosures <appcast> | rewrite <appcast> <prefix>")
+case ("rewrite", 4): rewrite(args[1], args[2], args[3])
+default:
+    fail(
+        "usage: public-key | items <appcast> | notes <appcast> <dir> <app> | enclosures <appcast> | rewrite <appcast> <prefix> <app>"
+    )
 }

@@ -22,23 +22,34 @@
 #   - the current appcast lists this version or a higher one.
 #
 # Without it, <dir> holds the signed, notarized DMG of this release,
-# <app>-<version>.dmg, and nothing else. The script then
+# <app>.dmg, and nothing else. Every release has its DMG under that name,
+# which the download link asks releases/latest/download for. generate_appcast
+# takes an archive's file name for its URL and for the name of its notes
+# file, so it needs a distinct name for each: in the work directory, and only
+# there, the DMG of release <short version> is <app>-<short version>.dmg.
+# The script then
 #   1. runs every check of --preflight;
 #   2. fetches the current appcast and downloads the DMGs of the newest 20
 #      releases it lists, the sources of the deltas, each from its release,
-#      v<short version>, with `gh release download`. generate_appcast keeps
-#      the item of a release it has no DMG for as it is, and with 21
-#      releases kept the one left is dropped anyway;
+#      v<short version>, with `gh release download`, as
+#      <app>-<short version>.dmg. The asset is the file the item's URL
+#      names: <app>-<short version>.dmg in appcasts built before releases
+#      had a single DMG, <app>.dmg in later ones.
+#      generate_appcast keeps the item of a release it has no DMG for as it
+#      is, and with 21 releases kept the one left is dropped anyway;
 #   3. writes the release notes of each listed release, its <description>,
-#      next to its DMG, so they survive (generate_appcast drops the notes of
-#      a release it has no file for), and release-notes/X.Y.Z.md next to the
-#      new DMG;
+#      to <app>-<short version>.md, next to its DMG, so they survive
+#      (generate_appcast drops the notes of a release it has no file for),
+#      and links the new DMG in as <app>-<version>.dmg, with
+#      release-notes/X.Y.Z.md next to it;
 #   4. runs generate_appcast, which signs every archive, makes the deltas
 #      from up to 20 earlier releases and keeps 21 releases;
-#   5. points every enclosure and delta at its release on GitHub,
-#      .../releases/download/v<short version>/<file>; deltas belong to the
-#      release they update to. The EdDSA signatures cover the files, not the
-#      URLs, so this changes no signature;
+#   5. points every DMG at .../releases/download/v<short version>/<app>.dmg
+#      and every delta at .../releases/download/v<short version>/<file>, on
+#      GitHub; deltas belong to the release they update to. The EdDSA
+#      signatures cover the files, not the URLs, so this changes no
+#      signature. Releases up to 0.2.0 carry the same DMG under both names,
+#      so their items keep their signatures too;
 #   6. checks that every enclosure has a signature, which has to verify
 #      with the key where the file is here, and a URL of that form, and
 #      warns when the new release has fewer deltas than there are earlier
@@ -54,7 +65,7 @@
 #   APPCAST_URL       The current appcast, a URL or a file. Default: the one
 #                     of the latest release of APPCAST_REPO.
 #   APPCAST_ARCHIVES  A directory to take the earlier DMGs from instead of
-#                     downloading them.
+#                     downloading them, each as <app>-<short version>.dmg.
 #   APPCAST_REPO      The GitHub repository. Default: athei/mach9
 #   APPCAST_INFO_PLIST
 #                     The Info.plist with the SUPublicEDKey to check the key
@@ -185,7 +196,7 @@ for tool in generate_appcast sign_update; do
 done
 [[ -d "$OUT" ]] || die "not a directory: $OUT"
 OUT="$(cd "$OUT" && pwd)"
-DMG_NAME="$APP_NAME-$VERSION.dmg"
+DMG_NAME="$APP_NAME.dmg"
 [[ -f "$OUT/$DMG_NAME" ]] || die "no $DMG_NAME in $OUT"
 others="$(find "$OUT" -mindepth 1 -maxdepth 1 ! -name "$DMG_NAME" | head -5)"
 [[ -z "$others" ]] || die "$OUT holds more than $DMG_NAME:"$'\n'"$others"
@@ -209,29 +220,32 @@ newer_listed() {
 }
 
 # Only the delta sources: a DMG generate_appcast diffs. The item of an older
-# release has no use for its DMG and stays as it is.
+# release has no use for its DMG and stays as it is. Each is saved under the
+# work directory's name for it, whatever the asset is called.
 echo "==> Getting the DMGs of the newest $MAXIMUM_DELTAS listed releases"
 while IFS=$'\t' read -r version short file; do
   if (( $(newer_listed "$version") >= MAXIMUM_DELTAS )); then
-    echo "    $file not needed, its item stays as it is"
+    echo "    $file of $short not needed, its item stays as it is"
     continue
   fi
+  archive="$APP_NAME-$short.dmg"
   if [[ -n "${APPCAST_ARCHIVES:-}" ]]; then
-    cp "$APPCAST_ARCHIVES/$file" "$WORK/$file" || die "no $file in $APPCAST_ARCHIVES"
+    cp "$APPCAST_ARCHIVES/$archive" "$WORK/$archive" || die "no $archive in $APPCAST_ARCHIVES"
   else
-    gh release download "v$short" --repo "$APPCAST_REPO" --pattern "$file" --dir "$WORK" \
+    gh release download "v$short" --repo "$APPCAST_REPO" --pattern "$file" --output "$WORK/$archive" \
       || die "could not download $file from the release v$short of $APPCAST_REPO"
   fi
-  [[ -f "$WORK/$file" ]] || die "release v$short has no asset $file"
-  echo "    $file"
+  [[ -f "$WORK/$archive" ]] || die "release v$short has no asset $file"
+  echo "    $file of $short as $archive"
 done <<<"$LISTED"
 
 echo "==> Release notes"
-"$TOOL" notes "$WORK/appcast.xml" "$WORK" | sed 's/^/    kept: /'
+"$TOOL" notes "$WORK/appcast.xml" "$WORK" "$APP_NAME" | sed 's/^/    kept: /'
 cp "$NOTES" "$WORK/$APP_NAME-$VERSION.md"
 echo "    new:  ${NOTES#"$REPO_ROOT/"}"
 
-ln "$OUT/$DMG_NAME" "$WORK/$DMG_NAME" 2>/dev/null || cp "$OUT/$DMG_NAME" "$WORK/$DMG_NAME"
+ln "$OUT/$DMG_NAME" "$WORK/$APP_NAME-$VERSION.dmg" 2>/dev/null \
+  || cp "$OUT/$DMG_NAME" "$WORK/$APP_NAME-$VERSION.dmg"
 
 echo "==> Generating the appcast and deltas"
 printf '%s\n' "$SPARKLE_ED_KEY" | "$SPARKLE_BIN/generate_appcast" \
@@ -247,16 +261,22 @@ if grep -q 'sparkle-signatures' "$WORK/appcast.xml"; then
 fi
 
 echo "==> Pointing the enclosures at $DOWNLOAD_PREFIX"
-"$TOOL" rewrite "$WORK/appcast.xml" "$DOWNLOAD_PREFIX"
+"$TOOL" rewrite "$WORK/appcast.xml" "$DOWNLOAD_PREFIX" "$APP_NAME"
 
 echo "==> Checking the enclosures"
-NEW_FILES=()
+NEW_DELTAS=()
 new_items=0
 deltas=0
 while IFS=$'\t' read -r short kind file signature url; do
-  [[ "$url" == "$DOWNLOAD_PREFIX/v$short/$file" ]] || die "$file has the URL $url"
+  # Every DMG is <app>.dmg in its release and <app>-<short version>.dmg here.
+  local_file="$file"
+  if [[ "$kind" == full ]]; then
+    [[ "$file" == "$DMG_NAME" ]] || die "the DMG of $short has the URL $url"
+    local_file="$APP_NAME-$short.dmg"
+  fi
+  [[ "$url" == "$DOWNLOAD_PREFIX/v$short/$file" ]] || die "$local_file has the URL $url"
   [[ -n "$signature" ]] \
-    || die "$file in the appcast has no EdDSA signature; does the app in it carry SUPublicEDKey $want_key?"
+    || die "$local_file in the appcast has no EdDSA signature; does the app in it carry SUPublicEDKey $want_key?"
   # No delta of an earlier release is ever downloaded, so one here was made
   # in this run. generate_appcast makes deltas into the newest release of
   # each minimum macOS version; this one would be attached to nothing, and
@@ -264,20 +284,24 @@ while IFS=$'\t' read -r short kind file signature url; do
   if [[ "$kind" == delta && "$short" != "$VERSION" && -f "$WORK/$file" ]]; then
     die "generate_appcast made $file, a delta into the earlier release $short, which would never be published. That happens when LSMinimumSystemVersion changes: the appcast then keeps the newest release of each minimum macOS version. Releasing across a floor change needs those deltas attached to their releases, which this script does not do."
   fi
-  if [[ -f "$WORK/$file" ]]; then
+  if [[ -f "$WORK/$local_file" ]]; then
     printf '%s\n' "$SPARKLE_ED_KEY" \
-      | "$SPARKLE_BIN/sign_update" --verify --ed-key-file - "$WORK/$file" "$signature" >/dev/null \
-      || die "the signature of $file does not verify"
+      | "$SPARKLE_BIN/sign_update" --verify --ed-key-file - "$WORK/$local_file" "$signature" >/dev/null \
+      || die "the signature of $local_file does not verify"
     verified="verified"
   else
     # A delta of an earlier release, or the DMG of a release older than the
     # delta sources: it stays in that release, and so does its signature.
     verified="not here, kept"
   fi
-  echo "    $kind $file ($verified)"
+  echo "    $short $kind $file ($verified)"
   if [[ "$short" == "$VERSION" ]]; then
-    NEW_FILES+=("$file")
-    if [[ "$kind" == full ]]; then new_items=$((new_items + 1)); else deltas=$((deltas + 1)); fi
+    if [[ "$kind" == full ]]; then
+      new_items=$((new_items + 1))
+    else
+      NEW_DELTAS+=("$file")
+      deltas=$((deltas + 1))
+    fi
   fi
 done < <("$TOOL" enclosures "$WORK/appcast.xml")
 [[ $new_items -eq 1 ]] || die "the appcast has $new_items items for $VERSION"
@@ -288,8 +312,9 @@ if (( deltas < expected )); then
   echo "warning: $deltas delta(s) for $listed earlier release(s); the others update with the whole DMG" >&2
 fi
 
-for file in "${NEW_FILES[@]}"; do
-  if [[ "$file" != "$DMG_NAME" ]]; then mv "$WORK/$file" "$OUT/$file"; fi
+# The new DMG is in <dir> already.
+for file in "${NEW_DELTAS[@]+"${NEW_DELTAS[@]}"}"; do
+  mv "$WORK/$file" "$OUT/$file"
 done
 mv "$WORK/appcast.xml" "$OUT/appcast.xml"
 
