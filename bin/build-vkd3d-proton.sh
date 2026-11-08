@@ -132,12 +132,13 @@ fi
 # would otherwise replace Apple's as the native compiler, which meson also
 # looks for. vkd3d-proton's cross files name the tools without a path, so
 # check that each resolves into llvm-mingw and not to some other mingw
-# earlier in PATH. widl compiles vkd3d-proton's IDL files; meson prefers an
-# unprefixed widl, which llvm-mingw does not have, over the prefixed one the
-# cross files name, so one elsewhere in PATH is refused too.
+# earlier in PATH. windres compiles the DLLs' version resources. widl
+# compiles vkd3d-proton's IDL files; meson prefers an unprefixed widl, which
+# llvm-mingw does not have, over the prefixed one the cross files name, so
+# one elsewhere in PATH is refused too.
 export PATH="$PATH:$MINGW_DIR/bin"
 for triple in i686-w64-mingw32 arm64ec-w64-mingw32; do
-    for tool in gcc g++ ar strip widl; do
+    for tool in gcc g++ ar strip widl windres; do
         if [ "$(command -v "$triple-$tool")" != "$MINGW_DIR/bin/$triple-$tool" ]; then
             echo "Error: $triple-$tool does not resolve to $MINGW_DIR/bin"
             echo "  (found: $(command -v "$triple-$tool" || echo nothing))"
