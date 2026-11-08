@@ -139,11 +139,11 @@ built before, which runs under Rosetta.
 2. Optionally tag a [release candidate](#release-candidates) first.
 3. Push the tag `vX.Y.Z`.
 4. Check the draft, add to its notes, and publish it with "Set as the
-   latest release" checked. Only then do copies in the field and the
-   download link see it ([updates in the field](#updates-in-the-field)).
+   latest release" checked. Only then do copies of 0.2.0 and later and
+   the download link see it ([updates in the field](#updates-in-the-field)).
 
 Only a `v*` release that carries `appcast.xml` and `Mach9.dmg` may be
-marked Latest. Any other one makes every copy in the field and the
+marked Latest. Any other one makes every copy of 0.2.0 and later and the
 download link get a 404, and the next tag run's preflight fails.
 
 A tag run fails before the expensive build when:
@@ -199,7 +199,10 @@ copy updated to it is offered X.Y.Z later.
 To check the update path before users see it, update a copy of the latest
 release to the candidate:
 
-1. Install the latest release's DMG into a scratch folder.
+1. Install the latest release's DMG into a scratch folder. It has to be
+   0.2.0 or later: 0.1.0 cannot show the update window
+   ([updates in the field](#updates-in-the-field)). Until 0.2.0 is out,
+   install 0.2.0-rc.2 or a later candidate instead.
 2. Point every copy of the app on this Mac at the candidate's appcast:
 
    ```bash
@@ -216,24 +219,39 @@ release to the candidate:
 
 ### Updates in the field
 
-Every copy polls `SUFeedURL` in
-[`launcher/app/Info.plist`](../launcher/app/Info.plist),
-`https://updates.mach9.app/appcast.xml`. Every copy ever shipped polls that
-URL, so it has to keep working; the domain is the stable name in front of
-wherever the appcast is.
+Every copy polls the `SUFeedURL` it shipped with, for good, so each feed
+URL that ever shipped has to keep working. Each is on a host of
+`mach9.app` that is a web forward, the stable name in front of wherever
+the appcast is. The forwards are set up by hand in the DNS of `mach9.app`
+at Gandi LiveDNS; nothing in this repository deploys them. Gandi's
+forwarders drop the path, so each host serves one appcast.
 
-- `updates.mach9.app` is a web forward of every path to
-  `https://github.com/athei/mach9/releases/latest/download/appcast.xml`,
-  set up in the DNS of `mach9.app` at Gandi LiveDNS, where it is changed.
-  Gandi's forwarder drops the path, so the domain serves the appcast and
-  nothing else.
+| Host | Polled by | Forwards to |
+|------|-----------|-------------|
+| `sparkle.mach9.app` | 0.2.0-rc.2 and later ([`Info.plist`](../launcher/app/Info.plist)) | `https://github.com/athei/mach9/releases/latest/download/appcast.xml` |
+| `updates.mach9.app` | 0.1.0, 0.2.0-rc.1 | `https://github.com/athei/mach9/releases/download/v0.1.0/appcast.xml` |
+
+- `sparkle.mach9.app` forwards both HTTPS and HTTP, to the HTTPS target.
+- 0.1.0 and 0.2.0-rc.1 cannot handle the update window: the app hangs as
+  soon as it shows one. So they are never offered an update: the `v0.1.0`
+  appcast lists only 0.1.0, and both always report that they are up to
+  date. Their users update by downloading the DMG
+  ([app docs](app.md#updates)).
+- Never point `updates.mach9.app` at `releases/latest`: both would be
+  offered an update, and the update window hangs them, also on the
+  background check before each game launch.
+- Never replace or delete the `v0.1.0` release's `appcast.xml`:
+  `updates.mach9.app` serves it.
+- After a change to the DNS or a forward, check each forward's own
+  redirect: `curl -sI https://<host>/appcast.xml` must show
+  `location:` with the target in the table. Gandi's forwarders drop some
+  connections, so retry when it fails.
 - The download link points at GitHub directly,
-  `https://github.com/athei/mach9/releases/latest/download/Mach9.dmg`, and
-  every DMG and delta URL in the appcast at a release download on GitHub,
-  so nothing else depends on the domain.
-- After a change to the DNS or the forward, check with `curl -sIL` that
-  `https://updates.mach9.app/appcast.xml` ends at the latest release's
-  appcast.
+  `https://github.com/athei/mach9/releases/latest/download/Mach9.dmg`.
+  In the appcasts `appcast.sh` builds, from 0.2.0 on, every DMG and delta
+  URL points at a release download on GitHub. The `v0.1.0` appcast's DMG
+  URL is on `updates.mach9.app`, which is never downloaded from, since
+  the copies that poll it are never offered an update.
 - A copy installs an update only when it is signed with the EdDSA key
   whose public half is `SUPublicEDKey`, by the Developer ID team the copy
   was signed by, for the bundle id `app.mach9`, with a higher
