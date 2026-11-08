@@ -13,12 +13,12 @@ name: Pages
 #   - index.html, which sends a browser to the repository.
 #
 # The latest release is the one GitHub marks Latest, never a draft or a
-# prerelease. Publishing a release or a prerelease starts this workflow
-# on main by hand (workflow_dispatch), so the site is always built by
-# main's copy of this file from main's sources, never from a tag.
-# Publishing a full release sends both published and released, which
-# starts two runs on main; the second deploys the same site again.
-# Marking another release Latest by hand starts nothing: run this
+# prerelease. Publishing a full release, or turning a prerelease into
+# one, sends released, which starts this workflow on main by hand
+# (workflow_dispatch), so the site is always built by main's copy of
+# this file from main's sources, never from a tag. Publishing a
+# prerelease starts nothing, since it never changes the Latest release.
+# Marking another release Latest by hand starts nothing either: run this
 # workflow by hand then (docs/maintenance.md, updates in the field).
 #
 # Pages has to have "GitHub Actions" as its source in the repository
@@ -28,7 +28,7 @@ name: Pages
 
 on:
   release:
-    types: [published, released]
+    types: [released]
   workflow_dispatch:
   push:
     branches: [main]
