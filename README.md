@@ -4,10 +4,13 @@
 
 <h1 align="center">Mach9</h1>
 
+To play Windows games on your Apple silicon Mac, download Mach9.app from
+[mach9.app](https://mach9.app).
+
 A relocatable, signed Wine for games on Apple silicon Macs, made to be
-embedded in a launcher. 32-bit Direct3D 9 games run better on it than on
-other solutions because of [mtld3d](docs/internals.md#mtld3d), its
-Direct3D 9 implementation on Metal. The launcher configures the engine
+embedded in a launcher. Direct3D 9 runs on
+[mtld3d](docs/internals.md#mtld3d), its own Direct3D 9 implementation,
+which draws straight on Metal. The launcher configures the engine
 with rules that match processes, passed in the environment variable
 `WINE_COMPATDB`, in a file `WINE_COMPATDB_FILE` names, or both, so each
 game gets the Direct3D implementation

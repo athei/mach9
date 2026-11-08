@@ -8,6 +8,7 @@ set -euo pipefail
 #   index.html                the landing page, site/index.html with its
 #                             placeholders filled in (below)
 #   mach9.png, dock-menu.jpg  the images it shows, from docs/images/
+#   robots.txt, sitemap.xml   for search engines, from site/, unchanged
 #   appcast.xml               <appcast>, unchanged
 #   compatdb_core/, ...       everything in <doc-dir>, the rustdoc that
 #                             cargo doc -p compatdb-core writes to
@@ -21,7 +22,8 @@ set -euo pipefail
 #
 # <info-plist> is launcher/app/Info.plist as of <tag>, not of the checkout,
 # so the page shows the floor of the app it links to even after main has
-# raised it. The page text and the images come from the checkout.
+# raised it. The page text, robots.txt, sitemap.xml and the images come from
+# the checkout.
 #
 # A placeholder (@WORD@) still in index.html afterwards, such as one added to
 # the page without a value here, fails the script.
@@ -57,7 +59,8 @@ APPCAST=$4
 OUT_DIR=$5
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-PAGE="$REPO_DIR/site/index.html"
+SITE="$REPO_DIR/site"
+PAGE="$SITE/index.html"
 IMAGES="$REPO_DIR/docs/images"
 
 # Both values go into the page as they are, so only plain version strings
@@ -82,6 +85,7 @@ mkdir "$OUT_DIR"
 cp -R "$DOC_DIR/." "$OUT_DIR/"
 cp "$APPCAST" "$OUT_DIR/appcast.xml"
 cp "$IMAGES/mach9.png" "$IMAGES/dock-menu.jpg" "$OUT_DIR/"
+cp "$SITE/robots.txt" "$SITE/sitemap.xml" "$OUT_DIR/"
 
 page=$(<"$PAGE")
 page=${page//@VERSION@/$VERSION}

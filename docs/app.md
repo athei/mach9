@@ -1,10 +1,10 @@
 # Mach9.app
 
-Mach9.app runs Windows games on Mach9 ([README](../README.md)). 32-bit
-Direct3D 9 games run better on it than on other solutions because of
-[mtld3d](internals.md#mtld3d), its Direct3D 9 implementation on Metal. It
-needs a Mac with Apple silicon and a recent macOS; macOS tells you when
-yours is too old to open it.
+Mach9.app runs Windows games on Mach9 ([README](../README.md)).
+Direct3D 9 games run on [mtld3d](internals.md#mtld3d), Mach9's own
+Direct3D 9 implementation, which draws straight on Metal. It needs a Mac
+with Apple silicon and a recent macOS; macOS tells you when yours is too
+old to open it.
 
 ## Install
 

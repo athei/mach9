@@ -2,20 +2,43 @@
 <!--
   The landing page at https://mach9.app. bin/ci/assemble-site.sh copies it
   into the site pages.yml deploys, fills in the version and the macOS
-  placeholders, and copies the images from docs/images/.
+  placeholders, also in the JSON-LD block, and copies the images from
+  docs/images/, robots.txt and sitemap.xml.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>Mach9</title>
-<meta name="description" content="Mach9 runs Windows games on Macs with Apple silicon, with Wine built in. 32-bit Direct3D 9 games run better on it than on other solutions.">
+<title>Mach9: play Windows games on Apple silicon Macs</title>
+<meta name="description" content="Play Windows games and Steam fast on Apple silicon Macs. Wine is built in, with Mach9's own Direct3D 9 on Metal. Free download for macOS.">
+<link rel="canonical" href="https://mach9.app/">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="Mach9">
 <meta property="og:url" content="https://mach9.app/">
-<meta property="og:title" content="Mach9">
-<meta property="og:description" content="Mach9 runs Windows games on Macs with Apple silicon, with Wine built in. 32-bit Direct3D 9 games run better on it than on other solutions.">
+<meta property="og:title" content="Mach9: play Windows games on Apple silicon Macs">
+<meta property="og:description" content="Play Windows games and Steam fast on Apple silicon Macs. Wine is built in, with Mach9's own Direct3D 9 on Metal. Free download for macOS.">
 <meta property="og:image" content="https://mach9.app/mach9.png">
+<meta name="twitter:card" content="summary">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Mach9",
+  "url": "https://mach9.app/",
+  "description": "Play Windows games and Steam fast on Apple silicon Macs. Wine is built in, with Mach9's own Direct3D 9 on Metal.",
+  "operatingSystem": "macOS @MACOS@ or later",
+  "applicationCategory": "GameApplication",
+  "softwareVersion": "@VERSION@",
+  "downloadUrl": "https://github.com/athei/mach9/releases/latest/download/Mach9.dmg",
+  "license": "https://opensource.org/license/zlib",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  }
+}
+</script>
 <link rel="icon" type="image/png" href="mach9.png">
 <link rel="apple-touch-icon" href="mach9.png">
 <style>
@@ -173,9 +196,9 @@ figcaption {
 <body>
 <main>
   <header>
-    <img class="icon" src="mach9.png" width="128" height="128" alt="">
+    <img class="icon" src="mach9.png" width="128" height="128" alt="Mach9 app icon">
     <h1>Mach9</h1>
-    <p class="lead">Mach9 runs Windows games on Macs with Apple silicon, with Wine built in. 32-bit Direct3D 9 games run better on it than on other solutions.</p>
+    <p class="lead">Play Windows games fast on your Apple silicon Mac. Wine is built in: drag Mach9 to Applications and play. There is nothing else to install or download.</p>
   </header>
 
   <div class="download">
@@ -184,16 +207,20 @@ figcaption {
     <p class="links"><a href="https://github.com/athei/mach9/releases/latest">Release notes</a> &middot; <a href="https://github.com/athei/mach9/releases">All releases</a></p>
   </div>
 
+  <section>
+    <h2>Its own Direct3D 9, written for Metal</h2>
+    <p>Direct3D 9 games run on mtld3d, Mach9's own Direct3D 9 implementation. It draws straight on Metal, with no Vulkan or OpenGL layer in between. Direct3D 10, 11 and 12 games run fast too.</p>
+  </section>
+
   <section class="app">
     <div>
       <h2>Mach9.app</h2>
       <ul>
         <li>Runs the Windows version of Steam, so Steam games install and start from there.</li>
-        <li>Wine is built in: nothing else to download, no Rosetta.</li>
+        <li>Runs 32-bit and 64-bit games without Rosetta.</li>
         <li>Notarized, and updates itself.</li>
         <li>Pick and start games from its Dock menu.</li>
       </ul>
-      <p>Direct3D 9 runs on mtld3d, Mach9's Direct3D 9 implementation on Metal, which is why 32-bit Direct3D 9 games run better on Mach9. Direct3D 10, 11 and 12 games run as well.</p>
     </div>
     <figure>
       <img src="dock-menu.jpg" width="298" height="413" alt="Mach9 Dock menu with a list of games and the menu items">

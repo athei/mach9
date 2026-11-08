@@ -15,7 +15,9 @@ name: Pages
 #     the version and the macOS floor it names come from the latest
 #     release: its tag and LSMinimumSystemVersion in that tag's
 #     launcher/app/Info.plist, so a floor raised on main shows only once
-#     a release has it.
+#     a release has it;
+#   - robots.txt and sitemap.xml, for search engines, from main
+#     (site/robots.txt, site/sitemap.xml).
 # bin/ci/assemble-site.sh puts them together, and runs locally too.
 #
 # The latest release is the one GitHub marks Latest, never a draft or a
