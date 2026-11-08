@@ -517,6 +517,33 @@ Mesa is our fork at the ref in [`mesa-src.ref`](../pins/mesa-src.ref)
   and one configured before EGL was built has no `SONAME_LIBEGL`;
   `build-wine.sh` stops and asks for `--clean`.
 
+### FEX
+
+FEX is our fork at the ref in [`fex-src.ref`](../pins/fex-src.ref)
+([FEX](internals.md#fex)). It moves from one upstream release tag
+(`FEX-YYMM`) to the next, as our Wine series on
+[`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched) moves
+from one upstream `wine-X.Y` tag to the next. To move FEX to a newer tag:
+
+- Rebase our commits onto the new tag with `git rerere` enabled, as for
+  Mesa, and drop the ones upstream has merged.
+- `FormatVersion` in `FEXCore/Source/Interface/Core/DiskCache.h` has to
+  stay above upstream's after a rebase, and `BinaryCacheVersion` in the
+  InstructionCountCI JSON files follows it. Several of our commits raise
+  it, so each rebase conflicts there. The message of our "DiskCache: Bump
+  version" commit says how far to raise it.
+- FEX depends on these parts of Wine's layout and interfaces. Recheck
+  them when either side changes:
+  - the loader's low reserve and Wine's top-down area;
+  - the address requirements of `NtAllocateVirtualMemoryEx` and
+    `NtMapViewOfSectionEx`;
+  - ntdll's `__wine_syscall_dispatcher` and
+    `__wine_unix_call_dispatcher_arm64ec`;
+  - the `BTCpuProcessTerm` calls of wow64 and the `ProcessTerm` calls of
+    ARM64EC ntdll.
+- Push the branch to athei/FEX before building without `FEX_REPO`
+  pointing at the local clone; the default builds what the remote has.
+
 ### GStreamer
 
 GStreamer, with glib and FFmpeg, is pinned in
