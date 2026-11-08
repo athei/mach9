@@ -54,9 +54,100 @@ fn wildcard_env() -> Vec<EnvEntry> {
 }
 
 /// The DLL overrides every process gets from the built-in rules: Mono
-/// and Gecko are disabled.
+/// and Gecko are disabled, and the D3DX and D3DCompiler DLLs load native,
+/// then builtin.
 fn wildcard_overrides() -> Vec<DllOverride> {
-    vec![DllOverride::literal("mscoree,mshtml=")]
+    vec![DllOverride::literal("mscoree,mshtml="), d3dx_override()]
+}
+
+/// `wildcard_overrides()` followed by `more`.
+fn wildcard_overrides_and(more: &[&str]) -> Vec<DllOverride> {
+    let mut overrides = wildcard_overrides();
+    overrides.extend(more.iter().map(|entry| DllOverride::literal(entry)));
+    overrides
+}
+
+/// Every D3DX DLL Wine builds, the directories of its `dlls/`, and the
+/// D3DCompiler DLLs of the DirectX redistributable. Spelled out to guard
+/// the ranges the rule builds its entry from.
+const D3DX_AND_D3DCOMPILER: [&str; 44] = [
+    "d3dx9_24",
+    "d3dx9_25",
+    "d3dx9_26",
+    "d3dx9_27",
+    "d3dx9_28",
+    "d3dx9_29",
+    "d3dx9_30",
+    "d3dx9_31",
+    "d3dx9_32",
+    "d3dx9_33",
+    "d3dx9_34",
+    "d3dx9_35",
+    "d3dx9_36",
+    "d3dx9_37",
+    "d3dx9_38",
+    "d3dx9_39",
+    "d3dx9_40",
+    "d3dx9_41",
+    "d3dx9_42",
+    "d3dx9_43",
+    "d3dx10_33",
+    "d3dx10_34",
+    "d3dx10_35",
+    "d3dx10_36",
+    "d3dx10_37",
+    "d3dx10_38",
+    "d3dx10_39",
+    "d3dx10_40",
+    "d3dx10_41",
+    "d3dx10_42",
+    "d3dx10_43",
+    "d3dx11_42",
+    "d3dx11_43",
+    "d3dcompiler_33",
+    "d3dcompiler_34",
+    "d3dcompiler_35",
+    "d3dcompiler_36",
+    "d3dcompiler_37",
+    "d3dcompiler_38",
+    "d3dcompiler_39",
+    "d3dcompiler_40",
+    "d3dcompiler_41",
+    "d3dcompiler_42",
+    "d3dcompiler_43",
+];
+
+/// The entry of the D3DX and D3DCompiler rule, `D3DX_AND_D3DCOMPILER`
+/// without the modules in `without`, native then builtin.
+fn d3dx_override_without(without: &[&str]) -> DllOverride {
+    let modules: Vec<&str> = D3DX_AND_D3DCOMPILER
+        .into_iter()
+        .filter(|module| !without.contains(module))
+        .collect();
+    DllOverride::literal(&format!("{}=n,b", modules.join(",")))
+}
+
+/// The entry of the D3DX and D3DCompiler rule.
+fn d3dx_override() -> DllOverride {
+    d3dx_override_without(&[])
+}
+
+/// The load order ntdll ends up with for `module` after `compatdb.so`
+/// adds the entries of `resolution` in order: ntdll keeps the last entry
+/// for a module, so the last entry that names it decides. Names match as
+/// ntdll matches them: ASCII-case-insensitively, without `.dll`.
+fn final_order<'a>(resolution: &'a Resolution, module: &str) -> Option<&'a str> {
+    let stem = |name: &str| {
+        let lower = name.to_ascii_lowercase();
+        lower.strip_suffix(".dll").unwrap_or(&lower).to_owned()
+    };
+    let module = stem(module);
+    resolution
+        .dll_overrides
+        .iter()
+        .rev()
+        .find(|entry| entry.modules().any(|m| stem(m) == module))
+        .map(DllOverride::order)
 }
 
 /// `wildcard_env()` followed by `more`.
@@ -577,7 +668,7 @@ fn a_star_rule_of_the_launcher_beats_a_builtin_star_rule() {
         Some(&Origin::Line(1))
     );
     // Its list entries come after the built-in `*` rules' ones.
-    assert_eq!(game.dll_overrides, ["mscoree,mshtml=", "mscoree=n,b"]);
+    assert_eq!(game.dll_overrides, wildcard_overrides_and(&["mscoree=n,b"]));
 }
 
 #[test]
@@ -961,8 +1052,11 @@ fn a_default_dll_override_hands_mono_and_gecko_back_to_the_registry() {
     // Each module comes out of the built-in entry on its own.
     let table = with_lines("exe=*;dll_overrides=mscoree=default");
     let game = table.resolve("game.exe", &VersionInfo::default(), None);
-    assert_eq!(game.dll_overrides, ["mshtml="]);
-    assert_eq!(game.dll_overrides_from, [Origin::BuiltIn]);
+    assert_eq!(
+        game.dll_overrides,
+        [DllOverride::literal("mshtml="), d3dx_override()]
+    );
+    assert_eq!(game.dll_overrides_from, [Origin::BuiltIn, Origin::BuiltIn]);
     assert_eq!(
         game.dll_overrides_reset,
         [DllOverrideReset {
@@ -971,21 +1065,21 @@ fn a_default_dll_override_hands_mono_and_gecko_back_to_the_registry() {
             removed: vec![Origin::BuiltIn],
         }]
     );
-    // Both, in one entry or two, leave no entry at all.
+    // Both, in one entry or two, leave no entry of theirs at all.
     for text in [
         "exe=*;dll_overrides=mscoree,mshtml=default",
         "exe=*;dll_overrides=mscoree=default;dll_overrides=MSHTML.dll=default",
     ] {
         let table = with_lines(text);
         let game = table.resolve("game.exe", &VersionInfo::default(), None);
-        assert_eq!(game.dll_overrides, [] as [&str; 0], "{text}");
+        assert_eq!(game.dll_overrides, [d3dx_override()], "{text}");
         assert_eq!(game.dll_overrides_reset.len(), 2, "{text}");
     }
     // A module no entry names is reported with nothing removed, and a
     // later entry gives a reset module a load order again.
     let table = with_lines("exe=*;dll_overrides=d3d12=default;dll_overrides=mscoree=b");
     let game = table.resolve("game.exe", &VersionInfo::default(), None);
-    assert_eq!(game.dll_overrides, ["mscoree,mshtml=", "mscoree=b"]);
+    assert_eq!(game.dll_overrides, wildcard_overrides_and(&["mscoree=b"]));
     assert_eq!(
         game.dll_overrides_reset,
         [DllOverrideReset {
@@ -1035,12 +1129,134 @@ fn a_launch_wide_rule_re_enables_mono_after_the_builtins() {
     // module, so `mscoree=b` wins while mshtml stays disabled.
     let table = with_lines("exe=*;dll_overrides=mscoree=b");
     let resolution = table.resolve("game.exe", &VersionInfo::default(), None);
-    assert_eq!(resolution.dll_overrides, ["mscoree,mshtml=", "mscoree=b"]);
+    assert_eq!(
+        resolution.dll_overrides,
+        wildcard_overrides_and(&["mscoree=b"])
+    );
     assert_eq!(
         resolution.dll_overrides_from,
-        [Origin::BuiltIn, Origin::Line(1)]
+        [Origin::BuiltIn, Origin::BuiltIn, Origin::Line(1)]
     );
     assert_eq!(table.duplicate_matchers(), []);
+}
+
+#[test]
+fn every_process_loads_d3dx_and_d3dcompiler_native_then_builtin() {
+    // One `*` rule without a fingerprint, with one entry that names every
+    // D3DX DLL Wine builds and the redistributable's D3DCompiler DLLs.
+    // The order is `n,b`: plain `n` would fail to load a DLL that has only
+    // Wine's placeholder in the prefix.
+    let rule = native_d3dx_and_d3dcompiler();
+    assert!(defaults().contains(&rule));
+    assert!(rule.exe.is_any());
+    assert_eq!(
+        (rule.company(), rule.product(), rule.original_filename()),
+        (None, None, None)
+    );
+    assert_eq!(rule.dll_overrides, [d3dx_override()]);
+    let modules: Vec<&str> = rule
+        .dll_overrides
+        .iter()
+        .flat_map(DllOverride::modules)
+        .collect();
+    assert_eq!(modules, D3DX_AND_D3DCOMPILER);
+    assert!(
+        rule.dll_overrides
+            .iter()
+            .all(|entry| entry.order() == "n,b")
+    );
+    // Every process gets it from the built-in rule, whatever its name or
+    // version resource, the programs with a built-in rule of their own
+    // included.
+    let steam = version_of(&steam_web_helper());
+    let nfs = VersionInfo {
+        company: "Electronic Arts".into(),
+        product: "Need for Speed ProStreet".into(),
+        original_filename: "nfs.exe".into(),
+    };
+    let table = Table::builtin();
+    for (exe, version) in [
+        ("game.exe", VersionInfo::default()),
+        ("nfs.exe", nfs),
+        ("WoW.exe", wow_version()),
+        ("steamwebhelper.exe", steam),
+    ] {
+        let resolution = table.resolve(exe, &version, None);
+        let at = resolution
+            .dll_overrides
+            .iter()
+            .position(|entry| *entry == d3dx_override());
+        assert_eq!(
+            at.and_then(|at| resolution.dll_overrides_from.get(at)),
+            Some(&Origin::BuiltIn),
+            "{exe}"
+        );
+        for module in D3DX_AND_D3DCOMPILER {
+            assert_eq!(
+                final_order(&resolution, module),
+                Some("n,b"),
+                "{exe} {module}"
+            );
+        }
+        // The compilers that programs ship in their own folders keep
+        // Wine's load order.
+        for module in ["d3dcompiler_46", "d3dcompiler_47"] {
+            assert_eq!(final_order(&resolution, module), None, "{exe} {module}");
+        }
+    }
+    // No other built-in rule gives one of these DLLs a load order.
+    for other in table.rules.iter().filter(|r| **r != rule) {
+        for entry in &other.dll_overrides {
+            assert!(
+                !entry.modules().any(|m| D3DX_AND_D3DCOMPILER
+                    .iter()
+                    .any(|d| d.eq_ignore_ascii_case(m))),
+                "{}",
+                other.matchers()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_later_rule_changes_the_order_of_one_d3dx_or_d3dcompiler_dll() {
+    // A launcher's `*` rule and its rule for one game both fold after the
+    // built-in `*` rule, and ntdll keeps the last entry for a module, so
+    // each wins for the DLL it names and the other DLLs keep `n,b`.
+    let table =
+        with_lines("exe=game.exe;dll_overrides=d3dcompiler_43=n\nexe=*;dll_overrides=d3dx9_34=b");
+    let game = table.resolve("Game.exe", &VersionInfo::default(), None);
+    assert_eq!(
+        game.dll_overrides,
+        wildcard_overrides_and(&["d3dx9_34=b", "d3dcompiler_43=n"])
+    );
+    assert_eq!(final_order(&game, "d3dcompiler_43"), Some("n"));
+    assert_eq!(final_order(&game, "D3DX9_34.dll"), Some("b"));
+    assert_eq!(final_order(&game, "d3dx9_43"), Some("n,b"));
+    let other = table.resolve("other.exe", &VersionInfo::default(), None);
+    assert_eq!(final_order(&other, "d3dcompiler_43"), Some("n,b"));
+    assert_eq!(final_order(&other, "d3dx9_34"), Some("b"));
+    // `default` takes one DLL out of the built-in entry, so the registry
+    // and WINEDLLOVERRIDES decide for it again; the others keep `n,b`.
+    let table = with_lines("exe=game.exe;dll_overrides=D3DX9_34.dll=default");
+    let game = table.resolve("Game.exe", &VersionInfo::default(), None);
+    assert_eq!(
+        game.dll_overrides,
+        [
+            DllOverride::literal("mscoree,mshtml="),
+            d3dx_override_without(&["d3dx9_34"])
+        ]
+    );
+    assert_eq!(final_order(&game, "d3dx9_34"), None);
+    assert_eq!(final_order(&game, "d3dx9_33"), Some("n,b"));
+    assert_eq!(
+        game.dll_overrides_reset,
+        [DllOverrideReset {
+            module: "D3DX9_34.dll".into(),
+            by: Origin::Line(1),
+            removed: vec![Origin::BuiltIn],
+        }]
+    );
 }
 
 #[test]

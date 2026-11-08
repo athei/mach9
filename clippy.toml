@@ -1,2 +1,2 @@
 # Product names the docs use as plain words, on top of clippy's defaults.
-doc-valid-idents = ["DirectInput", "GameController", "KosmicKrisp", "NosTale", "WoW", "WoW64", ".."]
+doc-valid-idents = ["D3DCompiler", "DirectInput", "GameController", "KosmicKrisp", "NosTale", "ProStreet", "WoW", "WoW64", ".."]

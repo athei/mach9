@@ -441,6 +441,7 @@
 //! | Give every process wined3d for D3D10 and D3D11, and no D3D12 | `exe=*;dxgi=wined3d` |
 //! | Give every process wined3d for D3D9 | `exe=*;d3d9=wined3d` |
 //! | Hide D3D12 from one game, keeping DXMT for D3D10 and D3D11 | `exe=Game.exe;dll_overrides=d3d12,d3d12core=` |
+//! | Give one game Wine's D3DX9 instead of its native copy | `exe=Game.exe;dll_overrides=d3dx9_43=b` |
 //! | Change a vkd3d-proton setting for one game | `exe=Game.exe;env=VKD3D_CONFIG=<options>` |
 //! | Give one game Wine's no-execute behaviour | `exe=Game.exe;force_nx=false` |
 //! | Give one game FEX's full x87 precision | `exe=Game.exe;env=FEX_X87REDUCEDPRECISION=` |

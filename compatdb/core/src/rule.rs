@@ -449,7 +449,8 @@ impl Rule {
     /// ASCII-case-insensitively, with or without `.dll`.
     ///
     /// With no entry, `WINEDLLOVERRIDES` and the registry decide, as in
-    /// upstream Wine. [`builtin::no_mono_or_gecko`] adds entries for every
+    /// upstream Wine. [`builtin::no_mono_or_gecko`] and
+    /// [`builtin::native_d3dx_and_d3dcompiler`] add entries for every
     /// process.
     #[must_use]
     pub fn dll_overrides(&self) -> &[DllOverride] {

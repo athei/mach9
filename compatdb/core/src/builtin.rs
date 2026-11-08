@@ -43,6 +43,7 @@ pub fn defaults() -> Vec<Rule> {
         opengl_egl(),
         force_nx(),
         no_mono_or_gecko(),
+        native_d3dx_and_d3dcompiler(),
     ]
 }
 
@@ -233,6 +234,57 @@ pub fn no_mono_or_gecko() -> Rule {
         dll_overrides: vec![DllOverride::literal("mscoree,mshtml=")],
         ..Rule::default()
     }
+}
+
+/// Native, then builtin, for the D3DX and D3DCompiler DLLs in every process.
+///
+/// Wine's builtins of these DLLs are incomplete. Its d3dx9 returns
+/// `E_NOTIMPL` from `ID3DXEffect::SetRawValue` for a vector with fewer than 4
+/// columns, so Need for Speed: ProStreet, which sets its sun and ambient
+/// colours that way, renders a black scene. Microsoft's copies, which a
+/// game's DirectX redistributable installs into the prefix or the game ships
+/// next to its executable, have what Wine's lack. Without an override Wine
+/// never loads them: it loads a DLL whose version resource names Microsoft
+/// as its company builtin first, wherever the file is.
+///
+/// The order is `n,b`, never `n`. Where no native copy exists, the prefix
+/// holds Wine's placeholder DLL, and ntdll loads the builtin for a placeholder
+/// under `n,b`; under `n` the DLL would fail to load. The entry names each
+/// DLL, since `WINEDLLOVERRIDES` has no wildcards: the D3DX DLLs Wine builds,
+/// `d3dx9_24` to `d3dx9_43`, `d3dx10_33` to `d3dx10_43`, `d3dx11_42` and
+/// `d3dx11_43`, and `d3dcompiler_33` to `d3dcompiler_43`, the compilers the
+/// DirectX redistributable installs with them.
+///
+/// `d3dcompiler_46` and `d3dcompiler_47` are left out. No game is known to
+/// need their native copies, and programs such as Steam's and the Social
+/// Club's web helpers ship `d3dcompiler_47` in their own folders for their
+/// shader compiles, which would move from Wine's builtin to Microsoft's x64
+/// compiler under FEX.
+///
+/// It matches every process, like the other [`defaults`]. ntdll keeps the
+/// last entry for a module, so a later entry for one of these DLLs, in a `*`
+/// rule or a rule for the program, such as `d3dx9_43=b`, replaces this one
+/// for that DLL. `d3dx9_43=default` hands it back to the registry and
+/// `WINEDLLOVERRIDES`, as for [`no_mono_or_gecko`]: otherwise this entry
+/// wins over their entries for the same name.
+#[must_use]
+pub fn native_d3dx_and_d3dcompiler() -> Rule {
+    let modules: Vec<String> = d3dx_and_d3dcompiler_modules().collect();
+    Rule {
+        exe: Exe::Any,
+        dll_overrides: vec![DllOverride::literal(&format!("{}=n,b", modules.join(",")))],
+        ..Rule::default()
+    }
+}
+
+/// The D3DX DLLs Wine builds a builtin of and the D3DCompiler DLLs of the
+/// DirectX redistributable, without `.dll`.
+fn d3dx_and_d3dcompiler_modules() -> impl Iterator<Item = String> {
+    let d3dx9 = (24..=43).map(|v| format!("d3dx9_{v}"));
+    let d3dx10 = (33..=43).map(|v| format!("d3dx10_{v}"));
+    let d3dx11 = (42..=43).map(|v| format!("d3dx11_{v}"));
+    let d3dcompiler = (33..=43).map(|v| format!("d3dcompiler_{v}"));
+    d3dx9.chain(d3dx10).chain(d3dx11).chain(d3dcompiler)
 }
 
 /// wined3d for the DXGI family in the Rockstar Games Launcher.
