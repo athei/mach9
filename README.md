@@ -127,11 +127,11 @@ Variables the bundle reads besides `WINE_COMPATDB`:
   rules.
 - [docs/maintenance.md](docs/maintenance.md): maintaining the build.
 
-[spec]: https://docs.mach9.app
-[format]: https://docs.mach9.app/compatdb_core/#format
-[recipes]: https://docs.mach9.app/compatdb_core/#recipes
-[quick-start]: https://docs.mach9.app/compatdb_core/#quick-start
-[launcher]: https://docs.mach9.app/compatdb_core/#launcher-responsibilities
-[defaults]: https://docs.mach9.app/compatdb_core/builtin/fn.defaults.html
-[x87]: https://docs.mach9.app/compatdb_core/builtin/fn.fex_reduced_x87_precision.html
-[wined3d]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.wined3d
+[spec]: https://mach9.app/compatdb_core/
+[format]: https://mach9.app/compatdb_core/#format
+[recipes]: https://mach9.app/compatdb_core/#recipes
+[quick-start]: https://mach9.app/compatdb_core/#quick-start
+[launcher]: https://mach9.app/compatdb_core/#launcher-responsibilities
+[defaults]: https://mach9.app/compatdb_core/builtin/fn.defaults.html
+[x87]: https://mach9.app/compatdb_core/builtin/fn.fex_reduced_x87_precision.html
+[wined3d]: https://mach9.app/compatdb_core/struct.Rule.html#method.wined3d

@@ -555,7 +555,7 @@
 /// of [`Key::docs_url`] and [`DocSection::url`] from it.
 macro_rules! docs_url {
     () => {
-        "https://docs.mach9.app/compatdb_core/"
+        "https://mach9.app/compatdb_core/"
     };
 }
 

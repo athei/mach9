@@ -63,7 +63,7 @@ fn every_section_links_to_a_heading_of_the_front_page() {
     }
     assert_eq!(
         DocSection::LauncherResponsibilities.url(),
-        "https://docs.mach9.app/compatdb_core/#launcher-responsibilities"
+        "https://mach9.app/compatdb_core/#launcher-responsibilities"
     );
 }
 
@@ -83,6 +83,6 @@ fn every_key_links_to_its_variant() {
     }
     assert_eq!(
         Key::MetalHud.docs_url(),
-        "https://docs.mach9.app/compatdb_core/enum.Key.html#variant.MetalHud"
+        "https://mach9.app/compatdb_core/enum.Key.html#variant.MetalHud"
     );
 }

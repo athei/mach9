@@ -135,17 +135,17 @@ To confirm a tree took effect, look at the running process's mapped files,
 for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
 `lib/wine/dxgi/<impl>/` or `lib/wine/d3d9/<impl>/` proves it.
 
-[spec]: https://docs.mach9.app
-[format]: https://docs.mach9.app/compatdb_core/#format
-[parsing]: https://docs.mach9.app/compatdb_core/#strict-and-lenient-parsing
-[matching]: https://docs.mach9.app/compatdb_core/#matching
-[folding]: https://docs.mach9.app/compatdb_core/#folding
-[launcher]: https://docs.mach9.app/compatdb_core/#launcher-responsibilities
-[recipes]: https://docs.mach9.app/compatdb_core/#recipes
-[upstream]: https://docs.mach9.app/compatdb_core/enum.Key.html#method.upstream
-[runtime]: https://docs.mach9.app/compatdb_core/runtime/index.html
-[dxgi]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.dxgi
-[d3d9]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.d3d9
-[env]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.env
-[arguments-override]: https://docs.mach9.app/compatdb_core/struct.Rule.html#method.arguments_override
-[fold-profiler]: https://docs.mach9.app/compatdb_core/struct.Resolution.html#method.fold_profiler_env
+[spec]: https://mach9.app/compatdb_core/
+[format]: https://mach9.app/compatdb_core/#format
+[parsing]: https://mach9.app/compatdb_core/#strict-and-lenient-parsing
+[matching]: https://mach9.app/compatdb_core/#matching
+[folding]: https://mach9.app/compatdb_core/#folding
+[launcher]: https://mach9.app/compatdb_core/#launcher-responsibilities
+[recipes]: https://mach9.app/compatdb_core/#recipes
+[upstream]: https://mach9.app/compatdb_core/enum.Key.html#method.upstream
+[runtime]: https://mach9.app/compatdb_core/runtime/index.html
+[dxgi]: https://mach9.app/compatdb_core/struct.Rule.html#method.dxgi
+[d3d9]: https://mach9.app/compatdb_core/struct.Rule.html#method.d3d9
+[env]: https://mach9.app/compatdb_core/struct.Rule.html#method.env
+[arguments-override]: https://mach9.app/compatdb_core/struct.Rule.html#method.arguments_override
+[fold-profiler]: https://mach9.app/compatdb_core/struct.Resolution.html#method.fold_profiler_env
