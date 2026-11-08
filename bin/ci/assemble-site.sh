@@ -8,8 +8,6 @@ set -euo pipefail
 #   index.html                the landing page, site/index.html with its
 #                             placeholders filled in (below)
 #   mach9.png, dock-menu.jpg  the images it shows, from docs/images/
-#   favicon.ico,              its browser icons, from site/, unchanged;
-#   apple-touch-icon.png      make-site-icons.sh makes both from mach9.png
 #   robots.txt, sitemap.xml   for search engines, from site/, unchanged
 #   appcast.xml               <appcast>, unchanged
 #   compatdb_core/, ...       everything in <doc-dir>, the rustdoc that
@@ -24,8 +22,8 @@ set -euo pipefail
 #
 # <info-plist> is launcher/app/Info.plist as of <tag>, not of the checkout,
 # so the page shows the floor of the app it links to even after main has
-# raised it. The page text, the other files of site/ and the images come
-# from the checkout.
+# raised it. The page text, robots.txt, sitemap.xml and the images come from
+# the checkout.
 #
 # A placeholder (@WORD@) still in index.html afterwards, such as one added to
 # the page without a value here, fails the script.
@@ -87,7 +85,7 @@ mkdir "$OUT_DIR"
 cp -R "$DOC_DIR/." "$OUT_DIR/"
 cp "$APPCAST" "$OUT_DIR/appcast.xml"
 cp "$IMAGES/mach9.png" "$IMAGES/dock-menu.jpg" "$OUT_DIR/"
-cp "$SITE/favicon.ico" "$SITE/apple-touch-icon.png" "$SITE/robots.txt" "$SITE/sitemap.xml" "$OUT_DIR/"
+cp "$SITE/robots.txt" "$SITE/sitemap.xml" "$OUT_DIR/"
 
 page=$(<"$PAGE")
 page=${page//@VERSION@/$VERSION}

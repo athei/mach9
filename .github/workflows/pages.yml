@@ -16,9 +16,6 @@ name: Pages
 #     release: its tag and LSMinimumSystemVersion in that tag's
 #     launcher/app/Info.plist, so a floor raised on main shows only once
 #     a release has it;
-#   - favicon.ico and apple-touch-icon.png, the page's browser icons,
-#     from main (site/), made from docs/images/mach9.png by
-#     bin/ci/make-site-icons.sh;
 #   - robots.txt and sitemap.xml, for search engines, from main
 #     (site/robots.txt, site/sitemap.xml).
 # bin/ci/assemble-site.sh puts them together, and runs locally too.

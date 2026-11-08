@@ -3,9 +3,7 @@
   The landing page at https://mach9.app. bin/ci/assemble-site.sh copies it
   into the site pages.yml deploys, fills in the version and the macOS
   placeholders, also in the JSON-LD block, and copies the images from
-  docs/images/, and favicon.ico, apple-touch-icon.png, robots.txt and
-  sitemap.xml from site/. bin/ci/make-site-icons.sh makes favicon.ico and
-  apple-touch-icon.png from docs/images/mach9.png.
+  docs/images/, robots.txt and sitemap.xml.
 -->
 <html lang="en">
 <head>
@@ -41,9 +39,8 @@
   }
 }
 </script>
-<link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
-<link rel="icon" type="image/png" href="mach9.png" sizes="256x256">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="mach9.png">
+<link rel="apple-touch-icon" href="mach9.png">
 <style>
 :root {
   --bg: #f7f7f9;
