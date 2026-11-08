@@ -1,0 +1,220 @@
+<!doctype html>
+<!--
+  The landing page at https://mach9.app. bin/ci/assemble-site.sh copies it
+  into the site pages.yml deploys, fills in the version and the macOS
+  placeholders, and copies the images from docs/images/.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Mach9</title>
+<meta name="description" content="Mach9 runs Windows games on Macs with Apple silicon, with Wine built in. 32-bit Direct3D 9 games run better on it than on other solutions.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mach9.app/">
+<meta property="og:title" content="Mach9">
+<meta property="og:description" content="Mach9 runs Windows games on Macs with Apple silicon, with Wine built in. 32-bit Direct3D 9 games run better on it than on other solutions.">
+<meta property="og:image" content="https://mach9.app/mach9.png">
+<link rel="icon" type="image/png" href="mach9.png">
+<link rel="apple-touch-icon" href="mach9.png">
+<style>
+:root {
+  --bg: #f7f7f9;
+  --surface: #ffffff;
+  --fg: #1d1d1f;
+  --muted: #5c5f66;
+  --border: #dedfe4;
+  --link: #0a5fc8;
+  --button: #0a64d6;
+  --button-hover: #0852b0;
+  --button-fg: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121316;
+    --surface: #1b1d21;
+    --fg: #ebecef;
+    --muted: #a3a6ad;
+    --border: #2e3036;
+    --link: #74aefc;
+    --button: #0a64d6;
+    --button-hover: #0852b0;
+    --button-fg: #ffffff;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 17px;
+  line-height: 1.55;
+}
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 3.5rem 16px 2.5rem;
+}
+a {
+  color: var(--link);
+}
+img {
+  max-width: 100%;
+  height: auto;
+}
+h2 {
+  font-size: 1.25rem;
+  margin: 0 0 0.75rem;
+}
+p {
+  margin: 0 0 0.75rem;
+}
+header {
+  text-align: center;
+}
+.icon {
+  display: block;
+  margin: 0 auto 0.75rem;
+}
+h1 {
+  font-size: 2.5rem;
+  line-height: 1.1;
+  margin: 0 0 0.75rem;
+}
+.lead {
+  font-size: 1.2rem;
+  color: var(--muted);
+  max-width: 32rem;
+  margin: 0 auto;
+}
+.download {
+  text-align: center;
+  margin: 2rem 0 3rem;
+}
+.button {
+  display: inline-block;
+  padding: 0.8rem 1.6rem;
+  border-radius: 0.75rem;
+  background: var(--button);
+  color: var(--button-fg);
+  font-size: 1.1rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.button:hover {
+  background: var(--button-hover);
+}
+.button:focus-visible {
+  outline: 3px solid var(--link);
+  outline-offset: 3px;
+}
+.download p {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+.download .links {
+  margin-top: 0.25rem;
+}
+section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  margin: 0 0 1.25rem;
+}
+.app {
+  display: grid;
+  gap: 1.5rem;
+  align-items: center;
+}
+.app ul {
+  margin: 0 0 0.75rem;
+  padding-left: 1.25rem;
+}
+.app li {
+  margin: 0 0 0.4rem;
+}
+figure {
+  margin: 0;
+  text-align: center;
+}
+figure img {
+  border-radius: 0.6rem;
+}
+figcaption {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: 0.4rem;
+}
+@media (min-width: 40rem) {
+  .app {
+    grid-template-columns: 1fr 15rem;
+  }
+}
+.more ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img class="icon" src="mach9.png" width="128" height="128" alt="">
+    <h1>Mach9</h1>
+    <p class="lead">Mach9 runs Windows games on Macs with Apple silicon, with Wine built in. 32-bit Direct3D 9 games run better on it than on other solutions.</p>
+  </header>
+
+  <div class="download">
+    <a class="button" href="https://github.com/athei/mach9/releases/latest/download/Mach9.dmg">Download Mach9 @VERSION@</a>
+    <p>Apple silicon, macOS @MACOS@ or later</p>
+    <p class="links"><a href="https://github.com/athei/mach9/releases/latest">Release notes</a> &middot; <a href="https://github.com/athei/mach9/releases">All releases</a></p>
+  </div>
+
+  <section class="app">
+    <div>
+      <h2>Mach9.app</h2>
+      <ul>
+        <li>Runs the Windows version of Steam, so Steam games install and start from there.</li>
+        <li>Wine is built in: nothing else to download, no Rosetta.</li>
+        <li>Notarized, and updates itself.</li>
+        <li>Pick and start games from its Dock menu.</li>
+      </ul>
+      <p>Direct3D 9 runs on mtld3d, Mach9's Direct3D 9 implementation on Metal, which is why 32-bit Direct3D 9 games run better on Mach9. Direct3D 10, 11 and 12 games run as well.</p>
+    </div>
+    <figure>
+      <img src="dock-menu.jpg" width="298" height="413" alt="Mach9 Dock menu with a list of games and the menu items">
+      <figcaption>The Dock menu</figcaption>
+    </figure>
+  </section>
+
+  <section class="more">
+    <h2>Help and source</h2>
+    <ul>
+      <li><a href="https://github.com/athei/mach9/blob/main/docs/app.md">User guide</a></li>
+      <li><a href="https://github.com/athei/mach9">Source on GitHub</a></li>
+      <li><a href="https://github.com/athei/mach9/issues">Report a problem</a></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>For launcher developers</h2>
+    <p>The engine behind the app is a relocatable, signed Wine for games on Apple silicon Macs, made to be embedded in a launcher. The launcher configures it with rules that match processes, written with the compatdb-core crate.</p>
+    <p><a href="compatdb_core/">compatdb-core documentation</a> &middot; <a href="https://github.com/athei/mach9#readme">README</a></p>
+  </section>
+</main>
+</body>
+</html>

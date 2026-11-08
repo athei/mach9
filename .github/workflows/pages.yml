@@ -10,14 +10,22 @@ name: Pages
 #   - compatdb_core/, the rustdoc of compatdb-core from main, the spec of
 #     WINE_COMPATDB, which DOCS_URL in compatdb/core/src/lib.rs links
 #     into;
-#   - index.html, which sends a browser to the repository.
+#   - index.html, the landing page, and the images it shows. Its text and
+#     the images come from main (site/index.html, docs/images/), while
+#     the version and the macOS floor it names come from the latest
+#     release: its tag and LSMinimumSystemVersion in that tag's
+#     launcher/app/Info.plist, so a floor raised on main shows only once
+#     a release has it.
+# bin/ci/assemble-site.sh puts them together, and runs locally too.
 #
 # The latest release is the one GitHub marks Latest, never a draft or a
 # prerelease. Publishing a full release, or turning a prerelease into
 # one, sends released, which starts this workflow on main by hand
 # (workflow_dispatch), so the site is always built by main's copy of
-# this file from main's sources, never from a tag. Publishing a
-# prerelease starts nothing, since it never changes the Latest release.
+# this file from main's sources, never from a tag; only the appcast, the
+# Info.plist and the version on the page come from the latest release.
+# Publishing a prerelease starts nothing, since it never changes the
+# Latest release.
 # Marking another release Latest by hand starts nothing either: run this
 # workflow by hand then (docs/maintenance.md, updates in the field).
 #
@@ -37,6 +45,10 @@ on:
       - '.cargo/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'site/**'
+      - 'docs/images/mach9.png'
+      - 'docs/images/dock-menu.jpg'
+      - 'bin/ci/assemble-site.sh'
       - '.github/workflows/pages.yml'
 
 permissions:
@@ -127,6 +139,16 @@ jobs:
               sys.exit(f"appcast.xml has no item for {latest}, the latest release")
           EOF
 
+      # The landing page names the macOS floor of the app it links to,
+      # which is the one in the tag, not on main. The checkout is shallow,
+      # so the file comes from the API.
+      - name: Download the app's Info.plist of the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.appcast.outputs.tag }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/launcher/app/Info.plist?ref=$TAG" -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/Info.plist"
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -143,13 +165,9 @@ jobs:
         run: cargo doc --locked -p compatdb-core --no-deps
 
       - name: Assemble the site
-        run: |
-          cp -R target/doc "$RUNNER_TEMP/site"
-          cp "$RUNNER_TEMP/appcast/appcast.xml" "$RUNNER_TEMP/site/"
-          printf '%s\n' '<!doctype html>' \
-            '<meta http-equiv="refresh" content="0; url=https://github.com/athei/mach9">' \
-            '<a href="https://github.com/athei/mach9">athei/mach9 on GitHub</a>' \
-            > "$RUNNER_TEMP/site/index.html"
+        env:
+          TAG: ${{ steps.appcast.outputs.tag }}
+        run: bin/ci/assemble-site.sh "$TAG" "$RUNNER_TEMP/Info.plist" target/doc "$RUNNER_TEMP/appcast/appcast.xml" "$RUNNER_TEMP/site"
 
       - name: Upload the site
         uses: actions/upload-pages-artifact@v5

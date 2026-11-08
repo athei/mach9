@@ -119,8 +119,9 @@ built before, which runs under Rosetta.
   should say by hand, as short bullets, before publishing the draft.
 - [`pages.yml`](../.github/workflows/pages.yml) deploys the GitHub Pages
   site at `mach9.app` ([updates in the field](#updates-in-the-field)),
-  which also serves the [spec](https://mach9.app/compatdb_core/). Its
-  header says what the site holds and when it runs.
+  which also serves the [spec](https://mach9.app/compatdb_core/) and the
+  landing page from [`site/`](../site). Its header says what the site
+  holds and when it runs.
 - [`compatdb.yml`](../.github/workflows/compatdb.yml) checks the
   formatting of the compatdb crates and tests, lints and builds the
   rustdoc of `compatdb-core` on Linux in minutes; its header says when it
