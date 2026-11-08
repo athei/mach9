@@ -67,10 +67,10 @@ fn wildcard_overrides_and(more: &[&str]) -> Vec<DllOverride> {
     overrides
 }
 
-/// Every D3DX DLL Wine builds, the directories of its `dlls/`, and the
-/// D3DCompiler DLLs of the DirectX redistributable. Spelled out to guard
-/// the ranges the rule builds its entry from.
-const D3DX_AND_D3DCOMPILER: [&str; 44] = [
+/// Every D3DX and D3DCompiler DLL Wine builds, the directories of its
+/// `dlls/`. Spelled out to guard the ranges the rule builds its entry
+/// from.
+const D3DX_AND_D3DCOMPILER: [&str; 46] = [
     "d3dx9_24",
     "d3dx9_25",
     "d3dx9_26",
@@ -115,6 +115,8 @@ const D3DX_AND_D3DCOMPILER: [&str; 44] = [
     "d3dcompiler_41",
     "d3dcompiler_42",
     "d3dcompiler_43",
+    "d3dcompiler_46",
+    "d3dcompiler_47",
 ];
 
 /// The entry of the D3DX and D3DCompiler rule, `D3DX_AND_D3DCOMPILER`
@@ -1143,9 +1145,9 @@ fn a_launch_wide_rule_re_enables_mono_after_the_builtins() {
 #[test]
 fn every_process_loads_d3dx_and_d3dcompiler_native_then_builtin() {
     // One `*` rule without a fingerprint, with one entry that names every
-    // D3DX DLL Wine builds and the redistributable's D3DCompiler DLLs.
-    // The order is `n,b`: plain `n` would fail to load a DLL that has only
-    // Wine's placeholder in the prefix.
+    // D3DX and D3DCompiler DLL Wine builds. The order is `n,b`: plain `n`
+    // would fail to load a DLL that has only Wine's placeholder in the
+    // prefix.
     let rule = native_d3dx_and_d3dcompiler();
     assert!(defaults().contains(&rule));
     assert!(rule.exe.is_any());
@@ -1198,12 +1200,11 @@ fn every_process_loads_d3dx_and_d3dcompiler_native_then_builtin() {
                 "{exe} {module}"
             );
         }
-        // The compilers that programs ship in their own folders keep
-        // Wine's load order.
-        for module in ["d3dcompiler_46", "d3dcompiler_47"] {
-            assert_eq!(final_order(&resolution, module), None, "{exe} {module}");
-        }
     }
+    // Steam's web helper ships `D3DCompiler_47.dll` in its own folder and
+    // loads it native too.
+    let helper = table.resolve("steamwebhelper.exe", &version_of(&steam_web_helper()), None);
+    assert_eq!(final_order(&helper, "D3DCompiler_47.dll"), Some("n,b"));
     // No other built-in rule gives one of these DLLs a load order.
     for other in table.rules.iter().filter(|r| **r != rule) {
         for entry in &other.dll_overrides {

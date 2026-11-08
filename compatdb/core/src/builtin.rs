@@ -249,17 +249,14 @@ pub fn no_mono_or_gecko() -> Rule {
 ///
 /// The order is `n,b`, never `n`. Where no native copy exists, the prefix
 /// holds Wine's placeholder DLL, and ntdll loads the builtin for a placeholder
-/// under `n,b`; under `n` the DLL would fail to load. The entry names each
-/// DLL, since `WINEDLLOVERRIDES` has no wildcards: the D3DX DLLs Wine builds,
-/// `d3dx9_24` to `d3dx9_43`, `d3dx10_33` to `d3dx10_43`, `d3dx11_42` and
-/// `d3dx11_43`, and `d3dcompiler_33` to `d3dcompiler_43`, the compilers the
-/// DirectX redistributable installs with them.
+/// under `n,b`; under `n` the DLL would fail to load. The entry names every
+/// D3DX and D3DCompiler DLL Wine builds, since `WINEDLLOVERRIDES` has no
+/// wildcards: `d3dx9_24` to `d3dx9_43`, `d3dx10_33` to `d3dx10_43`,
+/// `d3dx11_42` and `d3dx11_43`, `d3dcompiler_33` to `d3dcompiler_43`,
+/// `d3dcompiler_46` and `d3dcompiler_47`.
 ///
-/// `d3dcompiler_46` and `d3dcompiler_47` are left out. No game is known to
-/// need their native copies, and programs such as Steam's and the Social
-/// Club's web helpers ship `d3dcompiler_47` in their own folders for their
-/// shader compiles, which would move from Wine's builtin to Microsoft's x64
-/// compiler under FEX.
+/// Steam's and the Social Club's web helpers ship `d3dcompiler_47` in their
+/// own folders, so they load that copy native too.
 ///
 /// It matches every process, like the other [`defaults`]. ntdll keeps the
 /// last entry for a module, so a later entry for one of these DLLs, in a `*`
@@ -277,13 +274,14 @@ pub fn native_d3dx_and_d3dcompiler() -> Rule {
     }
 }
 
-/// The D3DX DLLs Wine builds a builtin of and the D3DCompiler DLLs of the
-/// DirectX redistributable, without `.dll`.
+/// The D3DX and D3DCompiler DLLs Wine builds a builtin of, without `.dll`.
 fn d3dx_and_d3dcompiler_modules() -> impl Iterator<Item = String> {
     let d3dx9 = (24..=43).map(|v| format!("d3dx9_{v}"));
     let d3dx10 = (33..=43).map(|v| format!("d3dx10_{v}"));
     let d3dx11 = (42..=43).map(|v| format!("d3dx11_{v}"));
-    let d3dcompiler = (33..=43).map(|v| format!("d3dcompiler_{v}"));
+    let d3dcompiler = (33..=43)
+        .chain([46, 47])
+        .map(|v| format!("d3dcompiler_{v}"));
     d3dx9.chain(d3dx10).chain(d3dx11).chain(d3dcompiler)
 }
 
