@@ -1,8 +1,7 @@
-// Renders the DMG installer background committed at
-// launcher/assets/dmg-background.png. Run manually, from the repository root,
-// when the artwork needs to change:
+// Renders the DMG installer background, with the app version drawn near the
+// bottom edge. make-dmg.sh runs it on every build:
 //
-//   swift launcher/scripts/generate-dmg-background.swift launcher/assets/dmg-background.png
+//   swift launcher/scripts/generate-dmg-background.swift <out.png> <version>
 //
 // The canvas is 660x400 points at 2x (1320x800 px, 144 DPI) and must stay in
 // sync with the geometry constants in make-dmg.sh: the app icon sits
@@ -11,9 +10,12 @@
 
 import AppKit
 
-let outPath = CommandLine.arguments.count > 1
-    ? CommandLine.arguments[1]
-    : "launcher/assets/dmg-background.png"
+guard CommandLine.arguments.count == 3 else {
+    fputs("usage: swift generate-dmg-background.swift <out.png> <version>\n", stderr)
+    exit(64)
+}
+let outPath = CommandLine.arguments[1]
+let version = CommandLine.arguments[2]
 
 let pointSize = NSSize(width: 660, height: 400)
 let scale: CGFloat = 2
@@ -79,6 +81,19 @@ let captionSize = caption.size(withAttributes: captionAttrs)
 caption.draw(
     at: NSPoint(x: (pointSize.width - captionSize.width) / 2, y: arrowY + 34),
     withAttributes: captionAttrs
+)
+
+// The icon labels end around Finder y = 290, which is a drawing y of 110;
+// the version sits well below them, about 40 pt above the bottom edge.
+let versionLine = "Version \(version)" as NSString
+let versionAttrs: [NSAttributedString.Key: Any] = [
+    .font: NSFont.systemFont(ofSize: 12),
+    .foregroundColor: NSColor(calibratedWhite: 0.58, alpha: 1),
+]
+let versionSize = versionLine.size(withAttributes: versionAttrs)
+versionLine.draw(
+    at: NSPoint(x: (pointSize.width - versionSize.width) / 2, y: 36),
+    withAttributes: versionAttrs
 )
 
 NSGraphicsContext.current = nil

@@ -3,7 +3,11 @@
 # Package a macOS .app bundle into a compressed, drag-to-install DMG.
 #
 # Usage:
-#   launcher/scripts/make-dmg.sh [--lzma] [--background <png>] [--out <file.dmg>] <path/to/App.app>
+#   launcher/scripts/make-dmg.sh [--lzma] [--out <file.dmg>] <path/to/App.app>
+#
+# The volume is named after the app and its CFBundleShortVersionString, which
+# version.sh --stamp writes, and the window background, rendered for each
+# build by generate-dmg-background.swift, shows that version too.
 #
 # The volume is APFS and the image is compressed with LZFSE (hdiutil format
 # ULFO): good ratio, very fast decompression, and the pair Sparkle recommends
@@ -12,7 +16,8 @@
 # slower. Both need macOS 10.13+ for APFS, far below what the app itself
 # needs (LSMinimumSystemVersion in the app's Info.plist).
 #
-# Only stock macOS tools are used (hdiutil, osascript, ditto, PlistBuddy).
+# Only stock macOS tools are used (hdiutil, osascript, ditto, PlistBuddy),
+# plus swift, which comes with Xcode or the Command Line Tools.
 
 set -euo pipefail
 
@@ -32,14 +37,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 require_macos "hdiutil, Finder"
 
 FORMAT=ULFO
-BACKGROUND="$LAUNCHER_DIR/assets/dmg-background.png"
 OUT=""
 APP=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --lzma) FORMAT=ULMO; shift ;;
-    --background) BACKGROUND="${2:?--background needs a path}"; shift 2 ;;
     --out) OUT="${2:?--out needs a path}"; shift 2 ;;
     -h|--help) usage 0 ;;
     -*) die "unknown option: $1" ;;
@@ -52,12 +55,16 @@ done
 [[ -n "$APP" ]] || usage
 [[ -d "$APP" ]] || die "not an app bundle: $APP"
 [[ -f "$APP/Contents/Info.plist" ]] || die "missing Contents/Info.plist in: $APP"
-[[ -f "$BACKGROUND" ]] || die "background image not found: $BACKGROUND"
+# Without Xcode or the Command Line Tools, /usr/bin/swift is a stub that
+# opens an install dialog instead of running.
+xcrun -f swift >/dev/null 2>&1 || die "swift not found; install Xcode or the Command Line Tools"
 
 APP_BASENAME="$(basename "$APP")"
 APP_NAME="$($PLIST -c 'Print :CFBundleDisplayName' "$APP/Contents/Info.plist" 2>/dev/null \
   || $PLIST -c 'Print :CFBundleName' "$APP/Contents/Info.plist" 2>/dev/null \
   || basename "$APP_BASENAME" .app)"
+VERSION="$($PLIST -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+[[ -n "$VERSION" ]] || die "no CFBundleShortVersionString in $APP/Contents/Info.plist (stamp the bundle with version.sh --stamp)"
 [[ -n "$OUT" ]] || OUT="$(dirname "$APP")/$APP_NAME.dmg"
 
 TMP_DIR="$(mktemp -d -t make-dmg)"
@@ -77,10 +84,13 @@ echo "==> Staging $APP_BASENAME"
 mkdir -p "$STAGING/.background"
 ditto "$APP" "$STAGING/$APP_BASENAME"
 ln -s /Applications "$STAGING/Applications"
-cp "$BACKGROUND" "$STAGING/.background/background.png"
+
+echo "==> Rendering background for version $VERSION"
+swift "$LAUNCHER_DIR/scripts/generate-dmg-background.swift" \
+  "$STAGING/.background/background.png" "$VERSION"
 
 echo "==> Creating writable image"
-hdiutil create -srcfolder "$STAGING" -volname "$APP_NAME" \
+hdiutil create -srcfolder "$STAGING" -volname "$APP_NAME $VERSION" \
   -fs APFS -format UDRW -ov -quiet "$RW_DMG"
 
 echo "==> Mounting"
