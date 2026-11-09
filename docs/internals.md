@@ -525,4 +525,4 @@ A `*-src.ref` file names a branch, tag or commit of the component's
 | Homebrew libraries | Not pinned ([Homebrew libraries and the floor](#homebrew-libraries-and-the-floor)); a CI build installs [`brew-formulae`](../pins/brew-formulae) at Homebrew's newest versions ([Homebrew formulae](maintenance.md#homebrew-formulae)) |
 | llvm-mingw | A CI build: [`redist.env`](../pins/redist.env), version and SHA-256. A local build: `MINGW_DIR` |
 | Provisioning profile | [`signing/loader.provisionprofile`](../signing/loader.provisionprofile); replace it when it expires or the App ID changes |
-| Sparkle, Mach9.app's updater | [`fetch-sparkle.sh`](../launcher/scripts/fetch-sparkle.sh): version and SHA-256 of the release tarball |
+| Sparkle, Mach9.app's updater | [`redist.env`](../pins/redist.env): version and SHA-256 of the release tarball |

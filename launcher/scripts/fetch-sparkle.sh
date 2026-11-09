@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# Fetch the pinned Sparkle release the launcher links against and the bundle
-# ships.
+# Fetch the Sparkle release pins/redist.env pins (SPARKLE_VERSION and
+# SPARKLE_SHA256), which the launcher links against and the bundle ships.
 #
 # Usage:
 #   launcher/scripts/fetch-sparkle.sh [--force] [--dest <dir>]
 #
 # The framework is a binary dependency, so it is not committed. This script
-# downloads exactly one pinned release, refuses to continue unless its SHA-256
+# downloads exactly that release, refuses to continue unless its SHA-256
 # matches, and lays the pieces out in SPARKLE_DIR (target/launcher/sparkle
 # unless the environment or --dest names another directory):
 #
@@ -21,20 +21,20 @@
 #
 # Re-running is a no-op once the pinned version is in place, apart from
 # touching .version in that directory so make sees it as newer than this
-# script; --force refetches. The stamp is written last, after the framework
-# verifies, so an interrupted or failed fetch is retried on the next run.
+# script and redist.env; --force refetches. The stamp is written last, after
+# the framework verifies, so an interrupted or failed fetch is retried on the
+# next run.
 #
 # Only stock macOS tools are used (curl, shasum, tar).
 
 set -euo pipefail
 
-# Bump both together. The checksum is over the release tarball as published at
-# the URL below; recompute it with `shasum -a 256` and never take it from
-# anywhere but a download you just made yourself.
-SPARKLE_VERSION="2.9.6"
-SPARKLE_SHA256="52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192"
-
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# SPARKLE_VERSION and SPARKLE_SHA256.
+# shellcheck source=../../pins/redist.env
+source "$REPO_ROOT/pins/redist.env"
+[[ -n "${SPARKLE_VERSION:-}" && -n "${SPARKLE_SHA256:-}" ]] \
+  || die "$REPO_ROOT/pins/redist.env pins no SPARKLE_VERSION or SPARKLE_SHA256"
 
 DEST="$SPARKLE_DIR"
 FORCE=0
@@ -54,8 +54,9 @@ STAMP="$DEST/.version"
 if [[ $FORCE -eq 0 && -f "$STAMP" && "$(cat "$STAMP")" == "$SPARKLE_VERSION" \
       && -d "$DEST/Sparkle.framework" && -x "$DEST/bin/generate_appcast" ]]; then
   # The Makefile rule that runs this script has the stamp as its target and
-  # the script as its prerequisite, so after an edit here that leaves the
-  # version alone, the stamp has to move or make runs this on every build.
+  # the script and redist.env as its prerequisites, so after an edit to
+  # either that leaves the version alone, the stamp has to move or make runs
+  # this on every build.
   touch "$STAMP"
   echo "Sparkle $SPARKLE_VERSION already in $DEST"
   exit 0

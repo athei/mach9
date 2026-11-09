@@ -86,7 +86,12 @@ What is pinned, and where, is in [internals.md](internals.md#pinned-inputs).
   its checksum matches; a fresh download that does not match is an error.
   To update one, change both its URL and its SHA-256.
 - [`bin/ci/llvm-mingw.sh`](../bin/ci/llvm-mingw.sh) does the same for the
-  llvm-mingw of a CI build; to update it, change its version and SHA-256.
+  llvm-mingw of a CI build; to update it, change `LLVM_MINGW_VERSION` and
+  `LLVM_MINGW_SHA256` in `redist.env`.
+- [`fetch-sparkle.sh`](../launcher/scripts/fetch-sparkle.sh) downloads the
+  Sparkle of Mach9.app and refuses a tarball whose checksum does not match;
+  to update it, change `SPARKLE_VERSION` and `SPARKLE_SHA256` in
+  `redist.env`.
 - The script that builds a source pinned by tag and commit fails when the
   tag is not at the commit.
 
@@ -310,7 +315,7 @@ the check.
 | DXMT's LLVM | The LLVM pin, the floor, the Xcode version and the runner image |
 | Pinned downloads | The `redist.env` lines that `pins-key.sh` hashes for it in `release.yml` |
 | cargo's registry | `Cargo.lock` |
-| Sparkle | `fetch-sparkle.sh`, which pins the release |
+| Sparkle | The `redist.env` lines that `pins-key.sh` hashes for it, and `fetch-sparkle.sh` |
 | Xcode choice | Runner image, its version, and the hashes of `host.sh` and `profile.sh`; `brew-cache.yml` shares it |
 
 Only runs on `main` save caches, the Homebrew kegs included. Every run can
@@ -323,8 +328,10 @@ branches read `main`'s caches and write none.
   rebuild it after such a change, delete the `dxmt-llvm15-*` caches
   (`gh cache list --key dxmt-llvm15-`, then `gh cache delete <id>`) or
   change the pin.
-- A new download pinned in `redist.env` needs its prefix added to the
-  `pins-key.sh` call for the downloads cache in `release.yml`.
+- A new download pinned in `redist.env` that `bundle-wine.sh` or
+  `bin/ci/llvm-mingw.sh` keeps in `CACHE_DIR` needs its prefix added to the
+  `pins-key.sh` call for the downloads cache in `release.yml`. Sparkle is
+  not in that cache; it has its own key.
 - A new commit on a branch a pin names, such as the Wine branch, starts no
   run. The next scheduled run picks it up; or start a run on `main` by
   hand before tagging.

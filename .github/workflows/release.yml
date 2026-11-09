@@ -271,10 +271,12 @@ jobs:
           xcode=$(xcodebuild -version | awk 'NR == 1 { print $2 }')
           llvm15=$(scripts/bin/ci/pins-key.sh LLVM15_)
           redist=$(scripts/bin/ci/pins-key.sh MTLD3D_ UNO_FLUENT_ICONS_ LLVM_MINGW_)
+          sparkle=$(scripts/bin/ci/pins-key.sh SPARKLE_)
           {
             echo "llvm15=dxmt-llvm15-$LLVM15_GIT_COMMIT-floor$MACOS_FLOOR-xcode$xcode-$ImageOS-$llvm15"
             echo "redist-prefix=redist-"
             echo "redist=redist-$redist"
+            echo "sparkle=sparkle-$sparkle-${{ hashFiles('scripts/launcher/scripts/fetch-sparkle.sh') }}"
             echo "cargo-prefix=cargo-"
             echo "ccache-prefix=ccache-$ImageOS-"
             echo "ccache=ccache-$ImageOS-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -522,14 +524,15 @@ jobs:
 
       # The pinned Sparkle release the launcher links and the app ships, and
       # the tools that build the appcast (fetch-sparkle.sh), in the place
-      # launcher/Makefile looks for them. Saved below once the app is
-      # assembled.
+      # launcher/Makefile looks for them. The key changes with the SPARKLE_
+      # pins of redist.env and with fetch-sparkle.sh. Saved below once the
+      # app is assembled.
       - name: Restore Sparkle
         id: sparkle
         uses: actions/cache/restore@v6
         with:
           path: scripts/target/launcher/sparkle
-          key: sparkle-${{ hashFiles('scripts/launcher/scripts/fetch-sparkle.sh') }}
+          key: ${{ steps.keys.outputs.sparkle }}
 
       # Mach9.app around the runtime-only bundle, in target/launcher/stage of
       # the checkout, unsigned (launcher/Makefile). A run on a tag stamps the
@@ -585,7 +588,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: scripts/target/launcher/sparkle
-          key: sparkle-${{ hashFiles('scripts/launcher/scripts/fetch-sparkle.sh') }}
+          key: ${{ steps.keys.outputs.sparkle }}
 
       # What a release does with the app short of notarizing it: sign it with
       # the Developer ID identity of the keychain above, then pack its DMG on

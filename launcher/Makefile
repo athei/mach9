@@ -39,10 +39,11 @@ PLUGIN       := $(BUILD)/$(PLUGIN_NAME).docktileplugin
 PLUGIN_BIN   := $(PLUGIN)/Contents/MacOS/$(PLUGIN_NAME)
 PLUGIN_PLIST := $(LAUNCHER)/docktile/Info.plist
 
-# The updater framework. Not committed: scripts/fetch-sparkle.sh downloads one
-# pinned release and checks it against a known SHA-256. The release build
-# links against the copy here (app/build.rs reads SPARKLE_DIR) and resolves
-# the copy in Contents/Frameworks at run time.
+# The updater framework. Not committed: scripts/fetch-sparkle.sh downloads the
+# release pinned in REDIST and checks it against the SHA-256 pinned with it.
+# The release build links against the copy here (app/build.rs reads
+# SPARKLE_DIR) and resolves the copy in Contents/Frameworks at run time.
+REDIST        := $(ROOT)/pins/redist.env
 SPARKLE_DIR   := $(BUILD)/sparkle
 SPARKLE_FW    := $(SPARKLE_DIR)/Sparkle.framework
 SPARKLE_STAMP := $(SPARKLE_DIR)/.version
@@ -75,7 +76,7 @@ all: build
 
 build: $(BIN) $(PLUGIN_BIN)
 
-$(SPARKLE_STAMP): $(SCRIPTS)/fetch-sparkle.sh
+$(SPARKLE_STAMP): $(SCRIPTS)/fetch-sparkle.sh $(REDIST)
 	SPARKLE_DIR="$(SPARKLE_DIR)" $(SCRIPTS)/fetch-sparkle.sh
 
 # Both packages are built by one cargo run. It runs on every build and lets
