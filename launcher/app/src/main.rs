@@ -1,6 +1,7 @@
 mod bundle;
 mod cli;
 mod config;
+mod dock;
 mod dpi;
 mod launch;
 mod registry;
@@ -64,6 +65,10 @@ fn run(args: cli::Args) -> io::Result<()> {
     // Before the config is read, so config failures reach the log too.
     let log_fd = maybe_redirect_stdio(&support)?;
     init_logger();
+
+    // Ahead of every dialog, update check and exec into wine, so the first
+    // launch with a new plug-in does it whatever it was started for.
+    dock::refresh_plugin_host(&support, &dock::plugin_binary(&resources), dock::kill_host);
 
     match setup(&support, args)? {
         Some(cfg) => match launch(&cfg, &support, &resources, log_fd)? {},
