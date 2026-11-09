@@ -2,8 +2,9 @@
 <!--
   The landing page at https://mach9.app. bin/ci/assemble-site.sh copies it
   into the site pages.yml deploys, fills in the version and the macOS
-  placeholders, also in the JSON-LD block, and copies the images from
-  docs/images/, robots.txt and sitemap.xml.
+  placeholders, also in the JSON-LD block, and copies the images it shows
+  (the WebP files in site/), the icon for the tab and link previews
+  (docs/images/mach9.png), robots.txt and sitemap.xml.
 -->
 <html lang="en">
 <head>
@@ -196,7 +197,7 @@ figcaption {
 <body>
 <main>
   <header>
-    <img class="icon" src="mach9.png" width="128" height="128" alt="Mach9 app icon">
+    <img class="icon" src="mach9-128.webp" srcset="mach9-128.webp 1x, mach9-256.webp 2x" width="128" height="128" alt="Mach9 app icon">
     <h1>Mach9</h1>
     <p class="lead">Play Windows games fast on your Apple silicon Mac. Wine is built in: drag Mach9 to Applications and play. There is nothing else to install or download.</p>
   </header>
@@ -223,7 +224,7 @@ figcaption {
       </ul>
     </div>
     <figure>
-      <img src="dock-menu.jpg" width="298" height="413" alt="Mach9 Dock menu with a list of games and the menu items">
+      <img src="dock-menu-240.webp" srcset="dock-menu-240.webp 1x, dock-menu-480.webp 2x" width="240" height="333" alt="Mach9 Dock menu with a list of games and the menu items">
       <figcaption>The Dock menu</figcaption>
     </figure>
   </section>

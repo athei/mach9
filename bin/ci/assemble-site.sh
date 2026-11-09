@@ -7,7 +7,10 @@ set -euo pipefail
 #
 #   index.html                the landing page, site/index.html with its
 #                             placeholders filled in (below)
-#   mach9.png, dock-menu.jpg  the images it shows, from docs/images/
+#   mach9-*.webp,             the images it shows, at 1x and 2x, from
+#   dock-menu-*.webp          site/, unchanged
+#   mach9.png                 the icon for favicon, apple-touch-icon and
+#                             og:image, from docs/images/
 #   robots.txt, sitemap.xml   for search engines, from site/, unchanged
 #   appcast.xml               <appcast>, unchanged
 #   compatdb_core/, ...       everything in <doc-dir>, the rustdoc that
@@ -84,7 +87,9 @@ mkdir -p "$(dirname "$OUT_DIR")"
 mkdir "$OUT_DIR"
 cp -R "$DOC_DIR/." "$OUT_DIR/"
 cp "$APPCAST" "$OUT_DIR/appcast.xml"
-cp "$IMAGES/mach9.png" "$IMAGES/dock-menu.jpg" "$OUT_DIR/"
+cp "$IMAGES/mach9.png" "$OUT_DIR/"
+cp "$SITE/mach9-128.webp" "$SITE/mach9-256.webp" \
+    "$SITE/dock-menu-240.webp" "$SITE/dock-menu-480.webp" "$OUT_DIR/"
 cp "$SITE/robots.txt" "$SITE/sitemap.xml" "$OUT_DIR/"
 
 page=$(<"$PAGE")

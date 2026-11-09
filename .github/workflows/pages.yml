@@ -11,11 +11,11 @@ name: Pages
 #     WINE_COMPATDB, which DOCS_URL in compatdb/core/src/lib.rs links
 #     into;
 #   - index.html, the landing page, and the images it shows. Its text and
-#     the images come from main (site/index.html, docs/images/), while
-#     the version and the macOS floor it names come from the latest
-#     release: its tag and LSMinimumSystemVersion in that tag's
-#     launcher/app/Info.plist, so a floor raised on main shows only once
-#     a release has it;
+#     the images come from main (site/index.html, the WebP files in
+#     site/, docs/images/mach9.png), while the version and the macOS
+#     floor it names come from the latest release: its tag and
+#     LSMinimumSystemVersion in that tag's launcher/app/Info.plist, so a
+#     floor raised on main shows only once a release has it;
 #   - robots.txt and sitemap.xml, for search engines, from main
 #     (site/robots.txt, site/sitemap.xml).
 # bin/ci/assemble-site.sh puts them together, and runs locally too.
@@ -49,7 +49,6 @@ on:
       - 'Cargo.lock'
       - 'site/**'
       - 'docs/images/mach9.png'
-      - 'docs/images/dock-menu.jpg'
       - 'bin/ci/assemble-site.sh'
       - '.github/workflows/pages.yml'
 
