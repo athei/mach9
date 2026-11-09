@@ -148,7 +148,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "compatdb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "compatdb-core",
  "libc",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "compatdb-core"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "defmt"
@@ -237,7 +237,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "gamelauncher"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "compatdb-core",
@@ -254,7 +254,7 @@ dependencies = [
 
 [[package]]
 name = "gamelauncher-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "plist",
@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "gamelauncher-docktile"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gamelauncher-core",
  "objc2",
