@@ -67,7 +67,7 @@ TMP_DIR="$(mktemp -d -t fetch-sparkle)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 echo "==> Downloading Sparkle $SPARKLE_VERSION"
-curl -fsSL --proto '=https' --tlsv1.2 -o "$TMP_DIR/sparkle.tar.xz" "$URL" \
+curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$TMP_DIR/sparkle.tar.xz" "$URL" \
   || die "download failed: $URL"
 
 echo "==> Verifying checksum"
