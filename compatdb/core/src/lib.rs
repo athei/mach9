@@ -421,8 +421,8 @@
 //! it on, so the log of a process shows its whole configuration with the
 //! source of every value, and a launcher rule that sets the same key
 //! changes it. [`builtin::programs`] each name an executable and pin its
-//! version resource, so none of them catches an unrelated program of the
-//! same name; a test enforces this.
+//! version resource, or name a Steam app id, so none of them catches an
+//! unrelated program of the same name; a test enforces this.
 //!
 //! # Recipes
 //!

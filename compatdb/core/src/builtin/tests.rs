@@ -483,7 +483,8 @@ fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
 #[test]
 fn every_builtin_rule_has_an_exe_and_none_matches_a_bare_basename() -> TestResult {
     // A rule naming an executable must also pin its version resource, or
-    // it would catch every program of that name. The `*` rules are a
+    // it would catch every program of that name; a rule for a Steam app id
+    // names no file and counts as pinned. The `*` rules are a
     // different case: they are meant for every process, and several of
     // them are not duplicates of each other.
     let table = Table::builtin();
@@ -1536,6 +1537,72 @@ fn age_of_empires_ii_hd_is_dpi_unaware_and_nothing_else_changes() {
         ..aoe2_hd_version()
     };
     assert_eq!(table.resolve("AoK HD.exe", &other, None), plain());
+}
+
+/// `text` in UTF-16, as a process's command line or environment block holds
+/// it.
+fn utf16(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+}
+
+#[test]
+fn half_life_2_and_team_fortress_2_get_noassert_by_their_steam_app_id() -> TestResult {
+    let table = Table::builtin();
+    // Their launchers have no version resource, so the processes have an
+    // empty one; the app id alone matches, whatever the image name.
+    for (app, exe) in [(220, "hl2.exe"), (440, "tf_win64.exe"), (440, "tf.exe")] {
+        let pin = rule(&table, &format!("steam:{app}"))?;
+        assert!(!pin.is_unfingerprinted(), "{exe}");
+        let mut game = table.resolve(exe, &VersionInfo::default(), Some(app));
+        assert_eq!(game.arguments, ["-noassert"], "{exe}");
+        assert_eq!(
+            game.arguments_from,
+            [Origin::BuiltInFor(pin.matchers())],
+            "{exe}"
+        );
+        // Nothing else changes for the game.
+        game.arguments.clear();
+        game.arguments_from.clear();
+        assert_eq!(game, plain(), "{exe}");
+    }
+    // Another app id, no app id, and a Steam process, whose SteamAppId is
+    // empty, get only the `*` rules.
+    assert_eq!(crate::runtime::steam_app(&utf16("SteamAppId=\0\0")), None);
+    assert_eq!(
+        crate::runtime::steam_app(&utf16("SteamAppId=440\0\0")),
+        Some(440)
+    );
+    for (exe, app) in [
+        ("hl2.exe", Some(380)),
+        ("hl2.exe", None),
+        ("tf_win64.exe", None),
+        ("steam.exe", None),
+    ] {
+        assert_eq!(
+            table.resolve(exe, &VersionInfo::default(), app),
+            plain(),
+            "{exe} {app:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn noassert_is_appended_after_steams_arguments_and_never_twice() {
+    let game = Table::builtin().resolve("hl2.exe", &VersionInfo::default(), Some(220));
+    let steam = "\"C:\\hl2.exe\" -steam -game hl2 -novid";
+    let (cmdline, appended) = crate::runtime::append_cmdline_each(&utf16(steam), &game.arguments);
+    assert_eq!(appended, [true]);
+    assert_eq!(
+        cmdline.map(|c| String::from_utf16_lossy(&c)),
+        Some(format!("{steam} -noassert"))
+    );
+    // A command line that already holds it, from the user's launch options,
+    // stays as it is.
+    let (cmdline, appended) =
+        crate::runtime::append_cmdline_each(&utf16(&format!("{steam} -noassert")), &game.arguments);
+    assert_eq!(appended, [false]);
+    assert_eq!(cmdline, None);
 }
 
 #[test]

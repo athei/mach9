@@ -98,13 +98,16 @@ impl Exe {
     }
 
     /// `text` as an `exe`, unchecked: only for the literals of this crate,
-    /// which a test reads back.
+    /// which a test reads back. `steam:<appid>` is [`Exe::Steam`], as for
+    /// [`Exe::new`].
     pub(crate) fn literal(text: &str) -> Self {
         if text == Self::ANY {
-            Self::Any
-        } else {
-            Self::Name(ExeName(text.to_owned()))
+            return Self::Any;
         }
+        after_steam_prefix(text).and_then(steam_app_id).map_or_else(
+            || Self::Name(ExeName(text.to_owned())),
+            |id| Self::Steam(SteamApp::of_id(id)),
+        )
     }
 
     /// `*`, the basename or `steam:<appid>`, as the wire writes it.

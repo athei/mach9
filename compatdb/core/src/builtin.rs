@@ -5,14 +5,15 @@
 //! the library appends them to these, and every rule that matches a process
 //! applies.
 //!
-//! Every rule that names an executable also carries a version fingerprint, so
-//! none of them can catch an unrelated program that happens to share a file
-//! name. The exceptions are the [`defaults`], which match every process on
-//! purpose: each is a default that a built-in rule for one program, or any
-//! `WINE_COMPATDB` rule that sets the same key, overrides. A rule for one
-//! program folds after a `*` rule from `WINE_COMPATDB`, so its fix survives
-//! launch-wide settings; a `WINE_COMPATDB` rule for that program changes it
-//! (see [`Table::resolve`]).
+//! Each rule for one program ([`programs`]) names an executable and pins its
+//! version fingerprint, or names a Steam app id, so none of them can catch an
+//! unrelated program that happens to share a file name. The [`defaults`]
+//! name no executable and match every process on purpose: each is a default
+//! that a built-in rule for one program, or any `WINE_COMPATDB` rule that
+//! sets the same key, overrides. A rule for one program folds after a `*`
+//! rule from `WINE_COMPATDB`, so its fix survives launch-wide settings; a
+//! `WINE_COMPATDB` rule for that program changes it (see
+//! [`Table::resolve`]).
 
 use std::fmt;
 
@@ -58,6 +59,8 @@ pub fn programs() -> Vec<Rule> {
         nostale(),
         age_of_empires_ii_hd(),
         world_of_warcraft(),
+        half_life_2(),
+        team_fortress_2(),
     ]
 }
 
@@ -438,6 +441,44 @@ pub fn world_of_warcraft() -> Rule {
         product: Some(Fingerprint::literal("World of Warcraft")),
         original_filename: Some(Fingerprint::literal("WoW.exe")),
         large_address_aware: Setting::Set(true),
+        ..Rule::default()
+    }
+}
+
+/// No assert dialog when Half-Life 2 (Steam app 220) quits.
+///
+/// Valve's `~CThread` checks once, while server.dll unloads, that the
+/// achievement-save thread has exited, and thread exit under Wine and FEX
+/// loses that race, so tier0 shows "Illegal termination of worker thread";
+/// with `-noassert`, tier0's `DoNewAssertDialog` returns without the dialog
+/// ([source-1-games#7391]). The rule matches the app id because `hl2.exe`
+/// has no version resource.
+///
+/// [source-1-games#7391]: https://github.com/ValveSoftware/source-1-games/issues/7391
+#[must_use]
+pub fn half_life_2() -> Rule {
+    source_noassert("steam:220")
+}
+
+/// No assert dialog when Team Fortress 2 (Steam app 440) quits.
+///
+/// The same race as in [`half_life_2`], with TF2's file-writer thread
+/// ([source-1-games#7391] reports it on Windows and Linux too). The rule
+/// matches the app id because `tf.exe` and `tf_win64.exe` have no version
+/// resource.
+///
+/// [source-1-games#7391]: https://github.com/ValveSoftware/source-1-games/issues/7391
+#[must_use]
+pub fn team_fortress_2() -> Rule {
+    source_noassert("steam:440")
+}
+
+/// The rule that appends `-noassert` to the command line of the processes
+/// with the Steam app id `app`, a `steam:<appid>` literal.
+fn source_noassert(app: &str) -> Rule {
+    Rule {
+        exe: Exe::literal(app),
+        arguments: vec![Argument::literal("-noassert")],
         ..Rule::default()
     }
 }
