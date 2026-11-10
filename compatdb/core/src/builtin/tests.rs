@@ -1572,45 +1572,66 @@ fn every_former_name_of_a_builtin_rule_says_what_does_it_now() -> TestResult {
     let dxmt = former("DXMT").ok_or("dxmt")?;
     assert_eq!(
         dxmt.to_string(),
-        "\"dxmt\" was the name of a built-in rule of compatdb.so, and the built-in rules have no \
-         names any more, so a rule can no longer extend or turn off one by naming it"
+        "\"dxmt\" was the name of a built-in rule, and built-in rules can no longer be extended \
+         or turned off by name"
     );
     assert_eq!(
         dxmt.instead_of_extending(),
-        "set dxgi instead, in a rule matching every process or in a rule for one program"
+        "Set `dxgi` in a rule for every process or for one program instead"
     );
     assert_eq!(
         dxmt.instead_of_turning_off(),
-        "dxgi set to default in a rule matching every process hands the setting back to \
-         upstream Wine in every process instead, except where a built-in rule for one program \
-         sets it"
+        "Set `dxgi` to `default` in a rule for every process to get upstream Wine's behaviour, \
+         except where a built-in rule for one program sets it"
     );
-    // A rule for one program is changed by a rule for that program.
+    // A former rule for one program: a block that extended it gets an
+    // `exe` with a fingerprint, and what turned it off is a rule for the
+    // program that resets its keys.
     let nostale = former("nostale").ok_or("nostale")?;
     assert_eq!(
         nostale.instead_of_extending(),
-        nostale.instead_of_turning_off()
+        "Add an `exe` with a `company`, `product` or `original_filename` to make it a rule for \
+         that program, or remove it"
     );
-    assert!(
-        nostale
-            .instead_of_turning_off()
-            .starts_with("to change what a built-in rule sets for one program")
+    assert_eq!(
+        nostale.instead_of_turning_off(),
+        "To undo what it set, give the program's `exe` a rule that sets those keys to `default`"
     );
     let gecko = former("no-mono-gecko").ok_or("no-mono-gecko")?;
     assert!(
         gecko
             .instead_of_extending()
-            .starts_with("set dll_overrides")
+            .starts_with("Set `dll_overrides`")
     );
     assert!(
         gecko
             .instead_of_turning_off()
-            .contains("\"mscoree,mshtml=default\"")
+            .contains("`mscoree,mshtml=default`")
+    );
+    let fex = former("fex-x87-reduced-precision").ok_or("fex-x87-reduced-precision")?;
+    assert!(
+        fex.instead_of_extending()
+            .starts_with("Set `FEX_X87REDUCEDPRECISION` in the `env`")
+    );
+    assert!(
+        fex.instead_of_turning_off()
+            .contains("`FEX_X87REDUCEDPRECISION=0`")
     );
     let laa = former("large-address-aware").ok_or("large-address-aware")?;
     assert!(
         laa.instead_of_turning_off()
-            .contains("large_address_aware set to true gives 4 GB")
+            .contains("set `large_address_aware` to `true` for 4 GB")
     );
+    // Each is a sentence a launcher prints after its own: it starts with a
+    // capital and leaves the final period to the launcher.
+    for name in names {
+        let rule = former(name).ok_or(name)?;
+        for sentence in [rule.instead_of_extending(), rule.instead_of_turning_off()] {
+            assert!(
+                sentence.starts_with(|c: char| c.is_ascii_uppercase()) && !sentence.ends_with('.'),
+                "{name}: {sentence}"
+            );
+        }
+    }
     Ok(())
 }

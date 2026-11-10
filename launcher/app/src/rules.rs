@@ -331,7 +331,7 @@ fn parse_rule(
         // whatever executable it named, which it no longer does.
         if let Some(former) = builtin::former(name) {
             warnings.push(format!(
-                "process rule `{name}` has `enabled = false`, so it is left out; {former}; {}",
+                "process rule `{name}` has `enabled = false`, so it is left out. {former}. {}",
                 former.instead_of_turning_off()
             ));
         }
@@ -367,25 +367,24 @@ fn unknown_field(written: &str) -> String {
 }
 
 /// The warning for a block without the matcher key [`Key::Exe`], which is
-/// left out. A file written for an older launcher used such a block to extend
-/// or turn off a built-in rule of `compatdb.so` by naming it, which no longer
-/// exists; the warning says what does that now.
+/// left out: what is wrong, why when the block has the name of a former
+/// built-in rule of `compatdb.so`, and what to do, one short sentence each. A
+/// file written for an older launcher used such a block to extend or turn off
+/// that rule by naming it, which no longer works.
 fn left_out_without_exe(name: &str, enabled: bool) -> String {
     let exe = Key::Exe;
     let what = if enabled {
-        format!("sets no `{exe}`")
+        format!("process rule `{name}` has no `{exe}`, so it matches nothing and is left out")
     } else {
-        format!("has `{ENABLED} = false` and no `{exe}`")
+        format!("process rule `{name}` has `{ENABLED} = false` and no `{exe}`, so it is left out")
     };
     let instead = match (builtin::former(name), enabled) {
-        (Some(former), true) => format!("{former}; {}", former.instead_of_extending()),
-        (Some(former), false) => format!("{former}; {}", former.instead_of_turning_off()),
-        (None, true) => {
-            format!("give the block an `{exe}` to make it a rule of its own, or remove it")
-        }
-        (None, false) => String::from("remove the block"),
+        (Some(former), true) => format!("{former}. {}", former.instead_of_extending()),
+        (Some(former), false) => format!("{former}. {}", former.instead_of_turning_off()),
+        (None, true) => format!("Give it an `{exe}` to make it a rule of its own, or remove it"),
+        (None, false) => String::from("Remove the block"),
     };
-    format!("process rule `{name}` {what}, so it matches no process and is left out; {instead}")
+    format!("{what}. {instead}")
 }
 
 /// The value of the field `key`, written `written`, as TOML holds it for the

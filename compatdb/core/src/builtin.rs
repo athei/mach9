@@ -449,8 +449,8 @@ pub fn world_of_warcraft() -> Rule {
 /// a name reaches nothing; [`former`] gives what does the same now.
 ///
 /// Its `Display` form says that, for example `"dxmt" was the name of a
-/// built-in rule of compatdb.so, and the built-in rules have no names any
-/// more, so a rule can no longer extend or turn off one by naming it`.
+/// built-in rule, and built-in rules can no longer be extended or turned off
+/// by name`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Former {
     /// The name, in lowercase.
@@ -467,18 +467,20 @@ enum Did {
     /// Anything else: what to do instead of extending it, if that differs
     /// from what to do instead of turning it off, and that.
     Other {
-        /// The clause that says what to do instead of extending the rule.
+        /// The sentence that says what to do instead of extending the rule.
         extend: Option<&'static str>,
-        /// The clause that says what to do instead of turning it off.
+        /// The sentence that says what to do instead of turning it off.
         off: &'static str,
     },
 }
 
 /// What changes what a former built-in rule for one program set.
 const PROGRAM_RULE: Did = Did::Other {
-    extend: None,
-    off: "to change what a built-in rule sets for one program, give that program's exe a rule \
-          that sets the same keys, or default for upstream Wine's behaviour",
+    extend: Some(
+        "Add an `exe` with a `company`, `product` or `original_filename` to make it a rule for \
+         that program, or remove it",
+    ),
+    off: "To undo what it set, give the program's `exe` a rule that sets those keys to `default`",
 };
 
 /// The former names of the built-in rules.
@@ -511,41 +513,37 @@ const FORMER: &[Former] = &[
         name: "no-mono-gecko",
         did: Did::Other {
             extend: Some(
-                "set dll_overrides instead, in a rule matching every process or in a rule for \
-                 one program",
+                "Set `dll_overrides` in a rule for every process or for one program instead",
             ),
-            off: "dll_overrides set to \"mscoree,mshtml=default\" in a rule matching every \
-                  process takes the built-in overrides of Mono and Gecko away instead",
+            off: "Set `dll_overrides` to `mscoree,mshtml=default` in a rule for every process to \
+                  take away the built-in overrides of Mono and Gecko",
         },
     },
     Former {
         name: "fex-x87-reduced-precision",
         did: Did::Other {
             extend: Some(
-                "set FEX_X87REDUCEDPRECISION in the env of a rule instead, one matching every \
-                 process or one for one program",
+                "Set `FEX_X87REDUCEDPRECISION` in the `env` of a rule for every process or for \
+                 one program instead",
             ),
-            off: "FEX_X87REDUCEDPRECISION=0 in the environment Wine is started with gives every \
-                  process FEX's full x87 precision instead, as does a rule matching every \
-                  process whose env removes FEX_X87REDUCEDPRECISION",
+            off: "For FEX's full x87 precision, start Wine with `FEX_X87REDUCEDPRECISION=0`, or \
+                  remove the variable in the `env` of a rule for every process",
         },
     },
     Former {
         name: "vkd3d-proton-min-latency",
         did: Did::Other {
             extend: None,
-            off: "compatdb.so no longer has that rule, so there is nothing left to change or turn \
-                  off; remove it",
+            off: "That rule no longer exists; remove this one",
         },
     },
     Former {
         name: "large-address-aware",
         did: Did::Other {
             extend: None,
-            off: "compatdb.so no longer gives every 32-bit process 4 GB: the executable's \
-                  large-address-aware flag decides, and large_address_aware set to true gives 4 \
-                  GB, in a rule matching every process to every 32-bit process or in a rule for \
-                  one program to that program",
+            off: "The executable's large-address-aware flag now decides; set \
+                  `large_address_aware` to `true` for 4 GB, in a rule for every process or for \
+                  one program",
         },
     },
     Former {
@@ -598,16 +596,16 @@ impl Former {
         self.name
     }
 
-    /// What to do instead of extending the rule by its name, a clause a
-    /// launcher can print after its own words, for example `set dxgi
-    /// instead, in a rule matching every process or in a rule for one
-    /// program`.
+    /// What to do instead of extending the rule by its name, a sentence
+    /// without the final period that a launcher can print after its own, for
+    /// example ``Set `dxgi` in a rule for every process or for one program
+    /// instead``.
     #[must_use]
     pub fn instead_of_extending(self) -> String {
         match self.did {
-            Did::Setting(key) => format!(
-                "set {key} instead, in a rule matching every process or in a rule for one program"
-            ),
+            Did::Setting(key) => {
+                format!("Set `{key}` in a rule for every process or for one program instead")
+            }
             Did::Other {
                 extend: Some(extend),
                 ..
@@ -616,15 +614,14 @@ impl Former {
         }
     }
 
-    /// What to do instead of turning the rule off by its name, a clause
+    /// What to do instead of turning the rule off by its name, a sentence
     /// like [`Former::instead_of_extending`].
     #[must_use]
     pub fn instead_of_turning_off(self) -> String {
         match self.did {
             Did::Setting(key) => format!(
-                "{key} set to default in a rule matching every process hands the setting back to \
-                 upstream Wine in every process instead, except where a built-in rule for one \
-                 program sets it"
+                "Set `{key}` to `default` in a rule for every process to get upstream Wine's \
+                 behaviour, except where a built-in rule for one program sets it"
             ),
             Did::Other { off, .. } => off.to_owned(),
         }
@@ -635,8 +632,8 @@ impl fmt::Display for Former {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:?} was the name of a built-in rule of compatdb.so, and the built-in rules have no \
-             names any more, so a rule can no longer extend or turn off one by naming it",
+            "{:?} was the name of a built-in rule, and built-in rules can no longer be extended \
+             or turned off by name",
             self.name
         )
     }

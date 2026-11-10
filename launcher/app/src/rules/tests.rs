@@ -43,14 +43,14 @@ fn exe_line(name: &str) -> String {
     text(Key::Exe, name)
 }
 
-/// What the warning about block `name` without a [`Key::Exe`] starts with,
-/// for a block with `enabled` as given.
+/// The first sentence of the warning about block `name` without a
+/// [`Key::Exe`], with its period, for a block with `enabled` as given.
 fn without_exe(name: &str, enabled: bool) -> String {
     let exe = Key::Exe;
     if enabled {
-        format!("process rule `{name}` sets no `{exe}`")
+        format!("process rule `{name}` has no `{exe}`, so it matches nothing and is left out. ")
     } else {
-        format!("process rule `{name}` has `enabled = false` and no `{exe}`")
+        format!("process rule `{name}` has `enabled = false` and no `{exe}`, so it is left out. ")
     }
 }
 
@@ -626,43 +626,74 @@ fn a_block_without_an_executable_is_left_out_with_a_warning() {
     .expect("no error");
     let names: Vec<&str> = rules.rules.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(names, ["kept"]);
-    let warnings = &rules.warnings;
-    assert_eq!(warnings.len(), 4, "{warnings:?}");
-    for warning in warnings {
-        assert!(
-            warning.contains("so it matches no process and is left out; "),
-            "{warning}"
-        );
-    }
-    let former = builtin::former(extended).unwrap();
-    assert!(
-        warnings[0].starts_with(&without_exe(extended, true))
-            && warnings[0].ends_with(&format!("{former}; {}", former.instead_of_extending())),
-        "{}",
-        warnings[0]
-    );
-    let former = builtin::former(&off).unwrap();
-    assert!(
-        warnings[1].starts_with(&without_exe(&off, false))
-            && warnings[1].ends_with(&format!("{former}; {}", former.instead_of_turning_off())),
-        "{}",
-        warnings[1]
-    );
-    assert!(
-        warnings[2].starts_with(&without_exe("mine", true))
-            && warnings[2].ends_with(&format!(
-                "give the block an `{}` to make it a rule of its own, or remove it",
+    let extended_former = builtin::former(extended).unwrap();
+    let off_former = builtin::former(&off).unwrap();
+    // What is wrong, why for a former built-in name, and what to do: one
+    // sentence each.
+    assert_eq!(
+        rules.warnings,
+        [
+            format!(
+                "{}{extended_former}. {}",
+                without_exe(extended, true),
+                extended_former.instead_of_extending()
+            ),
+            format!(
+                "{}{off_former}. {}",
+                without_exe(&off, false),
+                off_former.instead_of_turning_off()
+            ),
+            format!(
+                "{}Give it an `{}` to make it a rule of its own, or remove it",
+                without_exe("mine", true),
                 Key::Exe
-            )),
-        "{}",
-        warnings[2]
+            ),
+            format!("{}Remove the block", without_exe("old", false)),
+        ]
     );
-    assert!(
-        warnings[3].starts_with(&without_exe("old", false))
-            && warnings[3].ends_with("; remove the block"),
-        "{}",
-        warnings[3]
-    );
+}
+
+/// A block named after a former built-in rule for one program gets three
+/// short sentences: one that extended it is told to add an `exe` with a
+/// fingerprint, and one that turned it off, with or without an `exe`, to
+/// reset the rule's keys in a rule for the program.
+#[test]
+fn a_block_named_after_a_former_program_rule_says_what_to_write_instead() {
+    let why = "was the name of a built-in rule, and built-in rules can no longer be extended or \
+               turned off by name";
+    let off = "To undo what it set, give the program's `exe` a rule that sets those keys to \
+               `default`";
+    for (toml, warning) in [
+        (
+            block("gta-iv", &[]),
+            format!(
+                "process rule `gta-iv` has no `exe`, so it matches nothing and is left out. \
+                 \"gta-iv\" {why}. Add an `exe` with a `company`, `product` or \
+                 `original_filename` to make it a rule for that program, or remove it"
+            ),
+        ),
+        (
+            block(
+                "nostale",
+                &[exe_line("NostaleClientX.exe"), flag("enabled", false)],
+            ),
+            format!(
+                "process rule `nostale` has `enabled = false`, so it is left out. \"nostale\" \
+                 {why}. {off}"
+            ),
+        ),
+        (
+            block("nostale", &[flag("enabled", false)]),
+            format!(
+                "process rule `nostale` has `enabled = false` and no `exe`, so it is left out. \
+                 \"nostale\" {why}. {off}"
+            ),
+        ),
+    ] {
+        let rules = parsed(&toml).expect("no error");
+        assert_eq!(rules.rules, Vec::<NamedRule>::new(), "{toml}");
+        assert_eq!(rules.warnings, [warning], "{toml}");
+    }
 }
 
 /// A block named after a former built-in rule turned that rule off with
@@ -692,7 +723,7 @@ fn a_disabled_block_with_a_former_built_in_name_warns() {
     assert_eq!(
         rules.warnings,
         [format!(
-            "process rule `{name}` has `enabled = false`, so it is left out; {former}; {}",
+            "process rule `{name}` has `enabled = false`, so it is left out. {former}. {}",
             former.instead_of_turning_off()
         )]
     );
