@@ -48,6 +48,33 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 claim_tree "$BUILD_DIR" wine "$CLEAN"
 
+# The sources of the graphics tests the x86 tree builds below carry per-file
+# test selection blocks, which the conformance crate of this repository
+# generates. Tests built from blocks other than the ones the crate writes now
+# do not match this checkout, so the build stops on a mismatch, and does so
+# here, before anything is built. cargo runs in the repository, for its
+# .cargo/config.toml, as bundle-wine.sh builds compatdb.so. The target
+# directory is one per checkout, under BUILD_DIR/conformance, for the reason
+# COMPATDB_TARGET in bundle-wine.sh gives: two checkouts sharing one would
+# run each other's build.
+if ! command -v cargo >/dev/null; then
+    echo "Error: cargo not found (the check of the Wine source's test selection needs a"
+    echo "Rust toolchain)"
+    exit 1
+fi
+CONFORMANCE_TARGET="$BUILD_DIR/conformance/$(printf '%s' "$REPO_DIR" | shasum -a 256 | cut -c1-12)"
+echo "==> Checking the test selection in $WINE_SRC..."
+(cd "$REPO_DIR" && CARGO_TARGET_DIR="$CONFORMANCE_TARGET" \
+    cargo build --quiet --locked --manifest-path "$REPO_DIR/Cargo.toml" -p conformance)
+if ! (cd "$REPO_DIR" && CARGO_TARGET_DIR="$CONFORMANCE_TARGET" \
+    cargo run --quiet --locked --manifest-path "$REPO_DIR/Cargo.toml" -p conformance -- \
+        wine-macros --check "$WINE_SRC"); then
+    echo "Error: the check of the test selection in $WINE_SRC failed (see above). If the"
+    echo "blocks are out of date, regenerate them in $REPO_DIR with:"
+    echo "    cargo run -p conformance -- wine-macros --write \"$WINE_SRC\""
+    exit 1
+fi
+
 # With WINE_BUILD_CCACHE, Wine's configure and make run with a directory of
 # ccache links ahead of PATH (ccache_bin_dir in profile.sh): clang, which CC
 # names, and the llvm-mingw compilers configure looks for first. The build

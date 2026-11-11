@@ -42,7 +42,9 @@ script's header says what it builds and stages.
   with its arm64ec toolchain. The scripts append its `bin/` to `PATH`;
   never prepend it, since its unprefixed `clang` breaks configure's host
   compiler detection.
-- Rust with the `RUST_TARGET` target, for `compatdb.so`.
+- Rust with the `RUST_TARGET` target, for `compatdb.so` and for the check
+  of the Wine source's test selection that `build-wine.sh` runs before it
+  builds.
 - A code signing identity in the keychain whose certificate
   [`signing/loader.provisionprofile`](../signing/loader.provisionprofile)
   lists.

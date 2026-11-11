@@ -33,13 +33,17 @@ on:
     tags: ['v[0-9]*']
     branches: [main]
     # What the build, bundle and app steps read. launcher.yml checks the
-    # launcher crates in minutes; this run assembles the app. GitHub applies
-    # path filters to branch pushes only, so every v[0-9]* tag still runs.
+    # launcher crates in minutes; this run assembles the app. The conformance
+    # crate's baselines are read only by its tests, which conformance.yml
+    # runs. GitHub applies path filters to branch pushes only, so every
+    # v[0-9]* tag still runs.
     paths:
       - 'launcher/**'
       - 'release-notes/**'
       - 'bin/**'
       - 'compatdb/**'
+      - 'conformance/**'
+      - '!conformance/baselines/**'
       - '.cargo/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
