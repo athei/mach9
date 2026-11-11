@@ -1,0 +1,36 @@
+# Conformance baseline of vulkan-1_test.exe, one line per test.
+# Written by `cargo run -p conformance -- record vulkan-1`: do not edit.
+# wine: wine-11.21-39-g02da0e7b985
+# component: dxmt=d903db890362781abd9b56e62f84ce1472929353
+# component: fex=9d4fa4b46b1d8d834462a540539f37528883eec4
+# component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
+# component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
+# component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
+
+[i386-windows vulkan]
+enumerate_device_queues ok failed=0 sites=0 todo_succeeded=0 skipped=0
+enumerate_physical_device ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_destroy_command_pool ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_enumerate_physical_device2 ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_external_memory ok failed=0 sites=0 todo_succeeded=0 skipped=1
+test_instance_version ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_physical_device_groups ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_private_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_timeline_semaphore ok failed=0 sites=0 todo_succeeded=0 skipped=1
+test_unsupported_device_extensions ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_unsupported_instance_extensions ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_win32_surface fail failed=4 sites=2 todo_succeeded=0 skipped=1
+
+[x86_64-windows vulkan]
+enumerate_device_queues ok failed=0 sites=0 todo_succeeded=0 skipped=0
+enumerate_physical_device ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_destroy_command_pool ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_enumerate_physical_device2 ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_external_memory ok failed=0 sites=0 todo_succeeded=0 skipped=1
+test_instance_version ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_physical_device_groups ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_private_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_timeline_semaphore ok failed=0 sites=0 todo_succeeded=0 skipped=1
+test_unsupported_device_extensions ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_unsupported_instance_extensions ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_win32_surface fail failed=4 sites=2 todo_succeeded=0 skipped=1

@@ -1,0 +1,76 @@
+# Conformance baseline of opengl32_test.exe, one line per test.
+# Written by `cargo run -p conformance -- record opengl32`: do not edit.
+# wine: wine-11.21-39-g02da0e7b985
+# component: dxmt=d903db890362781abd9b56e62f84ce1472929353
+# component: fex=9d4fa4b46b1d8d834462a540539f37528883eec4
+# component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
+# component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
+# component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
+
+[i386-windows opengl]
+test_16bit_bitmap_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=1
+test_acceleration ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_bitmap_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_choosepixelformat ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_choosepixelformat_flag_is_ignored_when_unset ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_colorbits ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_copy_context fail failed=2 sites=2 todo_succeeded=0 skipped=0
+test_d3dkmt_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_dc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_debug_message_callback ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_deletecontext ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_destroy ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_destroy_read ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_framebuffer fail failed=7 sites=7 todo_succeeded=2 skipped=0
+test_gdi_dbuf ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_getprocaddress ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_gl_error ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_make_current_read ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_makecurrent ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_memory_map ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_message_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_minimized ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_object_creation ok failed=0 sites=0 todo_succeeded=0 skipped=13
+test_other_process_parent ok failed=0 sites=0 todo_succeeded=10 skipped=0
+test_other_process_window fail failed=11 sites=11 todo_succeeded=4 skipped=1
+test_pbuffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_setpixelformat ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_sharelists ok failed=0 sites=0 todo_succeeded=0 skipped=28
+test_swap_control ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_wglChoosePixelFormatARB ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_wglCreateContextAttribsARB ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_window_dc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+
+[x86_64-windows opengl]
+test_16bit_bitmap_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=1
+test_acceleration ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_bitmap_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_choosepixelformat ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_choosepixelformat_flag_is_ignored_when_unset ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_colorbits ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_copy_context fail failed=2 sites=2 todo_succeeded=0 skipped=0
+test_d3dkmt_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_dc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_debug_message_callback ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_deletecontext ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_destroy ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_destroy_read ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_framebuffer fail failed=7 sites=7 todo_succeeded=2 skipped=0
+test_gdi_dbuf ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_getprocaddress ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_gl_error ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_make_current_read ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_makecurrent ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_memory_map ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_message_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_minimized ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_object_creation ok failed=0 sites=0 todo_succeeded=0 skipped=13
+test_other_process_parent ok failed=0 sites=0 todo_succeeded=10 skipped=0
+test_other_process_window fail failed=11 sites=11 todo_succeeded=4 skipped=1
+test_pbuffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_setpixelformat ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_sharelists ok failed=0 sites=0 todo_succeeded=0 skipped=28
+test_swap_control ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_wglChoosePixelFormatARB ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_wglCreateContextAttribsARB ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_window_dc ok failed=0 sites=0 todo_succeeded=0 skipped=0

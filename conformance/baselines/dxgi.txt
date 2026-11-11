@@ -1,0 +1,134 @@
+# Conformance baseline of dxgi_test.exe, one line per test.
+# Written by `cargo run -p conformance -- record dxgi`: do not edit.
+# wine: wine-11.21-39-g02da0e7b985
+# component: dxmt=d903db890362781abd9b56e62f84ce1472929353
+# component: fex=9d4fa4b46b1d8d834462a540539f37528883eec4
+# component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
+# component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
+# component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
+
+[i386-windows dxgi]
+d3d10:test_create_swapchain fail failed=4 sites=4 todo_succeeded=12 skipped=0
+d3d10:test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+d3d10:test_default_fullscreen_target_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_frame_latency_event fail failed=3 sites=2 todo_succeeded=0 skipped=0
+d3d10:test_get_containing_output ok failed=0 sites=0 todo_succeeded=0 skipped=1
+d3d10:test_mode_change ok failed=0 sites=0 todo_succeeded=0 skipped=1
+d3d10:test_output_ownership ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_resize_fullscreen ok failed=0 sites=0 todo_succeeded=2 skipped=0
+d3d10:test_resize_target crash failed=0 sites=0 todo_succeeded=58 skipped=0
+d3d10:test_resize_target_wndproc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_set_fullscreen ok failed=0 sites=0 todo_succeeded=10 skipped=0
+d3d10:test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_swapchain_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_swapchain_present ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_swapchain_present_count ok failed=0 sites=0 todo_succeeded=4 skipped=0
+d3d10:test_swapchain_resize fail failed=17 sites=13 todo_succeeded=8 skipped=0
+d3d10:test_swapchain_window_messages ok failed=0 sites=0 todo_succeeded=2 skipped=0
+d3d10:test_window_association fail failed=3 sites=1 todo_succeeded=0 skipped=0
+d3d10:test_zero_size ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_colour_space_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_create_swapchain fail failed=2 sites=2 todo_succeeded=5 skipped=0
+d3d12:test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+d3d12:test_default_fullscreen_target_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_frame_latency_event ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_get_containing_output ok failed=0 sites=0 todo_succeeded=0 skipped=1
+d3d12:test_mode_change ok failed=0 sites=0 todo_succeeded=0 skipped=1
+d3d12:test_output_ownership ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_resize_fullscreen ok failed=0 sites=0 todo_succeeded=2 skipped=0
+d3d12:test_resize_target crash failed=0 sites=0 todo_succeeded=58 skipped=0
+d3d12:test_resize_target_wndproc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_set_fullscreen ok failed=0 sites=0 todo_succeeded=10 skipped=0
+d3d12:test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_swapchain_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_swapchain_present ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_swapchain_present_count ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_swapchain_resize ok failed=0 sites=0 todo_succeeded=4 skipped=0
+d3d12:test_swapchain_window_messages ok failed=0 sites=0 todo_succeeded=2 skipped=0
+d3d12:test_window_association fail failed=3 sites=1 todo_succeeded=0 skipped=0
+d3d12:test_zero_size ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_adapter_desc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_adapter_luid ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_check_interface_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_create_factory fail failed=3 sites=3 todo_succeeded=0 skipped=0
+test_create_surface crash failed=1 sites=1 todo_succeeded=0 skipped=0
+test_enum_warp_adapter ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_factory_check_feature_support fail failed=3 sites=3 todo_succeeded=0 skipped=0
+test_find_closest_matching_mode ok failed=0 sites=0 todo_succeeded=1 skipped=0
+test_gamma_control ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_inexact_modes ok failed=0 sites=0 todo_succeeded=9 skipped=0
+test_maximum_frame_latency ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_multi_adapter ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_object_wrapping ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_output_desc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_parents crash failed=1 sites=1 todo_succeeded=0 skipped=0
+test_private_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_query_video_memory_info ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_subresource_surface ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_parameters fail failed=34 sites=6 todo_succeeded=6 skipped=0
+test_swapchain_window_styles ok failed=0 sites=0 todo_succeeded=38 skipped=0
+test_video_memory_budget_notification fail failed=1 sites=1 todo_succeeded=0 skipped=0
+
+[x86_64-windows dxgi]
+d3d10:test_create_swapchain fail failed=4 sites=4 todo_succeeded=12 skipped=0
+d3d10:test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+d3d10:test_default_fullscreen_target_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_frame_latency_event fail failed=3 sites=2 todo_succeeded=0 skipped=0
+d3d10:test_get_containing_output ok failed=0 sites=0 todo_succeeded=0 skipped=1
+d3d10:test_mode_change ok failed=0 sites=0 todo_succeeded=0 skipped=1
+d3d10:test_output_ownership ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_resize_fullscreen ok failed=0 sites=0 todo_succeeded=2 skipped=0
+d3d10:test_resize_target crash failed=0 sites=0 todo_succeeded=58 skipped=0
+d3d10:test_resize_target_wndproc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_set_fullscreen ok failed=0 sites=0 todo_succeeded=10 skipped=0
+d3d10:test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_swapchain_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_swapchain_present ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d10:test_swapchain_present_count ok failed=0 sites=0 todo_succeeded=4 skipped=0
+d3d10:test_swapchain_resize fail failed=17 sites=13 todo_succeeded=8 skipped=0
+d3d10:test_swapchain_window_messages ok failed=0 sites=0 todo_succeeded=2 skipped=0
+d3d10:test_window_association fail failed=3 sites=1 todo_succeeded=0 skipped=0
+d3d10:test_zero_size ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_colour_space_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_create_swapchain fail failed=2 sites=2 todo_succeeded=5 skipped=0
+d3d12:test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+d3d12:test_default_fullscreen_target_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_frame_latency_event ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_get_containing_output ok failed=0 sites=0 todo_succeeded=0 skipped=1
+d3d12:test_mode_change ok failed=0 sites=0 todo_succeeded=0 skipped=1
+d3d12:test_output_ownership ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_resize_fullscreen ok failed=0 sites=0 todo_succeeded=2 skipped=0
+d3d12:test_resize_target crash failed=0 sites=0 todo_succeeded=58 skipped=0
+d3d12:test_resize_target_wndproc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_set_fullscreen ok failed=0 sites=0 todo_succeeded=10 skipped=0
+d3d12:test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_swapchain_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_swapchain_present ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_swapchain_present_count ok failed=0 sites=0 todo_succeeded=0 skipped=0
+d3d12:test_swapchain_resize ok failed=0 sites=0 todo_succeeded=4 skipped=0
+d3d12:test_swapchain_window_messages ok failed=0 sites=0 todo_succeeded=2 skipped=0
+d3d12:test_window_association fail failed=3 sites=1 todo_succeeded=0 skipped=0
+d3d12:test_zero_size ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_adapter_desc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_adapter_luid ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_check_interface_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_create_factory fail failed=3 sites=3 todo_succeeded=0 skipped=0
+test_create_surface crash failed=1 sites=1 todo_succeeded=0 skipped=0
+test_enum_warp_adapter ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_factory_check_feature_support fail failed=3 sites=3 todo_succeeded=0 skipped=0
+test_find_closest_matching_mode ok failed=0 sites=0 todo_succeeded=1 skipped=0
+test_gamma_control ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_inexact_modes ok failed=0 sites=0 todo_succeeded=9 skipped=0
+test_maximum_frame_latency ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_multi_adapter ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_object_wrapping ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_output_desc ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_parents crash failed=1 sites=1 todo_succeeded=0 skipped=0
+test_private_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_query_video_memory_info ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_subresource_surface ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_parameters fail failed=34 sites=6 todo_succeeded=6 skipped=0
+test_swapchain_window_styles ok failed=0 sites=0 todo_succeeded=38 skipped=0
+test_video_memory_budget_notification fail failed=1 sites=1 todo_succeeded=0 skipped=0

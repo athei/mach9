@@ -10,3 +10,8 @@
 #   d3d11/d3d11/test_swapchain_flip issue=12 flaky  # races the present thread
 #
 # A unit test fails on a line whose test no baseline here has.
+
+ddraw/ddraw1/test_coop_level_mode_set flaky  # failure count differs between runs of one build
+ddraw/ddraw2/test_coop_level_mode_set flaky  # failure count differs between runs of one build
+ddraw/ddraw4/test_coop_level_mode_set flaky  # failure count differs between runs of one build
+ddraw/ddraw7/test_coop_level_mode_set flaky  # failure count differs between runs of one build

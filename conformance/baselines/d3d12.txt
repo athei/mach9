@@ -1,0 +1,32 @@
+# Conformance baseline of d3d12_test.exe, one line per test.
+# Written by `cargo run -p conformance -- record d3d12`: do not edit.
+# wine: wine-11.21-39-g02da0e7b985
+# component: dxmt=d903db890362781abd9b56e62f84ce1472929353
+# component: fex=9d4fa4b46b1d8d834462a540539f37528883eec4
+# component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
+# component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
+# component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
+
+[i386-windows d3d12]
+test_create_device ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_desktop_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_draw ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_invalid_command_queue_types ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_ordinals ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_draw ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_refcount ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_size_mismatch ok failed=0 sites=0 todo_succeeded=0 skipped=0
+
+[x86_64-windows d3d12]
+test_create_device ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_desktop_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_draw ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_invalid_command_queue_types ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_ordinals ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_draw ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_refcount ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_swapchain_size_mismatch ok failed=0 sites=0 todo_succeeded=0 skipped=0
