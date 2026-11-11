@@ -1,7 +1,7 @@
 # Conformance baseline of d3d11_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record d3d11`: do not edit.
 # wine: wine-11.21-39-g02da0e7b985
-# component: dxmt=d903db890362781abd9b56e62f84ce1472929353
+# component: dxmt=a31a2e67f450780ca6410eed9db1f144015c292c
 # component: fex=9d4fa4b46b1d8d834462a540539f37528883eec4
 # component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
 # component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
@@ -22,7 +22,7 @@ test_clear_image_unordered_access_view fail failed=6 sites=1 todo_succeeded=0 sk
 test_clear_render_target_view_1d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clear_render_target_view_2d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clear_render_target_view_3d ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_clear_state fail failed=2 sites=2 todo_succeeded=48 skipped=0
+test_clear_state ok failed=0 sites=0 todo_succeeded=48 skipped=0
 test_clip_distance fail failed=5 sites=5 todo_succeeded=0 skipped=0
 test_color_mask ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_combined_clip_and_cull_distances fail failed=12 sites=3 todo_succeeded=0 skipped=0
@@ -34,7 +34,7 @@ test_copy_subresource_region fail failed=3 sites=3 todo_succeeded=0 skipped=0
 test_copy_subresource_region_1d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_copy_subresource_region_3d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_blend_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_create_buffer fail failed=16 sites=1 todo_succeeded=0 skipped=0
+test_create_buffer ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_deferred_context fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_create_depthstencil_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_depthstencil_view fail failed=1 sites=1 todo_succeeded=0 skipped=0
@@ -55,7 +55,7 @@ test_cube_maps ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_ddy ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_map fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_deferred_context_queries fail failed=9 sites=9 todo_succeeded=0 skipped=0
-test_deferred_context_rendering crash failed=0 sites=0 todo_succeeded=0 skipped=0
+test_deferred_context_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_swap_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_bias fail failed=205 sites=3 todo_succeeded=1 skipped=0
@@ -63,8 +63,8 @@ test_depth_clip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_stencil_sampling fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_depthstencil_view_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_desktop_window fail failed=1 sites=1 todo_succeeded=0 skipped=0
-test_device_context_state fail failed=13 sites=13 todo_succeeded=0 skipped=0
-test_device_interfaces fail failed=14 sites=2 todo_succeeded=0 skipped=0
+test_device_context_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_device_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_device_removed_reason ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_discard ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_dispatch_indirect ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -87,14 +87,14 @@ test_gather ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_gather_c ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_generate_mips fail failed=14 sites=2 todo_succeeded=0 skipped=0
 test_geometry_shader ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_getdc fail failed=17 sites=5 todo_succeeded=2 skipped=0
+test_getdc ok failed=0 sites=0 todo_succeeded=2 skipped=0
 test_h264_decoder ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_high_resource_count ok failed=0 sites=0 todo_succeeded=2 skipped=0
 test_il_append_aligned ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_immediate_constant_buffer ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_immediate_context fail failed=1 sites=1 todo_succeeded=1 skipped=0
 test_independent_blend ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_index_buffer_offset fail failed=19 sites=3 todo_succeeded=0 skipped=0
+test_index_buffer_offset fail failed=18 sites=2 todo_succeeded=0 skipped=0
 test_initial_depth_stencil_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_initial_texture_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_input_assembler ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -132,7 +132,7 @@ test_scissor ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_shader_input_registers_limits ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_shader_interstage_interface ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_shader_stage_input_output_matching ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_shared_resource fail failed=33 sites=2 todo_succeeded=63 skipped=0
+test_shared_resource ok failed=0 sites=0 todo_succeeded=38 skipped=0
 test_sm4_breakc_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm4_continuec_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm4_discard_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -143,21 +143,21 @@ test_sm5_swapc_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_so_statistics_query fail failed=7 sites=7 todo_succeeded=21 skipped=0
 test_staging_buffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_standard_pattern ok failed=0 sites=0 todo_succeeded=8 skipped=0
-test_state_refcounting fail failed=8 sites=2 todo_succeeded=0 skipped=0
+test_state_refcounting ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_export ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_separate ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output fail failed=238 sites=11 todo_succeeded=0 skipped=0
 test_stream_output_components fail failed=200 sites=1 todo_succeeded=0 skipped=0
 test_stream_output_resume fail failed=18 sites=1 todo_succeeded=0 skipped=0
-test_stream_output_vs fail failed=39 sites=2 todo_succeeded=0 skipped=0
+test_stream_output_vs fail failed=38 sites=1 todo_succeeded=0 skipped=0
 test_swapchain_flip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_formats ok failed=0 sites=0 todo_succeeded=7 skipped=0
 test_swapchain_views ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_texture fail failed=48 sites=1 todo_succeeded=0 skipped=0
 test_texture1d ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_texture1d_interfaces fail failed=3 sites=1 todo_succeeded=0 skipped=0
-test_texture2d_interfaces fail failed=4 sites=1 todo_succeeded=0 skipped=0
-test_texture3d_interfaces fail failed=3 sites=1 todo_succeeded=0 skipped=0
+test_texture1d_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_texture2d_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_texture3d_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_texture_compressed_3d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_tgsm ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_timestamp_query fail failed=5 sites=5 todo_succeeded=2 skipped=0
@@ -191,7 +191,7 @@ test_clear_image_unordered_access_view fail failed=6 sites=1 todo_succeeded=0 sk
 test_clear_render_target_view_1d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clear_render_target_view_2d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clear_render_target_view_3d ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_clear_state fail failed=2 sites=2 todo_succeeded=48 skipped=0
+test_clear_state ok failed=0 sites=0 todo_succeeded=48 skipped=0
 test_clip_distance fail failed=5 sites=5 todo_succeeded=0 skipped=0
 test_color_mask ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_combined_clip_and_cull_distances fail failed=12 sites=3 todo_succeeded=0 skipped=0
@@ -203,7 +203,7 @@ test_copy_subresource_region fail failed=3 sites=3 todo_succeeded=0 skipped=0
 test_copy_subresource_region_1d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_copy_subresource_region_3d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_blend_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_create_buffer fail failed=16 sites=1 todo_succeeded=0 skipped=0
+test_create_buffer ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_deferred_context fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_create_depthstencil_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_depthstencil_view fail failed=1 sites=1 todo_succeeded=0 skipped=0
@@ -224,7 +224,7 @@ test_cube_maps ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_ddy ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_map fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_deferred_context_queries fail failed=9 sites=9 todo_succeeded=0 skipped=0
-test_deferred_context_rendering crash failed=0 sites=0 todo_succeeded=0 skipped=0
+test_deferred_context_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_swap_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_bias fail failed=205 sites=3 todo_succeeded=1 skipped=0
@@ -232,8 +232,8 @@ test_depth_clip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_stencil_sampling fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_depthstencil_view_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_desktop_window fail failed=1 sites=1 todo_succeeded=0 skipped=0
-test_device_context_state fail failed=13 sites=13 todo_succeeded=0 skipped=0
-test_device_interfaces fail failed=14 sites=2 todo_succeeded=0 skipped=0
+test_device_context_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_device_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_device_removed_reason ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_discard ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_dispatch_indirect ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -256,14 +256,14 @@ test_gather ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_gather_c ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_generate_mips fail failed=14 sites=2 todo_succeeded=0 skipped=0
 test_geometry_shader ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_getdc fail failed=17 sites=5 todo_succeeded=2 skipped=0
+test_getdc ok failed=0 sites=0 todo_succeeded=2 skipped=0
 test_h264_decoder ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_high_resource_count ok failed=0 sites=0 todo_succeeded=2 skipped=0
 test_il_append_aligned ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_immediate_constant_buffer ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_immediate_context fail failed=1 sites=1 todo_succeeded=1 skipped=0
 test_independent_blend ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_index_buffer_offset fail failed=19 sites=3 todo_succeeded=0 skipped=0
+test_index_buffer_offset fail failed=18 sites=2 todo_succeeded=0 skipped=0
 test_initial_depth_stencil_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_initial_texture_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_input_assembler ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -301,7 +301,7 @@ test_scissor ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_shader_input_registers_limits ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_shader_interstage_interface ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_shader_stage_input_output_matching ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_shared_resource fail failed=33 sites=2 todo_succeeded=63 skipped=0
+test_shared_resource ok failed=0 sites=0 todo_succeeded=38 skipped=0
 test_sm4_breakc_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm4_continuec_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm4_discard_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -312,21 +312,21 @@ test_sm5_swapc_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_so_statistics_query fail failed=7 sites=7 todo_succeeded=21 skipped=0
 test_staging_buffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_standard_pattern ok failed=0 sites=0 todo_succeeded=8 skipped=0
-test_state_refcounting fail failed=8 sites=2 todo_succeeded=0 skipped=0
+test_state_refcounting ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_export ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_separate ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output fail failed=238 sites=11 todo_succeeded=0 skipped=0
 test_stream_output_components fail failed=200 sites=1 todo_succeeded=0 skipped=0
 test_stream_output_resume fail failed=18 sites=1 todo_succeeded=0 skipped=0
-test_stream_output_vs fail failed=39 sites=2 todo_succeeded=0 skipped=0
+test_stream_output_vs fail failed=38 sites=1 todo_succeeded=0 skipped=0
 test_swapchain_flip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_formats ok failed=0 sites=0 todo_succeeded=7 skipped=0
 test_swapchain_views ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_texture fail failed=48 sites=1 todo_succeeded=0 skipped=0
 test_texture1d ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_texture1d_interfaces fail failed=3 sites=1 todo_succeeded=0 skipped=0
-test_texture2d_interfaces fail failed=4 sites=1 todo_succeeded=0 skipped=0
-test_texture3d_interfaces fail failed=3 sites=1 todo_succeeded=0 skipped=0
+test_texture1d_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_texture2d_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_texture3d_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_texture_compressed_3d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_tgsm ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_timestamp_query fail failed=5 sites=5 todo_succeeded=2 skipped=0

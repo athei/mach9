@@ -1,7 +1,7 @@
 # Conformance baseline of d3d10_1_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record d3d10_1`: do not edit.
 # wine: wine-11.21-39-g02da0e7b985
-# component: dxmt=d903db890362781abd9b56e62f84ce1472929353
+# component: dxmt=a31a2e67f450780ca6410eed9db1f144015c292c
 # component: fex=9d4fa4b46b1d8d834462a540539f37528883eec4
 # component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
 # component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
@@ -14,7 +14,7 @@ test_create_device ok failed=0 sites=0 todo_succeeded=2 skipped=0
 test_create_shader_resource_view fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_device_interfaces fail failed=5 sites=1 todo_succeeded=0 skipped=0
 test_fx_4_1_blend_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_getdc fail failed=2 sites=2 todo_succeeded=4 skipped=0
+test_getdc ok failed=0 sites=0 todo_succeeded=4 skipped=0
 test_shader_profiles ok failed=0 sites=0 todo_succeeded=0 skipped=0
 
 [i386-windows reflection]
@@ -33,7 +33,7 @@ test_create_device ok failed=0 sites=0 todo_succeeded=2 skipped=0
 test_create_shader_resource_view fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_device_interfaces fail failed=5 sites=1 todo_succeeded=0 skipped=0
 test_fx_4_1_blend_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_getdc fail failed=2 sites=2 todo_succeeded=4 skipped=0
+test_getdc ok failed=0 sites=0 todo_succeeded=4 skipped=0
 test_shader_profiles ok failed=0 sites=0 todo_succeeded=0 skipped=0
 
 [x86_64-windows reflection]

@@ -1,7 +1,7 @@
 # Conformance baseline of d3d10core_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record d3d10core`: do not edit.
 # wine: wine-11.21-39-g02da0e7b985
-# component: dxmt=d903db890362781abd9b56e62f84ce1472929353
+# component: dxmt=14b322c492e5dfa18b28ce7ed217a2b284e5ddd8
 # component: fex=9d4fa4b46b1d8d834462a540539f37528883eec4
 # component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
 # component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
@@ -17,7 +17,7 @@ test_clear_after_draw ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clear_depth_stencil_view ok failed=0 sites=0 todo_succeeded=3 skipped=0
 test_clear_render_target_view_1d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clear_render_target_view_2d ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_clear_state fail failed=2 sites=2 todo_succeeded=0 skipped=0
+test_clear_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clip_distance ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_color_mask ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_combined_clip_and_cull_distances fail failed=12 sites=3 todo_succeeded=0 skipped=0
@@ -61,7 +61,7 @@ test_geometry_shader ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_il_append_aligned ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_immediate_constant_buffer ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_independent_blend ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_index_buffer_offset fail failed=17 sites=2 todo_succeeded=0 skipped=0
+test_index_buffer_offset fail failed=16 sites=1 todo_succeeded=0 skipped=0
 test_initial_depth_stencil_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_initial_texture_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_input_assembler ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -97,12 +97,12 @@ test_sm4_if_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm4_ret_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_so_statistics_query ok failed=0 sites=0 todo_succeeded=4 skipped=0
 test_staging_buffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_state_refcounting fail failed=2 sites=2 todo_succeeded=0 skipped=0
+test_state_refcounting ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_only_write_after_clear ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_separate ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output fail failed=154 sites=14 todo_succeeded=0 skipped=0
 test_stream_output_resume fail failed=21 sites=4 todo_succeeded=0 skipped=0
-test_stream_output_vs fail failed=10 sites=2 todo_succeeded=0 skipped=0
+test_stream_output_vs fail failed=9 sites=1 todo_succeeded=0 skipped=0
 test_swapchain_flip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_formats ok failed=0 sites=0 todo_succeeded=1 skipped=0
 test_swapchain_views ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -130,7 +130,7 @@ test_clear_after_draw ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clear_depth_stencil_view ok failed=0 sites=0 todo_succeeded=3 skipped=0
 test_clear_render_target_view_1d ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clear_render_target_view_2d ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_clear_state fail failed=2 sites=2 todo_succeeded=0 skipped=0
+test_clear_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_clip_distance ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_color_mask ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_combined_clip_and_cull_distances fail failed=12 sites=3 todo_succeeded=0 skipped=0
@@ -174,7 +174,7 @@ test_geometry_shader ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_il_append_aligned ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_immediate_constant_buffer ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_independent_blend ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_index_buffer_offset fail failed=17 sites=2 todo_succeeded=0 skipped=0
+test_index_buffer_offset fail failed=16 sites=1 todo_succeeded=0 skipped=0
 test_initial_depth_stencil_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_initial_texture_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_input_assembler ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -210,12 +210,12 @@ test_sm4_if_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm4_ret_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_so_statistics_query ok failed=0 sites=0 todo_succeeded=4 skipped=0
 test_staging_buffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_state_refcounting fail failed=2 sites=2 todo_succeeded=0 skipped=0
+test_state_refcounting ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_only_write_after_clear ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_separate ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output fail failed=154 sites=14 todo_succeeded=0 skipped=0
 test_stream_output_resume fail failed=21 sites=4 todo_succeeded=0 skipped=0
-test_stream_output_vs fail failed=10 sites=2 todo_succeeded=0 skipped=0
+test_stream_output_vs fail failed=9 sites=1 todo_succeeded=0 skipped=0
 test_swapchain_flip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_formats ok failed=0 sites=0 todo_succeeded=1 skipped=0
 test_swapchain_views ok failed=0 sites=0 todo_succeeded=0 skipped=0

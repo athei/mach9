@@ -16,37 +16,18 @@ ddraw/ddraw2/test_coop_level_mode_set flaky  # failure count differs between run
 ddraw/ddraw4/test_coop_level_mode_set flaky  # failure count differs between runs of one build
 ddraw/ddraw7/test_coop_level_mode_set flaky  # failure count differs between runs of one build
 
-d2d1/d2d1/test_dc_target issue=70
-d2d1/d2d1/test_dc_target_gdi_interop issue=70
-d2d1/d2d1/test_dxgi_surface_target_gdi_interop issue=70
-d2d1/d2d1/test_hwnd_target_gdi_interop issue=70
-d2d1/d2d1/test_wic_gdi_interop issue=70
-d3d10_1/d3d10_1/test_getdc issue=70
-d3d10core/d3d10core/test_clear_state issue=87
 d3d10core/d3d10core/test_depth_bias issue=77  # D16 lines are #80
-d3d10core/d3d10core/test_state_refcounting issue=86  # predicate line 9057; RTV line 9042 not traced
 d3d10core/d3d10core/test_stream_output issue=76
 d3d10core/d3d10core/test_stream_output_resume issue=75
-d3d11/d3d11/test_clear_state issue=87
-d3d11/d3d11/test_create_buffer issue=88
-d3d11/d3d11/test_deferred_context_rendering issue=84
 d3d11/d3d11/test_depth_bias issue=77  # D16 lines are #80
-d3d11/d3d11/test_device_context_state issue=72  # also #88, #86 and #87
-d3d11/d3d11/test_device_interfaces issue=88
 d3d11/d3d11/test_fl10_stream_output_desc issue=76
-d3d11/d3d11/test_getdc issue=70
 d3d11/d3d11/test_index_buffer_offset issue=74  # conjecture: appends of later draws lost
 d3d11/d3d11/test_quad_tessellation issue=75
-d3d11/d3d11/test_shared_resource issue=78
 d3d11/d3d11/test_so_statistics_query issue=74
-d3d11/d3d11/test_state_refcounting issue=86
 d3d11/d3d11/test_stream_output issue=76
 d3d11/d3d11/test_stream_output_components issue=76  # also #75
 d3d11/d3d11/test_stream_output_resume issue=75
 d3d11/d3d11/test_stream_output_vs issue=76  # test 0: no strides passed; test 1 fails with an explicit stride in d3d10core too; test 2 not traced
-d3d11/d3d11/test_texture1d_interfaces issue=88
-d3d11/d3d11/test_texture2d_interfaces issue=88
-d3d11/d3d11/test_texture3d_interfaces issue=88
 d3d11/d3d11/test_vertex_id issue=75  # RasterizedStream 0
 d3d11/d3d11/test_video_support  # accepted: DXMT takes VIDEO_SUPPORT for Media Foundation games, has no ID3D11VideoDevice
 d3d8/device/test_cursor_clipping issue=85
@@ -58,6 +39,4 @@ dxgi/dxgi/d3d10:test_cursor_clipping issue=85
 dxgi/dxgi/d3d10:test_resize_target issue=83
 dxgi/dxgi/d3d12:test_cursor_clipping issue=85
 dxgi/dxgi/d3d12:test_resize_target issue=83
-dxgi/dxgi/test_create_surface issue=71
-dxgi/dxgi/test_parents issue=71
 opengl32/opengl/test_other_process_window issue=49
