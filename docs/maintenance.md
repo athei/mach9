@@ -135,6 +135,11 @@ built before, which runs under Rosetta.
   formatting and lints and tests the launcher crates on macOS in minutes;
   its header says when it runs. A change to the launcher on `main` also
   runs `release.yml`, which assembles the app.
+- [`conformance.yml`](../.github/workflows/conformance.yml) checks the
+  formatting and lints, tests and builds the rustdoc of the `conformance`
+  crate on macOS; its header says when it runs. The graphics tests
+  themselves run locally only
+  ([conformance runner](internals.md#conformance-runner)).
 
 ### Cutting a release
 
@@ -461,6 +466,12 @@ setting; the bundle step checks the `force_nx` and `opengl` hooks
   test looks for ([runtime](internals.md#runtime)).
 - The loader checks for its entitlement and re-execs itself with 4K pages
   ([loader app](internals.md#loader-app)).
+- `include/wine/test.h` has `winetest_selected()`, which reads `WT_LIST`,
+  `WT_ONLY` and `WT_SKIP` and prints the `wt-list` and `wt-run` lines the
+  [conformance runner](internals.md#conformance-runner) reads. The
+  graphics tests' sources call it from the blocks
+  `conformance wine-macros` generates; `build-wine.sh` checks them
+  ([Wine](#wine)).
 
 [gcmouse]: https://mach9.app/compatdb_core/struct.Rule.html#method.gcmouse
 [force_nx]: https://mach9.app/compatdb_core/struct.Rule.html#method.force_nx
@@ -487,6 +498,39 @@ setting; the bundle step checks the `force_nx` and `opengl` hooks
     time, and the first process of every session reinstalls it when that
     time differs from the prefix's `.update-timestamp`. Only a prefix whose
     `.update-timestamp` says `disable` needs `wineboot -u`.
+
+### Wine
+
+Our series on
+[`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched) moves
+from one upstream `wine-X.Y` tag to the next. The two test selection
+commits stay at the top of the series. On a rebase:
+
+1. Rebase onto the new tag without "tests: Make the test functions of the
+   graphics tests selectable.": drop it, so no generated file conflicts.
+   "include: Add winetest_selected() to run single test functions." is
+   rebased like the other commits.
+2. In this repository, run
+   `cargo run -p conformance -- wine-macros --write <wine-src>`. It
+   writes nothing, and the `--check` of `build-wine.sh` stops, while:
+   - a `START_TEST` body has a call it cannot place;
+   - a `START_TEST` of a `SOURCES` file has no unit in the config (a new
+     upstream unit);
+   - the config names a unit, setup call or helper the sources no longer
+     have.
+3. Add, fix or remove that unit's entry in
+   [`wine-tests.toml`](../conformance/wine-tests.toml) (its header says
+   how) and run `--write` again.
+4. Commit the result in Wine with the dropped commit's message, and the
+   config change in this repository.
+5. Run `build-wine.sh` and a full bundle step: the runner needs the full
+   bundle's `lib/wine/tests`.
+6. Run all suites with the
+   [conformance runner](internals.md#conformance-runner), explain every
+   regression, and record all suites.
+7. Push Wine, then this repository's config change and baselines:
+   `release.yml` checks the tip of the Wine branch with this repository's
+   crate, so a run between the two pushes fails.
 
 ### Mesa and the Vulkan loader
 
@@ -518,6 +562,13 @@ Mesa is our fork at the ref in [`mesa-src.ref`](../pins/mesa-src.ref)
   naming its own manifest and no `MESA_KK_EXPERIMENTAL`. Extensions,
   features and limits that disappear are a regression to explain before
   the bundle takes the new driver.
+- After the bundle step, run the suites that reach Mesa with the
+  [conformance runner](internals.md#conformance-runner): those whose
+  `expect` in [`wine-tests.toml`](../conformance/wine-tests.toml) sets
+  `opengl` or `wined3d`, `vulkan-1`, `d3d12`, and `dxgi`, whose `d3d12:`
+  keys run vkd3d-proton on KosmicKrisp. Explain every regression before
+  the bundle takes the new driver, and record the suites again once the
+  differences are understood.
 - Push the branch to athei/mesa before building without `MESA_REPO`
   pointing at the local clone; the default builds what the remote has.
 - The Vulkan loader and headers are pinned together, from one Vulkan SDK
@@ -555,6 +606,11 @@ from one upstream `wine-X.Y` tag to the next. To move FEX to a newer tag:
     ARM64EC ntdll.
 - Push the branch to athei/FEX before building without `FEX_REPO`
   pointing at the local clone; the default builds what the remote has.
+- After the bundle step, run all suites with the
+  [conformance runner](internals.md#conformance-runner), since every test
+  is x86 code FEX runs. Explain every regression before the bundle takes
+  the new build, and record the suites again once the differences are
+  understood.
 
 ### GStreamer
 
@@ -612,7 +668,8 @@ upgraded together when the swapchain interface between them changes.
   without `DXMT_REPO` or `VKD3D_PROTON_REPO` pointing at the local clone;
   the default builds what the remote has.
 - Run a full bundle step: its smoke test runs `d3d12.exe` on every arch.
-  Run Wine's `d3d12_test.exe`, `dxgi_test.exe` and `d3d11_test.exe` from
-  the bundle's [graphics tests](internals.md#graphics-tests) before and
-  after, and explain any new failure before the bundle takes the new
-  build.
+- Then run the suites whose `expect` in
+  [`wine-tests.toml`](../conformance/wine-tests.toml) names the `dxmt`
+  tree with the [conformance runner](internals.md#conformance-runner).
+  Explain every regression before the bundle takes the new build, and
+  record the suites again once the differences are understood.

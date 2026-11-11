@@ -101,7 +101,7 @@ the same name, set in [`profile.sh`](../bin/lib/profile.sh) or, for
 | Variable | What it is |
 |----------|------------|
 | `WINE_SRC` | The Wine source, a checkout of athei/wine |
-| `BUILD_DIR` | The Wine build tree; also holds cargo's target directory for `compatdb.so`, one per checkout of this repository (`COMPATDB_TARGET` in [`bundle-wine.sh`](../bin/bundle-wine.sh)) |
+| `BUILD_DIR` | The Wine build tree; also holds cargo's target directories for `compatdb.so` and for the test selection check, one per checkout of this repository (`COMPATDB_TARGET` in [`bundle-wine.sh`](../bin/bundle-wine.sh), `CONFORMANCE_TARGET` in [`build-wine.sh`](../bin/build-wine.sh)) |
 | `X86LIBS_BUILD_DIR` | The x86 tree for the SDK's x86_64 archives and [graphics tests](#graphics-tests) |
 | `WINE_SDK_DIR` | The [Wine SDK](#wine-sdk) |
 | `FEX_REPO`, `MESA_REPO`, `DXMT_REPO`, `VKD3D_PROTON_REPO` | The repositories the forks are fetched from |
@@ -228,6 +228,115 @@ The test picks its Direct3D tree through compatdb as a game does, so a
 ([recipes](https://mach9.app/compatdb_core/#recipes)).
 It prints a summary line per part and exits with the number of failed
 checks, at most 255.
+
+To run single test functions of a part, set `WT_ONLY` to their keys, a
+comma-separated list; `WT_SKIP` runs all but the listed ones, and
+`WT_LIST=1` prints a `wt-list:<key>` line per test function and runs none.
+The parts `wine-tests.toml` marks `whole`, and every part of
+`d3d9_test.exe`, ignore them (`winetest_selected()` in Wine's
+`include/wine/test.h`, [conformance runner](#conformance-runner)).
+
+#### Conformance runner
+
+The crate in [`conformance/`](../conformance) runs these tests on a bundle
+and compares the results with baselines committed here, so a fork sync or
+a component upgrade shows what changed, test by test. Each test function
+runs in a process of its own, so a crash or stall loses only that function.
+
+```bash
+cargo run -p conformance -- run d3d11 dxgi   # compare with the baselines
+cargo run -p conformance -- record d3d11     # write the baselines again
+```
+
+- A suite is a test executable of
+  [`wine-tests.toml`](../conformance/wine-tests.toml), named without
+  `_test.exe`, or `all` for every one. Direct3D 9 is not a suite:
+  mtld3d's conformance suite covers it.
+- A key is one test function of a unit (a `START_TEST` part), named after
+  the function, in one leg (`i386-windows` or `x86_64-windows`). A unit
+  that `wine-tests.toml` marks `whole` runs as one process with the key
+  `*`.
+- `run --help` and `record --help` list the options.
+- Each invocation boots a fresh prefix with the launcher's emulated
+  display modes and the retina and DPI values its automatic setting gives
+  on a Retina display (`SETTINGS` in
+  [`session.rs`](../conformance/src/session.rs)). Record baselines on a
+  Retina display. The runner refuses to start while a wineserver of the
+  same bundle runs.
+- Every process gets the caller's environment without the variables that
+  change Wine, the libraries it loads, its graphics stack or the test
+  framework (`SCRUBBED` in
+  [`environment.rs`](../conformance/src/environment.rs)).
+- Before it trusts a result, the runner checks the test process's
+  `compatdb:` lines ([logging](compatdb.md#logging-and-verification))
+  against the `expect` of its executable in `wine-tests.toml`, and stops on
+  any other implementation.
+- `record` writes `conformance/baselines/<suite>.txt`, which nobody edits
+  by hand; `run` needs one. Its header has the bundle's `VERSION` and
+  `COMPONENTS`, whose differences a run reports without failing. The
+  format is in [`baseline.rs`](../conformance/src/baseline.rs).
+- People keep [`triage.txt`](../conformance/baselines/triage.txt) in the
+  same directory: per test an issue and whether it is flaky.
+- The state directory, `build/conformance` in the
+  [layout](building.md#layout) by default, serves one invocation at a
+  time:
+  - `runs/<run id>/` holds the raw logs of each invocation. The runner
+    never deletes them; delete old runs by hand.
+  - `baseline-raw/<suite>/` holds the logs of the last record of each
+    suite, on the machine that recorded it only.
+  - `record` writes the baselines and `baseline-raw/` once every suite of
+    the invocation is done.
+- Interrupts:
+  - Ctrl-C, `SIGTERM` or `SIGHUP` ends the prefix's Wine processes and
+    exits with 130; a second signal ends the runner at once, and the next
+    invocation ends what is left.
+  - The same command continues where it stopped, unless the test
+    executable, `VERSION` or `COMPONENTS` changed
+    ([`resume.rs`](../conformance/src/resume.rs)).
+- A process a test moved out of its process group runs on into later keys
+  until a stall or a key that was not reached restarts the Wine session
+  ([`exec.rs`](../conformance/src/exec.rs)).
+- The suites need a Mac with a Metal 4 GPU, open windows and take the
+  focus, so they run locally only;
+  [`conformance.yml`](../.github/workflows/conformance.yml) runs only the
+  crate's own tests.
+
+| Result | Meaning | Exit code |
+|--------|---------|-----------|
+| Match | `run`: no change fails the run. `record`: a baseline with no unstable key | 0 |
+| Regression | `run`: a key got worse, a new key crashes or stalls, or the run no longer lists a key | 1 |
+| Stale baseline | `run`: a key got better or is new: record the suite | 1 |
+| Unstable | `run`: a changed key gave its baseline's result the second time. `record`: a key gave two results and is written with the higher status and the larger of each count | 1 |
+| Error | Bad arguments, no baseline, or a bundle, state directory or implementation the runner cannot use | 2 |
+| Interrupted | Stopped by a signal | 130 |
+
+- The last line of the output names the result. What counts as worse or
+  better, and what is only listed as `flaky` or `info`, is in
+  [`diff.rs`](../conformance/src/diff.rs).
+- `run` runs again each baselined key whose change fails the run; `record`
+  each key whose result differs from the old baseline, new keys included.
+  Mark an unstable key `flaky` in the triage file.
+- `record` refuses to record one leg or some keys of a suite on another
+  build than its baseline's: record the whole suite.
+
+After a regression:
+
+- The first line of the output names the invocation's log directory. A
+  test's log in it is `<leg>/<suite>/<unit>/<key>.log` (`whole.log` for a
+  whole unit), with every run of the key and how each ended; a stall also
+  leaves a sample beside it. A resumed test's log is in the directory of
+  the invocation that ran it.
+- On the machine that recorded the baseline, `baseline-raw/<suite>/` has
+  the same test's log from that record.
+- Rerun one key alone, which also rules out a process an earlier key left
+  running; `--only` takes a comma-separated list:
+
+  ```bash
+  cargo run -p conformance -- run d3d11 --leg x86_64 --only d3d11/test_create_device
+  ```
+
+- Record the suite again only once every regression is fixed or
+  explained.
 
 ## DXMT
 
