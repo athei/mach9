@@ -205,6 +205,11 @@ mtld3d's conformance suite runs the `d3d9_test.exe` of both directories.
 - `lib/wine/tests/VERSION` holds the `wine --version` string of the Wine
   they were built from, so a copy of `lib/wine/tests` taken alone still
   names its build. mtld3d's conformance runner reads its first line.
+- A full bundle's `lib/wine/tests/COMPONENTS` has a `<name>=<commit>`
+  line for each component besides Wine that these scripts build from
+  source and the tests run on (`TEST_COMPONENTS` in
+  [`bundle-wine.sh`](../bin/bundle-wine.sh)), so results from two bundles
+  show what each ran on. The SDK has no such file.
 - `d3d12_test.exe` needs the `dxmt` tree ([vkd3d-proton](#vkd3d-proton)).
   On the `wined3d` tree the loader stops it with `c0000135` (a missing
   DLL) and it exits with 53.

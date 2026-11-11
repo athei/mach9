@@ -2130,6 +2130,64 @@ check_vkd3d_proton_build() {
     echo "  vkd3d-proton: $(cat "$VKD3D_PROTON_DIST/DESCRIBE") ($built)"
 }
 
+# The components besides Wine that these scripts build from source and the
+# graphics tests run on, as <name>:<dist variable>/<file with its commit>.
+# lib/wine/tests/COMPONENTS (Step 2d) names the commit of each, so test
+# results can be told apart by what they ran on, also in a copy of
+# lib/wine/tests taken alone.
+TEST_COMPONENTS="mesa:MESA_DIST/COMMIT vulkan-loader:MESA_DIST/LOADER_COMMIT
+                 dxmt:DXMT_DIST/COMMIT vkd3d-proton:VKD3D_PROTON_DIST/COMMIT fex:FEX_DIST/COMMIT"
+
+# test_components: print lib/wine/tests/COMPONENTS, one <name>=<commit> line
+# per TEST_COMPONENTS: the commit its build script wrote into its dist, which
+# the preflight has compared with the pin, so nothing is resolved again.
+test_components() {
+    local c ref var file commit
+    for c in $TEST_COMPONENTS; do
+        ref=${c#*:}
+        var=${ref%%/*}
+        file="${!var}/${ref#*/}"
+        commit=$(cat "$file" 2>/dev/null) || {
+            echo "Error: no $file" >&2
+            exit 1
+        }
+        echo "${c%%:*}=$commit"
+    done
+}
+
+# check_test_components <file>: report every way <file> is not a COMPONENTS
+# with exactly one <name>=<commit> line for each name of TEST_COMPONENTS and
+# nothing else, the commit a full 40-hex one, and set MISSING=1.
+check_test_components() {
+    local c line name commit known="" seen=""
+    for c in $TEST_COMPONENTS; do
+        known="${known:+$known }${c%%:*}"
+    done
+    while IFS= read -r line || [ -n "$line" ]; do
+        name=${line%%=*}
+        commit=${line#*=}
+        if ! [[ "$line" =~ ^[a-z0-9-]+= ]] || ! in_list "$name" "$known"; then
+            echo "  ERROR: lib/wine/tests/COMPONENTS has the line '$line', not <name>=<commit> for one of: $known"
+            MISSING=1
+        elif in_list "$name" "$seen"; then
+            echo "  ERROR: lib/wine/tests/COMPONENTS names $name twice"
+            MISSING=1
+        else
+            seen="$seen $name"
+            if ! [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "  ERROR: lib/wine/tests/COMPONENTS gives $name the commit '$commit', not a full commit hash"
+                MISSING=1
+            fi
+        fi
+    done < "$1"
+    for name in $known; do
+        if ! in_list "$name" "$seen"; then
+            echo "  ERROR: lib/wine/tests/COMPONENTS does not name $name"
+            MISSING=1
+        fi
+    done
+}
+
 # ── Loader app ──────────────────────────────────────────────────────────
 # The loader needs com.apple.developer.cross-architecture-support,
 # with which the kernel leaves most of the 4 GB __PAGEZERO replaceable, so
@@ -2653,7 +2711,10 @@ fi
 # directories it searches for modules. Development files only, like the
 # link libraries. tests/VERSION, the `wine --version` string of the Wine they
 # were built from, goes with them, so the directory taken alone still names
-# its build; Step 5 checks it against this bundle's wine.
+# its build; Step 5 checks it against this bundle's wine. tests/COMPONENTS,
+# the commits of TEST_COMPONENTS (test_components), goes with them for the
+# same reason, in a file of its own, since mtld3d's conformance runner reads
+# the first line of VERSION; Step 5 checks its names and commits.
 if [ "$RUNTIME_ONLY" -eq 0 ]; then
     time_mark "Step 2d: Graphics tests"
     echo "==> Step 2d: Graphics tests"
@@ -2666,6 +2727,8 @@ if [ "$RUNTIME_ONLY" -eq 0 ]; then
     done
     echo "    tests/VERSION"
     cp "$WINE_SDK_DIR/lib/wine/tests/VERSION" "$WINE_DIR/lib/wine/tests/"
+    echo "    tests/COMPONENTS"
+    test_components > "$WINE_DIR/lib/wine/tests/COMPONENTS"
 fi
 
 # What a full bundle has beyond a runtime-only one, for Step 6: everything
@@ -3318,7 +3381,7 @@ if [ "$RUNTIME_ONLY" -eq 0 ]; then
             WANT+=("lib/wine/tests/$pe/${t}_test.exe")
         done
     done
-    WANT+=("lib/wine/tests/VERSION")
+    WANT+=("lib/wine/tests/VERSION" "lib/wine/tests/COMPONENTS")
 fi
 MISSING=0
 for want in "${WANT[@]}"; do
@@ -3368,6 +3431,9 @@ if [ "$RUNTIME_ONLY" -eq 0 ] && [ -f "$WINE_DIR/lib/wine/tests/VERSION" ]; then
         echo "  ERROR: lib/wine/tests/VERSION says $tests_version, but bin/wine --version prints $wine_version (run build-wine.sh)"
         MISSING=1
     fi
+fi
+if [ "$RUNTIME_ONLY" -eq 0 ] && [ -f "$WINE_DIR/lib/wine/tests/COMPONENTS" ]; then
+    check_test_components "$WINE_DIR/lib/wine/tests/COMPONENTS"
 fi
 if [ $MISSING -ne 0 ]; then
     echo "Error: copied-in components are not installed correctly"

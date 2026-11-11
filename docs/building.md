@@ -87,6 +87,7 @@ The libraries built here that configure finds are described with them:
 | `lib/wine/x86_64-windows/` | Full bundle only: the x86_64 link libraries of the [Wine SDK](internals.md#wine-sdk). Nothing reads the directory at run time |
 | `lib/wine/tests/i386-windows/`, `lib/wine/tests/x86_64-windows/` | Full bundle only: Wine's graphics conformance tests as `<name>_test.exe` ([graphics tests](internals.md#graphics-tests)) |
 | `lib/wine/tests/VERSION` | Full bundle only: the Wine version the tests were built from ([graphics tests](internals.md#graphics-tests)) |
+| `lib/wine/tests/COMPONENTS` | Full bundle only: the source commits of the components besides Wine that these scripts build and the tests run on ([graphics tests](internals.md#graphics-tests)) |
 | `lib/external/` | Bundled dylibs, the Vulkan loader, KosmicKrisp, Mesa's EGL with Zink ([OpenGL](internals.md#opengl)), and GStreamer with glib and FFmpeg, which `winegstreamer.so` links ([GStreamer](internals.md#gstreamer)) |
 | `lib/external/gstreamer-1.0/` | GStreamer's plugins, gst-libav with FFmpeg's decoders among them ([GStreamer](internals.md#gstreamer)) |
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
