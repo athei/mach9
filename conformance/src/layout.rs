@@ -63,6 +63,26 @@ pub fn default_state(root: &Path) -> PathBuf {
     root.join("build").join(STATE_TREE)
 }
 
+/// The tree name of the deqp-vk suite's state directory.
+pub const DEQP_STATE_TREE: &str = "deqp-vk";
+
+/// The tree name of the deqp-vk suite's working directory, which each
+/// invocation makes fresh.
+pub const DEQP_WORK_TREE: &str = "deqp-vk-work";
+
+/// The default state directory of the deqp-vk suite under `root`.
+#[must_use]
+pub fn default_deqp_state(root: &Path) -> PathBuf {
+    root.join("build").join(DEQP_STATE_TREE)
+}
+
+/// The default `deqp-vk` dist under `root`, where `bin/build-vk-gl-cts.sh`
+/// stages it.
+#[must_use]
+pub fn default_deqp(root: &Path) -> PathBuf {
+    root.join("build").join("vk-gl-cts").join("dist")
+}
+
 /// A bundle with its graphics tests.
 pub struct Bundle {
     pub dir: PathBuf,
@@ -132,8 +152,18 @@ impl State {
     /// Returns a message when the directory is not the runner's, cannot be
     /// made, or another invocation holds its lock.
     pub fn claim(dir: &Path) -> Result<Self, String> {
+        Self::claim_tree(dir, STATE_TREE)
+    }
+
+    /// [`Self::claim`] for the state directory of another suite, the tree
+    /// `name`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::claim`].
+    pub fn claim_tree(dir: &Path, name: &str) -> Result<Self, String> {
         let dir = std::path::absolute(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        claim_dir(&dir, STATE_TREE)?;
+        claim_dir(&dir, name)?;
         let path = dir.join(".lock");
         let lock = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         match lock.try_lock() {

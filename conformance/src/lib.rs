@@ -1,4 +1,5 @@
-//! `conformance`: tooling for Wine's graphics conformance tests.
+//! `conformance`: tooling for Wine's graphics conformance tests and the
+//! deqp-vk suite.
 //!
 //! Which executables and units exist is in `wine-tests.toml` ([`model`]).
 //! `wine-macros` generates and checks the blocks in Wine's test sources that
@@ -17,11 +18,15 @@
 //! [`environment`] in one Wine session of a fresh prefix ([`session`],
 //! [`procs`]), and stops cleanly on a signal ([`interrupt`]).
 //!
+//! [`deqp`] is the deqp-vk suite: cases of Khronos' Vulkan CTS that
+//! `deqp-vk.toml` selects, run on KosmicKrisp without Wine.
+//!
 //! [`Outcome`]: outcome::Outcome
 //! [`TestId`]: outcome::TestId
 
 pub mod baseline;
 pub mod compatdb_log;
+pub mod deqp;
 pub mod diff;
 pub mod environment;
 pub mod exec;

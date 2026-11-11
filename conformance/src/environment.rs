@@ -58,6 +58,36 @@ pub fn wine_env(
     env
 }
 
+/// The environment of every `deqp-vk` process of the deqp-vk suite: the
+/// caller's variables without the [`SCRUBBED`] ones, then:
+///
+/// - `VK_DRIVER_FILES` the manifest directory `icd_dir`, so the loader
+///   loads that driver and no other;
+/// - `VK_LOADER_LAYERS_DISABLE=~all~`, so no layer found on the system
+///   loads;
+/// - `MESA_SHADER_CACHE_DIR` a directory in the runner's `work` directory,
+///   so the cases' shaders do not fill the cache the user's games share.
+#[must_use]
+pub fn deqp_env(
+    caller: impl IntoIterator<Item = (OsString, OsString)>,
+    icd_dir: &Path,
+    work: &Path,
+) -> Vec<(OsString, OsString)> {
+    let mut env: Vec<(OsString, OsString)> = caller
+        .into_iter()
+        .filter(|(name, _)| !is_scrubbed(name))
+        .collect();
+    let cache = work.join("mesa-shader-cache");
+    for (name, value) in [
+        ("VK_DRIVER_FILES", icd_dir.as_os_str()),
+        ("VK_LOADER_LAYERS_DISABLE", OsStr::new("~all~")),
+        ("MESA_SHADER_CACHE_DIR", cache.as_os_str()),
+    ] {
+        env.push((OsString::from(name), value.to_owned()));
+    }
+    env
+}
+
 /// Whether the variable `name` is one [`wine_env`] removes.
 fn is_scrubbed(name: &OsStr) -> bool {
     let name = name.as_encoded_bytes();

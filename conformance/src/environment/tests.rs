@@ -90,3 +90,38 @@ fn the_runner_s_settings_are_set_once() {
     assert_eq!(value(&env, "WT_ONLY"), None);
     assert_eq!(env.len(), 7);
 }
+
+#[test]
+fn deqp_processes_get_only_the_named_driver() {
+    let env = deqp_env(
+        caller(&[
+            "VK_ICD_FILENAMES",
+            "VK_ADD_DRIVER_FILES",
+            "VK_DRIVER_FILES",
+            "VK_INSTANCE_LAYERS",
+            "MESA_KK_DEBUG",
+            "DYLD_LIBRARY_PATH",
+            "PATH",
+        ]),
+        &PathBuf::from("/m/share/vulkan/icd.d"),
+        &PathBuf::from("/s/work"),
+    );
+    for (name, expected) in [
+        ("VK_DRIVER_FILES", "/m/share/vulkan/icd.d"),
+        ("VK_LOADER_LAYERS_DISABLE", "~all~"),
+        ("MESA_SHADER_CACHE_DIR", "/s/work/mesa-shader-cache"),
+        ("PATH", "caller"),
+    ] {
+        assert_eq!(value(&env, name), Some(OsStr::new(expected)), "{name}");
+    }
+    for name in [
+        "VK_ICD_FILENAMES",
+        "VK_ADD_DRIVER_FILES",
+        "VK_INSTANCE_LAYERS",
+        "MESA_KK_DEBUG",
+        "DYLD_LIBRARY_PATH",
+    ] {
+        assert_eq!(value(&env, name), None, "{name}");
+    }
+    assert_eq!(env.len(), 4);
+}

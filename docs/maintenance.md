@@ -569,6 +569,14 @@ Mesa is our fork at the ref in [`mesa-src.ref`](../pins/mesa-src.ref)
   keys run vkd3d-proton on KosmicKrisp. Explain every regression before
   the bundle takes the new driver, and record the suites again once the
   differences are understood.
+- Run the [deqp-vk suite](internals.md#deqp-vk-suite) on the new driver,
+  `cargo run -p conformance -- deqp-vk run`, with `--vulkan` naming its
+  `MESA_DIST` before the bundle step or the bundle after it. A change to a
+  KosmicKrisp path a group covers needs that group before and after; an
+  issue that needs other cases adds a group to
+  [`deqp-vk.toml`](../conformance/deqp-vk.toml). Explain every regression,
+  and record the groups again (`deqp-vk record`) once the differences are
+  understood.
 - Push the branch to athei/mesa before building without `MESA_REPO`
   pointing at the local clone; the default builds what the remote has.
 - The Vulkan loader and headers are pinned together, from one Vulkan SDK
@@ -577,6 +585,22 @@ Mesa is our fork at the ref in [`mesa-src.ref`](../pins/mesa-src.ref)
 - A Wine build tree configured without Vulkan has no `SONAME_LIBVULKAN`,
   and one configured before EGL was built has no `SONAME_LIBEGL`;
   `build-wine.sh` stops and asks for `--clean`.
+
+### VK-GL-CTS
+
+VK-GL-CTS, which builds the `deqp-vk` of the
+[deqp-vk suite](internals.md#deqp-vk-suite), is pinned by tag and commit
+in [`redist.env`](../pins/redist.env).
+
+- Follow the Vulkan CTS release Mesa's CI builds `deqp-vk` from
+  (`DEQP_VK_VERSION` in Mesa's `.gitlab-ci/container/build-deqp.sh`), and
+  bump tag and commit together.
+- Rebuild with `build-vk-gl-cts.sh`, and record every group again
+  (`deqp-vk record`) on a driver that did not change since its last
+  record, so the differences are the CTS's alone.
+- Check that each pattern and `exclude` of
+  [`deqp-vk.toml`](../conformance/deqp-vk.toml) still selects what its
+  comment says, against the new `mustpass.txt`.
 
 ### FEX
 

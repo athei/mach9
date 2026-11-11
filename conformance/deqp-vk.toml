@@ -1,0 +1,78 @@
+# The groups of the deqp-vk suite of the conformance runner: the Vulkan CTS
+# cases it runs on KosmicKrisp (docs/internals.md, deqp-vk suite). A group
+# is opt-in: it is here because a change to our Mesa needs its cases, and it
+# grows when an issue needs more. The full mustpass is not a goal.
+#
+# [[group]]
+# name     = "draw"         letters, digits, `_` and `-`; its expected
+#                           results are baselines/deqp-vk/<name>.txt
+# issues   = [61]           the mach9 issues whose changes the group checks
+# cases    = ["dEQP-VK.draw.*"]
+#                           patterns over the case names of the vk-default
+#                           mustpass of the pinned VK-GL-CTS; `*` matches any
+#                           run of characters, dots included
+# exclude  = ["*.rgen"]     optional: patterns of matching cases left out;
+#                           only for a feature KosmicKrisp does not have at
+#                           all, each with its reason in a comment, never a
+#                           case that runs
+# fraction = 4             optional: every 4th matching case, in mustpass
+#                           order, as deqp-runner's --fraction takes them;
+#                           1, all of them, by default
+#
+# A case may match several groups; it runs once.
+
+[[group]]
+name = "draw"
+issues = [61]
+cases = [
+    "dEQP-VK.draw.*",
+    "dEQP-VK.conditional_rendering.*",
+    "dEQP-VK.multiview.*",
+    "dEQP-VK.robustness.index_access.*indirect*",
+    "dEQP-VK.robustness.bind_index_buffer2.*indirect*",
+]
+
+[[group]]
+name = "robust-buffer-access"
+issues = [62]
+cases = [
+    "dEQP-VK.robustness.*buffer_access.*",
+    "dEQP-VK.robustness.robustness2.*.storage_buffer*",
+    "dEQP-VK.robustness.robustness2.*.uniform_buffer*",
+    "dEQP-VK.robustness.pipeline_robustness.robustness2.*.storage_buffer*",
+    "dEQP-VK.robustness.pipeline_robustness.robustness2.*.uniform_buffer*",
+    "dEQP-VK.ssbo.*",
+]
+exclude = [
+    # Ray generation shaders: KosmicKrisp has no ray tracing, so each of
+    # these cases ends NotSupported.
+    "dEQP-VK.robustness.robustness2.*.rgen",
+    "dEQP-VK.robustness.robustness2.*.rgen_compute",
+]
+
+# The cases of #63 in three groups, so that a record of one of them stays
+# short enough to share the machine.
+[[group]]
+name = "synchronization"
+issues = [63]
+cases = [
+    "dEQP-VK.synchronization.*",
+    "dEQP-VK.query_pool.*occlusion*",
+]
+
+[[group]]
+name = "synchronization2"
+issues = [63]
+cases = ["dEQP-VK.synchronization2.*"]
+
+[[group]]
+name = "memory-model"
+issues = [63]
+cases = ["dEQP-VK.memory_model.*"]
+exclude = [
+    # 64-bit atomic read-modify-write in a fragment shader hangs the GPU in
+    # some runs and not in others (#91): VK_ERROR_DEVICE_LOST, which can
+    # take other processes' devices with it. Remove with #91.
+    "dEQP-VK.memory_model.write_after_read.ext.u64.*.atomic_atomic.atomicrmw.*.payload_local.*.frag",
+    "dEQP-VK.memory_model.message_passing.ext.u64.*.atomic_atomic.atomicrmw.*.payload_local.*.frag",
+]

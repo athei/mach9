@@ -1,0 +1,16 @@
+# Notes on the deqp-vk cases of the expected results in this directory, kept
+# by hand.
+#
+# One line per pattern over case names (`*` matches any run of characters),
+# then any of
+#   issue=<n>  the mach9 issue that tracks the cases
+#   flaky      their results change between runs of one build: the diff
+#              reports their changes but fails only on a new crash or stall,
+#              and `record` runs them three more times alone and writes the
+#              worst result
+# `#` starts a comment, on a line of its own or after the notes:
+#
+#   dEQP-VK.synchronization.basic.timeline_semaphore.* issue=63 flaky  # races the host
+#
+# A case that loses the device does not belong here: it harms the cases of
+# other processes. Exclude its family in deqp-vk.toml with its issue instead.

@@ -57,6 +57,10 @@ script's header says what it builds and stages.
   - When they build: `build-vkd3d-proton.sh` for the submodules,
     `build-mesa.sh` for a new Vulkan loader or Python environment, and
     `build-gstreamer.sh` unless its clone and wraps are already there.
+- For the [deqp-vk suite](#deqp-vk-suite) only, which no CI build runs:
+  `build-vk-gl-cts.sh` needs git, CMake, Ninja and Python 3, all of them
+  build tools of `brew-formulae` or macOS, and the network for its clone
+  and the sources VK-GL-CTS's `external/fetch_sources.py` fetches.
 
 ## Commands
 
@@ -69,6 +73,7 @@ script's header says what it builds and stages.
 | [`build-dxmt.sh`](../bin/build-dxmt.sh) | DXMT, after a Wine build ([DXMT](#dxmt)) |
 | [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | vkd3d-proton's D3D12 DLLs, after a Wine build ([vkd3d-proton](#vkd3d-proton)) |
 | [`bundle-wine.sh`](../bin/bundle-wine.sh) | Assembles the bundle, signs the loader and checks the result ([what the bundle step checks](#what-the-bundle-step-checks)) |
+| [`build-vk-gl-cts.sh`](../bin/build-vk-gl-cts.sh) | `deqp-vk` for the [deqp-vk suite](#deqp-vk-suite); not run by `build-wine.sh` |
 
 The flags are in [building.md](building.md#commands). The five component
 scripts also run alone.
@@ -95,8 +100,9 @@ scripts also run alone.
 Every tree lives under `build/` and the bundle in `dist/wine`, in the
 [layout](building.md#layout). Each variable below overrides the default of
 the same name, set in [`profile.sh`](../bin/lib/profile.sh) or, for
-`MINGW_DIR` and `CACHE_DIR`, at the top of the scripts that use them. A
-`MACOSX_DEPLOYMENT_TARGET` may raise the floor but not lower it.
+`MINGW_DIR`, `CACHE_DIR` and the `VK_GL_CTS_*` ones, at the top of the
+scripts that use them. A `MACOSX_DEPLOYMENT_TARGET` may raise the floor
+but not lower it.
 
 | Variable | What it is |
 |----------|------------|
@@ -110,6 +116,7 @@ the same name, set in [`profile.sh`](../bin/lib/profile.sh) or, for
 | `DXMT_LLVM` | The LLVM static libraries `winemetal.so` links |
 | `FEX_DIST`, `MESA_DIST`, `DXMT_DIST`, `VKD3D_PROTON_DIST`, `GSTREAMER_DIST` | What the bundle installs from each component, with the commits it was built from; by default inside the component's build directory |
 | `LOADER_PROFILE` | The provisioning profile the loader is signed for |
+| `VK_GL_CTS_BUILD_DIR`, `VK_GL_CTS_DIST` | The tree of [`build-vk-gl-cts.sh`](../bin/build-vk-gl-cts.sh), with its VK-GL-CTS clone, and the `deqp-vk` it stages |
 | `MINGW_DIR` | llvm-mingw |
 | `CACHE_DIR` | Downloaded redistributables |
 
@@ -337,6 +344,96 @@ After a regression:
 
 - Record the suite again only once every regression is fixed or
   explained.
+
+#### deqp-vk suite
+
+The same crate runs cases of Khronos' Vulkan CTS on KosmicKrisp with
+`deqp-vk`, natively and without Wine, so a change to our Mesa shows what
+it changes in the CTS groups it touches. Which cases run is the groups of
+[`deqp-vk.toml`](../conformance/deqp-vk.toml), patterns over the
+vk-default mustpass; a group is added when an issue needs it, and the full
+mustpass is not a goal.
+
+```bash
+bin/build-vk-gl-cts.sh                                     # build deqp-vk once
+cargo run -p conformance -- deqp-vk run                    # compare with the expected results
+cargo run -p conformance -- deqp-vk run --group draw       # one group
+cargo run -p conformance -- deqp-vk record --group draw    # write its expected results again
+```
+
+- [`build-vk-gl-cts.sh`](../bin/build-vk-gl-cts.sh) builds `deqp-vk` from
+  the VK-GL-CTS release [`redist.env`](../pins/redist.env) pins and stages
+  it in `build/vk-gl-cts/dist`; its header says what it stages. It is not
+  part of `build-wine.sh`, and the bundle does not carry it.
+- `--vulkan` names the Vulkan stack: a full bundle, by default
+  `dist/wine`, or a `MESA_DIST` of `build-mesa.sh`, which compares two
+  Mesa builds without a bundle step. `deqp-vk` loads that stack's loader
+  (`--deqp-vk-library-path`) with `VK_DRIVER_FILES` naming its manifest
+  directory and every layer disabled (`deqp_env` in
+  [`environment.rs`](../conformance/src/environment.rs)).
+- Before any case counts, a probe runs `dEQP-VK.info.device_properties`
+  with the loader's driver messages on. It must pass, the loader must have
+  found its manifests in that directory alone and set up every device with
+  the driver of that stack, and the runner prints the device, the driver
+  library and its `driverVersion`
+  ([`probe.rs`](../conformance/src/deqp/probe.rs)).
+- The cases run in batches, one `deqp-vk` process each, several at a time
+  (`--jobs`, `--batch`). A process that dies or stalls in a case gives
+  that case `crash` or `stall` and the batch goes on in a new process.
+  `deqp-vk run --help` lists the options.
+- A case that loses the device on KosmicKrisp can make the cases other
+  processes run at the same time fail or lose their device too. So the
+  cases the expected results give `crash` or `stall` run after the
+  others, one process at a time, and so does every other case that
+  crashed or stalled among the others. When one did, the cases that
+  failed among the others run again without it. After each lost device
+  in a process of its own, `dEQP-VK.api.smoke.triangle` has to pass
+  before the next case runs (`run_cases` and `recover` in
+  [`run.rs`](../conformance/src/deqp/run.rs)).
+- When a case that crashed or stalled among the others does so alone
+  too, it took the others with it, and the results alone and run again
+  count. When none does, nothing explains the first crash: each such case,
+  and each case whose result changed when it ran again, is unstable.
+  `run` then ends with the unstable result, and `record` writes the worse
+  of its two results and counts it as unstable.
+- `record` writes `conformance/baselines/deqp-vk/<group>.txt`, which
+  nobody edits by hand: every case of the group that does not pass, with
+  its status (one `<node>.*` line where all cases of the group under a
+  node share one), and a header with the commits of Mesa, the loader and
+  VK-GL-CTS, which a run reports without failing, and the number of cases,
+  which a run of the whole group that selects another number reports as
+  stale. The format and what counts as worse or better are in
+  [`expected.rs`](../conformance/src/deqp/expected.rs).
+- People keep [`triage.txt`](../conformance/baselines/deqp-vk/triage.txt)
+  in the same directory: per case pattern an issue and whether it is
+  flaky. A flaky case fails a run only on a new crash or stall, and
+  `record` runs it three more times alone and writes its worst result,
+  so a case that loses the device in some runs is expected to crash.
+  Mark a case flaky only with two runs of one build that differ.
+- `--cases <pattern>`, which may be given several times, runs and
+  compares only the cases of the groups a pattern matches, to rerun a
+  regression alone.
+- The results and exit codes are those of the table above. `run` runs
+  each case whose change fails the run a second time, and `record` each
+  case whose result differs from the old file.
+- The state directory, `build/deqp-vk` by default, serves one invocation
+  at a time. `runs/<run id>/` holds the probe's output and test log and
+  each batch's output (`first/batch-<n>.log`, `second/` for the cases run
+  again, `first-again/` and `second-again/` for the failed cases run
+  again without one that lost the device, and `first-alone/` and
+  `second-alone/` for those run alone).
+- Interrupts:
+  - Ctrl-C, `SIGTERM` or `SIGHUP` ends the `deqp-vk` processes and exits
+    with 130; an interrupted invocation keeps no results, and the next
+    one starts over.
+  - A second signal ends the runner at once and can leave `deqp-vk`
+    processes running without a watchdog. The runner refuses to start
+    while a process of the dist's `deqp-vk` runs, and names it: it cannot
+    tell its own from one started by hand, so it ends none, as the Wine
+    suites refuse to start while a wineserver of the bundle runs.
+- Like the Wine suites, it needs a Mac with a Metal 4 GPU and runs
+  locally only. It opens no windows: the window-system cases the groups
+  match end NotSupported.
 
 ## DXMT
 
@@ -642,3 +739,4 @@ A `*-src.ref` file names a branch, tag or commit of the component's
 | llvm-mingw | A CI build: [`redist.env`](../pins/redist.env), version and SHA-256. A local build: `MINGW_DIR` |
 | Provisioning profile | [`signing/loader.provisionprofile`](../signing/loader.provisionprofile); replace it when it expires or the App ID changes |
 | Sparkle, Mach9.app's updater | [`redist.env`](../pins/redist.env): version and SHA-256 of the release tarball |
+| VK-GL-CTS, for the [deqp-vk suite](#deqp-vk-suite) | [`redist.env`](../pins/redist.env): tag and commit; the sources it builds on at the commits and checksums its `external/fetch_sources.py` pins |
