@@ -1,0 +1,202 @@
+# The Wine test executables of the bundle's graphics tests, their units and
+# how each unit's test functions are selected one at a time.
+#
+# Each [[exe]] is <name>_test.exe, built from the SOURCES of
+# <dir>/Makefile.in (`dir` is relative to the Wine source root) for the PE
+# directories in `pe_dirs`, both i386-windows and x86_64-windows unless it
+# says otherwise. The exes and their PE directories are GRAPHICS_TESTS in
+# bin/lib/profile.sh without d3d9; a unit test keeps the two equal.
+#
+# Each [[exe.unit]] is one START_TEST(name) entry, the argument that selects
+# the unit on the test's command line; its file is <dir>/<name>.c unless
+# `file` names another.
+#
+# A unit with `whole = true` runs as a whole: its START_TEST body mixes setup
+# and tests. Every other unit gets a block before START_TEST, written by
+# `conformance wine-macros --write`, that makes each test function the body
+# runs a key of its own for WT_LIST, WT_ONLY and WT_SKIP. Its key is the
+# function's name.
+#
+# - `dispatch`: helpers that take the test function as an argument. `args` is
+#   the number of arguments (default 1), `key` the 1-based position of the
+#   test function (default 1), and `prefix` goes before the function's name
+#   in the key, for a function the unit runs through two helpers.
+# - `setup`: local functions and function-like macros of the file the body
+#   calls that stay unwrapped: setup, child process entry points, the call
+#   that runs the queued tests, and check macros.
+# - `tests`: test functions the body calls directly that are not named
+#   test_* or *_test, or that a `return;` follows.
+#
+# Every other local function the body calls as a whole statement is wrapped
+# as a test function if it is named test_* or *_test and no `return;`
+# follows it. `conformance wine-macros --check` fails on any other local call
+# or macro call.
+
+[[exe]]
+name = "ddraw"
+dir = "dlls/ddraw/tests"
+
+[[exe.unit]]
+name = "d3d"
+whole = true
+
+[[exe.unit]]
+name = "ddraw1"
+dispatch = [{ name = "run_for_each_device_type" }]
+setup = ["create_ddraw", "ddraw_get_identifier", "start_foreground_window_thread"]
+
+[[exe.unit]]
+name = "ddraw2"
+dispatch = [{ name = "run_for_each_device_type" }]
+setup = ["create_ddraw", "ddraw_get_identifier", "start_foreground_window_thread"]
+
+[[exe.unit]]
+name = "ddraw4"
+dispatch = [{ name = "run_for_each_device_type" }]
+setup = ["create_ddraw", "ddraw_get_identifier", "start_foreground_window_thread"]
+
+[[exe.unit]]
+name = "ddraw7"
+dispatch = [{ name = "run_for_each_device_type" }]
+setup = ["create_ddraw", "ddraw_get_identifier", "start_foreground_window_thread"]
+
+[[exe.unit]]
+name = "ddrawmodes"
+whole = true
+
+[[exe.unit]]
+name = "dsurface"
+whole = true
+
+[[exe.unit]]
+name = "refcount"
+whole = true
+
+[[exe.unit]]
+name = "visual"
+whole = true
+
+[[exe]]
+name = "d3d8"
+dir = "dlls/d3d8/tests"
+pe_dirs = ["i386-windows"]
+
+[[exe.unit]]
+name = "device"
+
+[[exe.unit]]
+name = "stateblock"
+whole = true
+
+[[exe.unit]]
+name = "visual"
+
+[[exe]]
+name = "d3d10"
+dir = "dlls/d3d10/tests"
+
+[[exe.unit]]
+name = "device"
+
+[[exe.unit]]
+name = "effect"
+
+[[exe.unit]]
+name = "reflection"
+file = "dlls/d3dcompiler_43/tests/reflection.c"
+
+[[exe]]
+name = "d3d10_1"
+dir = "dlls/d3d10_1/tests"
+
+[[exe.unit]]
+name = "d3d10_1"
+
+[[exe.unit]]
+name = "reflection"
+file = "dlls/d3dcompiler_43/tests/reflection.c"
+
+[[exe]]
+name = "d3d10core"
+dir = "dlls/d3d10core/tests"
+
+[[exe.unit]]
+name = "d3d10core"
+dispatch = [{ name = "queue_test" }]
+setup = ["print_adapter_info", "run_queued_tests"]
+
+[[exe]]
+name = "d3d11"
+dir = "dlls/d3d11/tests"
+
+[[exe.unit]]
+name = "d3d11"
+dispatch = [
+    { name = "queue_test" },
+    { name = "queue_for_each_feature_level" },
+    { name = "queue_for_each_9_x_feature_level" },
+    { name = "queue_for_each_feature_level_in_range", args = 3, key = 3 },
+]
+setup = ["test_create_device_child", "print_adapter_info", "run_queued_tests"]
+
+[[exe]]
+name = "d3d12"
+dir = "dlls/d3d12/tests"
+
+[[exe.unit]]
+name = "d3d12"
+setup = ["print_adapter_info"]
+
+[[exe]]
+name = "dxgi"
+dir = "dlls/dxgi/tests"
+
+[[exe.unit]]
+name = "dxgi"
+dispatch = [
+    { name = "queue_test" },
+    { name = "run_on_d3d10", prefix = "d3d10:" },
+    { name = "run_on_d3d12", prefix = "d3d12:" },
+]
+setup = ["run_queued_tests"]
+
+[[exe]]
+name = "d2d1"
+dir = "dlls/d2d1/tests"
+
+[[exe.unit]]
+name = "d2d1"
+dispatch = [{ name = "queue_test" }, { name = "queue_d3d10_test" }]
+setup = ["print_adapter_info", "run_queued_tests"]
+
+[[exe]]
+name = "opengl32"
+dir = "dlls/opengl32/tests"
+
+[[exe.unit]]
+name = "opengl"
+setup = [
+    "test_other_process_window_process",
+    "test_other_process_parent_process",
+    "flush_events",
+    "init_functions",
+    "check_gl_error",
+    "ok_ptr",
+    "ok_ret",
+]
+
+[[exe]]
+name = "vulkan-1"
+dir = "dlls/vulkan-1/tests"
+
+[[exe.unit]]
+name = "vulkan"
+# The `resource` branch of START_TEST(vulkan), which runs in the child
+# process test_external_memory starts, calls for_each_device_instance too,
+# so its macro wraps that call as well. The child inherits WT_ONLY and
+# WT_SKIP, so it runs test_external_memory whenever the parent selected it,
+# and prints its own wt-run line under its own pid.
+dispatch = [
+    { name = "for_each_device" },
+    { name = "for_each_device_instance", args = 4, key = 3 },
+]

@@ -1,12 +1,14 @@
 # Every Rust crate of the repository: compatdb.so (compatdb), the rule
-# table it is built on (compatdb/core), and Mach9.app's launcher
+# table it is built on (compatdb/core), Mach9.app's launcher
 # (launcher/app), its Dock tile plug-in (launcher/docktile) and the code
-# both share (launcher/core). A plain cargo command here acts on all of them.
+# both share (launcher/core), and the runner of Wine's graphics tests
+# (conformance). A plain cargo command here acts on all of them.
 [workspace]
 resolver = "3"
 members = [
     "compatdb",
     "compatdb/core",
+    "conformance",
     "launcher/app",
     "launcher/core",
     "launcher/docktile",

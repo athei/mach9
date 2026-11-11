@@ -160,6 +160,14 @@ name = "compatdb-core"
 version = "0.3.1"
 
 [[package]]
+name = "conformance"
+version = "0.3.1"
+dependencies = [
+ "clap",
+ "toml_edit",
+]
+
+[[package]]
 name = "defmt"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
