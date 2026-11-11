@@ -1,0 +1,93 @@
+name: Conformance
+
+# Checks the conformance crate (conformance/), the runner of Wine's graphics
+# tests, on macOS, where the runner runs: its integration tests
+# (conformance/tests/exec.rs) run the process handling of a run against a
+# shell script that stands in for Wine. It checks the crate's formatting,
+# then clippy, the tests and the rustdoc without the Wine build of
+# release.yml, which also tests and lints the workspace. It runs on a change
+# to the crate, to compatdb-core, which it reads the compatdb log with, to
+# the files outside the crate its unit tests read (bin/lib/profile.sh,
+# whose GRAPHICS_TESTS they compare with wine-tests.toml, and the
+# launcher's dpi.rs and registry.rs, whose display values they compare with
+# the prefix's), or to the workspace files. The graphics tests themselves
+# need a Metal 4 GPU, open windows and take the focus, so they run locally
+# only (docs/internals.md, conformance runner).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'conformance/**'
+      - 'compatdb/core/**'
+      - 'bin/lib/profile.sh'
+      - 'launcher/app/src/dpi.rs'
+      - 'launcher/app/src/registry.rs'
+      - '.cargo/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+      - 'rustfmt.toml'
+      - '.github/workflows/conformance.yml'
+  # The same paths. This check is not a required one, so a pull request it
+  # skips can still merge.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'conformance/**'
+      - 'compatdb/core/**'
+      - 'bin/lib/profile.sh'
+      - 'launcher/app/src/dpi.rs'
+      - 'launcher/app/src/registry.rs'
+      - '.cargo/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+      - 'rustfmt.toml'
+      - '.github/workflows/conformance.yml'
+
+permissions:
+  contents: read
+
+# A newer push to main or to a pull request cancels the run it makes
+# pointless.
+concurrency:
+  group: conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # rustfmt.toml uses options that only nightly rustfmt applies.
+      - name: Install the toolchains
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup toolchain install nightly --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Check the formatting
+        run: cargo +nightly fmt -p conformance --check
+
+      - name: Clippy
+        run: cargo clippy --locked -p conformance --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked -p conformance
+
+      - name: Build the docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked -p conformance --no-deps
