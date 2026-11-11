@@ -857,6 +857,7 @@ smoke_test() {
     check_wined3d_device "${wine_env[@]}"
     check_wmadec_runs "${wine_env[@]}"
     check_fex_runs "${wine_env[@]}"
+    check_attach_runs "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
 }
@@ -1442,6 +1443,32 @@ run_fex() {
         exit 1
     fi
     grep "$want" "$log" | sed 's/^/    /'
+}
+
+# check_attach_runs <env-command>...: build smoke/attach.c for aarch64 and
+# i686 and run the aarch64 program, a debugger like the bundle's winedbg, in
+# the booted throwaway prefix on the i686 one, and exit with the log unless it
+# attached to the running i686 process, got the break-in and detached without
+# killing it (smoke/attach.c says how). The program's own waits of 5 seconds
+# end a failure, so the limit only catches a hang of Wine itself. A clean run
+# takes about 0.1 seconds.
+check_attach_runs() {
+    local log="$TMP_DIR/attach.log" target want
+    "$MINGW_DIR/bin/aarch64-w64-mingw32-clang" -O2 -o "$TMP_DIR/attach-aarch64.exe" "$REPO_DIR/smoke/attach.c"
+    "$MINGW_DIR/bin/i686-w64-mingw32-clang" -O2 -o "$TMP_DIR/attach-i686.exe" "$REPO_DIR/smoke/attach.c"
+    target="Z:$(tr / '\\' <<< "$TMP_DIR/attach-i686.exe")"
+    time_mark "smoke: attach.exe aarch64 on i686"
+    echo "  Attaching the aarch64 attach.exe to the i686 one..."
+    run_limited 10 "$log" "$@" "$WINE_DIR/bin/wine" "$TMP_DIR/attach-aarch64.exe" "$target"
+    smoke_check "attach.exe for aarch64 on the i686 process" 10 "$log"
+    want="wine-build smoke test: aarch64 attached to the WoW64 process"
+    if ! grep -q "$want" "$log"; then
+        echo "Error: attach.exe for aarch64 did not print '$want'"
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
+    grep "wine-build smoke test: aarch64 attached" "$log" | sed 's/^/    /'
 }
 
 # check_wgl_runs <env-command>...: build smoke/wgl.c for each arch of
