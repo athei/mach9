@@ -1,0 +1,15 @@
+compatdb: vulkan-1_test.exe [x86_64 (arm64ec)]
+compatdb:   dxgi = dxmt (from /Users/me/dist/wine/lib/wine/dxgi/dxmt), built-in
+compatdb:   opengl = egl, built-in
+0040:wt-run:test_external_memory
+vulkan.c:1101: Test failed: vkGetMemoryWin32HandleKHR failed, VkResult -3.
+compatdb: vulkan-1_test.exe [x86_64 (arm64ec)]
+compatdb:   dxgi = dxmt (from /Users/me/dist/wine/lib/wine/dxgi/dxmt), built-in
+compatdb:   opengl = egl, built-in
+0048:wt-run:test_external_memory
+vulkan.c:1180: Test failed: Got unexpected memory type bits 0.
+vulkan.c:1185: Test failed: vkImportMemoryWin32HandleKHR failed, VkResult -1000072003.
+vulkan.c:1190: Tests skipped: Dedicated allocation is not supported.
+0048:vulkan: 12 tests executed (0 marked as todo, 0 as flaky, 2 failures), 1 skipped.
+vulkan.c:1221: 2 failures in child process
+0040:vulkan: 40 tests executed (0 marked as todo, 0 as flaky, 3 failures), 0 skipped.

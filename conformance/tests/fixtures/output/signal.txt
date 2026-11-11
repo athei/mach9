@@ -1,0 +1,5 @@
+0030:wt-run:test_fl9_draw
+d3d11.c:12500: Test failed: Got unexpected color 0x00000000.
+-[MTLDebugRenderCommandEncoder validateCommonDrawErrors:]:5970: failed assertion `Draw Errors Validation
+Vertex Function(vertex_0): argument buffer[0] is missing.
+'

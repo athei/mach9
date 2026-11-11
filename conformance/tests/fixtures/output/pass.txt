@@ -1,0 +1,25 @@
+compatdb: d3d11_test.exe [x86_64 (arm64ec)]
+compatdb:   dxgi = dxmt (from /Users/me/dist/wine/lib/wine/dxgi/dxmt), built-in
+compatdb:   d3d9 = mtld3d (from /Users/me/dist/wine/lib/wine/d3d9/mtld3d), built-in
+compatdb:   wined3d = unset (upstream: the OpenGL renderer, unless WINE_D3D_CONFIG or wined3d's registry settings name another)
+compatdb:   metal_hud = unset (upstream: the MTL_HUD_ variables of the environment the process was started with)
+compatdb:   dll_overrides = unset (upstream: WINEDLLOVERRIDES and the registry's DllOverrides decide)
+compatdb:   dpi_aware = unset (upstream: the AppCompatFlags layer, then the manifest, otherwise unaware)
+compatdb:   large_address_aware = unset (upstream: the executable's large-address-aware flag); no effect in a 64-bit process
+compatdb:   gcmouse = unset (upstream: off, the cursor's movement)
+compatdb:   force_nx = unset (upstream: no-execute off when the executable or a DLL lacks the NX_COMPAT flag)
+compatdb:   opengl = egl, built-in
+compatdb:   arguments = unset (upstream: the command line the process was started with)
+compatdb:   debug_channels = unset (upstream: the WINEDEBUG the process was started with)
+compatdb:   env = unset (upstream: the environment the process was started with)
+compatdb: services.exe [aarch64]
+compatdb:   dxgi = dxmt (from /Users/me/dist/wine/lib/wine/dxgi/dxmt), built-in
+compatdb:   d3d9 = mtld3d (from /Users/me/dist/wine/lib/wine/d3d9/mtld3d), built-in
+0024:wt-run:test_create_device
+d3d11.c:37760: Adapter: Apple M2 Max, 106b:0000.
+0024:fixme:dxgi:dxgi_adapter_QueryVideoMemoryInfo iface 0000000000123450, node_index 0, segment_group 0, info 0000000000A1FDE0 partial stub!
+d3d11.c:1845: Tests skipped: Feature level 0xc000 not supported.
+d3d11.c:1845: Tests skipped: Feature level 0xc100 not supported.
+d3d11.c:1902: Test marked todo: Got unexpected refcount 2.
+0024:err:ole:CoGetClassObject class {ab1e5a20-5daa-4a62-a6fe-c2f1a3fe9b0f} not registered
+0024:d3d11: 1523 tests executed (1 marked as todo, 0 as flaky, 0 failures), 2 skipped.

@@ -1,0 +1,8 @@
+compatdb: ddraw_test.exe [i386]
+compatdb:   dxgi = dxmt (from /Users/me/dist/wine/lib/wine/dxgi/dxmt), built-in
+compatdb:   d3d9 = mtld3d (from /Users/me/dist/wine/lib/wine/d3d9/mtld3d), built-in
+compatdb:   opengl = egl, built-in
+d3d.c:1250: Tests skipped: D3DDEVTYPE_HAL not available.
+d3d.c:1410: Test failed: Got unexpected vertex 0: 1.000000e+00.
+0070:fixme:d3d:wined3d_device_set_clip_status iface 00A1B2C0, clip_status 0012F9E0 stub!
+0070:d3d: 812 tests executed (0 marked as todo, 0 as flaky, 1 failure), 1 skipped.

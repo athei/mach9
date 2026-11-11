@@ -1,0 +1,8 @@
+compatdb: opengl32_test.exe [x86_64 (arm64ec)]
+compatdb:   opengl = egl, built-in
+0060:wt-run:test_bitmap_rendering
+opengl.c:5310: Test failed: Pixel format 2: Expected color 0xff00ff, got 0x0.
+0060:wt-run:test_bitmap_rendering
+opengl.c:5310: Test failed: Pixel format 2: Expected color 0xff00ff, got 0x0.
+0060:fixme:wgl:wglDescribePixelFormat Flag PFD_DRAW_TO_BITMAP is not supported.
+0060:opengl: 412 tests executed (0 marked as todo, 0 as flaky, 2 failures), 0 skipped.

@@ -1,0 +1,12 @@
+# Notes on the tests of the baselines in this directory, kept by hand.
+#
+# One line per test: <exe>/<unit>/<key>, then any of
+#   issue=<n>  the mach9 issue that tracks the test
+#   flaky      its results change between runs of one build: the diff
+#              reports its changes but fails only on a new crash or stall
+# The test is that of every leg; <key> is * for a unit that runs as a
+# whole. `#` starts a comment, on a line of its own or after the notes:
+#
+#   d3d11/d3d11/test_swapchain_flip issue=12 flaky  # races the present thread
+#
+# A unit test fails on a line whose test no baseline here has.

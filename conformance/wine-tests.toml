@@ -7,6 +7,12 @@
 # says otherwise. The exes and their PE directories are GRAPHICS_TESTS in
 # bin/lib/profile.sh without d3d9; a unit test keeps the two equal.
 #
+# `expect` names the implementations the exe's tests must run on, in
+# compatdb's spelling: `dxgi` (the DXGI-family tree), `opengl` (the Mac
+# driver's OpenGL) and `wined3d` (wined3d's renderer; an unset line counts as
+# wined3d's default, gl). The runner reads them from the compatdb: block of
+# the test process and stops before it trusts any result that ran elsewhere.
+#
 # Each [[exe.unit]] is one START_TEST(name) entry, the argument that selects
 # the unit on the test's command line; its file is <dir>/<name>.c unless
 # `file` names another.
@@ -35,6 +41,7 @@
 [[exe]]
 name = "ddraw"
 dir = "dlls/ddraw/tests"
+expect = { opengl = "egl", wined3d = "gl" }
 
 [[exe.unit]]
 name = "d3d"
@@ -80,6 +87,7 @@ whole = true
 name = "d3d8"
 dir = "dlls/d3d8/tests"
 pe_dirs = ["i386-windows"]
+expect = { opengl = "egl", wined3d = "gl" }
 
 [[exe.unit]]
 name = "device"
@@ -94,6 +102,7 @@ name = "visual"
 [[exe]]
 name = "d3d10"
 dir = "dlls/d3d10/tests"
+expect = { dxgi = "dxmt" }
 
 [[exe.unit]]
 name = "device"
@@ -108,6 +117,7 @@ file = "dlls/d3dcompiler_43/tests/reflection.c"
 [[exe]]
 name = "d3d10_1"
 dir = "dlls/d3d10_1/tests"
+expect = { dxgi = "dxmt" }
 
 [[exe.unit]]
 name = "d3d10_1"
@@ -119,6 +129,7 @@ file = "dlls/d3dcompiler_43/tests/reflection.c"
 [[exe]]
 name = "d3d10core"
 dir = "dlls/d3d10core/tests"
+expect = { dxgi = "dxmt" }
 
 [[exe.unit]]
 name = "d3d10core"
@@ -128,6 +139,7 @@ setup = ["print_adapter_info", "run_queued_tests"]
 [[exe]]
 name = "d3d11"
 dir = "dlls/d3d11/tests"
+expect = { dxgi = "dxmt" }
 
 [[exe.unit]]
 name = "d3d11"
@@ -142,6 +154,7 @@ setup = ["test_create_device_child", "print_adapter_info", "run_queued_tests"]
 [[exe]]
 name = "d3d12"
 dir = "dlls/d3d12/tests"
+expect = { dxgi = "dxmt" }
 
 [[exe.unit]]
 name = "d3d12"
@@ -150,6 +163,7 @@ setup = ["print_adapter_info"]
 [[exe]]
 name = "dxgi"
 dir = "dlls/dxgi/tests"
+expect = { dxgi = "dxmt" }
 
 [[exe.unit]]
 name = "dxgi"
@@ -163,6 +177,7 @@ setup = ["run_queued_tests"]
 [[exe]]
 name = "d2d1"
 dir = "dlls/d2d1/tests"
+expect = { dxgi = "dxmt" }
 
 [[exe.unit]]
 name = "d2d1"
@@ -172,6 +187,7 @@ setup = ["print_adapter_info", "run_queued_tests"]
 [[exe]]
 name = "opengl32"
 dir = "dlls/opengl32/tests"
+expect = { opengl = "egl" }
 
 [[exe.unit]]
 name = "opengl"

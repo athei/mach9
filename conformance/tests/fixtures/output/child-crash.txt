@@ -1,0 +1,8 @@
+0024:wt-run:test_create_device
+d3d11.c:37760: Adapter: Apple M2 Max, 106b:0000.
+wine: Unhandled page fault on read access to 0000000000000010 at address 0000000140003F10 (thread 0054), starting debugger...
+Unhandled exception: page fault on read access to 0x0000000000000010 in 64-bit code (0x0000000140003f10).
+Backtrace:
+=>0 0x0000000140003f10 test_create_device_child+0x60() [/src/dlls/d3d11/tests/d3d11.c:2310] in d3d11_test (0x000000000011fd00)
+d3d11.c:2344: unhandled exception c0000005 in child process 0050
+0024:d3d11: 98 tests executed (0 marked as todo, 0 as flaky, 1 failure), 0 skipped.

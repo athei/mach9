@@ -1,0 +1,6 @@
+0024:wt-run:test_format_support
+d3d11.c:21900: Tests skipped: Format 0x3 does not support rendering.
+d3d11.c:21900: Tests skipped: Format 0x4 does not support rendering.
+d3d11.c:21900: Line has been silenced after 2 occurrences
+0024:d3d11: Silenced 0 todos, 3 skips and 0 traces.
+0024:d3d11: 300 tests executed (0 marked as todo, 0 as flaky, 0 failures), 2 skipped.

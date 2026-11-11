@@ -164,6 +164,8 @@ name = "conformance"
 version = "0.3.1"
 dependencies = [
  "clap",
+ "compatdb-core",
+ "nix",
  "toml_edit",
 ]
 

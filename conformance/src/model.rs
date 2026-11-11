@@ -3,8 +3,9 @@
 //!
 //! [`Config::builtin`] reads the copy compiled into the binary.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, str::FromStr};
 
+use compatdb_core::{Dxgi, OpenGl, Wined3d};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, Value};
 
 /// The `wine-tests.toml` next to `Cargo.toml`.
@@ -24,10 +25,31 @@ pub struct Exe {
     /// The PE directories the bundle builds it for; both unless the TOML
     /// restricts it.
     pub pe_dirs: Vec<PeDir>,
+    /// What the `compatdb:` block of its test process must say before its
+    /// results count.
+    pub expect: Expect,
     pub units: Vec<Unit>,
 }
 
+/// The implementations an executable's tests must run on, as the
+/// `compatdb:` block of the test process reports them; `None` checks
+/// nothing.
+pub struct Expect {
+    /// The DXGI-family tree.
+    pub dxgi: Option<Dxgi>,
+    /// The OpenGL the Mac driver gives the process.
+    pub opengl: Option<OpenGl>,
+    /// The renderer of wined3d. A process whose `wined3d` line says
+    /// `unset` gets wined3d's default, [`Wined3d::Gl`]: the runner's
+    /// prefix is fresh and its environment has no `WINE_D3D_CONFIG`.
+    pub wined3d: Option<Wined3d>,
+}
+
 /// A PE directory of the bundle's tests, `lib/wine/tests/<pe-dir>`.
+///
+/// A run of the tests of one directory is a leg; the baselines order the
+/// legs as the variants are declared.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum PeDir {
     I386,
     X86_64,
@@ -36,6 +58,7 @@ pub enum PeDir {
 impl PeDir {
     /// The directory name, as `TEST_PE_DIRS` in `bin/lib/profile.sh`
     /// spells it.
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::I386 => "i386-windows",
@@ -43,7 +66,9 @@ impl PeDir {
         }
     }
 
-    fn parse(name: &str) -> Option<Self> {
+    /// The directory [`Self::as_str`] spells `name`, if any.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
         match name {
             "i386-windows" => Some(Self::I386),
             "x86_64-windows" => Some(Self::X86_64),
@@ -93,7 +118,8 @@ pub struct Dispatch {
     /// The 1-based position of the test function among the arguments.
     pub key: usize,
     /// Put before the test function's name to form the key, for a test
-    /// function the unit runs through two helpers.
+    /// function the unit runs through two helpers: a C name and `:`, or
+    /// empty.
     pub prefix: String,
 }
 
@@ -113,7 +139,8 @@ impl Config {
     /// # Errors
     ///
     /// Returns a message naming the entry for a TOML syntax error, an unknown
-    /// or missing key, a value of the wrong type, a name that is not a C
+    /// or missing key, a value of the wrong type, an `expect` value compatdb
+    /// does not know, a name that is not a C
     /// identifier, an unknown PE directory, a duplicate executable, unit,
     /// helper or name, a key position outside the helper's arguments, a name
     /// in two of `dispatch`, `setup` and `tests`, or a whole unit with any of
@@ -144,8 +171,20 @@ fn parse_exe(table: &Table) -> Result<Exe, String> {
         ));
     }
     let context = format!("exe {name}");
-    check_keys(table, &context, &["name", "dir", "pe_dirs", "unit"])?;
+    check_keys(
+        table,
+        &context,
+        &["name", "dir", "pe_dirs", "expect", "unit"],
+    )?;
     let dir = string(table, "dir", &context)?;
+    let expect = match table.get("expect") {
+        Some(item) => parse_expect(item, &context)?,
+        None => Expect {
+            dxgi: None,
+            opengl: None,
+            wined3d: None,
+        },
+    };
     let pe_dirs = match table.get("pe_dirs") {
         Some(item) => {
             let names = names(item, "pe_dirs", &context, |_| true)?;
@@ -182,7 +221,43 @@ fn parse_exe(table: &Table) -> Result<Exe, String> {
         name,
         dir,
         pe_dirs,
+        expect,
         units,
+    })
+}
+
+/// The `expect` table of an exe: `dxgi`, `opengl` and `wined3d`, each a
+/// value in compatdb's spelling.
+fn parse_expect(item: &Item, context: &str) -> Result<Expect, String> {
+    let table = item
+        .as_table_like()
+        .ok_or_else(|| format!("{context}: `expect` must be a table"))?;
+    if let Some((key, _)) = table
+        .iter()
+        .find(|(key, _)| !["dxgi", "opengl", "wined3d"].contains(key))
+    {
+        return Err(format!("{context}: unknown key `expect.{key}`"));
+    }
+    Ok(Expect {
+        dxgi: expect_value(table, "dxgi", context)?,
+        opengl: expect_value(table, "opengl", context)?,
+        wined3d: expect_value(table, "wined3d", context)?,
+    })
+}
+
+/// The value of `expect.<key>`, parsed as compatdb parses it.
+fn expect_value<T: FromStr<Err: std::fmt::Display>>(
+    table: &dyn toml_edit::TableLike,
+    key: &str,
+    context: &str,
+) -> Result<Option<T>, String> {
+    table.get(key).map_or(Ok(None), |item| {
+        let text = item
+            .as_str()
+            .ok_or_else(|| format!("{context}: `expect.{key}` must be a string"))?;
+        text.parse()
+            .map(Some)
+            .map_err(|e| format!("{context}: `expect.{key}`: {e}"))
     })
 }
 
@@ -330,16 +405,9 @@ fn parse_dispatch(value: &Value, context: &str) -> Result<Dispatch, String> {
     let prefix = match table.get("prefix") {
         Some(value) => value
             .as_str()
-            .filter(|prefix| {
-                prefix
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '-' | '.'))
-            })
+            .filter(|prefix| prefix.strip_suffix(':').is_some_and(is_ident))
             .ok_or_else(|| {
-                format!(
-                    "{context}: `prefix` of {name} must be a string of letters, digits, `_`, \
-                     `:`, `-` and `.`"
-                )
+                format!("{context}: `prefix` of {name} must be a C name followed by `:`")
             })?
             .to_owned(),
         None => String::new(),
@@ -353,6 +421,7 @@ fn parse_dispatch(value: &Value, context: &str) -> Result<Dispatch, String> {
 }
 
 /// Whether `name` is a C identifier.
+#[must_use]
 pub fn is_ident(name: &str) -> bool {
     let mut chars = name.chars();
     chars

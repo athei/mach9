@@ -1,0 +1,4 @@
+0038:wt-run:test_swapchain_flip
+dxgi.c:5120: Test failed: Got unexpected color 0x00ff0000.
+dxgi.c:5131: Tests skipped: Flip sequential swapchains are not supported.
+0038:fixme:dxgi:dxgi_swapchain_Present1 Ignoring flags 0x2.

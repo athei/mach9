@@ -1,0 +1,11 @@
+0024:wt-run:test_generate_mips
+d3d11.c:37760: Adapter: Apple M2 Max, 106b:0000.
+compatdb: conhost.exe [aarch64]
+compatdb:   dxgi = dxmt (from /Users/me/dist/wine/lib/wine/dxgi/dxmt), built-in
+0024:fixme:dxgi:DXGID3D10CreateDevice Ignoring flags 0x20.
+0024:fixme:d3d11:d3d11_device_CheckFeatureSupport Unhandled feature 0x10.
+0024:err:winediag:nodrv_CreateWindow Application tried to create a window, but no driver could be loaded.
+d3d11.c:31220: Test failed: Feature level 0xb000: Resource type 4, test 7, mip 2: Got 0x00000000, expected 0xff00ff00 at (0, 0).
+d3d11.c:31220: Test failed: Feature level 0xb000: Resource type 4, test 8, mip 2: Got 0x00000000, expected 0xff00ff00 at (0, 0).
+d3d11.c:31220: Test failed: Feature level 0xa100: Resource type 4, test 7, mip 2: Got 0x00000000, expected 0xff00ff00 at (0, 0).
+0024:d3d11: 1876 tests executed (0 marked as todo, 0 as flaky, 3 failures), 0 skipped.

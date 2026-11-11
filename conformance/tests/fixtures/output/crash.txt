@@ -1,0 +1,14 @@
+0024:wt-run:test_texture
+d3d11.c:6083: Test failed: Test 3: Got unexpected hr 0x80070057.
+wine: Unhandled page fault on read access to 0000000000000000 at address 000000014001A2B3 (thread 0024), starting debugger...
+Unhandled exception: page fault on read access to 0x0000000000000000 in 64-bit code (0x000000014001a2b3).
+Register dump:
+ rip:000000014001a2b3 rsp:000000000011f9a0 rbp:0000000000000000 eflags:00010246 (  R- --  I  Z- -P- )
+Backtrace:
+=>0 0x000000014001a2b3 test_texture+0x123() [/src/dlls/d3d11/tests/d3d11.c:6200] in d3d11_test (0x0000000000412abc)
+  1 0x0000000140019e01 run_queued_tests+0x51() [/src/dlls/d3d11/tests/d3d11.c:142] in d3d11_test (0x0000000000412b00)
+0x000000014001a2b3 test_texture+0x123 [/src/dlls/d3d11/tests/d3d11.c:6200] in d3d11_test: movl (%rax), %ecx
+6200	    hr = ID3D11Texture2D_GetDevice(texture, &device);
+Modules:
+Module	Address					Debug info	Name (12 modules)
+PE	          140000000-         1403a0000	Dwarf           d3d11_test

@@ -99,8 +99,16 @@ fn mistakes_in_the_config_are_errors() {
             "`key` of f must be a positive integer",
         ),
         (
-            "dispatch = [{ name = \"f\", prefix = \"a,b\" }]",
-            "`prefix` of f must be a string",
+            "dispatch = [{ name = \"f\", prefix = \"a,b:\" }]",
+            "`prefix` of f must be a C name followed by `:`",
+        ),
+        (
+            "dispatch = [{ name = \"f\", prefix = \"d3d10\" }]",
+            "`prefix` of f must be a C name followed by `:`",
+        ),
+        (
+            "dispatch = [{ name = \"f\", prefix = \"a:b:\" }]",
+            "`prefix` of f must be a C name followed by `:`",
         ),
         (
             "dispatch = [{ name = \"f\", argc = 1 }]",
@@ -159,6 +167,49 @@ fn pe_dirs_take_only_the_bundle_directories() {
     ] {
         let error = with(pe_dirs).err().unwrap_or_default();
         assert!(error.contains(expected), "{pe_dirs}: {error}");
+    }
+}
+
+/// The DXGI-family tests need DXMT, the OpenGL and wined3d ones Mesa's EGL
+/// with wined3d on OpenGL, and vulkan-1 nothing.
+#[test]
+fn the_builtin_config_expects_the_default_implementations() {
+    let config = Config::builtin().unwrap();
+    for exe in &config.exes {
+        let expect = &exe.expect;
+        let got = (expect.dxgi, expect.opengl, expect.wined3d);
+        let wanted = match exe.name.as_str() {
+            "d3d10" | "d3d10_1" | "d3d10core" | "d3d11" | "d3d12" | "dxgi" | "d2d1" => {
+                (Some(Dxgi::Dxmt), None, None)
+            }
+            "d3d8" | "ddraw" => (None, Some(OpenGl::Egl), Some(Wined3d::Gl)),
+            "opengl32" => (None, Some(OpenGl::Egl), None),
+            "vulkan-1" => (None, None, None),
+            other => panic!("no expectation for {other}"),
+        };
+        assert_eq!(got, wanted, "{}", exe.name);
+    }
+}
+
+#[test]
+fn expect_takes_compatdb_values_only() {
+    let with = |expect: &str| {
+        Config::parse(&format!(
+            "[[exe]]\nname = \"x\"\ndir = \"d\"\nexpect = {expect}\n\n[[exe.unit]]\nname = \"x\"\n"
+        ))
+    };
+    let config = with("{ opengl = \"cgl\", wined3d = \"vulkan\" }").unwrap();
+    assert_eq!(config.exes[0].expect.opengl, Some(OpenGl::Cgl));
+    assert_eq!(config.exes[0].expect.wined3d, Some(Wined3d::Vulkan));
+    assert_eq!(config.exes[0].expect.dxgi, None);
+    for (expect, error) in [
+        ("{ dxgi = \"metal\" }", "exe x: `expect.dxgi`: "),
+        ("{ d3d9 = \"mtld3d\" }", "unknown key `expect.d3d9`"),
+        ("{ opengl = 1 }", "`expect.opengl` must be a string"),
+        ("\"dxmt\"", "`expect` must be a table"),
+    ] {
+        let message = with(expect).err().unwrap_or_default();
+        assert!(message.contains(error), "{expect}: {message}");
     }
 }
 

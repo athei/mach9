@@ -1,0 +1,10 @@
+compatdb: opengl32_test.exe [i386]
+compatdb:   opengl = egl, built-in
+opengl.c:6160: Pixel format count 120.
+0060:wt-list:test_bitmap_rendering
+0060:wt-list:test_dc
+0060:wt-list:test_bitmap_rendering
+0060:fixme:wgl:wglDescribePixelFormat Flag PFD_DRAW_TO_BITMAP is not supported.
+0060:wt-list:test_choosepixelformat_flag_is_ignored_when_unset
+0060:wt-list:test_pbuffers
+0060:opengl: 4 tests executed (0 marked as todo, 0 as flaky, 0 failures), 0 skipped.

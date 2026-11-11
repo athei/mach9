@@ -8,6 +8,8 @@ description = "Runs Wine's graphics conformance tests against the bundle, one te
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+compatdb-core = { workspace = true }
+nix = { version = "0.31", default-features = false, features = ["poll", "process", "signal"] }
 toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
 [lints]

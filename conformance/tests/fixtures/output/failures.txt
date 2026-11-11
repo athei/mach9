@@ -1,0 +1,17 @@
+compatdb: d3d11_test.exe [i386]
+compatdb:   dxgi = dxmt (from /Users/me/dist/wine/lib/wine/dxgi/dxmt), built-in
+0034:wt-run:test_texture
+d3d11.c:37760:0.081 Adapter: Apple M2 Max, 106b:0000.
+d3d11.c:6083:0.412 Test failed: Test 3: Got unexpected hr 0x80070057.
+d3d11.c:6083:0.412 Test failed: Test 5: Got unexpected hr 0x80070057.
+d3d11.c:6102:0.415 Test failed: Feature level 0xa000: format 0x47: Got color 0x00ff0000 at (0, 0), expected 0x0000ff00.
+d3d11.c:6110:0.418 Test failed: Got "d3d11.c:5: Test failed: x" from GetPrivateData: hr 0x887a0002, data 0x1:0x2:0x3.
+d3d11.c:6120:0.420 Copying: Test failed: not a failure, a trace that says so.
+d3d11.c:6130:0.422 Test marked flaky: Got unexpected timestamp 0.
+d3d11.c:6131:0.423 Test succeeded inside flaky todo block: Got unexpected hr 0.
+d3d11.c:6140:0.430 Test succeeded inside todo block: Got unexpected color 0xff00ff00.
+d3d11.c:6141:0.431 Test marked todo: Got unexpected color 0x00000000.
+0034:fixme:d3d:wined3d_context_gl_apply_draw_state Unsupported format 0x47.
+d3d11.c:6150:1.432 Test succeeded
+d3d11.c:6160:1.500 Tests skipped: Format 0x48 does not support rendering.
+0034:d3d11:2.417 2311 tests executed (1 marked as todo, 2 as flaky, 5 failures), 1 skipped.
