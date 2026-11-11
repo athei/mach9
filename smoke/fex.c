@@ -1,9 +1,10 @@
 /* The program bundle-wine.sh builds for each x86 PE architecture and runs under
  * FEX, once in its default mode and once with FEX_SMCCHECKS=full. Its cases run
  * code in reserved memory and on guard pages, writes to compiled pages,
- * instructions FEX cannot decode or fetch whole, and pages taken away or changed
- * while code runs from them. FEX has hung on or reported most of these wrongly;
- * the others guard behaviour that already worked.
+ * instructions FEX cannot decode or fetch whole, pages taken away or changed
+ * while code runs from them, and a write to a page while it compiles. FEX has
+ * hung on or got most of these wrong; the others guard behaviour that already
+ * worked.
  *
  * The cases run in order in one process, or just those named on the command
  * line. Each prints its name first. A failed case prints why and ends the
@@ -50,6 +51,7 @@
 #define STALE_CALLS 100
 #define RWX_ROUNDS 3000
 #define RWX_ROUNDS_FULL 200
+#define WRITE_ROUNDS 500
 #define GUARD_THREADS 2
 #define GUARD_ROUNDS 100
 
@@ -738,24 +740,16 @@ static double seconds_since(LARGE_INTEGER start)
     return (double)(now.QuadPart - start.QuadPart) / freq.QuadPart;
 }
 
-/* RWX to RW racing a first compile, then a write from the guest, which must not
- * fault: a compile that protects the page after the guest's protect leaves it
- * read-only. That takes the few microseconds after the guest's protect, so the
- * protect is placed by what a compile takes. */
-static void rwx_to_rw_race(void)
+/* How many rounds of spin() one and a half first compiles of the page take, for
+ * a race to place something in a compile another thread runs. Leaves the page
+ * RW. */
+static unsigned int compile_spins(BYTE *page)
 {
-    const char *smc = getenv("FEX_SMCCHECKS");
-    int rounds = smc && !strcmp(smc, "full") ? RWX_ROUNDS_FULL : RWX_ROUNDS;
-    BYTE *page = new_pages(PAGE, PAGE_READWRITE);
     void (*fn)(void) = (void *)page;
     double compile_time = 1e9, elapsed;
     LARGE_INTEGER start;
-    unsigned int range;
-    HANDLE thread;
     int i;
 
-    fill_page(page, 1);
-    set_code(page, PAGE);
     for (i = 0; i < 50; i++)
     {
         protect(page, PAGE, PAGE_EXECUTE_READWRITE);
@@ -767,7 +761,30 @@ static void rwx_to_rw_race(void)
     }
     QueryPerformanceCounter(&start);
     spin(1000000);
-    range = (unsigned int)(compile_time * 1.5 / (seconds_since(start) / 1000000)) + 1;
+    return (unsigned int)(compile_time * 1.5 / (seconds_since(start) / 1000000)) + 1;
+}
+
+static void spin_below(unsigned int range)
+{
+    spin(((unsigned int)rand() * 32768u + (unsigned int)rand()) % range);
+}
+
+/* RWX to RW racing a first compile, then a write from the guest, which must not
+ * fault: a compile that protects the page after the guest's protect leaves it
+ * read-only. That takes the few microseconds after the guest's protect, so the
+ * protect is placed by what a compile takes. */
+static void rwx_to_rw_race(void)
+{
+    const char *smc = getenv("FEX_SMCCHECKS");
+    int rounds = smc && !strcmp(smc, "full") ? RWX_ROUNDS_FULL : RWX_ROUNDS;
+    BYTE *page = new_pages(PAGE, PAGE_READWRITE);
+    unsigned int range;
+    HANDLE thread;
+    int i;
+
+    fill_page(page, 1);
+    set_code(page, PAGE);
+    range = compile_spins(page);
 
     thread = CreateThread(NULL, 0, rwx_caller, page, 0, NULL);
     if (!thread) FAIL("CreateThread: %lu", GetLastError());
@@ -775,10 +792,48 @@ static void rwx_to_rw_race(void)
     {
         protect(page, PAGE, PAGE_EXECUTE_READWRITE);
         go = i;
-        spin(((unsigned int)rand() * 32768u + (unsigned int)rand()) % range);
+        spin_below(range);
         protect(page, PAGE, PAGE_READWRITE);
         ((volatile BYTE *)page)[0] = 0x66;
         while (done != i) YieldProcessor();
+    }
+    stop = 1;
+    WaitForSingleObject(thread, INFINITE);
+}
+
+/* A write to an RWX page racing a first compile of it, then a call from the
+ * writing thread, which must run what it wrote. FEX write-protects the page at
+ * the end of the compile, so a write after the compile read the code takes no
+ * fault that would drop the block. The write is placed by what a compile takes,
+ * and the code fills the page so that a compile takes long enough to hit. Under
+ * FEX_SMCCHECKS=full only a write while the compile decodes is lost, about one
+ * round in 30, which sets the number of rounds. */
+static void rwx_write_race(void)
+{
+    BYTE *page = new_pages(PAGE, PAGE_READWRITE);
+    int (*fn)(void) = (void *)page;
+    unsigned int range;
+    HANDLE thread;
+    int i, r;
+
+    /* mov eax, 0; ten one byte nops; the sled; ret */
+    fill_page(page, 1);
+    put_code(page, 0);
+    memset(page + 5, 0x90, 10);
+    set_code(page, PAGE);
+    range = compile_spins(page);
+
+    thread = CreateThread(NULL, 0, rwx_caller, page, 0, NULL);
+    if (!thread) FAIL("CreateThread: %lu", GetLastError());
+    for (i = 1; i <= WRITE_ROUNDS; i++)
+    {
+        protect(page, PAGE, PAGE_EXECUTE_READWRITE);
+        go = i;
+        spin_below(range);
+        memcpy(page + 1, &i, 4);
+        while (done != i) YieldProcessor();
+        r = fn();
+        if (r != i) FAIL("round %d: the call after the write returned %d", i, r);
     }
     stop = 1;
     WaitForSingleObject(thread, INFINITE);
@@ -817,6 +872,7 @@ static const struct
     CASE(guard_race),
     CASE(decommit_race),
     CASE(rwx_to_rw_race),
+    CASE(rwx_write_race),
 };
 
 static int selected(const char *name, int argc, char **argv)
