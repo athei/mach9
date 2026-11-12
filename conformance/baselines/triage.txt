@@ -27,7 +27,7 @@ d3d11/d3d11/test_stream_output_resume issue=75
 d3d11/d3d11/test_vertex_id issue=75  # RasterizedStream 0
 d3d11/d3d11/test_video_support  # accepted: DXMT takes VIDEO_SUPPORT for Media Foundation games, has no ID3D11VideoDevice
 d3d8/device/test_cursor_pos issue=113  # AppKit moves the window at the top of the screen below the menu bar, away from the cursor
-dxgi/dxgi/d3d10:test_create_swapchain issue=113  # AppKit moves the restored window below the menu bar; line 2164 is #97; lines 2183 and 2185 are DXMT's D3D11 swap chain taking 0 for an empty client area
+dxgi/dxgi/d3d10:test_create_swapchain issue=113  # AppKit moves the restored window below the menu bar; line 2164 is #97
 dxgi/dxgi/d3d10:test_set_fullscreen issue=113  # AppKit moves the restored window below the menu bar; the client rect lines are #101
 dxgi/dxgi/d3d12:test_create_swapchain issue=113  # AppKit moves the restored window below the menu bar; line 2164 is #97
 dxgi/dxgi/d3d12:test_set_fullscreen issue=113  # AppKit moves the restored window below the menu bar; the client rect lines are #101
