@@ -1,7 +1,7 @@
 # Conformance baseline of ddraw_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record ddraw`: do not edit.
-# wine: wine-11.21-41-gb2a575d4357
-# component: dxmt=14b322c492e5dfa18b28ce7ed217a2b284e5ddd8
+# wine: wine-11.21-42-g531be8de899
+# component: dxmt=4ee2e4747cc4785bd822e7d3c818f5a8d0731d42
 # component: fex=af091aeea4fd04496c5729c9855f5324d48bce21
 # component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
 # component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
@@ -121,7 +121,7 @@ test_colorkey_precision ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=5 sites=4 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -219,7 +219,7 @@ test_compute_sphere_visibility ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=5 sites=4 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -335,7 +335,7 @@ test_compute_sphere_visibility ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=3 sites=3 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -556,7 +556,7 @@ test_colorkey_precision ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=3 sites=3 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -654,7 +654,7 @@ test_compute_sphere_visibility ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=5 sites=4 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -770,7 +770,7 @@ test_compute_sphere_visibility ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=3 sites=3 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0

@@ -11,10 +11,10 @@
 #
 # A unit test fails on a line whose test no baseline here has.
 
-ddraw/ddraw1/test_coop_level_mode_set flaky  # failure count differs between runs of one build
-ddraw/ddraw2/test_coop_level_mode_set flaky  # failure count differs between runs of one build
-ddraw/ddraw4/test_coop_level_mode_set flaky  # failure count differs between runs of one build
-ddraw/ddraw7/test_coop_level_mode_set flaky  # failure count differs between runs of one build
+ddraw/ddraw1/test_coop_level_mode_set issue=101 flaky  # three checks fail only when the Wine process becomes the active application
+ddraw/ddraw2/test_coop_level_mode_set issue=101 flaky  # three checks fail only when the Wine process becomes the active application; the full screen rect line is #113
+ddraw/ddraw4/test_coop_level_mode_set issue=101 flaky  # three checks fail only when the Wine process becomes the active application; the full screen rect line is #113
+ddraw/ddraw7/test_coop_level_mode_set issue=101 flaky  # three checks fail only when the Wine process becomes the active application; the full screen rect line is #113
 
 d3d10core/d3d10core/test_depth_bias issue=77  # D16 lines are #80
 d3d10core/d3d10core/test_index_buffer_offset issue=74  # conjecture: appends of later draws lost
@@ -26,10 +26,13 @@ d3d11/d3d11/test_so_statistics_query issue=74
 d3d11/d3d11/test_stream_output_resume issue=75
 d3d11/d3d11/test_vertex_id issue=75  # RasterizedStream 0
 d3d11/d3d11/test_video_support  # accepted: DXMT takes VIDEO_SUPPORT for Media Foundation games, has no ID3D11VideoDevice
-dxgi/dxgi/d3d10:test_create_swapchain issue=101 flaky  # window rects off by one pixel in some machine states
-dxgi/dxgi/d3d10:test_set_fullscreen issue=101 flaky  # window rects off by one pixel in some machine states
-dxgi/dxgi/d3d12:test_create_swapchain issue=101 flaky  # window rects off by one pixel in some machine states
-dxgi/dxgi/d3d12:test_set_fullscreen issue=101 flaky  # window rects off by one pixel in some machine states
+d3d8/device/test_cursor_pos issue=113  # AppKit moves the window at the top of the screen below the menu bar, away from the cursor
+dxgi/dxgi/d3d10:test_create_swapchain issue=113  # AppKit moves the restored window below the menu bar; line 2164 is #97; lines 2183 and 2185 are DXMT's D3D11 swap chain taking 0 for an empty client area
+dxgi/dxgi/d3d10:test_set_fullscreen issue=113  # AppKit moves the restored window below the menu bar; the client rect lines are #101
+dxgi/dxgi/d3d12:test_create_swapchain issue=113  # AppKit moves the restored window below the menu bar; line 2164 is #97
+dxgi/dxgi/d3d12:test_set_fullscreen issue=113  # AppKit moves the restored window below the menu bar; the client rect lines are #101
+dxgi/dxgi/test_inexact_modes issue=113  # AppKit moves the restored window below the menu bar; the client rect lines are #101
 dxgi/dxgi/d3d10:test_resize_target issue=97
 dxgi/dxgi/d3d12:test_resize_target issue=97
+opengl32/opengl/test_other_process_parent issue=113  # passes; one todo fewer succeeds since AppKit moves and resizes its window between two reads
 opengl32/opengl/test_other_process_window issue=49
