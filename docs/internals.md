@@ -272,6 +272,13 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   [`session.rs`](../conformance/src/session.rs)). Record baselines on a
   Retina display. The runner refuses to start while a wineserver of the
   same bundle runs.
+- Each test process has to become the active application, and macOS does
+  not activate it while another application is active. Start a run from
+  the frontmost terminal with the screen unlocked, and leave the keyboard
+  and mouse alone until it ends. A test process that stays in the
+  background gets no activation or focus events, and winemac then reports
+  some window frames as Cocoa rounded them. The triage file marks the
+  keys known to change with it `flaky`.
 - Every process gets the caller's environment without the variables that
   change Wine, the libraries it loads, its graphics stack or the test
   framework (`SCRUBBED` in
