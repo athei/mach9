@@ -276,9 +276,9 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   not activate it while another application is active. Start a run from
   the frontmost terminal with the screen unlocked, and leave the keyboard
   and mouse alone until it ends. A test process that stays in the
-  background gets no activation or focus events, and winemac then reports
-  some window frames as Cocoa rounded them. The triage file marks the
-  keys known to change with it `flaky`.
+  background gets no activation or focus events, which the ddraw
+  `test_coop_level_mode_set` tests depend on: the triage file marks them
+  `flaky`.
 - Every process gets the caller's environment without the variables that
   change Wine, the libraries it loads, its graphics stack or the test
   framework (`SCRUBBED` in
