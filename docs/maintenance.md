@@ -691,7 +691,9 @@ upgraded together when the swapchain interface between them changes.
 - Push the branch to athei/dxmt or athei/vkd3d-proton before building
   without `DXMT_REPO` or `VKD3D_PROTON_REPO` pointing at the local clone;
   the default builds what the remote has.
-- Run a full bundle step: its smoke test runs `d3d12.exe` on every arch.
+- Run a full bundle step: its smoke test runs `d3d12.exe` on every arch,
+  and `streamout.exe`, cases of DXMT's emulated stream output, most of
+  which Wine's tests do not draw, on the x86 ones.
 - Then run the suites whose `expect` in
   [`wine-tests.toml`](../conformance/wine-tests.toml) names the `dxmt`
   tree with the [conformance runner](internals.md#conformance-runner).

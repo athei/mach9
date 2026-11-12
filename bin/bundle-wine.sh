@@ -694,11 +694,13 @@ check_default_trees() {
 # native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
 # hang rather than an error. The caller's WINE_COMPATDB, WINE_COMPATDB_FILE
-# and WINE_D3D_CONFIG and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, MESA_*,
-# MTL_*, METAL_* and GST_* variable are dropped so that the built-in rules
-# and the defaults of Wine, FEX, the Vulkan loader, vkd3d-proton, KosmicKrisp,
-# Metal and GStreamer decide; only vkd3d-proton's pipeline cache is moved into
-# the prefix, and check_fex_runs sets FEX_SMCCHECKS=full on one run per arch.
+# and WINE_D3D_CONFIG and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, DXMT_*,
+# MESA_*, MTL_*, METAL_* and GST_* variable are dropped so that the built-in
+# rules and the defaults of Wine, FEX, the Vulkan loader, vkd3d-proton, DXMT,
+# KosmicKrisp, Metal and GStreamer decide; only vkd3d-proton's pipeline cache
+# is moved into the prefix, check_fex_runs sets FEX_SMCCHECKS=full on one run
+# per arch, and check_streamout_runs turns on Metal shader validation and
+# turns off DXMT's shader cache for its runs.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
@@ -706,7 +708,7 @@ check_default_trees() {
 smoke_test() {
     local version log arch cc exe marker markers var dlls
     local wine_env=(env -u WINE_COMPATDB -u WINE_COMPATDB_FILE -u WINE_D3D_CONFIG)
-    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|MESA_|MTL_|METAL_|GST_)'); do
+    for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|DXMT_|MESA_|MTL_|METAL_|GST_)'); do
         wine_env+=(-u "$var")
     done
     wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all)
@@ -854,6 +856,7 @@ smoke_test() {
     check_wgl_runs "${wine_env[@]}"
     check_vulkan_runs "${wine_env[@]}"
     check_d3d12_runs "${wine_env[@]}"
+    check_streamout_runs "${wine_env[@]}"
     check_wined3d_device "${wine_env[@]}"
     check_wmadec_runs "${wine_env[@]}"
     check_fex_runs "${wine_env[@]}"
@@ -1247,6 +1250,62 @@ check_d3d12_no_gpu() {
     cat "$log"
     smoke_stop
     exit 1
+}
+
+# check_streamout_runs <env-command>...: build smoke/streamout.c for x86_64
+# and i686 and run it in the booted throwaway prefix, and exit with the log
+# unless each gets the default dxmt tree from compatdb.so, passes every case
+# of DXMT's emulated stream output, and DXMT logged no failed command buffer
+# ("Device error") and no message of one ("Frame <n>: "). The runs have Metal
+# shader validation on, which reports each load or store outside a buffer in
+# such a message: the failure the bounds, append, unbind, no-target and
+# pipeline-switch cases guard against, and in the first four one no readback
+# sees; Metal's "Metal GPU Validation Enabled" line has to show that it was
+# on. DXMT's shader cache is off, so that a shader variant an earlier DXMT
+# compiled and cached cannot stand in for the one under test. The program
+# prints each case's name as it starts it, so the last of those is the case
+# that hung or failed. A clean run takes about 1.3 seconds, so the limit of
+# 10 seconds catches a hang and nothing else. On a Mac without a Metal 4 GPU
+# (METAL4=0, see metal4_probe), whose GPU is not of the Apple7 family either,
+# DXMT takes its experimental path for other GPUs (dxmt_device.cpp), which
+# the check is not for, so the programs are only built there.
+check_streamout_runs() {
+    local arch exe log last want
+    for arch in x86_64 i686; do
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/streamout-$arch.exe" \
+            "$REPO_DIR/smoke/streamout.c"
+    done
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the stream output runs: DXMT's path for Apple GPUs needs one."
+        return 0
+    fi
+    for arch in x86_64 i686; do
+        exe="$TMP_DIR/streamout-$arch.exe"
+        time_mark "smoke: streamout.exe $arch"
+        echo "  Running streamout.exe for $arch with Metal shader validation..."
+        log="$TMP_DIR/streamout-$arch.log"
+        run_limited 10 "$log" "$@" MTL_SHADER_VALIDATION=1 DXMT_SHADER_CACHE=0 "$WINE_DIR/bin/wine" "$exe"
+        last=$(grep "wine-build smoke test: $arch case " "$log" | tail -n 1 | tr -d '\r' | sed 's/.* case //')
+        smoke_check "streamout.exe for $arch, in case '$last'," 10 "$log"
+        for want in "wine-build smoke test: $arch stream output cases passed" \
+                    "compatdb: .*dxgi = ${DXGI_IMPLS%% *} (from" \
+                    "Metal GPU Validation Enabled"; do
+            if ! grep -q "$want" "$log"; then
+                echo "Error: streamout.exe for $arch did not print '$want'"
+                cat "$log"
+                smoke_stop
+                exit 1
+            fi
+        done
+        if grep -Eq "err: +(Device error|Frame [0-9]+: )" "$log"; then
+            echo "Error: Metal shader validation or the GPU reported an error for streamout.exe for $arch;"
+            echo "the case named before the first DXMT 'err:' line about a frame caused it:"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
+        grep "wine-build smoke test: $arch stream output" "$log" | sed 's/^/    /'
+    done
 }
 
 # check_egl_host: build smoke/egl.c for the host and run it on the bundle's

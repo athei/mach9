@@ -673,11 +673,12 @@ function's comment says what it checks and why; each program in
 | Vulkan driver and manifest, EGL with Zink, ntdll's compatdb hooks | `check_vulkan`, `check_egl`, `check_compat_hooks` |
 | `wine.app` signature, entitlements and `Info.plist` | `check_loader_app` |
 | `minos` of every Mach-O at most the floor, no import of `FLOOR_NEWER_FUNCS` ([macOS floors](maintenance.md#macos-floors)) | `check_minos`, `check_floor_newer_imports` |
-| A fresh prefix boots with msync and compatdb, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, wined3d, WMA decoding, FEX on code that faults or changes, a 64-bit debugger attaching to and detaching from an i386 process, and EGL and GStreamer outside Wine | `smoke_test` and the `check_*` functions it calls |
+| A fresh prefix boots with msync and compatdb, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, DXMT's emulated stream output under Metal shader validation, wined3d, WMA decoding, FEX on code that faults or changes, a 64-bit debugger attaching to and detaching from an i386 process, and EGL and GStreamer outside Wine | `smoke_test` and the `check_*` functions it calls |
 
 On a Mac without a Metal 4 GPU, such as a hosted CI runner, the checks
 that need a KosmicKrisp device or Zink change or are left out, and so are
-those that need Apple's accelerated OpenGL on a Mac without it
+the stream output runs, which are for DXMT on Apple GPUs; so are those
+that need Apple's accelerated OpenGL on a Mac without it
 ([`smoke/metal4.m`](../smoke/metal4.m),
 [`smoke/opengl.m`](../smoke/opengl.m)). The step says which.
 
