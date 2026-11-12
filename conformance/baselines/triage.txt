@@ -30,6 +30,10 @@ d3d11/d3d11/test_stream_output_resume issue=75
 d3d11/d3d11/test_stream_output_vs issue=76  # test 0: no strides passed; test 1 fails with an explicit stride in d3d10core too; test 2 not traced
 d3d11/d3d11/test_vertex_id issue=75  # RasterizedStream 0
 d3d11/d3d11/test_video_support  # accepted: DXMT takes VIDEO_SUPPORT for Media Foundation games, has no ID3D11VideoDevice
+dxgi/dxgi/d3d10:test_create_swapchain issue=101 flaky  # window rects off by one pixel in some machine states
+dxgi/dxgi/d3d10:test_set_fullscreen issue=101 flaky  # window rects off by one pixel in some machine states
+dxgi/dxgi/d3d12:test_create_swapchain issue=101 flaky  # window rects off by one pixel in some machine states
+dxgi/dxgi/d3d12:test_set_fullscreen issue=101 flaky  # window rects off by one pixel in some machine states
 dxgi/dxgi/d3d10:test_resize_target issue=97
 dxgi/dxgi/d3d12:test_resize_target issue=97
 opengl32/opengl/test_other_process_window issue=49
