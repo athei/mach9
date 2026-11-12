@@ -857,6 +857,7 @@ smoke_test() {
     check_vulkan_runs "${wine_env[@]}"
     check_d3d12_runs "${wine_env[@]}"
     check_streamout_runs "${wine_env[@]}"
+    check_dxmt_runs "${wine_env[@]}"
     check_wined3d_device "${wine_env[@]}"
     check_wmadec_runs "${wine_env[@]}"
     check_fex_runs "${wine_env[@]}"
@@ -1309,6 +1310,53 @@ check_streamout_runs() {
             exit 1
         fi
         grep "wine-build smoke test: $arch stream output" "$log" | sed 's/^/    /'
+    done
+}
+
+# check_dxmt_runs <env-command>...: build smoke/dxmt.c for x86_64 and i686
+# and run each of its cases in the booted throwaway prefix, and exit unless
+# every case passes: DXMT's CreateInputLayout and
+# CreateGeometryShaderWithStreamOutput refuse bytecode whose header states
+# more than the length passed (bytecode), SwapDeviceContextState keeps the
+# installed state it swaps in again (swap-state), and a deferred context
+# released after its device keeps the device until it is destroyed itself
+# (deferred); smoke/dxmt.c says how. Each case is a process of its own, so
+# a case that crashes cannot hide the result of another, and each has to get
+# the default dxmt tree from compatdb.so, since Wine's own d3d11 passes them
+# too. On a Mac without a Metal 4 GPU (METAL4=0, see metal4_probe) DXMT
+# takes its experimental path for other GPUs (dxmt_device.cpp), which the
+# check is not for, so the programs are only built there. A clean run of
+# a case takes about 0.5 seconds; the limit of 5 seconds leaves room for a
+# loaded machine and for winedbg's backtrace of a case that crashes.
+check_dxmt_runs() {
+    local arch exe log name want
+    for arch in x86_64 i686; do
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/dxmt-$arch.exe" \
+            "$REPO_DIR/smoke/dxmt.c" -ld3d11
+    done
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the dxmt.exe runs: DXMT's path for Apple GPUs needs one."
+        return 0
+    fi
+    for arch in x86_64 i686; do
+        exe="$TMP_DIR/dxmt-$arch.exe"
+        time_mark "smoke: dxmt.exe $arch"
+        for name in bytecode swap-state deferred; do
+            log="$TMP_DIR/dxmt-$arch-$name.log"
+            echo "  Running dxmt.exe $name for $arch..."
+            run_limited 5 "$log" "$@" "$WINE_DIR/bin/wine" "$exe" "$name"
+            smoke_check "dxmt.exe $name for $arch" 5 "$log"
+            for want in "wine-build smoke test: $arch $name check ok" \
+                        "compatdb: .*dxgi = ${DXGI_IMPLS%% *} (from"; do
+                if ! grep -q "$want" "$log"; then
+                    echo "Error: dxmt.exe $name for $arch did not print '$want'"
+                    cat "$log"
+                    smoke_stop
+                    exit 1
+                fi
+            done
+            grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+        done
     done
 }
 
