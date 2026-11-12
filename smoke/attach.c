@@ -5,14 +5,20 @@
  * 4 GB, so the WoW64 process has to run it on its 64-bit context instead of
  * in the 32-bit simulation.
  *
- * attach.exe <target.exe> starts "<target.exe> target <ready> <quit>", where
- * the two are handles of events it inherits, and attaches to it once the
- * target set <ready>. It then expects one breakpoint, at an address above
- * 4 GB, and the exit of the thread that raised it, detaches, sets <quit> and
- * waits for the target to exit. It prints one line and exits with 0 when every
- * step worked and the target exited with 0, else it prints what failed, ends
- * the target and exits with 1. Every wait has a time limit, and the target
- * exits with 2 when <quit> does not come in time, so a failure never hangs. */
+ * attach.exe <continue|pass> <target.exe> starts "<target.exe> target <ready>
+ * <quit>", where the two are handles of events it inherits, and attaches to it
+ * once the target set <ready>. It then expects one breakpoint, at an address
+ * above 4 GB, and the exit with 0 of the thread that raised it, detaches, sets
+ * <quit> and waits for the target to exit. With continue it continues the
+ * breakpoint as handled. With pass it passes it on to the target, as winedbg's
+ * pass does, so that the exception dispatch of the break-in thread runs and
+ * DbgUiRemoteBreakin's own handler takes it; the emulator then sees an
+ * exception on a thread it never ran. Any other exception fails the run when
+ * the debugger gets it. The program prints one line and exits with 0 when
+ * every step worked and the target exited with 0, else it prints what failed,
+ * ends the target and exits with 1. Every wait has a time limit, and the
+ * target exits with 2 when <quit> does not come in time, so a failure never
+ * hangs. */
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -58,14 +64,14 @@ static int target(char **argv)
     return WaitForSingleObject(quit, TARGET_WAIT_MS) == WAIT_OBJECT_0 ? 0 : 2;
 }
 
-static int debugger(const char *path)
+static int debugger(BOOL pass, const char *path)
 {
     SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
     STARTUPINFOA si = { sizeof(si) };
     EXCEPTION_RECORD *rec;
     DEBUG_EVENT ev;
     HANDLE ready, quit;
-    DWORD breakin_tid = 0, code = ~0u;
+    DWORD breakin_tid = 0, code = ~0u, status;
     void *breakin_addr = NULL;
     BOOL wow64 = FALSE, done = FALSE;
     char cmd[MAX_PATH + 64];
@@ -89,6 +95,7 @@ static int debugger(const char *path)
         if (!WaitForDebugEvent(&ev, WAIT_MS))
             fail("no %s within %u ms", breakin_tid ? "exit of the break-in thread" : "break-in",
                  WAIT_MS);
+        status = DBG_CONTINUE;
         switch (ev.dwDebugEventCode)
         {
         case CREATE_PROCESS_DEBUG_EVENT:
@@ -99,20 +106,27 @@ static int debugger(const char *path)
             break;
         case EXCEPTION_DEBUG_EVENT:
             rec = &ev.u.Exception.ExceptionRecord;
-            if (breakin_tid || rec->ExceptionCode != EXCEPTION_BREAKPOINT ||
+            if (breakin_tid)
+                fail("exception %08lx at %p on thread %04lx after the break-in on thread %04lx",
+                     rec->ExceptionCode, rec->ExceptionAddress, ev.dwThreadId, breakin_tid);
+            if (rec->ExceptionCode != EXCEPTION_BREAKPOINT ||
                 (ULONG_PTR)rec->ExceptionAddress <= 0xffffffff)
                 fail("exception %08lx at %p on thread %04lx, expected one breakpoint above 4 GB",
                      rec->ExceptionCode, rec->ExceptionAddress, ev.dwThreadId);
             breakin_tid = ev.dwThreadId;
             breakin_addr = rec->ExceptionAddress;
+            if (pass) status = DBG_EXCEPTION_NOT_HANDLED;
             break;
         case EXIT_THREAD_DEBUG_EVENT:
-            if (breakin_tid && ev.dwThreadId == breakin_tid) done = TRUE;
+            if (!breakin_tid || ev.dwThreadId != breakin_tid) break;
+            if (ev.u.ExitThread.dwExitCode)
+                fail("the break-in thread exited with %08lx", ev.u.ExitThread.dwExitCode);
+            done = TRUE;
             break;
         case EXIT_PROCESS_DEBUG_EVENT:
             fail("the target exited with %lu while attached", ev.u.ExitProcess.dwExitCode);
         }
-        if (!ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, DBG_CONTINUE))
+        if (!ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status))
             fail("ContinueDebugEvent failed, error %lu", GetLastError());
     }
     if (!DebugActiveProcessStop(pi.dwProcessId))
@@ -123,8 +137,8 @@ static int debugger(const char *path)
         fail("the target did not exit within %u ms after the detach", WAIT_MS);
     if (!GetExitCodeProcess(pi.hProcess, &code) || code)
         fail("the target exited with %lu after the detach", code);
-    printf("wine-build smoke test: %s attached to the WoW64 process, broke in at %p and detached\n",
-           ARCH, breakin_addr);
+    printf("wine-build smoke test: %s attached to the WoW64 process, %s the break-in at %p and detached\n",
+           ARCH, pass ? "passed on" : "continued", breakin_addr);
     return 0;
 }
 
@@ -132,7 +146,8 @@ int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 4 && !strcmp(argv[1], "target")) return target(argv);
-    if (argc == 2) return debugger(argv[1]);
-    printf("usage: attach.exe <target.exe>\n");
+    if (argc == 3 && !strcmp(argv[1], "continue")) return debugger(FALSE, argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "pass")) return debugger(TRUE, argv[2]);
+    printf("usage: attach.exe <continue|pass> <target.exe>\n");
     return 1;
 }

@@ -1558,23 +1558,35 @@ run_fex() {
 
 # check_attach_runs <env-command>...: build smoke/attach.c for aarch64 and
 # i686 and run the aarch64 program, a debugger like the bundle's winedbg, in
-# the booted throwaway prefix on the i686 one, and exit with the log unless it
-# attached to the running i686 process, got the break-in and detached without
-# killing it (smoke/attach.c says how). The program's own waits of 5 seconds
-# end a failure, so the limit only catches a hang of Wine itself. A clean run
-# takes about 0.1 seconds.
+# the booted throwaway prefix on the i686 one (run_attach), once continuing the
+# break-in and once passing it on to the target. The second run puts an
+# exception on a thread FEX never ran through FEX's exception hook.
 check_attach_runs() {
-    local log="$TMP_DIR/attach.log" target want
+    local target
     "$MINGW_DIR/bin/aarch64-w64-mingw32-clang" -O2 -o "$TMP_DIR/attach-aarch64.exe" "$REPO_DIR/smoke/attach.c"
     "$MINGW_DIR/bin/i686-w64-mingw32-clang" -O2 -o "$TMP_DIR/attach-i686.exe" "$REPO_DIR/smoke/attach.c"
     target="Z:$(tr / '\\' <<< "$TMP_DIR/attach-i686.exe")"
-    time_mark "smoke: attach.exe aarch64 on i686"
-    echo "  Attaching the aarch64 attach.exe to the i686 one..."
-    run_limited 10 "$log" "$@" "$WINE_DIR/bin/wine" "$TMP_DIR/attach-aarch64.exe" "$target"
-    smoke_check "attach.exe for aarch64 on the i686 process" 10 "$log"
-    want="wine-build smoke test: aarch64 attached to the WoW64 process"
+    run_attach continue continued "$target" "$@"
+    run_attach pass "passed on" "$target" "$@"
+}
+
+# run_attach <mode> <verb> <target> <env-command>...: run the aarch64 attach.exe
+# in <mode> on the i686 <target>, and exit with the log unless it attached to
+# the running process, got the break-in, saw the break-in thread exit with no
+# other exception and detached without killing the process, and printed <verb>
+# in its line (smoke/attach.c says how). The program's own waits of 5 seconds
+# end a failure, and it fails at the first unexpected exception, so the limit
+# only catches a hang of Wine itself. A clean run takes about 0.1 seconds.
+run_attach() {
+    local mode="$1" verb="$2" target="$3" log="$TMP_DIR/attach-$1.log" want
+    shift 3
+    time_mark "smoke: attach.exe aarch64 on i686 ($mode)"
+    echo "  Attaching the aarch64 attach.exe to the i686 one ($mode)..."
+    run_limited 10 "$log" "$@" "$WINE_DIR/bin/wine" "$TMP_DIR/attach-aarch64.exe" "$mode" "$target"
+    smoke_check "attach.exe for aarch64 on the i686 process ($mode)" 10 "$log"
+    want="wine-build smoke test: aarch64 attached to the WoW64 process, $verb the break-in"
     if ! grep -q "$want" "$log"; then
-        echo "Error: attach.exe for aarch64 did not print '$want'"
+        echo "Error: attach.exe for aarch64 ($mode) did not print '$want'"
         cat "$log"
         smoke_stop
         exit 1
