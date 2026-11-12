@@ -1,8 +1,8 @@
 # Conformance baseline of d3d11_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record d3d11`: do not edit.
-# wine: wine-11.21-39-g02da0e7b985
-# component: dxmt=a31a2e67f450780ca6410eed9db1f144015c292c
-# component: fex=9d4fa4b46b1d8d834462a540539f37528883eec4
+# wine: wine-11.21-42-gb9387db4d4b
+# component: dxmt=4ee2e4747cc4785bd822e7d3c818f5a8d0731d42
+# component: fex=af091aeea4fd04496c5729c9855f5324d48bce21
 # component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
 # component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
 # component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
@@ -76,7 +76,7 @@ test_dynamic_map_synchronization ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_early_depth_stencil ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_face_culling ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_filter_minmax ok failed=0 sites=0 todo_succeeded=0 skipped=1
-test_fl10_stream_output_desc fail failed=64 sites=14 todo_succeeded=0 skipped=0
+test_fl10_stream_output_desc ok failed=0 sites=0 todo_succeeded=2 skipped=0
 test_fl9_draw ok failed=0 sites=0 todo_succeeded=3 skipped=0
 test_format_compatibility ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_format_support fail failed=6 sites=1 todo_succeeded=36 skipped=0
@@ -146,10 +146,10 @@ test_standard_pattern ok failed=0 sites=0 todo_succeeded=8 skipped=0
 test_state_refcounting ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_export ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_separate ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_stream_output fail failed=238 sites=11 todo_succeeded=0 skipped=0
-test_stream_output_components fail failed=200 sites=1 todo_succeeded=0 skipped=0
+test_stream_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_stream_output_components ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output_resume fail failed=18 sites=1 todo_succeeded=0 skipped=0
-test_stream_output_vs fail failed=38 sites=1 todo_succeeded=0 skipped=0
+test_stream_output_vs ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_flip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_formats ok failed=0 sites=0 todo_succeeded=7 skipped=0
 test_swapchain_views ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -245,7 +245,7 @@ test_dynamic_map_synchronization ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_early_depth_stencil ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_face_culling ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_filter_minmax ok failed=0 sites=0 todo_succeeded=0 skipped=1
-test_fl10_stream_output_desc fail failed=64 sites=14 todo_succeeded=0 skipped=0
+test_fl10_stream_output_desc ok failed=0 sites=0 todo_succeeded=2 skipped=0
 test_fl9_draw ok failed=0 sites=0 todo_succeeded=3 skipped=0
 test_format_compatibility ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_format_support fail failed=6 sites=1 todo_succeeded=36 skipped=0
@@ -315,10 +315,10 @@ test_standard_pattern ok failed=0 sites=0 todo_succeeded=8 skipped=0
 test_state_refcounting ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_export ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_separate ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_stream_output fail failed=238 sites=11 todo_succeeded=0 skipped=0
-test_stream_output_components fail failed=200 sites=1 todo_succeeded=0 skipped=0
+test_stream_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
+test_stream_output_components ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output_resume fail failed=18 sites=1 todo_succeeded=0 skipped=0
-test_stream_output_vs fail failed=38 sites=1 todo_succeeded=0 skipped=0
+test_stream_output_vs ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_flip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_formats ok failed=0 sites=0 todo_succeeded=7 skipped=0
 test_swapchain_views ok failed=0 sites=0 todo_succeeded=0 skipped=0
