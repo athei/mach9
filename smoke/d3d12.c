@@ -12,8 +12,10 @@
  * its output, frame statistics and fullscreen state, and checks that a
  * swapchain on a compute queue and one for the desktop window are refused as
  * on Windows. It creates more timestamp query heaps than the 32 Metal counter
- * heaps a process gets, as Unreal Engine 5 does, writes every query of each,
- * resolves them into a readback buffer and checks the values, twice. Last it
+ * heaps a process gets, as Unreal Engine 5 does, writes every query and
+ * resolves the heaps into a readback buffer, first after all the writes and
+ * then heap by heap, and checks both times that the values are timestamps in
+ * the order they were written. Last it
  * creates a committed texture with D3D12_HEAP_FLAG_SHARED, as games with an
  * embedded browser do, and asks for a shared handle to it, which may succeed
  * or fail with an error code: the winemac driver offers no Win32 external
@@ -309,12 +311,24 @@ static void shared_texture(void)
     ID3D12Resource_Release(texture);
 }
 
-/* Create TS_HEAPS timestamp query heaps of TS_QUERIES queries (an even
- * number), write every query, resolve them into a readback buffer and check
- * that each value is a timestamp: not 0, and within 10 seconds of the others.
- * Do it twice, the second time after a reset of the allocator and the command
- * list, which returns the counter heap entries, and check that the second
- * round is later than the first. Every failure exits with 29. */
+/* Create TS_HEAPS timestamp query heaps of TS_QUERIES queries, write every
+ * query, resolve each heap into a readback buffer, and check that each value
+ * is a timestamp: not 0, not earlier than the one written before it, and
+ * within 10 seconds of the others. Do it twice, in one command list each:
+ *
+ * - Round 1 writes the queries of every heap before the first resolve.
+ *   KosmicKrisp encodes writes with no resolve between them into one Metal
+ *   compute encoder, here with more entries than one of its counter heaps of
+ *   4096 has.
+ * - Round 2, after a reset of the allocator and the command list, which
+ *   returns the counter heap entries, resolves each heap after its writes. A
+ *   resolve ends the compute encoder, so the entries are reused in one
+ *   encoder per heap, with resolves between the encoders. It has to be later
+ *   than round 1.
+ *
+ * KosmicKrisp samples each timestamp after a dispatch of its own, so in both
+ * rounds the last of a query heap has to be later than its first. Every
+ * failure exits with 29. */
 static void timestamp_heaps(void)
 {
     D3D12_HEAP_PROPERTIES heap_props = { D3D12_HEAP_TYPE_READBACK, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
@@ -356,21 +370,19 @@ static void timestamp_heaps(void)
             fail(29, "ID3D12CommandAllocator::Reset failed, %#lx", hr);
         if (FAILED(hr = ID3D12GraphicsCommandList_Reset(list, allocator, NULL)))
             fail(29, "ID3D12GraphicsCommandList::Reset failed, %#lx", hr);
-        /* On KosmicKrisp only the first 4 timestamps of a Metal compute
-         * encoder get a value, the later ones read 0, and a resolve ends the
-         * encoder, so the queries are written and resolved two at a time, as
-         * a begin and end pair. Write them all before one resolve with #115. */
         for (h = 0; h < TS_HEAPS; h++)
         {
-            for (q = 0; q < TS_QUERIES; q += 2)
-            {
+            for (q = 0; q < TS_QUERIES; q++)
                 ID3D12GraphicsCommandList_EndQuery(list, heaps[h], D3D12_QUERY_TYPE_TIMESTAMP, q);
-                ID3D12GraphicsCommandList_EndQuery(list, heaps[h], D3D12_QUERY_TYPE_TIMESTAMP, q + 1);
+            if (round == 2)
                 ID3D12GraphicsCommandList_ResolveQueryData(list, heaps[h], D3D12_QUERY_TYPE_TIMESTAMP,
-                                                           q, 2, results,
-                                                           sizeof(UINT64) * (TS_QUERIES * h + q));
-            }
+                                                           0, TS_QUERIES, results,
+                                                           sizeof(UINT64) * TS_QUERIES * h);
         }
+        for (h = 0; round == 1 && h < TS_HEAPS; h++)
+            ID3D12GraphicsCommandList_ResolveQueryData(list, heaps[h], D3D12_QUERY_TYPE_TIMESTAMP,
+                                                       0, TS_QUERIES, results,
+                                                       sizeof(UINT64) * TS_QUERIES * h);
         if (FAILED(hr = ID3D12GraphicsCommandList_Close(list)))
             fail(29, "ID3D12GraphicsCommandList::Close failed, %#lx", hr);
         ID3D12CommandQueue_ExecuteCommandLists(queue, 1, (ID3D12CommandList **)&list);
@@ -384,8 +396,14 @@ static void timestamp_heaps(void)
             if (!ticks[q])
                 fail(29, "round %d: timestamp %d of query heap %d is 0", round, q % TS_QUERIES,
                      q / TS_QUERIES + 1);
-            if (ticks[q] < first) first = ticks[q];
-            if (ticks[q] > last) last = ticks[q];
+            if (ticks[q] < last)
+                fail(29, "round %d: timestamp %d of query heap %d is %llu, earlier than the "
+                     "one written before it, %llu", round, q % TS_QUERIES, q / TS_QUERIES + 1,
+                     (unsigned long long)ticks[q], (unsigned long long)last);
+            last = ticks[q];
+            if (q % TS_QUERIES == TS_QUERIES - 1 && ticks[q] == ticks[q - (TS_QUERIES - 1)])
+                fail(29, "round %d: the %d timestamps of query heap %d are all %llu", round,
+                     TS_QUERIES, q / TS_QUERIES + 1, (unsigned long long)ticks[q]);
         }
         ID3D12Resource_Unmap(results, 0, &written);
         if (last - first > 10 * frequency)

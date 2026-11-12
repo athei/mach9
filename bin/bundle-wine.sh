@@ -1178,7 +1178,9 @@ vulkan_no_gpu() {
 # swapchains Windows refuses, and a committed texture with
 # D3D12_HEAP_FLAG_SHARED and a request for its shared handle, which may fail
 # but must not crash, and more timestamp query heaps than Metal has counter
-# heaps for a process, each written and read back. The log must also show
+# heaps for a process, written once before the first resolve and once with
+# a resolve after each heap, with values that do not decrease in the order
+# written. The log must also show
 # vkd3d-proton's report that it releases the frame latency handle of the
 # waitable swapchain once the GPU has completed a present, which says the
 # thread that does it started, and the step that waits on that handle each
