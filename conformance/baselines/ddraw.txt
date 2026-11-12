@@ -1,8 +1,8 @@
 # Conformance baseline of ddraw_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record ddraw`: do not edit.
-# wine: wine-11.21-39-g02da0e7b985
-# component: dxmt=d903db890362781abd9b56e62f84ce1472929353
-# component: fex=9d4fa4b46b1d8d834462a540539f37528883eec4
+# wine: wine-11.21-41-gb2a575d4357
+# component: dxmt=14b322c492e5dfa18b28ce7ed217a2b284e5ddd8
+# component: fex=af091aeea4fd04496c5729c9855f5324d48bce21
 # component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
 # component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
 # component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
@@ -30,14 +30,14 @@ test_colorkey_precision ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=5 sites=4 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=3 sites=3 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_threaded ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_surface_pitch ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_cross_device_blt fail failed=2 sites=2 todo_succeeded=0 skipped=0
-test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+test_cursor_clipping ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d32_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_readback ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_device_qi ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -121,7 +121,7 @@ test_colorkey_precision ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=5 sites=4 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -129,7 +129,7 @@ test_coop_level_threaded ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_versions ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_surface_pitch ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_cross_device_blt fail failed=2 sites=2 todo_succeeded=0 skipped=0
-test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+test_cursor_clipping ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d32_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d3d_state_reset ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_blit ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -227,7 +227,7 @@ test_coop_level_threaded ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_versions ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_surface_pitch ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_cross_device_blt fail failed=2 sites=2 todo_succeeded=0 skipped=0
-test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+test_cursor_clipping ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d32_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d3d_state_reset ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_blit fail failed=12 sites=1 todo_succeeded=0 skipped=0
@@ -335,7 +335,7 @@ test_compute_sphere_visibility ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=3 sites=3 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -343,7 +343,7 @@ test_coop_level_threaded ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_versions ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_surface_pitch ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_cross_device_blt fail failed=2 sites=2 todo_succeeded=0 skipped=0
-test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+test_cursor_clipping ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d32_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d3d_state_reset ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_blit fail failed=12 sites=1 todo_succeeded=0 skipped=0
@@ -465,14 +465,14 @@ test_colorkey_precision ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=3 sites=3 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_threaded ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_surface_pitch ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_cross_device_blt fail failed=2 sites=2 todo_succeeded=0 skipped=0
-test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+test_cursor_clipping ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d32_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_readback ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_device_qi ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -564,7 +564,7 @@ test_coop_level_threaded ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_versions ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_surface_pitch ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_cross_device_blt fail failed=2 sites=2 todo_succeeded=0 skipped=0
-test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+test_cursor_clipping ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d32_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d3d_state_reset ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_blit ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -654,7 +654,7 @@ test_compute_sphere_visibility ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=4 sites=4 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=5 sites=4 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -662,7 +662,7 @@ test_coop_level_threaded ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_versions ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_surface_pitch ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_cross_device_blt fail failed=2 sites=2 todo_succeeded=0 skipped=0
-test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+test_cursor_clipping ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d32_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d3d_state_reset ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_blit fail failed=12 sites=1 todo_succeeded=0 skipped=0
@@ -770,7 +770,7 @@ test_compute_sphere_visibility ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_activateapp ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_create_device_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_d3d_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_coop_level_mode_set fail failed=5 sites=4 todo_succeeded=0 skipped=0
+test_coop_level_mode_set fail failed=3 sites=3 todo_succeeded=0 skipped=0
 test_coop_level_mode_set_multi ok failed=0 sites=0 todo_succeeded=0 skipped=1
 test_coop_level_multi_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_surf_create ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -778,7 +778,7 @@ test_coop_level_threaded ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_coop_level_versions ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_create_surface_pitch ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_cross_device_blt fail failed=2 sites=2 todo_succeeded=0 skipped=0
-test_cursor_clipping fail failed=1 sites=1 todo_succeeded=0 skipped=0
+test_cursor_clipping ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d32_support ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_d3d_state_reset ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_blit fail failed=12 sites=1 todo_succeeded=0 skipped=0
