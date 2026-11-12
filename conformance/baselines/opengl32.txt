@@ -1,10 +1,10 @@
 # Conformance baseline of opengl32_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record opengl32`: do not edit.
-# wine: wine-11.21-42-g531be8de899
-# component: dxmt=4ee2e4747cc4785bd822e7d3c818f5a8d0731d42
+# wine: wine-11.21-42-gf93e7ca0ff0
+# component: dxmt=60074945359c4cded59c1a1a8501d58548d2fbf3
 # component: fex=af091aeea4fd04496c5729c9855f5324d48bce21
-# component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
-# component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
+# component: mesa=bdaf06afed71a3399997b6ac3bcffca9ca4ef517
+# component: vkd3d-proton=c5e2c9b8c55872893e3ba47d60448dd4f35185ef
 # component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
 
 [i386-windows opengl]
@@ -31,7 +31,7 @@ test_memory_map ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_message_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_minimized ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_object_creation ok failed=0 sites=0 todo_succeeded=0 skipped=13
-test_other_process_parent ok failed=0 sites=0 todo_succeeded=9 skipped=0
+test_other_process_parent ok failed=0 sites=0 todo_succeeded=10 skipped=0
 test_other_process_window fail failed=11 sites=11 todo_succeeded=4 skipped=1
 test_pbuffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_setpixelformat ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -65,7 +65,7 @@ test_memory_map ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_message_window ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_minimized ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_object_creation ok failed=0 sites=0 todo_succeeded=0 skipped=13
-test_other_process_parent ok failed=0 sites=0 todo_succeeded=9 skipped=0
+test_other_process_parent ok failed=0 sites=0 todo_succeeded=10 skipped=0
 test_other_process_window fail failed=11 sites=11 todo_succeeded=4 skipped=1
 test_pbuffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_setpixelformat ok failed=0 sites=0 todo_succeeded=0 skipped=0

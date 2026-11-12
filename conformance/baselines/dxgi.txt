@@ -1,6 +1,6 @@
 # Conformance baseline of dxgi_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record dxgi`: do not edit.
-# wine: wine-11.21-42-g531be8de899
+# wine: wine-11.21-42-gf93e7ca0ff0
 # component: dxmt=60074945359c4cded59c1a1a8501d58548d2fbf3
 # component: fex=af091aeea4fd04496c5729c9855f5324d48bce21
 # component: mesa=bdaf06afed71a3399997b6ac3bcffca9ca4ef517
@@ -18,7 +18,7 @@ d3d10:test_output_ownership ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d10:test_resize_fullscreen ok failed=0 sites=0 todo_succeeded=2 skipped=0
 d3d10:test_resize_target fail failed=16 sites=1 todo_succeeded=88 skipped=0
 d3d10:test_resize_target_wndproc ok failed=0 sites=0 todo_succeeded=0 skipped=0
-d3d10:test_set_fullscreen fail failed=14 sites=4 todo_succeeded=10 skipped=0
+d3d10:test_set_fullscreen fail failed=7 sites=4 todo_succeeded=10 skipped=0
 d3d10:test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d10:test_swapchain_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d10:test_swapchain_present ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -38,7 +38,7 @@ d3d12:test_output_ownership ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d12:test_resize_fullscreen ok failed=0 sites=0 todo_succeeded=2 skipped=0
 d3d12:test_resize_target fail failed=16 sites=1 todo_succeeded=88 skipped=0
 d3d12:test_resize_target_wndproc ok failed=0 sites=0 todo_succeeded=0 skipped=0
-d3d12:test_set_fullscreen fail failed=14 sites=4 todo_succeeded=10 skipped=0
+d3d12:test_set_fullscreen fail failed=7 sites=4 todo_succeeded=10 skipped=0
 d3d12:test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d12:test_swapchain_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d12:test_swapchain_present ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -56,7 +56,7 @@ test_enum_warp_adapter ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_factory_check_feature_support fail failed=3 sites=3 todo_succeeded=0 skipped=0
 test_find_closest_matching_mode ok failed=0 sites=0 todo_succeeded=1 skipped=0
 test_gamma_control ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_inexact_modes fail failed=18 sites=3 todo_succeeded=9 skipped=0
+test_inexact_modes fail failed=9 sites=3 todo_succeeded=9 skipped=0
 test_maximum_frame_latency ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_multi_adapter ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_object_wrapping ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -81,7 +81,7 @@ d3d10:test_output_ownership ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d10:test_resize_fullscreen ok failed=0 sites=0 todo_succeeded=2 skipped=0
 d3d10:test_resize_target fail failed=16 sites=1 todo_succeeded=88 skipped=0
 d3d10:test_resize_target_wndproc ok failed=0 sites=0 todo_succeeded=0 skipped=0
-d3d10:test_set_fullscreen fail failed=14 sites=4 todo_succeeded=10 skipped=0
+d3d10:test_set_fullscreen fail failed=7 sites=4 todo_succeeded=10 skipped=0
 d3d10:test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d10:test_swapchain_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d10:test_swapchain_present ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -101,7 +101,7 @@ d3d12:test_output_ownership ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d12:test_resize_fullscreen ok failed=0 sites=0 todo_succeeded=2 skipped=0
 d3d12:test_resize_target fail failed=16 sites=1 todo_succeeded=88 skipped=0
 d3d12:test_resize_target_wndproc ok failed=0 sites=0 todo_succeeded=0 skipped=0
-d3d12:test_set_fullscreen fail failed=14 sites=4 todo_succeeded=10 skipped=0
+d3d12:test_set_fullscreen fail failed=7 sites=4 todo_succeeded=10 skipped=0
 d3d12:test_swapchain_backbuffer_index ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d12:test_swapchain_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
 d3d12:test_swapchain_present ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -119,7 +119,7 @@ test_enum_warp_adapter ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_factory_check_feature_support fail failed=3 sites=3 todo_succeeded=0 skipped=0
 test_find_closest_matching_mode ok failed=0 sites=0 todo_succeeded=1 skipped=0
 test_gamma_control ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_inexact_modes fail failed=18 sites=3 todo_succeeded=9 skipped=0
+test_inexact_modes fail failed=9 sites=3 todo_succeeded=9 skipped=0
 test_maximum_frame_latency ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_multi_adapter ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_object_wrapping ok failed=0 sites=0 todo_succeeded=0 skipped=0
