@@ -11,10 +11,13 @@
  * the same with a frame latency waitable object. It asks the swapchain for
  * its output, frame statistics and fullscreen state, and checks that a
  * swapchain on a compute queue and one for the desktop window are refused as
- * on Windows. Last it creates a committed texture with D3D12_HEAP_FLAG_SHARED,
- * as games with an embedded browser do, and asks for a shared handle to it,
- * which may succeed or fail with an error code: the winemac driver offers no
- * Win32 external memory, so vkd3d-proton cannot export the texture.
+ * on Windows. It creates more timestamp query heaps than the 32 Metal counter
+ * heaps a process gets, as Unreal Engine 5 does, writes every query of each,
+ * resolves them into a readback buffer and checks the values, twice. Last it
+ * creates a committed texture with D3D12_HEAP_FLAG_SHARED, as games with an
+ * embedded browser do, and asks for a shared handle to it, which may succeed
+ * or fail with an error code: the winemac driver offers no Win32 external
+ * memory, so vkd3d-proton cannot export the texture.
  *
  * It prints a few lines on the way and, for the step that fails, one line
  * and a distinct exit status:
@@ -36,6 +39,7 @@
  *                                               27  desktop window swapchain
  *                                                   not refused
  *                                               28  shared texture
+ *                                               29  timestamp query heaps
  *
  * A failure in a frame (recording, presenting, the fence wait, or a pixel
  * read back that is not the clear color) exits with the status of the
@@ -69,6 +73,8 @@
 #define HEIGHT 64
 #define FRAMES 6
 #define FORMAT DXGI_FORMAT_B8G8R8A8_UNORM
+#define TS_HEAPS 40
+#define TS_QUERIES 128
 
 typedef HRESULT (WINAPI *PFN_CreateDXGIFactory1)(REFIID, void **);
 
@@ -303,6 +309,102 @@ static void shared_texture(void)
     ID3D12Resource_Release(texture);
 }
 
+/* Create TS_HEAPS timestamp query heaps of TS_QUERIES queries (an even
+ * number), write every query, resolve them into a readback buffer and check
+ * that each value is a timestamp: not 0, and within 10 seconds of the others.
+ * Do it twice, the second time after a reset of the allocator and the command
+ * list, which returns the counter heap entries, and check that the second
+ * round is later than the first. Every failure exits with 29. */
+static void timestamp_heaps(void)
+{
+    D3D12_HEAP_PROPERTIES heap_props = { D3D12_HEAP_TYPE_READBACK, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                                         D3D12_MEMORY_POOL_UNKNOWN, 0, 0 };
+    D3D12_QUERY_HEAP_DESC query_desc = { D3D12_QUERY_HEAP_TYPE_TIMESTAMP, TS_QUERIES, 0 };
+    D3D12_RANGE range = { 0, sizeof(UINT64) * TS_HEAPS * TS_QUERIES }, written = { 0, 0 };
+    UINT64 frequency = 0, first, last, previous = 0, *ticks;
+    ID3D12QueryHeap *heaps[TS_HEAPS];
+    D3D12_RESOURCE_DESC desc = {0};
+    ID3D12Resource *results;
+    int round, h, q;
+    HRESULT hr;
+
+    if (FAILED(hr = ID3D12CommandQueue_GetTimestampFrequency(queue, &frequency)) || !frequency)
+        fail(29, "GetTimestampFrequency returned %#lx, frequency %llu", hr,
+             (unsigned long long)frequency);
+    for (h = 0; h < TS_HEAPS; h++)
+    {
+        if (FAILED(hr = ID3D12Device_CreateQueryHeap(device, &query_desc, &IID_ID3D12QueryHeap,
+                                                     (void **)&heaps[h])))
+            fail(29, "CreateQueryHeap(TIMESTAMP) %d of %d failed, %#lx", h + 1, TS_HEAPS, hr);
+    }
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = range.End;
+    desc.Height = 1;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if (FAILED(hr = ID3D12Device_CreateCommittedResource(device, &heap_props, D3D12_HEAP_FLAG_NONE,
+                                                         &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                         NULL, &IID_ID3D12Resource,
+                                                         (void **)&results)))
+        fail(29, "creating the timestamp readback buffer failed, %#lx", hr);
+
+    for (round = 1; round <= 2; round++)
+    {
+        if (FAILED(hr = ID3D12CommandAllocator_Reset(allocator)))
+            fail(29, "ID3D12CommandAllocator::Reset failed, %#lx", hr);
+        if (FAILED(hr = ID3D12GraphicsCommandList_Reset(list, allocator, NULL)))
+            fail(29, "ID3D12GraphicsCommandList::Reset failed, %#lx", hr);
+        /* On KosmicKrisp only the first 4 timestamps of a Metal compute
+         * encoder get a value, the later ones read 0, and a resolve ends the
+         * encoder, so the queries are written and resolved two at a time, as
+         * a begin and end pair. Write them all before one resolve with #115. */
+        for (h = 0; h < TS_HEAPS; h++)
+        {
+            for (q = 0; q < TS_QUERIES; q += 2)
+            {
+                ID3D12GraphicsCommandList_EndQuery(list, heaps[h], D3D12_QUERY_TYPE_TIMESTAMP, q);
+                ID3D12GraphicsCommandList_EndQuery(list, heaps[h], D3D12_QUERY_TYPE_TIMESTAMP, q + 1);
+                ID3D12GraphicsCommandList_ResolveQueryData(list, heaps[h], D3D12_QUERY_TYPE_TIMESTAMP,
+                                                           q, 2, results,
+                                                           sizeof(UINT64) * (TS_QUERIES * h + q));
+            }
+        }
+        if (FAILED(hr = ID3D12GraphicsCommandList_Close(list)))
+            fail(29, "ID3D12GraphicsCommandList::Close failed, %#lx", hr);
+        ID3D12CommandQueue_ExecuteCommandLists(queue, 1, (ID3D12CommandList **)&list);
+        wait_gpu(29);
+
+        if (FAILED(hr = ID3D12Resource_Map(results, 0, &range, (void **)&ticks)))
+            fail(29, "mapping the timestamp readback buffer failed, %#lx", hr);
+        first = last = ticks[0];
+        for (q = 0; q < TS_HEAPS * TS_QUERIES; q++)
+        {
+            if (!ticks[q])
+                fail(29, "round %d: timestamp %d of query heap %d is 0", round, q % TS_QUERIES,
+                     q / TS_QUERIES + 1);
+            if (ticks[q] < first) first = ticks[q];
+            if (ticks[q] > last) last = ticks[q];
+        }
+        ID3D12Resource_Unmap(results, 0, &written);
+        if (last - first > 10 * frequency)
+            fail(29, "round %d: the timestamps span %llu ticks, more than 10 seconds at %llu Hz",
+                 round, (unsigned long long)(last - first), (unsigned long long)frequency);
+        /* The buffer still holds the first round's values, so the second
+         * round has to be later than all of them. */
+        if (round == 2 && first <= previous)
+            fail(29, "round 2: timestamp %llu is not later than the last of round 1, %llu",
+                 (unsigned long long)first, (unsigned long long)previous);
+        previous = last;
+    }
+    say("%d timestamp query heaps of %d queries, written and read back twice", TS_HEAPS,
+        TS_QUERIES);
+
+    ID3D12Resource_Release(results);
+    for (h = 0; h < TS_HEAPS; h++) ID3D12QueryHeap_Release(heaps[h]);
+}
+
 static void check_luid(const char *which, LUID luid, LUID want)
 {
     if (luid.LowPart != want.LowPart || luid.HighPart != want.HighPart)
@@ -518,6 +620,7 @@ int main(void)
     DestroyWindow(window);
     say("swapchains on a compute queue and for the desktop window are refused");
 
+    timestamp_heaps();
     shared_texture();
 
     ID3D12Resource_Release(readback);

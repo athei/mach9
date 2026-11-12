@@ -37,7 +37,8 @@ fn the_committed_groups_parse_and_name_their_issues() {
             "robust-buffer-access",
             "synchronization",
             "synchronization2",
-            "memory-model"
+            "memory-model",
+            "timestamp"
         ]
     );
     for group in &groups.groups {

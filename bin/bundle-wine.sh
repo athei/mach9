@@ -1176,14 +1176,16 @@ vulkan_no_gpu() {
 # visible window, a clear read back, resizes, a frame latency handle, the
 # swapchains Windows refuses, and a committed texture with
 # D3D12_HEAP_FLAG_SHARED and a request for its shared handle, which may fail
-# but must not crash. The log must also show vkd3d-proton's
-# report that it releases the frame latency handle of the waitable swapchain
-# once the GPU has completed a present, which says the thread that does it
-# started, and the step that waits on that handle each frame has to pass for
-# the run to finish. vkd3d-proton reaches KosmicKrisp through
-# winevulkan and the bundled loader, as vulkan.exe does. On a Mac without a
-# Metal 4 GPU (METAL4=0, see metal4_probe) KosmicKrisp has no device, so
-# each run must fail creating its first device instead (check_d3d12_no_gpu).
+# but must not crash, and more timestamp query heaps than Metal has counter
+# heaps for a process, each written and read back. The log must also show
+# vkd3d-proton's report that it releases the frame latency handle of the
+# waitable swapchain once the GPU has completed a present, which says the
+# thread that does it started, and the step that waits on that handle each
+# frame has to pass for the run to finish. vkd3d-proton reaches KosmicKrisp
+# through winevulkan and the bundled loader, as vulkan.exe does. On a Mac
+# without a Metal 4 GPU (METAL4=0, see metal4_probe) KosmicKrisp has no
+# device, so each run must fail creating its first device instead
+# (check_d3d12_no_gpu).
 check_d3d12_runs() {
     local arch exe log want
     for arch in x86_64 i686 aarch64; do

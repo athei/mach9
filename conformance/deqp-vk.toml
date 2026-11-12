@@ -76,3 +76,13 @@ exclude = [
     "dEQP-VK.memory_model.write_after_read.ext.u64.*.atomic_atomic.atomicrmw.*.payload_local.*.frag",
     "dEQP-VK.memory_model.message_passing.ext.u64.*.atomic_atomic.atomicrmw.*.payload_local.*.frag",
 ]
+
+# Timestamp queries. The multiview cases, which are in draw too, write
+# timestamps inside render passes.
+[[group]]
+name = "timestamp"
+issues = [106]
+cases = [
+    "dEQP-VK.pipeline.monolithic.timestamp.*",
+    "dEQP-VK.multiview.*timestamp*",
+]
