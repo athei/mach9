@@ -11,7 +11,10 @@
  * the same with a frame latency waitable object. It asks the swapchain for
  * its output, frame statistics and fullscreen state, and checks that a
  * swapchain on a compute queue and one for the desktop window are refused as
- * on Windows.
+ * on Windows. Last it creates a committed texture with D3D12_HEAP_FLAG_SHARED,
+ * as games with an embedded browser do, and asks for a shared handle to it,
+ * which may succeed or fail with an error code: the winemac driver offers no
+ * Win32 external memory, so vkd3d-proton cannot export the texture.
  *
  * It prints a few lines on the way and, for the step that fails, one line
  * and a distinct exit status:
@@ -32,6 +35,7 @@
  *      or readback buffer                           not refused
  *                                               27  desktop window swapchain
  *                                                   not refused
+ *                                               28  shared texture
  *
  * A failure in a frame (recording, presenting, the fence wait, or a pixel
  * read back that is not the clear color) exits with the status of the
@@ -267,6 +271,38 @@ static const char *utf8(const WCHAR *text, char *buffer, int size)
     return buffer;
 }
 
+/* Create a committed render target texture with D3D12_HEAP_FLAG_SHARED and
+ * ask for a shared handle to it, exiting with 28 when the texture cannot be
+ * created. */
+static void shared_texture(void)
+{
+    D3D12_HEAP_PROPERTIES heap_props = { D3D12_HEAP_TYPE_DEFAULT, D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                                         D3D12_MEMORY_POOL_UNKNOWN, 0, 0 };
+    D3D12_RESOURCE_DESC desc = {0};
+    ID3D12Resource *texture;
+    HANDLE shared = NULL;
+    HRESULT hr;
+
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = 256;
+    desc.Height = 256;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = FORMAT;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+    if (FAILED(hr = ID3D12Device_CreateCommittedResource(device, &heap_props, D3D12_HEAP_FLAG_SHARED,
+                                                         &desc, D3D12_RESOURCE_STATE_COMMON, NULL,
+                                                         &IID_ID3D12Resource, (void **)&texture)))
+        fail(28, "creating a committed texture with D3D12_HEAP_FLAG_SHARED failed, %#lx", hr);
+    hr = ID3D12Device_CreateSharedHandle(device, (ID3D12DeviceChild *)texture, NULL, GENERIC_ALL,
+                                         NULL, &shared);
+    if (SUCCEEDED(hr)) CloseHandle(shared);
+    say("shared committed texture created, CreateSharedHandle returned %#lx", hr);
+    ID3D12Resource_Release(texture);
+}
+
 static void check_luid(const char *which, LUID luid, LUID want)
 {
     if (luid.LowPart != want.LowPart || luid.HighPart != want.HighPart)
@@ -481,6 +517,8 @@ int main(void)
              "E_ACCESSDENIED", hr);
     DestroyWindow(window);
     say("swapchains on a compute queue and for the desktop window are refused");
+
+    shared_texture();
 
     ID3D12Resource_Release(readback);
     ID3D12DescriptorHeap_Release(rtv_heap);

@@ -1173,8 +1173,10 @@ vulkan_no_gpu() {
 # and aarch64 and run it in the booted throwaway prefix, and exit unless each
 # gets the default dxmt tree from compatdb.so and goes through every step:
 # vkd3d-proton's devices on DXMT's adapter, a swapchain DXMT presents for a
-# visible window, a clear read back, resizes, a frame latency handle, and
-# the swapchains Windows refuses. The log must also show vkd3d-proton's
+# visible window, a clear read back, resizes, a frame latency handle, the
+# swapchains Windows refuses, and a committed texture with
+# D3D12_HEAP_FLAG_SHARED and a request for its shared handle, which may fail
+# but must not crash. The log must also show vkd3d-proton's
 # report that it releases the frame latency handle of the waitable swapchain
 # once the GPU has completed a present, which says the thread that does it
 # started, and the step that waits on that handle each frame has to pass for
