@@ -1777,21 +1777,23 @@ check_no_d3d12() {
 }
 
 # check_fex_build: exit unless build-fex.sh staged all of FEX in FEX_DIST
-# from the commit fex-src.ref names now: the COMMIT it wrote last. Needs the
-# network, to resolve a branch or tag.
+# from the commit FEX_REF (fex-src.ref unless the environment sets it) names
+# now: the COMMIT it wrote last. Needs the network, to resolve a branch or
+# tag.
 check_fex_build() {
-    local f built want
+    local f built want from
     built=$(cat "$FEX_DIST/COMMIT" 2>/dev/null) || {
         echo "Error: $FEX_DIST has no COMMIT; build-fex.sh has not staged it (run build-wine.sh)"
         exit 1
     }
-    want=$(src_ref_commit fex-src.ref "$FEX_REPO")
+    want=$(src_ref_commit "$FEX_REF" "$FEX_REPO")
+    from=$(ref_source FEX_REF fex-src.ref)
     if [ -z "$want" ]; then
-        echo "Error: cannot resolve fex-src.ref ($(tr -d '[:space:]' < "$PINS_DIR/fex-src.ref")) in $FEX_REPO"
+        echo "Error: cannot resolve $from ($FEX_REF) in $FEX_REPO"
         exit 1
     fi
     if [ "$built" != "$want" ]; then
-        echo "Error: FEX was built from $built, but fex-src.ref now names $want"
+        echo "Error: FEX was built from $built, but $from now names $want"
         echo "(run build-fex.sh)"
         exit 1
     fi
@@ -1806,24 +1808,26 @@ check_fex_build() {
 }
 
 # check_mesa_build: exit unless build-mesa.sh staged the Vulkan loader,
-# KosmicKrisp and EGL with Zink completely, Mesa from the commit mesa-src.ref
-# names now and the loader from the pinned one, and set MESA_GALLIUM to the
-# name of the gallium library libEGL.1.dylib loads, which carries Mesa's
-# version. Needs the network, to resolve a branch or tag.
+# KosmicKrisp and EGL with Zink completely, Mesa from the commit MESA_REF
+# (mesa-src.ref unless the environment sets it) names now and the loader
+# from the pinned one, and set MESA_GALLIUM to the name of the gallium
+# library libEGL.1.dylib loads, which carries Mesa's version. Needs the
+# network, to resolve a branch or tag.
 check_mesa_build() {
-    local f built want lib
+    local f built want from lib
     local gallium=()
     built=$(cat "$MESA_DIST/COMMIT" 2>/dev/null) || {
         echo "Error: $MESA_DIST has no COMMIT; build-mesa.sh has not staged it (run build-wine.sh)"
         exit 1
     }
-    want=$(src_ref_commit mesa-src.ref "$MESA_REPO")
+    want=$(src_ref_commit "$MESA_REF" "$MESA_REPO")
+    from=$(ref_source MESA_REF mesa-src.ref)
     if [ -z "$want" ]; then
-        echo "Error: cannot resolve mesa-src.ref ($(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref")) in $MESA_REPO"
+        echo "Error: cannot resolve $from ($MESA_REF) in $MESA_REPO"
         exit 1
     fi
     if [ "$built" != "$want" ]; then
-        echo "Error: Mesa was built from $built, but mesa-src.ref now names $want"
+        echo "Error: Mesa was built from $built, but $from now names $want"
         echo "(run build-mesa.sh)"
         exit 1
     fi
@@ -2082,23 +2086,25 @@ check_wine_sdk() {
 }
 
 # check_dxmt_build: exit unless build-dxmt.sh staged all of DXMT from the
-# commit dxmt-src.ref names now. The DLLs and winemetal.so share a private
-# call interface, so they must be one build: the COMMIT build-dxmt.sh wrote
-# last, and the DESCRIBE it recorded, which d3d11.dll carries as its version
-# string. Needs the network, to resolve a branch or tag.
+# commit DXMT_REF (dxmt-src.ref unless the environment sets it) names now.
+# The DLLs and winemetal.so share a private call interface, so they must be
+# one build: the COMMIT build-dxmt.sh wrote last, and the DESCRIBE it
+# recorded, which d3d11.dll carries as its version string. Needs the
+# network, to resolve a branch or tag.
 check_dxmt_build() {
-    local f describe built want
+    local f describe built want from
     built=$(cat "$DXMT_DIST/COMMIT" 2>/dev/null) || {
         echo "Error: $DXMT_DIST has no COMMIT; build-dxmt.sh has not staged it (run build-wine.sh)"
         exit 1
     }
-    want=$(src_ref_commit dxmt-src.ref "$DXMT_REPO")
+    want=$(src_ref_commit "$DXMT_REF" "$DXMT_REPO")
+    from=$(ref_source DXMT_REF dxmt-src.ref)
     if [ -z "$want" ]; then
-        echo "Error: cannot resolve dxmt-src.ref ($(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref")) in $DXMT_REPO"
+        echo "Error: cannot resolve $from ($DXMT_REF) in $DXMT_REPO"
         exit 1
     fi
     if [ "$built" != "$want" ]; then
-        echo "Error: DXMT was built from $built, but dxmt-src.ref now names $want"
+        echo "Error: DXMT was built from $built, but $from now names $want"
         echo "(run build-dxmt.sh)"
         exit 1
     fi
@@ -2127,23 +2133,25 @@ check_dxmt_build() {
 }
 
 # check_vkd3d_proton_build: exit unless build-vkd3d-proton.sh staged both of
-# vkd3d-proton's DLLs for both arches from the commit vkd3d-proton-src.ref
-# names now: the COMMIT it wrote last. Its WINE_COMMIT is not compared: the
-# DLLs link nothing of Wine, and the builtin mark winebuild gave them does
-# not change with Wine. Needs the network, to resolve a branch or tag.
+# vkd3d-proton's DLLs for both arches from the commit VKD3D_PROTON_REF
+# (vkd3d-proton-src.ref unless the environment sets it) names now: the
+# COMMIT it wrote last. Its WINE_COMMIT is not compared: the DLLs link
+# nothing of Wine, and the builtin mark winebuild gave them does not change
+# with Wine. Needs the network, to resolve a branch or tag.
 check_vkd3d_proton_build() {
-    local f built want
+    local f built want from
     built=$(cat "$VKD3D_PROTON_DIST/COMMIT" 2>/dev/null) || {
         echo "Error: $VKD3D_PROTON_DIST has no COMMIT; build-vkd3d-proton.sh has not staged it (run build-wine.sh)"
         exit 1
     }
-    want=$(src_ref_commit vkd3d-proton-src.ref "$VKD3D_PROTON_REPO")
+    want=$(src_ref_commit "$VKD3D_PROTON_REF" "$VKD3D_PROTON_REPO")
+    from=$(ref_source VKD3D_PROTON_REF vkd3d-proton-src.ref)
     if [ -z "$want" ]; then
-        echo "Error: cannot resolve vkd3d-proton-src.ref ($(tr -d '[:space:]' < "$PINS_DIR/vkd3d-proton-src.ref")) in $VKD3D_PROTON_REPO"
+        echo "Error: cannot resolve $from ($VKD3D_PROTON_REF) in $VKD3D_PROTON_REPO"
         exit 1
     fi
     if [ "$built" != "$want" ]; then
-        echo "Error: vkd3d-proton was built from $built, but vkd3d-proton-src.ref now names $want"
+        echo "Error: vkd3d-proton was built from $built, but $from now names $want"
         echo "(run build-vkd3d-proton.sh)"
         exit 1
     fi

@@ -24,10 +24,10 @@ set -e
 #
 # Mesa comes from athei/mesa (upstream Mesa plus our topic commits,
 # originally from Hadron's patches; MESA_REPO names another repository) at
-# the ref in mesa-src.ref (a branch, tag or commit). Called by build-wine.sh
-# before Wine's configure, which links against this loader and finds EGL
-# here; running it alone rebuilds the Vulkan and OpenGL stack only.
-# bundle-wine.sh installs from MESA_DIST.
+# the ref in mesa-src.ref (a branch, tag or commit; MESA_REF names another
+# one). Called by build-wine.sh before Wine's configure, which links against
+# this loader and finds EGL here; running it alone rebuilds the Vulkan and
+# OpenGL stack only. bundle-wine.sh installs from MESA_DIST.
 #
 # The loader is built from the Vulkan-Loader and Vulkan-Headers tags pinned
 # in redist.env, for the floor: Homebrew's vulkan-loader bottle needs a newer
@@ -62,14 +62,13 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# profile.sh names Mesa's repository and clone, says where the trees go and
-# pins the floor.
+# profile.sh names Mesa's repository, ref and clone, says where the trees go
+# and pins the floor.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
 # shellcheck source=../pins/redist.env
 . "$PINS_DIR/redist.env"
 
-MESA_REF="$(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref")"
 if [ -z "$MESA_REF" ]; then
     echo "Error: $PINS_DIR/mesa-src.ref is empty"
     exit 1
@@ -162,8 +161,8 @@ MESA_KEY_INPUTS+=" $(sdk_key)"
 mesa_key() {
     dist_key "$SCRIPT_DIR/build-mesa.sh" "mesa=$1" "$MESA_KEY_INPUTS"
 }
-MESA_WANT=$(src_ref_commit mesa-src.ref "$MESA_REPO")
-print_dist_key "$MESA_WANT" mesa-src.ref mesa_key
+MESA_WANT=$(src_ref_commit "$MESA_REF" "$MESA_REPO")
+print_dist_key "$MESA_WANT" "$(ref_source MESA_REF mesa-src.ref) ($MESA_REF) in $MESA_REPO" mesa_key
 
 # The trees this script deletes and recreates are fixed paths in
 # MESA_BUILD_DIR. MESA_DIST is inside it unless overridden, so it is claimed

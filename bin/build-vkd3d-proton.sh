@@ -4,8 +4,9 @@ set -e
 # Builds vkd3d-proton, the Direct3D 12 implementation on Vulkan, for the
 # bundle from athei/vkd3d-proton (upstream vkd3d-proton with our commits on
 # top; VKD3D_PROTON_REPO names another repository) at the ref in
-# vkd3d-proton-src.ref (a branch, tag or commit) and stages it in
-# VKD3D_PROTON_DIST, in the layout of a Wine install's lib/wine:
+# vkd3d-proton-src.ref (a branch, tag or commit; VKD3D_PROTON_REF names
+# another one) and stages it in VKD3D_PROTON_DIST, in the layout of a Wine
+# install's lib/wine:
 #
 #   aarch64-windows/{d3d12,d3d12core}.dll   ARM64X
 #   i386-windows/{d3d12,d3d12core}.dll      i386
@@ -62,13 +63,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# profile.sh names VKD3D_PROTON_REPO, VKD3D_PROTON_BUILD_DIR,
-# VKD3D_PROTON_DIST, and the Wine build tree and SDK whose winebuild marks the
-# DLLs.
+# profile.sh names VKD3D_PROTON_REPO, VKD3D_PROTON_REF,
+# VKD3D_PROTON_BUILD_DIR, VKD3D_PROTON_DIST, and the Wine build tree and SDK
+# whose winebuild marks the DLLs.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
 
-VKD3D_PROTON_REF="$(tr -d '[:space:]' < "$PINS_DIR/vkd3d-proton-src.ref")"
 if [ -z "$VKD3D_PROTON_REF" ]; then
     echo "Error: $PINS_DIR/vkd3d-proton-src.ref is empty"
     exit 1
@@ -104,8 +104,8 @@ vkd3d_proton_key() {
     dist_key "$SCRIPT_DIR/build-vkd3d-proton.sh" "vkd3d-proton=$1" \
         "$(mingw_key)" "glslang=$(cc_version "$GLSLANG")"
 }
-VKD3D_PROTON_WANT=$(src_ref_commit vkd3d-proton-src.ref "$VKD3D_PROTON_REPO")
-print_dist_key "$VKD3D_PROTON_WANT" vkd3d-proton-src.ref vkd3d_proton_key
+VKD3D_PROTON_WANT=$(src_ref_commit "$VKD3D_PROTON_REF" "$VKD3D_PROTON_REPO")
+print_dist_key "$VKD3D_PROTON_WANT" "$(ref_source VKD3D_PROTON_REF vkd3d-proton-src.ref) ($VKD3D_PROTON_REF) in $VKD3D_PROTON_REPO" vkd3d_proton_key
 
 # The checkout and meson trees this script deletes and recreates are fixed
 # paths in VKD3D_PROTON_BUILD_DIR. VKD3D_PROTON_DIST is inside it unless

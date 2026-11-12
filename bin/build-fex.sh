@@ -3,9 +3,9 @@ set -e
 
 # Builds FEX, the x86 emulator of the Wine, from athei/FEX (upstream FEX
 # with our commits on top; FEX_REPO names another repository) at the ref in
-# fex-src.ref (a branch, tag or commit). Called by build-wine.sh; running it
-# alone rebuilds FEX only. Three CMake trees under FEX_BUILD_DIR,
-# following Hadron's recipe:
+# fex-src.ref (a branch, tag or commit; FEX_REF names another one). Called
+# by build-wine.sh; running it alone rebuilds FEX only. Three CMake trees
+# under FEX_BUILD_DIR, following Hadron's recipe:
 #
 #   wow64/    libwow64fex.dll, an aarch64 PE that runs i386 code under WoW64
 #             (Wine loads it as xtajit.dll)
@@ -38,12 +38,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# profile.sh names FEX's repository, clone and dist, says where the trees go
-# and pins the floor of the unix half.
+# profile.sh names FEX's repository, ref, clone and dist, says where the
+# trees go and pins the floor of the unix half.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
 
-FEX_REF="$(tr -d '[:space:]' < "$PINS_DIR/fex-src.ref")"
 if [ -z "$FEX_REF" ]; then
     echo "Error: $PINS_DIR/fex-src.ref is empty"
     exit 1
@@ -74,8 +73,8 @@ fex_key() {
     dist_key "$SCRIPT_DIR/build-fex.sh" "fex=$1" "$(mingw_key)" \
         "cc=$(cc_version /usr/bin/clang)" "$(sdk_key)" "floor=$MACOS_FLOOR"
 }
-FEX_WANT=$(src_ref_commit fex-src.ref "$FEX_REPO")
-print_dist_key "$FEX_WANT" fex-src.ref fex_key
+FEX_WANT=$(src_ref_commit "$FEX_REF" "$FEX_REPO")
+print_dist_key "$FEX_WANT" "$(ref_source FEX_REF fex-src.ref) ($FEX_REF) in $FEX_REPO" fex_key
 
 if [ "$CLEAN" -eq 1 ]; then
     echo "==> Cleaning $FEX_BUILD_DIR..."
@@ -186,7 +185,7 @@ done
 remove_tree "$install"
 fex_key "$FEX_COMMIT" > "$part/KEY"
 # Written last, so a staged directory without it is an incomplete one. The
-# bundle step compares it with what fex-src.ref names.
+# bundle step compares it with what FEX_REF names.
 echo "$FEX_COMMIT" > "$part/COMMIT"
 remove_tree "$FEX_DIST"
 mv "$part" "$FEX_DIST"

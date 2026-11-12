@@ -36,7 +36,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # BUNDLE_DEST, WINE_SRC, WINE_SDK_DIR, FEX_DIST, MESA_DIST, GSTREAMER_DIST,
-# DXMT_DIST, VKD3D_PROTON_DIST, the repositories and wine_src_commit.
+# DXMT_DIST, VKD3D_PROTON_DIST, the repositories with their refs, and
+# wine_src_commit.
 # shellcheck source=../lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
 # GStreamer's tag and repository.
@@ -215,10 +216,10 @@ fi
 {
     echo "- Wine: $wine_repo@$wine_ref ($(short "$wine_commit"), $describe)"
     echo "- Mach9: $self"
-    echo "- FEX: $(github_name "$FEX_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/fex-src.ref") ($(short "$(cat "$FEX_DIST/COMMIT")"))"
-    echo "- Mesa: $(github_name "$MESA_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/mesa-src.ref") ($(short "$(cat "$MESA_DIST/COMMIT")"))"
-    echo "- DXMT: $(github_name "$DXMT_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref") ($(short "$(cat "$DXMT_DIST/COMMIT")"))"
-    echo "- vkd3d-proton: $(github_name "$VKD3D_PROTON_REPO")@$(tr -d '[:space:]' < "$PINS_DIR/vkd3d-proton-src.ref") ($(short "$(cat "$VKD3D_PROTON_DIST/COMMIT")"))"
+    echo "- FEX: $(github_name "$FEX_REPO")@$FEX_REF ($(short "$(cat "$FEX_DIST/COMMIT")"))"
+    echo "- Mesa: $(github_name "$MESA_REPO")@$MESA_REF ($(short "$(cat "$MESA_DIST/COMMIT")"))"
+    echo "- DXMT: $(github_name "$DXMT_REPO")@$DXMT_REF ($(short "$(cat "$DXMT_DIST/COMMIT")"))"
+    echo "- vkd3d-proton: $(github_name "$VKD3D_PROTON_REPO")@$VKD3D_PROTON_REF ($(short "$(cat "$VKD3D_PROTON_DIST/COMMIT")"))"
     echo "- GStreamer: $(github_name "$GSTREAMER_GIT_URL")@$GSTREAMER_GIT_TAG ($(short "$(cat "$GSTREAMER_DIST/COMMIT")"))"
 } > "$NOTES"
 

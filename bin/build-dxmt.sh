@@ -3,8 +3,8 @@ set -e
 
 # Builds DXMT for the bundle from athei/dxmt (upstream DXMT with our commits
 # on top; DXMT_REPO names another repository) at the ref in dxmt-src.ref (a
-# branch, tag or commit) and stages it in DXMT_DIST, in the layout of a Wine
-# install's lib/wine:
+# branch, tag or commit; DXMT_REF names another one) and stages it in
+# DXMT_DIST, in the layout of a Wine install's lib/wine:
 #
 #   aarch64-windows/{dxgi,d3d10core,d3d11,winemetal}.dll   ARM64X
 #   i386-windows/{dxgi,d3d10core,d3d11,winemetal}.dll      i386
@@ -77,13 +77,13 @@ while [ $# -gt 0 ]; do
 done
 
 # profile.sh names the Wine build tree and SDK to link against, DXMT_REPO,
-# DXMT_BUILD_DIR, DXMT_LLVM, DXMT_DIST and the floor; redist.env pins LLVM.
+# DXMT_REF, DXMT_BUILD_DIR, DXMT_LLVM, DXMT_DIST and the floor; redist.env
+# pins LLVM.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
 # shellcheck source=../pins/redist.env
 . "$PINS_DIR/redist.env"
 
-DXMT_REF="$(tr -d '[:space:]' < "$PINS_DIR/dxmt-src.ref")"
 if [ -z "$DXMT_REF" ]; then
     echo "Error: $PINS_DIR/dxmt-src.ref is empty"
     exit 1
@@ -119,8 +119,8 @@ dxmt_key() {
         "cc=$(cc_version /usr/bin/clang)" "$(sdk_key)" \
         "metal=$(xcrun -sdk macosx metal --version 2>/dev/null | head -n 1)" "floor=$MACOS_FLOOR"
 }
-DXMT_WANT=$(src_ref_commit dxmt-src.ref "$DXMT_REPO")
-print_dist_key "$DXMT_WANT" dxmt-src.ref dxmt_key
+DXMT_WANT=$(src_ref_commit "$DXMT_REF" "$DXMT_REPO")
+print_dist_key "$DXMT_WANT" "$(ref_source DXMT_REF dxmt-src.ref) ($DXMT_REF) in $DXMT_REPO" dxmt_key
 
 # The checkouts and meson trees this script deletes and recreates are fixed
 # paths in DXMT_BUILD_DIR. DXMT_LLVM and DXMT_DIST are inside it unless

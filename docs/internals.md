@@ -49,8 +49,8 @@ script's header says what it builds and stages.
   [`signing/loader.provisionprofile`](../signing/loader.provisionprofile)
   lists.
 - Network access:
-  - The bundle step resolves the `*-src.ref` pins and gets the loader's
-    secure timestamp.
+  - The bundle step resolves each fork's ref (`*_REF` or its `*-src.ref`,
+    [paths](#paths)) and gets the loader's secure timestamp.
   - `build-fex.sh`, `build-mesa.sh`, `build-dxmt.sh` and
     `build-vkd3d-proton.sh` resolve their ref against `*_REPO` on every
     run, which needs the network unless `*_REPO` is a local clone.
@@ -79,8 +79,9 @@ The flags are in [building.md](building.md#commands). The five component
 scripts also run alone.
 
 - FEX, Mesa, DXMT and vkd3d-proton are fetched from their `*_REPO` at the
-  ref their `*-src.ref` names. A commit that is only in a local clone is
-  built only with `*_REPO` set to that clone.
+  ref their `*-src.ref` names, or their `*_REF` when it is set
+  ([paths](#paths)). A commit that is only in a local clone is built only
+  with `*_REPO` set to that clone.
 - Each staged directory (`*_DIST`) holds a `KEY` line naming what it was
   built from: the source commit, the hashes of the scripts, the tool
   versions (`dist_key` in `profile.sh`, and each script's key function).
@@ -111,6 +112,7 @@ but not lower it.
 | `X86LIBS_BUILD_DIR` | The x86 tree for the SDK's x86_64 archives and [graphics tests](#graphics-tests) |
 | `WINE_SDK_DIR` | The [Wine SDK](#wine-sdk) |
 | `FEX_REPO`, `MESA_REPO`, `DXMT_REPO`, `VKD3D_PROTON_REPO` | The repositories the forks are fetched from |
+| `FEX_REF`, `MESA_REF`, `DXMT_REF`, `VKD3D_PROTON_REF` | The branch, tag or commit of that repository to build instead of the one its `*-src.ref` names, such as a candidate branch in a worktree of the fork's checkout (point `FEX_SRC` and `MESA_SRC` at other clones then: by default they are those checkouts, which the build would move to the candidate); the bundle step checks the staged commit against the same ref, so it needs the same variables |
 | `FEX_SRC`, `MESA_SRC` | The local clones `build-fex.sh` and `build-mesa.sh` check out |
 | `FEX_BUILD_DIR`, `MESA_BUILD_DIR`, `DXMT_BUILD_DIR`, `VKD3D_PROTON_BUILD_DIR`, `GSTREAMER_BUILD_DIR` | Each component's trees, and the clones its script keeps there |
 | `DXMT_LLVM` | The LLVM static libraries `winemetal.so` links |
@@ -656,7 +658,7 @@ function's comment says what it checks and why; each program in
 
 | Checks | Where |
 |--------|-------|
-| macOS SDK, formulae, Wine SDK, each staged component current against its pin (which needs the network), llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
+| macOS SDK, formulae, Wine SDK, each staged component current against its pin or `*_REF` (which needs the network), llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
 | Inherited `com.apple.quarantine` removed, nothing else | Step 4f |
 | No reference to `LEAK_PREFIXES`, no `@rpath` dependency outside the bundle, every dylib loads ([`smoke/dlopen.c`](../smoke/dlopen.c)), GStreamer loads only from the bundle | `check_no_leaks`, `check_rpath_deps`, `check_dylibs_load`, `check_gstreamer` |
 | Copied-in components in place, the [icon font](#icon-font)'s aliases in `wine.inf`, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
@@ -720,7 +722,7 @@ Static linking:
 ## Pinned inputs
 
 A `*-src.ref` file names a branch, tag or commit of the component's
-`*_REPO`.
+`*_REPO`; its `*_REF` overrides it ([paths](#paths)).
 
 | Input | Pinned in |
 |-------|-----------|

@@ -36,6 +36,29 @@ macos_newer() {
       $(( ${b1:-0} * 10000 + ${b2:-0} * 100 + ${b3:-0} )) ]
 }
 
+# FEX_REF, MESA_REF, DXMT_REF and VKD3D_PROTON_REF, set below with each
+# fork's repository, are the refs (a branch, tag or commit) its build script
+# checks out and the bundle step checks the staged commit against. Each is
+# the ref its *-src.ref in PINS_DIR names (pin_ref) unless the environment
+# sets it, so a branch the pin does not name, such as a candidate in a
+# worktree of the fork's checkout, builds without moving the pinned branch.
+
+# pin_ref <ref-file>: print the ref <ref-file> in PINS_DIR names.
+pin_ref() {
+    tr -d '[:space:]' < "$PINS_DIR/$1"
+}
+
+# ref_source <name> <ref-file>: print where the fork ref <name> (such as
+# FEX_REF) came from, for messages: <ref-file> when it is the ref that file
+# names, else <name>, which the environment set.
+ref_source() {
+    if [ "${!1}" = "$(pin_ref "$2")" ]; then
+        echo "$2"
+    else
+        echo "$1"
+    fi
+}
+
 # The Wine source: upstream Wine with our series, a checkout of athei/wine.
 WINE_SRC="${WINE_SRC:-$ROOT/src}"
 BUILD_DIR="${BUILD_DIR:-$BUILD_TOP/wine}"
@@ -52,11 +75,12 @@ DEPS_FORMULAE="freetype gnutls sdl2-compat sdl3 bison pkgconf"
 # from pins/brew-formulae.
 MESA_FORMULAE="llvm spirv-llvm-translator spirv-tools"
 # Mesa's repository (upstream Mesa plus our topic commits, for its Vulkan
-# driver KosmicKrisp), the local clone build-mesa.sh checks out mesa-src.ref
-# in, its trees, and the Vulkan loader and driver as build-mesa.sh stages
-# them for the bundle. Set ahead of the configure flags, which name
+# driver KosmicKrisp) and its ref, the local clone build-mesa.sh checks out
+# that ref in, its trees, and the Vulkan loader and driver as build-mesa.sh
+# stages them for the bundle. Set ahead of the configure flags, which name
 # MESA_DIST.
 MESA_REPO="${MESA_REPO:-https://github.com/athei/mesa}"
+MESA_REF="${MESA_REF:-$(pin_ref mesa-src.ref)}"
 MESA_SRC="${MESA_SRC:-$ROOT/src-mesa}"
 MESA_BUILD_DIR="${MESA_BUILD_DIR:-$BUILD_TOP/mesa}"
 MESA_DIST="${MESA_DIST:-$MESA_BUILD_DIR/dist}"
@@ -209,24 +233,27 @@ graphics_tests() {
         echo "$t"
     done
 }
-# DXMT's repository (upstream DXMT plus our commits), which build-dxmt.sh
-# clones into DXMT_BUILD_DIR and checks out dxmt-src.ref in, its trees, the
+# DXMT's repository (upstream DXMT plus our commits) and its ref, which
+# build-dxmt.sh clones into DXMT_BUILD_DIR and checks out, its trees, the
 # LLVM libraries it links, and DXMT as build-dxmt.sh stages it for the
 # bundle.
 DXMT_REPO="${DXMT_REPO:-https://github.com/athei/dxmt}"
+DXMT_REF="${DXMT_REF:-$(pin_ref dxmt-src.ref)}"
 DXMT_BUILD_DIR="${DXMT_BUILD_DIR:-$BUILD_TOP/dxmt}"
 DXMT_LLVM="${DXMT_LLVM:-$DXMT_BUILD_DIR/llvm15}"
 DXMT_DIST="${DXMT_DIST:-$DXMT_BUILD_DIR/dist}"
-# vkd3d-proton's repository (upstream vkd3d-proton plus our commits), which
-# build-vkd3d-proton.sh clones into VKD3D_PROTON_BUILD_DIR and checks out
-# vkd3d-proton-src.ref in, its trees, and its D3D12 DLLs as
-# build-vkd3d-proton.sh stages them for the bundle.
+# vkd3d-proton's repository (upstream vkd3d-proton plus our commits) and its
+# ref, which build-vkd3d-proton.sh clones into VKD3D_PROTON_BUILD_DIR and
+# checks out, its trees, and its D3D12 DLLs as build-vkd3d-proton.sh stages
+# them for the bundle.
 VKD3D_PROTON_REPO="${VKD3D_PROTON_REPO:-https://github.com/athei/vkd3d-proton}"
+VKD3D_PROTON_REF="${VKD3D_PROTON_REF:-$(pin_ref vkd3d-proton-src.ref)}"
 VKD3D_PROTON_BUILD_DIR="${VKD3D_PROTON_BUILD_DIR:-$BUILD_TOP/vkd3d-proton}"
 VKD3D_PROTON_DIST="${VKD3D_PROTON_DIST:-$VKD3D_PROTON_BUILD_DIR/dist}"
-# FEX's repository, the local clone build-fex.sh checks out fex-src.ref in,
-# its build trees, and FEX as build-fex.sh stages it for the bundle.
+# FEX's repository and its ref, the local clone build-fex.sh checks out that
+# ref in, its build trees, and FEX as build-fex.sh stages it for the bundle.
 FEX_REPO="${FEX_REPO:-https://github.com/athei/FEX}"
+FEX_REF="${FEX_REF:-$(pin_ref fex-src.ref)}"
 FEX_SRC="${FEX_SRC:-$ROOT/src-fex}"
 FEX_BUILD_DIR="${FEX_BUILD_DIR:-$BUILD_TOP/fex}"
 FEX_DIST="${FEX_DIST:-$FEX_BUILD_DIR/dist}"
@@ -492,15 +519,14 @@ wine_src_commit() {
     echo "$commit"
 }
 
-# src_ref_commit <ref-file> <repo>: print the commit the ref in <ref-file>
-# (a file in PINS_DIR, such as fex-src.ref) names in <repo>: the ref itself
-# when it is a full commit hash, else the tag (peeled, for an annotated one)
-# or branch of that name, preferring a tag as git does. Prints nothing when
-# the ref cannot be resolved, also when <repo> wants credentials: git is not
-# allowed to ask for them.
+# src_ref_commit <ref> <repo>: print the commit <ref> (a fork ref, such as
+# FEX_REF) names in <repo>: the ref itself when it is a full commit hash,
+# else the tag (peeled, for an annotated one) or branch of that name,
+# preferring a tag as git does. Prints nothing when the ref cannot be
+# resolved, also when <repo> wants credentials: git is not allowed to ask
+# for them.
 src_ref_commit() {
-    local ref
-    ref=$(tr -d '[:space:]' < "$PINS_DIR/$1")
+    local ref="$1"
     if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
         echo "$ref"
         return 0
@@ -575,14 +601,14 @@ sdk_key() {
     echo "sdk=$(xcrun --show-sdk-version 2>/dev/null) sdk-build=$(xcrun --show-sdk-build-version 2>/dev/null)"
 }
 
-# print_dist_key <commit> <ref-file> <key-function>: with --print-key
+# print_dist_key <commit> <source> <key-function>: with --print-key
 # (PRINT_KEY=1), print the KEY <key-function> gives for <commit>, the commit
-# <ref-file> resolved to, and exit; exit with an error when it did not
-# resolve. Without it, do nothing.
+# <source> resolved to, and exit; exit with an error naming <source> when it
+# did not resolve. Without it, do nothing.
 print_dist_key() {
     [ "${PRINT_KEY:-0}" -eq 1 ] || return 0
     if [ -z "$1" ]; then
-        echo "Error: cannot resolve $2 ($(tr -d '[:space:]' < "$PINS_DIR/$2"))" >&2
+        echo "Error: cannot resolve $2" >&2
         exit 1
     fi
     "$3" "$1"
