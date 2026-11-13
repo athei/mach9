@@ -567,10 +567,13 @@ bench/kk.sh                                             # on dist/wine
 bench/kk.sh ../build/mesa/dist --case dispatch-loads    # one case, on a Mesa build
 ```
 
-Compare the difference between the arms of one invocation, not absolute
-medians across invocations: the absolute times of one build move between
-invocations while the differences stay put. For a before and after,
-alternate invocations of the two stacks with the same `--case` selection.
+Each timed run starts with a fixed load in the run's command buffer, before
+the first timestamp, so the GPU is in its highest performance state whatever
+ran before; without it a light arm slows the arms after it. Compare the
+difference between the arms of one invocation, not absolute medians across
+invocations: the absolute times of one build still move between invocations
+while the differences stay put. For a before and after, alternate
+invocations of the two stacks with the same `--case` selection.
 
 ## OpenGL
 

@@ -11,9 +11,10 @@
  * the default runs all.
  *
  * Each case has arms that differ in one setting, such as the robustness
- * features of the device. An arm records its work into one command buffer
- * between two vkCmdWriteTimestamp, submits it and waits for it; the GPU time
- * is the difference times timestampPeriod. Every round runs each arm once,
+ * features of the device. An arm records a fixed load and then its work
+ * between two vkCmdWriteTimestamp into one command buffer, submits it and
+ * waits for it; the GPU time is the difference times timestampPeriod, which
+ * leaves the load out. Every round runs each arm once,
  * starting with another arm each round, after untimed warm-up rounds. It
  * prints one line per arm: the case, its settings, and the median,
  * quartiles, minimum and maximum over the rounds in ms. Before the timed
@@ -49,10 +50,24 @@
  *   KosmicKrisp hands a second timestamp of the same stage the first one's
  *   value. Outside one, it writes each after a one-thread dispatch of its own
  *   that waits for the work before it.
+ * - The GPU lowers its performance state under light load and climbs back
+ *   over about 16 ms of work, so without the load an arm's time depends on
+ *   the arms before it: after ten draw arms of maxDrawCount 32 in a row, an
+ *   arm of maxDrawCount 4096 took twice as long. The load, LOAD_DISPATCHES
+ *   dispatches of LOAD_GROUPS workgroups of loads.comp, runs before the first
+ *   timestamp in the run's command buffer, so the interval starts with
+ *   the GPU in its highest state and nothing idle in between. The first
+ *   timestamp waits for the work before it, which keeps the load out of the
+ *   interval. A pause of 20 ms or more before a run still moves its time by
+ *   up to 0.3 ms, since the GPU climbs more slowly after one; the rounds
+ *   have no pause.
  * - Compare the difference between arms of one invocation, not absolute
  *   medians across invocations: the absolute times of one build move between
  *   invocations while the differences stay put. For a before and after,
  *   alternate invocations of the two stacks with the same --case selection.
+ *   This is not the performance state, and the load does not remove it: the
+ *   dispatch-loads arms read 0.045 ms more in some invocations than in
+ *   others with the GPU in its highest state in both.
  * - The compute cases put both timestamps into one compute encoder. A Mesa
  *   without "kk: Write compute timestamps with precise granularity" (#115)
  *   gives them one value, and the run stops with FAIL.
@@ -102,6 +117,11 @@
 #define CHAIN_LENGTH 256
 /* The bindings of loads_wide.comp, the most of any shader here. */
 #define MAX_BINDINGS 7
+/* The load before each timed interval: about 29 ms of GPU time on an M5 Max,
+ * against the 16 ms of work the GPU took from idle to its highest
+ * performance state. */
+#define LOAD_DISPATCHES 256
+#define LOAD_GROUPS 1024
 #define WARMUP_ROUNDS 3
 #define DEFAULT_ROUNDS 20
 
@@ -282,6 +302,16 @@ static struct arm arms[] = {
 };
 #define ARM_COUNT (sizeof(arms) / sizeof(arms[0]))
 
+/* The load each device runs before the timed interval of its arms: the
+ * shader of dispatch-loads, LOAD_DISPATCHES dispatches of LOAD_GROUPS
+ * workgroups. Every workgroup writes the same sums to the same place. */
+static struct arm loads[ROBUST_COUNT] = {
+    LOADS("load", ROBUST_OFF, false),
+    LOADS("load", ROBUST_RBA, false),
+    LOADS("load", ROBUST_RBA2, false),
+    LOADS("load", ROBUST_PIPELINE, false),
+};
+
 static VkInstance instance;
 static VkPhysicalDevice physical;
 static VkPhysicalDeviceMemoryProperties memory_properties;
@@ -424,12 +454,13 @@ static bool create_device(struct device *dev, enum robustness robustness)
                                          .queryType = VK_QUERY_TYPE_TIMESTAMP,
                                          .queryCount = 2 };
     VkDescriptorPoolSize sizes[] = {
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDINGS * ARM_COUNT },
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_BINDINGS * ARM_COUNT },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDINGS * (ARM_COUNT + 1) },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_BINDINGS * (ARM_COUNT + 1) },
     };
+    /* The arms and the device's load. */
     VkDescriptorPoolCreateInfo descriptors = { .sType =
                                                    VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                                               .maxSets = ARM_COUNT,
+                                               .maxSets = ARM_COUNT + 1,
                                                .poolSizeCount = 2,
                                                .pPoolSizes = sizes };
 
@@ -884,7 +915,10 @@ static void record_draws(struct arm *arm, VkCommandBuffer cmd, bool check)
     vkCmdEndRendering(cmd);
 }
 
-static void record_dispatches(struct arm *arm, VkCommandBuffer cmd)
+/* Records <count> dispatches of <groups> workgroups of a compute arm: the
+ * arm's own work, or a device's load. */
+static void record_dispatches(struct arm *arm, VkCommandBuffer cmd, uint32_t count,
+                              uint32_t groups)
 {
     const uint32_t params[2] = { LOAD_ITERATIONS, SOURCE_VEC4S - 1 };
     VkMemoryBarrier2 memory = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
@@ -896,7 +930,7 @@ static void record_dispatches(struct arm *arm, VkCommandBuffer cmd)
     VkDependencyInfo dependency = { .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                                     .memoryBarrierCount = 1,
                                     .pMemoryBarriers = &memory };
-    uint32_t i, count = arm->kind == KIND_LOADS ? DISPATCHES : CHAIN_LENGTH;
+    uint32_t i;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, arm->pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, arm->layout, 0, 1, &arm->set, 0,
@@ -906,7 +940,7 @@ static void record_dispatches(struct arm *arm, VkCommandBuffer cmd)
                            params);
     for (i = 0; i < count; i++)
     {
-        vkCmdDispatch(cmd, 1, 1, 1);
+        vkCmdDispatch(cmd, groups, 1, 1);
         if (arm->barriers && i + 1 < count) vkCmdPipelineBarrier2(cmd, &dependency);
     }
 }
@@ -940,11 +974,16 @@ static bool run(struct arm *arm, bool check, double *ms)
         !ok(vkBeginCommandBuffer(dev->cmd, &begin), "vkBeginCommandBuffer"))
         return false;
     if (!check)
+    {
+        /* The first timestamp waits for the work before it, so the load is
+         * outside the interval. */
+        record_dispatches(&loads[arm->robustness], dev->cmd, LOAD_DISPATCHES, LOAD_GROUPS);
         vkCmdWriteTimestamp(dev->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, dev->timestamps, 0);
+    }
     if (arm->kind == KIND_INDEXED || arm->kind == KIND_NONINDEXED)
         record_draws(arm, dev->cmd, check);
     else
-        record_dispatches(arm, dev->cmd);
+        record_dispatches(arm, dev->cmd, arm->kind == KIND_LOADS ? DISPATCHES : CHAIN_LENGTH, 1);
     if (check)
         vkCmdPipelineBarrier2(dev->cmd, &dependency);
     else
@@ -1021,7 +1060,13 @@ static bool setup(struct arm *arm)
     struct device *dev = &devices[arm->robustness];
     double unused;
 
-    if (!dev->created) create_device(dev, arm->robustness);
+    if (!dev->created)
+    {
+        struct arm *load = &loads[arm->robustness];
+
+        load->dev = dev;
+        if (create_device(dev, arm->robustness) && !setup_loads(load)) dev->failed = true;
+    }
     if (dev->failed) return false;
     arm->dev = dev;
     switch (arm->kind)
@@ -1287,7 +1332,11 @@ int main(int argc, char **argv)
         if (arms[i].ready) report(&arms[i], rounds);
 
     for (i = 0; i < ARM_COUNT; i++) teardown(&arms[i]);
-    for (i = 0; i < ROBUST_COUNT; i++) destroy_device(&devices[i]);
+    for (i = 0; i < ROBUST_COUNT; i++)
+    {
+        teardown(&loads[i]);
+        destroy_device(&devices[i]);
+    }
     vkDestroyInstance(instance, NULL);
     return failed;
 }
