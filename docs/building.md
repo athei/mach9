@@ -41,6 +41,7 @@ scripts also run alone ([commands](internals.md#commands)).
 | [`launcher/`](../launcher) | The source of [Mach9.app](app.md)'s launcher (`app`), its Dock tile plug-in (`docktile`) and the code both share (`core`), and the Makefile and scripts that assemble, sign and release the app ([Mach9.app](#mach9app)); nothing the bundle step builds depends on it |
 | [`release-notes/`](../release-notes) | The notes the app's update window shows, one file per release ([README](../release-notes/README.md)) |
 | [`smoke/`](../smoke) | The programs the bundle step builds and runs to check the bundle |
+| [`bench/`](../bench) | Benchmarks run by hand: [`kk.sh`](../bench/kk.sh) times KosmicKrisp ([Vulkan](internals.md#vulkan)) |
 | [`licenses/`](../licenses) | The licence texts the bundle step installs |
 | [`signing/`](../signing) | The loader's provisioning profile |
 | [`docs/`](.) | The documentation the README links to |

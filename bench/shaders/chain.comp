@@ -1,0 +1,16 @@
+#version 450
+
+// One link of the barrier-chain case: each dispatch adds one to what the
+// previous one wrote, so with a barrier between them the result is the
+// number of dispatches.
+layout(local_size_x = 32) in;
+
+layout(std430, set = 0, binding = 0) buffer Counters
+{
+    uint counters[];
+};
+
+void main()
+{
+    counters[gl_LocalInvocationID.x] += 1u;
+}

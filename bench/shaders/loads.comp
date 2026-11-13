@@ -1,0 +1,37 @@
+#version 450
+
+// The loads of the dispatch-loads case: each iteration reads one vec4 of the
+// storage buffer and one of the uniform buffer. The count and the mask come
+// from push constants, so the compiler can neither unroll the loop nor prove
+// an index in bounds.
+layout(local_size_x = 32) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Source
+{
+    vec4 source[];
+};
+
+layout(std140, set = 0, binding = 1) uniform Weights
+{
+    vec4 weights[256];
+};
+
+layout(std430, set = 0, binding = 2) writeonly buffer Result
+{
+    vec4 result[];
+};
+
+layout(push_constant) uniform Params
+{
+    uint iterations;
+    uint mask;
+};
+
+void main()
+{
+    uint lane = gl_LocalInvocationID.x;
+    vec4 sum = vec4(0.0);
+    for (uint i = 0u; i < iterations; i++)
+        sum += source[(lane + i * 32u) & mask] * weights[i & 255u];
+    result[lane] = sum;
+}

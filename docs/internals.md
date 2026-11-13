@@ -550,6 +550,21 @@ can, per game.
   ([`Rule::wined3d`](https://mach9.app/compatdb_core/struct.Rule.html#method.wined3d)).
 - DXVK is not covered. A program that wants Vulkan itself gets it.
 
+[`bench/kk.sh`](../bench/kk.sh) builds a native benchmark of KosmicKrisp's
+GPU time and runs it on a full bundle or a `MESA_DIST`, so a Mesa change
+gets a number before and after; the bundle step does not run it. The cases
+and the output are in the header of [`bench/kk.c`](../bench/kk.c).
+
+```bash
+bench/kk.sh                                             # on dist/wine
+bench/kk.sh ../build/mesa/dist --case dispatch-loads    # one case, on a Mesa build
+```
+
+Compare the difference between the arms of one invocation, not absolute
+medians across invocations: the absolute times of one build move between
+invocations while the differences stay put. For a before and after,
+alternate invocations of the two stacks with the same `--case` selection.
+
 ## OpenGL
 
 OpenGL runs on Zink on KosmicKrisp through Mesa's EGL wherever

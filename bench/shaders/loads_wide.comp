@@ -1,0 +1,60 @@
+#version 450
+
+// The loads of the dispatch-loads-wide case: as in loads.comp, but each
+// iteration reads four storage buffers and two uniform buffers, each a
+// binding of its own, at indices derived from one another.
+layout(local_size_x = 32) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Source0
+{
+    vec4 source0[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Source1
+{
+    vec4 source1[];
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer Source2
+{
+    vec4 source2[];
+};
+
+layout(std430, set = 0, binding = 3) readonly buffer Source3
+{
+    vec4 source3[];
+};
+
+layout(std140, set = 0, binding = 4) uniform Weights0
+{
+    vec4 weights0[256];
+};
+
+layout(std140, set = 0, binding = 5) uniform Weights1
+{
+    vec4 weights1[256];
+};
+
+layout(std430, set = 0, binding = 6) writeonly buffer Result
+{
+    vec4 result[];
+};
+
+layout(push_constant) uniform Params
+{
+    uint iterations;
+    uint mask;
+};
+
+void main()
+{
+    uint lane = gl_LocalInvocationID.x;
+    vec4 sum = vec4(0.0);
+    for (uint i = 0u; i < iterations; i++)
+    {
+        uint j = (lane + i * 32u) & mask;
+        sum += source0[j] * weights0[i & 255u] + source1[j ^ 1u] * weights1[(i + 1u) & 255u] +
+               source2[(j * 3u) & mask] + source3[(j + 7u) & mask];
+    }
+    result[lane] = sum;
+}
