@@ -18,6 +18,7 @@
 #              other time
 #   *.crowd    loses the device the first time it runs, and passes every
 #              other time: a crash no other case explains
+#   *.icb      passes with MESA_KK_DEBUG=force_icb, fails otherwise
 #   *.hang     prints nothing more for 30 seconds
 #   *.silent   ends the process at once, with nothing printed
 #
@@ -119,6 +120,13 @@ while read -r case; do
         *.crowd)
             [ "$(count crowd)" -eq 1 ] && lose_device
             echo "  Pass (Pass)"
+            ;;
+        *.icb)
+            if [ "$MESA_KK_DEBUG" = force_icb ]; then
+                echo "  Pass (Pass)"
+            else
+                echo "  Fail (no MESA_KK_DEBUG=force_icb)"
+            fi
             ;;
         *.hang)
             sleep 30

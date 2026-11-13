@@ -34,6 +34,7 @@ fn the_committed_groups_parse_and_name_their_issues() {
         names,
         [
             "draw",
+            "draw-icb",
             "robust-buffer-access",
             "synchronization",
             "synchronization2",
@@ -167,6 +168,57 @@ fn bad_groups_are_refused() {
         let e = Groups::parse(text).err().unwrap();
         assert!(e.contains(error), "{text:?}: {e}");
     }
+}
+
+#[test]
+fn kk_debug_is_a_list_of_debug_names() {
+    let parse = |value: &str| {
+        Groups::parse(&format!(
+            "[[group]]\nname = \"g\"\ncases = [\"dEQP-VK.*\"]\nkk_debug = {value}\n"
+        ))
+    };
+    assert_eq!(
+        parse("\"force_icb\"").unwrap().groups[0]
+            .kk_debug
+            .as_deref(),
+        Some("force_icb")
+    );
+    assert_eq!(
+        parse("\"force_icb,msl\"").unwrap().groups[0]
+            .kk_debug
+            .as_deref(),
+        Some("force_icb,msl")
+    );
+    for bad in [
+        "\"\"",
+        "\"force_icb,\"",
+        "\",msl\"",
+        "\"force icb\"",
+        "\"FORCE_ICB\"",
+        "\"msl;x=1\"",
+        "1",
+        "[\"msl\"]",
+    ] {
+        let e = parse(bad).err().unwrap();
+        assert!(
+            e.contains("`kk_debug` is a comma-separated list"),
+            "{bad}: {e}"
+        );
+    }
+    let groups = Groups::parse("[[group]]\nname = \"g\"\ncases = [\"dEQP-VK.*\"]\n").unwrap();
+    assert_eq!(groups.groups[0].kk_debug, None);
+}
+
+#[test]
+fn draw_icb_runs_the_cases_of_draw_with_force_icb() {
+    let groups = Groups::builtin().unwrap();
+    let draw = groups.select(&[String::from("draw")]).unwrap()[0];
+    let icb = groups.select(&[String::from("draw-icb")]).unwrap()[0];
+    assert_eq!(icb.cases, draw.cases);
+    assert_eq!(icb.exclude, draw.exclude);
+    assert_eq!(icb.fraction, draw.fraction);
+    assert_eq!(draw.kk_debug, None);
+    assert_eq!(icb.kk_debug.as_deref(), Some("force_icb"));
 }
 
 #[test]

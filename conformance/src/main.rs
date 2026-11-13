@@ -242,7 +242,7 @@ fn deqp_vk(mode: Mode, args: DeqpArgs) -> ExitCode {
     finish(deqp::run::execute(
         &groups,
         &options,
-        std::env::vars_os().collect(),
+        &std::env::vars_os().collect::<Vec<_>>(),
         &interrupt::REQUESTED,
     ))
 }

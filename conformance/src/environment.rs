@@ -66,12 +66,15 @@ pub fn wine_env(
 /// - `VK_LOADER_LAYERS_DISABLE=~all~`, so no layer found on the system
 ///   loads;
 /// - `MESA_SHADER_CACHE_DIR` a directory in the runner's `work` directory,
-///   so the cases' shaders do not fill the cache the user's games share.
+///   so the cases' shaders do not fill the cache the user's games share;
+/// - `MESA_KK_DEBUG` the `kk_debug` of a group that sets one
+///   ([`crate::deqp::groups::Group::kk_debug`]).
 #[must_use]
 pub fn deqp_env(
     caller: impl IntoIterator<Item = (OsString, OsString)>,
     icd_dir: &Path,
     work: &Path,
+    kk_debug: Option<&str>,
 ) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> = caller
         .into_iter()
@@ -84,6 +87,9 @@ pub fn deqp_env(
         ("MESA_SHADER_CACHE_DIR", cache.as_os_str()),
     ] {
         env.push((OsString::from(name), value.to_owned()));
+    }
+    if let Some(flags) = kk_debug {
+        env.push((OsString::from("MESA_KK_DEBUG"), OsString::from(flags)));
     }
     env
 }

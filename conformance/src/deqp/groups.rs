@@ -28,6 +28,9 @@ pub struct Group {
     pub exclude: Vec<String>,
     /// Every how many matching cases one runs; 1 for all of them.
     pub fraction: usize,
+    /// `MESA_KK_DEBUG` of the group's `deqp-vk` processes, a comma-separated
+    /// list of KosmicKrisp debug names; `None` keeps it unset.
+    pub kk_debug: Option<String>,
 }
 
 impl Groups {
@@ -49,8 +52,9 @@ impl Groups {
     /// unknown or missing key, a value of the wrong type, a bad name or the
     /// name `triage`, a group named twice, a group without patterns, a
     /// pattern of `cases` or `exclude` that does not start with `dEQP-VK.`
-    /// or holds whitespace, an issue that is not a positive number and a
-    /// fraction below 1.
+    /// or holds whitespace, an issue that is not a positive number, a
+    /// fraction below 1 and a `kk_debug` that is not a comma-separated list
+    /// of names of lowercase letters, digits and `_`.
     pub fn parse(text: &str) -> Result<Self, String> {
         let doc: DocumentMut = text.parse().map_err(|e| format!("deqp-vk.toml: {e}"))?;
         if let Some((key, _)) = doc.as_table().iter().find(|(key, _)| *key != "group") {
@@ -169,10 +173,9 @@ fn parse_group(table: &Table) -> Result<Group, String> {
             "{context}: the name is taken by the triage file of the expected results"
         ));
     }
-    if let Some((key, _)) = table
-        .iter()
-        .find(|(key, _)| !["name", "issues", "cases", "exclude", "fraction"].contains(key))
-    {
+    if let Some((key, _)) = table.iter().find(|(key, _)| {
+        !["name", "issues", "cases", "exclude", "fraction", "kk_debug"].contains(key)
+    }) {
         return Err(format!("{context}: unknown key `{key}`"));
     }
     let issues = match table.get("issues") {
@@ -210,12 +213,38 @@ fn parse_group(table: &Table) -> Result<Group, String> {
             .ok_or_else(|| format!("{context}: `fraction` must be a positive integer"))?,
         None => 1,
     };
+    let kk_debug = match table.get("kk_debug") {
+        Some(item) => Some(
+            item.as_str()
+                .filter(|value| is_debug_list(value))
+                .ok_or_else(|| {
+                    format!(
+                        "{context}: `kk_debug` is a comma-separated list of names of lowercase \
+                         letters, digits and `_`"
+                    )
+                })?
+                .to_owned(),
+        ),
+        None => None,
+    };
     Ok(Group {
         name,
         issues,
         cases,
         exclude,
         fraction,
+        kk_debug,
+    })
+}
+
+/// Whether `value` is one or more names of lowercase letters, digits and
+/// `_`, separated by single commas.
+fn is_debug_list(value: &str) -> bool {
+    value.split(',').all(|name| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     })
 }
 

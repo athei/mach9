@@ -404,6 +404,13 @@ cargo run -p conformance -- deqp-vk record --group draw    # write its expected 
   the driver of that stack, and the runner prints the device, the driver
   library and its `driverVersion`
   ([`probe.rs`](../conformance/src/deqp/probe.rs)).
+- A group's `kk_debug` sets `MESA_KK_DEBUG` for its `deqp-vk` processes,
+  to run its cases on a KosmicKrisp path the cases do not reach otherwise;
+  every other variable of Mesa stays removed. The groups of each setting run
+  after those without one, in processes of their own, with a probe of their
+  own whose line names the setting, and their logs in `kk_debug-<names>/` of
+  the run's directory; a case of two groups with different settings runs
+  once for each. A KosmicKrisp that does not know a name ignores it.
 - The cases run in batches, one `deqp-vk` process each, several at a time
   (`--jobs`, `--batch`). A process that dies or stalls in a case gives
   that case `crash` or `stall` and the batch goes on in a new process.

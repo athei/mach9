@@ -1,5 +1,72 @@
 use super::*;
 
+fn plans_of(groups: &Groups) -> Vec<Planned<'_>> {
+    groups
+        .groups
+        .iter()
+        .map(|group| Planned {
+            group,
+            cases: vec![String::from("dEQP-VK.a")],
+            whole: true,
+            old: None,
+            path: PathBuf::from("/e/g.txt"),
+        })
+        .collect()
+}
+
+#[test]
+fn each_kk_debug_setting_runs_once_unset_first() {
+    let groups = Groups::parse(
+        "[[group]]\nname = \"f\"\ncases = [\"dEQP-VK.*\"]\nkk_debug = \"force_icb\"\n\
+         [[group]]\nname = \"g\"\ncases = [\"dEQP-VK.*\"]\n\
+         [[group]]\nname = \"h\"\ncases = [\"dEQP-VK.*\"]\nkk_debug = \"force_icb\"\n\
+         [[group]]\nname = \"i\"\ncases = [\"dEQP-VK.*\"]\nkk_debug = \"msl\"\n",
+    )
+    .unwrap();
+    let plans = plans_of(&groups);
+    assert_eq!(settings(&plans), [None, Some("force_icb"), Some("msl")]);
+    let groups = Groups::parse("[[group]]\nname = \"g\"\ncases = [\"dEQP-VK.*\"]\n").unwrap();
+    assert_eq!(settings(&plans_of(&groups)), [None]);
+}
+
+#[test]
+fn a_setting_whose_groups_have_no_case_left_does_not_run() {
+    let groups = Groups::parse(
+        "[[group]]\nname = \"f\"\ncases = [\"dEQP-VK.*\"]\nkk_debug = \"force_icb\"\n\
+         [[group]]\nname = \"g\"\ncases = [\"dEQP-VK.*\"]\n\
+         [[group]]\nname = \"h\"\ncases = [\"dEQP-VK.*\"]\nkk_debug = \"force_icb\"\n",
+    )
+    .unwrap();
+    // `--cases` left the two force_icb groups without a case.
+    let mut plans = plans_of(&groups);
+    plans[0].cases.clear();
+    plans[2].cases.clear();
+    assert_eq!(settings(&plans), [None]);
+    // One force_icb group kept its cases, the group without a setting none.
+    let mut plans = plans_of(&groups);
+    plans[0].cases.clear();
+    plans[1].cases.clear();
+    assert_eq!(settings(&plans), [Some("force_icb")]);
+}
+
+#[test]
+fn the_runs_of_the_settings_combine_to_the_worse() {
+    let run = |a, b| match combine(Conclusion::Run(a), Conclusion::Run(b)) {
+        Conclusion::Run(verdict) => verdict,
+        Conclusion::Record { .. } => panic!("a record"),
+    };
+    assert_eq!(run(Verdict::Match, Verdict::Match), Verdict::Match);
+    assert_eq!(run(Verdict::Match, Verdict::Unstable), Verdict::Unstable);
+    assert_eq!(run(Verdict::Unstable, Verdict::Match), Verdict::Unstable);
+    match combine(
+        Conclusion::Record { unstable: 1 },
+        Conclusion::Record { unstable: 2 },
+    ) {
+        Conclusion::Record { unstable } => assert_eq!(unstable, 3),
+        Conclusion::Run(_) => panic!("a run"),
+    }
+}
+
 fn statuses(pairs: &[(&str, Status)]) -> BTreeMap<String, Status> {
     pairs
         .iter()

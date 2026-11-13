@@ -110,6 +110,16 @@ fn try_execute(
     cases: &[&str],
     setup: Setup,
 ) -> Result<Conclusion, Failure> {
+    try_execute_groups(root, mode, cases, setup, GROUPS)
+}
+
+fn try_execute_groups(
+    root: &Path,
+    mode: Mode,
+    cases: &[&str],
+    setup: Setup,
+    groups: &str,
+) -> Result<Conclusion, Failure> {
     let (vulkan, driver) = vulkan(root, setup == Setup::Bundle);
     let options = Options {
         mode,
@@ -142,9 +152,9 @@ fn try_execute(
     if setup == Setup::CanaryFails {
         env.push((OsString::from("STUB_CANARY_FAILS"), OsString::from("1")));
     }
-    let groups = Groups::parse(GROUPS).unwrap();
+    let groups = Groups::parse(groups).unwrap();
     let stop = AtomicBool::new(setup == Setup::Stopped);
-    run::execute(&groups, &options, env, &stop)
+    run::execute(&groups, &options, &env, &stop)
 }
 
 fn execute(root: &Path, mode: Mode, cases: &[&str]) -> Conclusion {
@@ -181,6 +191,40 @@ fn setup_error(result: Result<Conclusion, Failure>) -> String {
     match result {
         Err(Failure::Setup(message)) => message,
         other => panic!("expected a setup failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_group_with_kk_debug_runs_its_cases_with_it_and_the_others_without() {
+    let root = scratch("kk-debug");
+    let groups = "[[group]]\nname = \"g\"\ncases = [\"dEQP-VK.g.*\"]\n[[group]]\nname = \
+                  \"f\"\ncases = [\"dEQP-VK.g.*\"]\nkk_debug = \"force_icb\"\n";
+    let cases = ["dEQP-VK.g.a.icb", "dEQP-VK.g.b.pass"];
+    let recorded = try_execute_groups(&root, Mode::Record, &cases, PLAIN, groups).unwrap();
+    assert!(
+        matches!(recorded, Conclusion::Record { unstable: 0 }),
+        "{recorded:?}"
+    );
+    let load = |group: &str| {
+        Expected::load(&root.join(format!("expected/{group}.txt")), group)
+            .unwrap()
+            .unwrap()
+    };
+    let (plain, forced) = (load("g"), load("f"));
+    assert_eq!(plain.status(cases[0]), Status::Fail);
+    assert_eq!(forced.status(cases[0]), Status::Pass);
+    assert_eq!(plain.status(cases[1]), Status::Pass);
+    assert_eq!(forced.status(cases[1]), Status::Pass);
+    let run = try_execute_groups(&root, Mode::Run, &cases, PLAIN, groups).unwrap();
+    assert!(matches!(run, Conclusion::Run(Verdict::Match)), "{run:?}");
+    for run in fs::read_dir(root.join("deqp-state/runs")).unwrap() {
+        let dir = run.unwrap().path();
+        assert!(dir.join("first").is_dir(), "{}", dir.display());
+        assert!(
+            dir.join("kk_debug-force_icb/first").is_dir(),
+            "{}",
+            dir.display()
+        );
     }
 }
 

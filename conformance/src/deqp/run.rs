@@ -251,7 +251,7 @@ struct Planned<'g> {
 pub fn execute(
     groups: &Groups,
     options: &Options,
-    caller_env: Vec<(OsString, OsString)>,
+    caller_env: &[(OsString, OsString)],
     stop: &AtomicBool,
 ) -> Result<Conclusion, Failure> {
     let selected = groups.select(&options.groups).map_err(Failure::Setup)?;
@@ -296,8 +296,7 @@ pub fn execute(
             path,
         });
     }
-    let all = union(&plans);
-    if all.is_empty() {
+    if union(&plans).is_empty() {
         return Err(Failure::Setup(String::from(
             "--cases matches no case of the groups",
         )));
@@ -309,47 +308,112 @@ pub fn execute(
     let run_dir = state.runs().join(layout::run_id(SystemTime::now()));
     fs::create_dir_all(&run_dir).map_err(|e| setup_io(&run_dir, &e))?;
     println!("conformance: raw logs in {}", run_dir.display());
-    let env = environment::deqp_env(caller_env, &vulkan.icd_dir, &work);
-    let runner = Runner {
-        deqp: &deqp,
-        vulkan: &vulkan,
-        env: &env,
-        work: &work,
-        run_dir: &run_dir,
-        options,
-        stop,
-    };
-    runner.probe()?;
     let started = Instant::now();
-    println!(
-        "conformance: deqp-vk: {} cases of {} groups, {} at a time in batches of {}",
-        all.len(),
-        plans.len(),
-        options.jobs,
-        options.batch
-    );
-    let mut isolate = known_crashes(&plans);
-    let first = runner.run_cases("first", &all, &isolate)?;
-    // The second pass runs alone every case that crashed or stalled in the
-    // first, so its own crashes cannot change the result of another case.
-    isolate.extend(
-        first
-            .results
+    let mut total = 0;
+    let mut conclusion: Option<Conclusion> = None;
+    // The groups of one `kk_debug` setting run as a run of their own, so a
+    // case of two groups with different settings runs once in each, and no
+    // process mixes the settings.
+    for setting in settings(&plans) {
+        let plans: Vec<&Planned<'_>> = plans
             .iter()
-            .filter(|(_, status)| status.is_crash_or_stall())
-            .map(|(case, _)| case.clone())
-            .chain(first.unstable.keys().cloned()),
-    );
-    let conclusion = match options.mode {
-        Mode::Run => run_groups(&runner, &plans, first, &isolate, &components, &triage)?,
-        Mode::Record => record_groups(&runner, &plans, &first, &isolate, &components, &triage)?,
-    };
+            .filter(|plan| plan.group.kk_debug.as_deref() == setting)
+            .collect();
+        let dir = setting.map_or_else(
+            || run_dir.clone(),
+            |flags| run_dir.join(format!("kk_debug-{}", flags.replace(',', "+"))),
+        );
+        fs::create_dir_all(&dir).map_err(|e| setup_io(&dir, &e))?;
+        let env =
+            environment::deqp_env(caller_env.iter().cloned(), &vulkan.icd_dir, &work, setting);
+        let runner = Runner {
+            deqp: &deqp,
+            vulkan: &vulkan,
+            env: &env,
+            kk_debug: setting,
+            work: &work,
+            run_dir: &dir,
+            options,
+            stop,
+        };
+        let part = runner.run_plans(&plans, &components, &triage)?;
+        total += union_of(&plans).len();
+        conclusion = Some(match conclusion {
+            Some(before) => combine(before, part),
+            None => part,
+        });
+    }
     println!(
-        "conformance: deqp-vk: {} cases in {:.1} s",
-        all.len(),
+        "conformance: deqp-vk: {total} cases in {:.1} s",
         started.elapsed().as_secs_f64()
     );
-    Ok(conclusion)
+    conclusion.ok_or_else(|| Failure::Setup(String::from("no deqp-vk group selected")))
+}
+
+/// The `kk_debug` settings of the plans that have a case, each once, unset
+/// first. A setting whose groups `--cases` left without a case has nothing
+/// to run, and so needs no probe.
+fn settings<'p>(plans: &'p [Planned<'_>]) -> Vec<Option<&'p str>> {
+    let mut settings: Vec<Option<&str>> = Vec::new();
+    for plan in plans {
+        let setting = plan.group.kk_debug.as_deref();
+        if !plan.cases.is_empty() && !settings.contains(&setting) {
+            settings.push(setting);
+        }
+    }
+    settings.sort_by_key(Option::is_some);
+    settings
+}
+
+/// The conclusion of two runs of one invocation: the worse verdict, or the
+/// unstable cases of both records.
+fn combine(a: Conclusion, b: Conclusion) -> Conclusion {
+    match (a, b) {
+        (Conclusion::Run(a), Conclusion::Run(b)) => Conclusion::Run(a.max(b)),
+        (Conclusion::Record { unstable: a }, Conclusion::Record { unstable: b }) => {
+            Conclusion::Record { unstable: a + b }
+        }
+        (a, _) => a,
+    }
+}
+
+impl Runner<'_> {
+    /// Probe the driver with this runner's environment, run the cases of
+    /// `plans`, and compare or record each of them.
+    fn run_plans(
+        &self,
+        plans: &[&Planned<'_>],
+        components: &BTreeMap<String, String>,
+        triage: &Triage,
+    ) -> Result<Conclusion, Failure> {
+        let options = self.options;
+        let all = union_of(plans);
+        self.probe()?;
+        println!(
+            "conformance: deqp-vk: {} cases of {} groups, {} at a time in batches of {}",
+            all.len(),
+            plans.len(),
+            options.jobs,
+            options.batch
+        );
+        let mut isolate = known_crashes(plans);
+        let first = self.run_cases("first", &all, &isolate)?;
+        // The second pass runs alone every case that crashed or stalled in
+        // the first, so its own crashes cannot change the result of another
+        // case.
+        isolate.extend(
+            first
+                .results
+                .iter()
+                .filter(|(_, status)| status.is_crash_or_stall())
+                .map(|(case, _)| case.clone())
+                .chain(first.unstable.keys().cloned()),
+        );
+        match options.mode {
+            Mode::Run => run_groups(self, plans, first, &isolate, components, triage),
+            Mode::Record => record_groups(self, plans, &first, &isolate, components, triage),
+        }
+    }
 }
 
 /// Refuse to start while a process of `program` runs: one a run left
@@ -372,7 +436,7 @@ fn refuse_running(program: &Path) -> Result<(), Failure> {
 }
 
 /// The cases of the plans whose expected results say crash or stall.
-fn known_crashes(plans: &[Planned<'_>]) -> HashSet<String> {
+fn known_crashes(plans: &[&Planned<'_>]) -> HashSet<String> {
     plans
         .iter()
         .filter_map(|plan| plan.old.as_ref().map(|old| (plan, old)))
@@ -387,6 +451,11 @@ fn known_crashes(plans: &[Planned<'_>]) -> HashSet<String> {
 
 /// The cases of every plan, each once, in the order they first appear.
 fn union(plans: &[Planned<'_>]) -> Vec<String> {
+    union_of(&plans.iter().collect::<Vec<_>>())
+}
+
+/// [`union`] of plans held by reference.
+fn union_of(plans: &[&Planned<'_>]) -> Vec<String> {
     let mut seen = HashSet::new();
     plans
         .iter()
@@ -399,7 +468,7 @@ fn union(plans: &[Planned<'_>]) -> Vec<String> {
 /// `run`: diff each group, run the gating cases again, and decide.
 fn run_groups(
     runner: &Runner<'_>,
-    plans: &[Planned<'_>],
+    plans: &[&Planned<'_>],
     first: Ran,
     isolate: &HashSet<String>,
     components: &BTreeMap<String, String>,
@@ -497,7 +566,7 @@ fn with_worse(
 /// write each group's file.
 fn record_groups(
     runner: &Runner<'_>,
-    plans: &[Planned<'_>],
+    plans: &[&Planned<'_>],
     first: &Ran,
     isolate: &HashSet<String>,
     components: &BTreeMap<String, String>,
@@ -534,7 +603,7 @@ fn record_groups(
     // A case the triage marks flaky runs alone FLAKY_RUNS more times, and
     // the worst of its results is written, so its expected result is the
     // one that gates (a crash or stall) and its better results do not.
-    let flaky: Vec<String> = union(plans)
+    let flaky: Vec<String> = union_of(plans)
         .into_iter()
         .filter(|case| triage.is_flaky(case))
         .collect();
@@ -611,6 +680,8 @@ struct Runner<'a> {
     deqp: &'a Deqp,
     vulkan: &'a Vulkan,
     env: &'a [(OsString, OsString)],
+    /// The `MESA_KK_DEBUG` of `env`, if any.
+    kk_debug: Option<&'a str>,
     work: &'a Path,
     run_dir: &'a Path,
     options: &'a Options,
@@ -702,9 +773,12 @@ impl Runner<'_> {
                 qpa.display()
             ))
         })?;
+        let debug = self
+            .kk_debug
+            .map_or_else(String::new, |flags| format!(", with MESA_KK_DEBUG={flags}"));
         println!(
             "conformance: deqp-vk runs on {device} with {driver}, driverVersion {version}, \
-             through {} and {}",
+             through {} and {}{debug}",
             self.vulkan.loader.display(),
             manifests.join(", ")
         );

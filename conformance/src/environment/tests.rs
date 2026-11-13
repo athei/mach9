@@ -105,6 +105,7 @@ fn deqp_processes_get_only_the_named_driver() {
         ]),
         &PathBuf::from("/m/share/vulkan/icd.d"),
         &PathBuf::from("/s/work"),
+        None,
     );
     for (name, expected) in [
         ("VK_DRIVER_FILES", "/m/share/vulkan/icd.d"),
@@ -124,4 +125,21 @@ fn deqp_processes_get_only_the_named_driver() {
         assert_eq!(value(&env, name), None, "{name}");
     }
     assert_eq!(env.len(), 4);
+}
+
+#[test]
+fn a_group_s_kk_debug_replaces_the_caller_s() {
+    let env = deqp_env(
+        caller(&["MESA_KK_DEBUG", "MESA_KK_EXPERIMENTAL", "PATH"]),
+        &PathBuf::from("/m/share/vulkan/icd.d"),
+        &PathBuf::from("/s/work"),
+        Some("force_icb,msl"),
+    );
+    assert_eq!(
+        value(&env, "MESA_KK_DEBUG"),
+        Some(OsStr::new("force_icb,msl"))
+    );
+    assert_eq!(value(&env, "MESA_KK_EXPERIMENTAL"), None);
+    assert_eq!(value(&env, "PATH"), Some(OsStr::new("caller")));
+    assert_eq!(env.len(), 5);
 }

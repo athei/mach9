@@ -18,12 +18,33 @@
 # fraction = 4             optional: every 4th matching case, in mustpass
 #                           order, as deqp-runner's --fraction takes them;
 #                           1, all of them, by default
+# kk_debug = "force_icb"    optional: MESA_KK_DEBUG of the group's deqp-vk
+#                           processes, a comma-separated list of
+#                           KosmicKrisp's debug names; unset by default. A
+#                           KosmicKrisp without a name ignores it
 #
-# A case may match several groups; it runs once.
+# A case may match several groups; it runs once for each kk_debug setting of
+# those groups, and the groups of one setting run in processes of their own.
 
 [[group]]
 name = "draw"
 issues = [61]
+cases = [
+    "dEQP-VK.draw.*",
+    "dEQP-VK.conditional_rendering.*",
+    "dEQP-VK.multiview.*",
+    "dEQP-VK.robustness.index_access.*indirect*",
+    "dEQP-VK.robustness.bind_index_buffer2.*indirect*",
+]
+
+# The cases of draw with every indirect-count draw run from an indirect
+# command buffer whatever its maxDrawCount (#61): the cases' counts are below
+# the threshold, so draw alone never reaches that path. Its expected results
+# equal draw's.
+[[group]]
+name = "draw-icb"
+issues = [61]
+kk_debug = "force_icb"
 cases = [
     "dEQP-VK.draw.*",
     "dEQP-VK.conditional_rendering.*",
