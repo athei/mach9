@@ -341,7 +341,7 @@ fn a_field_a_steam_rule_refuses_is_an_error() {
         let refused = describe(key.as_str(), &FieldError::RefusedOnSteamApp(key));
         for lines in [
             vec![exe_line("steam:440"), field.clone()],
-            vec![field.clone(), exe_line("steam:440")],
+            vec![field, exe_line("steam:440")],
         ] {
             assert_eq!(
                 error_of(&block("a", &lines)),

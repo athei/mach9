@@ -325,7 +325,7 @@ fn a_steam_rule_refuses_what_a_star_rule_refuses_and_debug_channels() -> TestRes
         let refused = !key.allowed_on_any() || key == Key::DebugChannels;
         let error = Err(FieldError::RefusedOnSteamApp(key));
         // With or without a fingerprint, as for `*`.
-        for rule in [steam()?, steam()?.with_company(Fingerprint::new("Acme")?)] {
+        for mut rule in [steam()?, steam()?.with_company(Fingerprint::new("Acme")?)] {
             let mut set = rule.clone();
             let result = set.set(key, sample(key));
             assert_eq!(result.is_ok(), !refused, "{key}: {result:?}");
@@ -334,7 +334,7 @@ fn a_steam_rule_refuses_what_a_star_rule_refuses_and_debug_channels() -> TestRes
                 assert_eq!(set, rule, "{key}");
             }
             if key.kind() == KeyKind::List || key.kind() == KeyKind::Env {
-                let list = rule.clone().set_list(key, [] as [&str; 0]);
+                let list = rule.set_list(key, [] as [&str; 0]);
                 assert_eq!(list.is_ok(), !refused, "{key}: {list:?}");
             }
             // A rule that holds the setting cannot become a Steam rule
@@ -482,7 +482,7 @@ fn allowed_on_any_is_what_a_rule_for_every_process_takes() -> TestResult {
         }
         // `set`, `set_list` and `set_env` agree with it, with or without a
         // fingerprint on the `*` rule.
-        for any in [
+        for mut any in [
             Rule::new(Exe::Any),
             Rule::new(Exe::Any).with_company(Fingerprint::new("Acme")?),
         ] {
@@ -493,7 +493,7 @@ fn allowed_on_any_is_what_a_rule_for_every_process_takes() -> TestResult {
                 assert_eq!(set, refused, "{key}");
             }
             if key.kind() == KeyKind::List || key.kind() == KeyKind::Env {
-                let list = any.clone().set_list(key, [] as [&str; 0]);
+                let list = any.set_list(key, [] as [&str; 0]);
                 assert_eq!(list.is_ok(), key.allowed_on_any(), "{key}: {list:?}");
             }
             // A rule that holds the setting cannot become a `*` rule
