@@ -376,6 +376,18 @@ After a regression:
   cargo run -p conformance -- run d3d11 --leg x86_64 --only d3d11/test_create_device
   ```
 
+- Trace a key with `--winedebug <channels>`, which `run` takes and
+  `record` refuses. Every Wine process of the invocation gets the channels
+  as its `WINEDEBUG` instead of `-all`, and the traces go into the raw
+  logs: a test's into its log, the session's into `session.log`. A trace
+  slows a test and counts as output for the stall limit, so its result is
+  that of the traced test, and its state is never continued without the
+  option:
+
+  ```bash
+  cargo run -p conformance -- run ddraw --leg x86_64 --only ddraw7/test_coop_level_mode_set --winedebug +win,+event
+  ```
+
 - Record the suite again only once every regression is fixed or
   explained.
 

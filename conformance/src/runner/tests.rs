@@ -628,3 +628,32 @@ fn record_decides_the_same_with_resumed_passes() {
     assert_eq!(resumed.baseline.entries[&b], OK);
     assert_eq!(Conclusion::Record { unstable: 1 }.exit_code(), 1);
 }
+
+#[test]
+fn only_run_takes_debug_channels() {
+    assert_eq!(check_winedebug(Mode::Run, None), Ok(()));
+    assert_eq!(check_winedebug(Mode::Record, None), Ok(()));
+    assert_eq!(check_winedebug(Mode::Run, Some("+win,+event")), Ok(()));
+    assert_eq!(
+        check_winedebug(Mode::Record, Some("+win,+event")),
+        Err(String::from(
+            "record takes no --winedebug: a baseline is the result of the untraced tests"
+        ))
+    );
+    assert_eq!(
+        check_winedebug(Mode::Run, Some("")),
+        Err(String::from("--winedebug names no channel"))
+    );
+}
+
+#[test]
+fn a_traced_scope_differs_from_the_untraced_one() {
+    let config = config();
+    let plans = plan(&config, &suites(&["d3d8"]), None, None).unwrap();
+    let scope = plans[0].scope_text();
+    assert_eq!(traced_scope(scope.clone(), None), scope);
+    assert_eq!(
+        traced_scope(scope, Some("+win,+event")),
+        "legs=i386-windows only=all winedebug=+win,+event"
+    );
+}

@@ -54,6 +54,7 @@ fn the_caller_s_wine_and_graphics_variables_are_removed() {
         caller(&names),
         &PathBuf::from("/s/prefix"),
         &PathBuf::from("/s/work"),
+        None,
     );
     for name in removed {
         assert_ne!(value(&env, name), Some(OsStr::new("caller")), "{name}");
@@ -76,6 +77,7 @@ fn the_runner_s_settings_are_set_once() {
         caller(&["WINEPREFIX", "PATH"]),
         &PathBuf::from("/s/prefix"),
         &PathBuf::from("/s/work"),
+        None,
     );
     for (name, expected) in [
         ("WINEPREFIX", "/s/prefix"),
@@ -89,6 +91,71 @@ fn the_runner_s_settings_are_set_once() {
     }
     assert_eq!(value(&env, "WT_ONLY"), None);
     assert_eq!(env.len(), 7);
+}
+
+#[test]
+fn without_channels_the_environment_is_the_untraced_one() {
+    let env = wine_env(
+        caller(&["WINEDEBUG", "PATH", "HOME"]),
+        &PathBuf::from("/s/prefix"),
+        &PathBuf::from("/s/work"),
+        None,
+    );
+    let expected: Vec<(OsString, OsString)> = [
+        ("PATH", "caller"),
+        ("HOME", "caller"),
+        ("WINEPREFIX", "/s/prefix"),
+        ("WINEDLLOVERRIDES", "mscoree,mshtml="),
+        ("WINEDEBUG", "-all"),
+        ("WINETEST_NO_MT_D3D", "1"),
+        ("WINETEST_TIME", "1"),
+        ("VKD3D_SHADER_CACHE_PATH", "/s/work"),
+    ]
+    .iter()
+    .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+    .collect();
+    assert_eq!(env, expected);
+}
+
+#[test]
+fn channels_replace_only_the_value_of_winedebug() {
+    let caller_env = caller(&["WINEDEBUG", "PATH"]);
+    let prefix = PathBuf::from("/s/prefix");
+    let work = PathBuf::from("/s/work");
+    let untraced = wine_env(caller_env.clone(), &prefix, &work, None);
+    let traced = wine_env(caller_env, &prefix, &work, Some("+win,+event"));
+    assert_eq!(value(&traced, "WINEDEBUG"), Some(OsStr::new("+win,+event")));
+    let rest = |env: &[(OsString, OsString)]| -> Vec<(OsString, OsString)> {
+        env.iter()
+            .filter(|(name, _)| name != "WINEDEBUG")
+            .cloned()
+            .collect()
+    };
+    assert_eq!(rest(&traced), rest(&untraced));
+    assert_eq!(traced.len(), untraced.len());
+}
+
+#[test]
+fn channels_are_one_word() {
+    for channels in [
+        "+win",
+        "+win,+event,+macdrv",
+        "warn+all,-heap",
+        "+timestamp,+pid,+win",
+    ] {
+        assert_eq!(check_winedebug(channels), Ok(()), "{channels}");
+    }
+    assert_eq!(
+        check_winedebug(""),
+        Err(String::from("--winedebug names no channel"))
+    );
+    for channels in ["+win +event", "+win\n+event", "+win\t", "+win\u{7}"] {
+        let error = check_winedebug(channels).unwrap_err();
+        assert!(
+            error.ends_with("has white space or a control character"),
+            "{error}"
+        );
+    }
 }
 
 #[test]

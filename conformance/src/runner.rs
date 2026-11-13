@@ -83,6 +83,39 @@ pub struct Options {
     /// The directory of the baselines and the triage file.
     pub baselines: PathBuf,
     pub limits: Limits,
+    /// The `--winedebug` text: the `WINEDEBUG` of every Wine process, to
+    /// trace a test. `None` runs them with `-all`.
+    pub winedebug: Option<String>,
+}
+
+/// Check `--winedebug` for `mode`.
+///
+/// # Errors
+///
+/// Returns a message for `record` with channels, since a trace changes a
+/// test's timing and a baseline is the result of the untraced test, and for
+/// channels [`environment::check_winedebug`] refuses.
+pub fn check_winedebug(mode: Mode, winedebug: Option<&str>) -> Result<(), String> {
+    let Some(channels) = winedebug else {
+        return Ok(());
+    };
+    if matches!(mode, Mode::Record) {
+        return Err(String::from(
+            "record takes no --winedebug: a baseline is the result of the untraced tests",
+        ));
+    }
+    environment::check_winedebug(channels)
+}
+
+/// The resume scope of a plan whose scope text is `scope`: the same text
+/// without channels, so a traced invocation and an untraced one never
+/// continue each other's state.
+#[must_use]
+pub fn traced_scope(scope: String, winedebug: Option<&str>) -> String {
+    match winedebug {
+        None => scope,
+        Some(channels) => format!("{scope} winedebug={channels}"),
+    }
 }
 
 /// How a command ended when it got that far.
@@ -340,11 +373,13 @@ pub struct Prepared<'c> {
 ///
 /// # Errors
 ///
-/// Returns [`Failure::Setup`] for a bad selection, a bundle without tests,
-/// a missing baseline of `run`, a partial `record` on another build, a
-/// state directory that is not the runner's or is in use, and a wineserver
-/// of the bundle that serves another prefix.
+/// Returns [`Failure::Setup`] for a bad selection, a bad `--winedebug`
+/// ([`check_winedebug`]), a bundle without tests, a missing baseline of
+/// `run`, a partial `record` on another build, a state directory that is
+/// not the runner's or is in use, and a wineserver of the bundle that
+/// serves another prefix.
 pub fn prepare<'c>(config: &'c Config, options: &Options) -> Result<Prepared<'c>, Failure> {
+    check_winedebug(options.mode, options.winedebug.as_deref()).map_err(Failure::Setup)?;
     let plans = plan(
         config,
         &options.suites,
@@ -412,7 +447,11 @@ impl Prepared<'_> {
         let run_dir = state.runs().join(layout::run_id(SystemTime::now()));
         fs::create_dir_all(&run_dir).map_err(|e| setup_io(&run_dir, &e))?;
         println!("conformance: raw logs in {}", run_dir.display());
-        let env = environment::wine_env(caller_env, &state.prefix(), &state.work());
+        let winedebug = options.winedebug.as_deref();
+        if let Some(channels) = winedebug {
+            println!("conformance: WINEDEBUG={channels}: the traces are in the raw logs");
+        }
+        let env = environment::wine_env(caller_env, &state.prefix(), &state.work(), winedebug);
         let session = Session::start(
             &self.bundle,
             state,
@@ -425,6 +464,7 @@ impl Prepared<'_> {
             state,
             run_dir,
             env: &env,
+            winedebug,
             limits: options.limits,
             session,
             stop,
@@ -490,6 +530,8 @@ struct Runner<'a> {
     state: &'a State,
     run_dir: PathBuf,
     env: &'a [(OsString, OsString)],
+    /// The channels of `--winedebug`, part of the resume scope.
+    winedebug: Option<&'a str>,
     limits: Limits,
     session: Session<'a>,
     stop: &'a AtomicBool,
@@ -584,7 +626,7 @@ impl Runner<'_> {
                     exe: exe.clone(),
                     leg,
                     digest,
-                    scope: plan.scope_text(),
+                    scope: traced_scope(plan.scope_text(), self.winedebug),
                     header: header.clone(),
                 };
                 let dir = self.state.resume();

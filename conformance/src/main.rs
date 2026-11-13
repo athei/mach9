@@ -168,6 +168,10 @@ struct RunArgs {
     #[arg(long, value_name = "SECONDS", default_value_t = 900,
           value_parser = clap::value_parser!(u64).range(1..))]
     time_limit: u64,
+    /// `run` only: the WINEDEBUG of every Wine process, such as
+    /// `+win,+event`, to trace a test. The traces go into the raw logs.
+    #[arg(long, value_name = "CHANNELS")]
+    winedebug: Option<String>,
 }
 
 /// A leg as the command line spells it.
@@ -285,6 +289,7 @@ fn run(config: &Config, mode: Mode, args: RunArgs) -> ExitCode {
             idle: Duration::from_secs(args.idle_limit),
             total: Duration::from_secs(args.time_limit),
         },
+        winedebug: args.winedebug,
     };
     // Read before the runner becomes an application, which may set
     // variables of its own.

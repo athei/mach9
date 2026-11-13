@@ -20,12 +20,35 @@ pub const SCRUBBED: [&str; 17] = [
     "GALLIUM_", "LIBGL_", "EGL_", "MVK_", "NIR_", "DYLD_",
 ];
 
+/// Check the channels of `--winedebug`, a `WINEDEBUG` value such as
+/// `+win,+event`.
+///
+/// # Errors
+///
+/// Returns a message for an empty text and for one with white space or a
+/// control character, which the resume file's scope line cannot hold.
+pub fn check_winedebug(channels: &str) -> Result<(), String> {
+    if channels.is_empty() {
+        return Err(String::from("--winedebug names no channel"));
+    }
+    if channels
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(format!(
+            "--winedebug {channels:?} has white space or a control character"
+        ));
+    }
+    Ok(())
+}
+
 /// The caller's variables without the [`SCRUBBED`] ones, then:
 ///
 /// - `WINEPREFIX` the runner's `prefix`;
 /// - `WINEDLLOVERRIDES=mscoree,mshtml=`, so no Mono or Gecko installer
 ///   opens a dialog;
-/// - `WINEDEBUG=-all`;
+/// - `WINEDEBUG=-all`, or the channels of `winedebug` ([`check_winedebug`]),
+///   whose traces then go where the process's output goes;
 /// - `WINETEST_NO_MT_D3D=1`, which runs the queued tests of the d3d units
 ///   one after another instead of on several threads at once;
 /// - `WINETEST_TIME=1`, which puts the elapsed time on every check line;
@@ -40,6 +63,7 @@ pub fn wine_env(
     caller: impl IntoIterator<Item = (OsString, OsString)>,
     prefix: &Path,
     work: &Path,
+    winedebug: Option<&str>,
 ) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> = caller
         .into_iter()
@@ -48,7 +72,7 @@ pub fn wine_env(
     for (name, value) in [
         ("WINEPREFIX", prefix.as_os_str()),
         ("WINEDLLOVERRIDES", OsStr::new("mscoree,mshtml=")),
-        ("WINEDEBUG", OsStr::new("-all")),
+        ("WINEDEBUG", OsStr::new(winedebug.unwrap_or("-all"))),
         ("WINETEST_NO_MT_D3D", OsStr::new("1")),
         ("WINETEST_TIME", OsStr::new("1")),
         ("VKD3D_SHADER_CACHE_PATH", work.as_os_str()),
