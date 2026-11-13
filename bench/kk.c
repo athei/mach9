@@ -29,6 +29,7 @@
  * | draw-indexed-count | robustness off, robustBufferAccess, robustBufferAccess2; maxDrawCount 4096 and 32 | CALLS vkCmdDrawIndexedIndirectCount of COUNT one-triangle draws, 16-bit indices at offset 0 |
  * | draw-indexed-count-unroll | robustness off, robustBufferAccess2, the pipelineRobustness feature; maxDrawCount 4096 and 32 | the same with the index buffer bound at offset 2, which the last two arms unroll |
  * | draw-count | robustness off; maxDrawCount 4096 and 32 | CALLS vkCmdDrawIndirectCount, the same counts |
+ * | draw-indexed-count-mixed | robustBufferAccess2; maxDrawCount 4096 and 32 | the calls of draw-indexed-count and of draw-indexed-count-unroll in turn, in one command buffer: the index buffer bound at offset 0 for every other call and at offset 2 for the rest |
  * | dispatch-loads | robustness off, robustBufferAccess, robustBufferAccess2 | DISPATCHES single-workgroup dispatches of 32 threads, LOAD_ITERATIONS iterations of one storage and one uniform buffer load each |
  * | dispatch-loads-wide | the same | the same with four storage and two uniform buffer loads per iteration, each from a buffer of its own |
  * | barrier-chain | barriers on, off | CHAIN_LENGTH single-workgroup dispatches, with a compute-to-compute vkCmdPipelineBarrier2 between each or none |
@@ -46,6 +47,10 @@
  *   arm and draw-indexed-count-unroll carries the cost; on macOS 26 both
  *   cases unroll under those two arms. robustBufferAccess alone never
  *   unrolls.
+ * - draw-indexed-count-mixed shows whether the paths the driver takes for
+ *   the two kinds of call cost each other anything in one command buffer:
+ *   without that, it reads the mean of the robustBufferAccess2 arms of the
+ *   two cases it alternates.
  * - The timestamps are written outside render passes: in a render encoder
  *   KosmicKrisp hands a second timestamp of the same stage the first one's
  *   value. Outside one, it writes each after a one-thread dispatch of its own
@@ -249,6 +254,9 @@ struct arm
     enum robustness robustness;
     uint32_t max_draws;
     uint32_t index_offset;
+    /* draw-indexed-count-mixed: every second call binds the index buffer at
+     * index_offset, the others at 0. */
+    bool mixed;
     bool barriers;
     /* dispatch-loads-wide: loads_wide.comp instead of loads.comp. */
     bool wide;
@@ -272,6 +280,9 @@ struct arm
 #define DRAW(case_name, draw_kind, robust, max, offset)                                            \
     { .name = case_name, .kind = draw_kind, .robustness = robust, .max_draws = max,                \
       .index_offset = offset }
+#define MIXED(max)                                                                                 \
+    { .name = "draw-indexed-count-mixed", .kind = KIND_INDEXED, .robustness = ROBUST_RBA2,         \
+      .max_draws = max, .index_offset = 2, .mixed = true }
 #define LOADS(case_name, robust, is_wide)                                                          \
     { .name = case_name, .kind = KIND_LOADS, .robustness = robust, .wide = is_wide }
 #define CHAIN(on) { .name = "barrier-chain", .kind = KIND_CHAIN, .barriers = on }
@@ -291,6 +302,8 @@ static struct arm arms[] = {
     DRAW("draw-indexed-count-unroll", KIND_INDEXED, ROBUST_PIPELINE, COUNT, 2),
     DRAW("draw-count", KIND_NONINDEXED, ROBUST_OFF, MAX_DRAWS, 0),
     DRAW("draw-count", KIND_NONINDEXED, ROBUST_OFF, COUNT, 0),
+    MIXED(MAX_DRAWS),
+    MIXED(COUNT),
     LOADS("dispatch-loads", ROBUST_OFF, false),
     LOADS("dispatch-loads", ROBUST_RBA, false),
     LOADS("dispatch-loads", ROBUST_RBA2, false),
@@ -333,9 +346,9 @@ static void settings(const struct arm *arm, char *out, size_t size)
     switch (arm->kind)
     {
     case KIND_INDEXED:
-        snprintf(out, size, "robustness=%s calls=%u max=%u count=%u index=u16+%u",
+        snprintf(out, size, "robustness=%s calls=%u max=%u count=%u index=u16+%s%u",
                  robustness_names[arm->robustness], CALLS, arm->max_draws, COUNT,
-                 arm->index_offset);
+                 arm->mixed ? "0/" : "", arm->index_offset);
         break;
     case KIND_NONINDEXED:
         snprintf(out, size, "robustness=%s calls=%u max=%u count=%u",
@@ -783,7 +796,8 @@ static bool setup_draw(struct arm *arm)
     /* A triangle that covers the whole target, so each draw of the check
      * counts TARGET_SIZE * TARGET_SIZE fragments. */
     static const float vertices[] = { -1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f };
-    /* Indices 0, 1, 2 at byte offset 0 and at byte offset 2. */
+    /* Indices 0, 1, 2 at byte offset 0 and at byte offset 2. A mixed arm
+     * reads the first at both offsets: 0, 1, 2 and 1, 2, 0. */
     static const uint16_t aligned[] = { 0, 1, 2, 0 };
     static const uint16_t unaligned[] = { 0, 0, 1, 2 };
     const uint32_t count = COUNT;
@@ -801,7 +815,7 @@ static bool setup_draw(struct arm *arm)
         !create_buffer(dev, sizeof(vertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertices,
                        &arm->vertices) ||
         !create_buffer(dev, sizeof(aligned), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                       arm->index_offset ? unaligned : aligned, &arm->indices) ||
+                       arm->index_offset && !arm->mixed ? unaligned : aligned, &arm->indices) ||
         !create_buffer(dev, sizeof(count), VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, &count,
                        &arm->count) ||
         !create_buffer(dev, (VkDeviceSize)stride * arm->max_draws,
@@ -905,6 +919,9 @@ static void record_draws(struct arm *arm, VkCommandBuffer cmd, bool check)
         vkCmdBindIndexBuffer(cmd, arm->indices.buffer, arm->index_offset, VK_INDEX_TYPE_UINT16);
     for (i = 0; i < CALLS; i++)
     {
+        if (arm->mixed)
+            vkCmdBindIndexBuffer(cmd, arm->indices.buffer, i % 2 ? arm->index_offset : 0,
+                                 VK_INDEX_TYPE_UINT16);
         if (arm->kind == KIND_INDEXED)
             vkCmdDrawIndexedIndirectCount(cmd, arm->indirect.buffer, 0, arm->count.buffer, 0,
                                           arm->max_draws, sizeof(VkDrawIndexedIndirectCommand));
