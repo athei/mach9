@@ -1,10 +1,10 @@
 # Conformance baseline of d3d11_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record d3d11`: do not edit.
-# wine: wine-11.21-42-gb9387db4d4b
-# component: dxmt=4ee2e4747cc4785bd822e7d3c818f5a8d0731d42
-# component: fex=af091aeea4fd04496c5729c9855f5324d48bce21
-# component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
-# component: vkd3d-proton=364e47ac08c538e454edecde60014eb02365156b
+# wine: wine-11.21-42-gf93e7ca0ff0
+# component: dxmt=7429bb9e6de678aada18065bcae534bb72ab1d85
+# component: fex=83f8be25aa270c263600bcda6e89232c2284441a
+# component: mesa=689c916008cf608744f2d01e93cf8aa55103931e
+# component: vkd3d-proton=c5e2c9b8c55872893e3ba47d60448dd4f35185ef
 # component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
 
 [i386-windows d3d11]
@@ -58,7 +58,7 @@ test_deferred_context_queries fail failed=9 sites=9 todo_succeeded=0 skipped=0
 test_deferred_context_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_swap_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_depth_bias fail failed=205 sites=3 todo_succeeded=1 skipped=0
+test_depth_bias fail failed=30 sites=2 todo_succeeded=1 skipped=0
 test_depth_clip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_stencil_sampling fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_depthstencil_view_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -227,7 +227,7 @@ test_deferred_context_queries fail failed=9 sites=9 todo_succeeded=0 skipped=0
 test_deferred_context_rendering ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_deferred_context_swap_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_depth_bias fail failed=205 sites=3 todo_succeeded=1 skipped=0
+test_depth_bias fail failed=30 sites=2 todo_succeeded=1 skipped=0
 test_depth_clip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_depth_stencil_sampling fail failed=1 sites=1 todo_succeeded=0 skipped=0
 test_depthstencil_view_interfaces ok failed=0 sites=0 todo_succeeded=0 skipped=0
