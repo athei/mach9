@@ -11,10 +11,10 @@
 #
 # A unit test fails on a line whose test no baseline here has.
 
-ddraw/ddraw1/test_coop_level_mode_set issue=101 flaky  # three checks fail only when the Wine process becomes the active application
-ddraw/ddraw2/test_coop_level_mode_set issue=101 flaky  # three checks fail only when the Wine process becomes the active application; the full screen rect line is #113
-ddraw/ddraw4/test_coop_level_mode_set issue=101 flaky  # three checks fail only when the Wine process becomes the active application; the full screen rect line is #113
-ddraw/ddraw7/test_coop_level_mode_set issue=101 flaky  # three checks fail only when the Wine process becomes the active application; the full screen rect line is #113
+ddraw/ddraw1/test_coop_level_mode_set issue=119  # three checks fail with the test process active
+ddraw/ddraw2/test_coop_level_mode_set issue=119  # three checks fail with the test process active; the full screen rect line is #113
+ddraw/ddraw4/test_coop_level_mode_set issue=119  # three checks fail with the test process active; the full screen rect line is #113
+ddraw/ddraw7/test_coop_level_mode_set issue=119  # three checks fail with the test process active; the full screen rect line is #113
 
 d3d10core/d3d10core/test_depth_bias issue=77  # D16 lines are #80
 d3d10core/d3d10core/test_index_buffer_offset issue=74  # conjecture: appends of later draws lost

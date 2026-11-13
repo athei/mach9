@@ -272,13 +272,20 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   [`session.rs`](../conformance/src/session.rs)). Record baselines on a
   Retina display. The runner refuses to start while a wineserver of the
   same bundle runs.
-- Each test process has to become the active application, and macOS does
-  not activate it while another application is active. Start a run from
-  the frontmost terminal with the screen unlocked, and leave the keyboard
-  and mouse alone until it ends. A test process that stays in the
-  background gets no activation or focus events, which the ddraw
-  `test_coop_level_mode_set` tests depend on: the triage file marks them
-  `flaky`.
+- Each test process has to become the active application: one that stays
+  in the background gets no activation or focus events, which the ddraw
+  `test_coop_level_mode_set` tests depend on. macOS does not activate a
+  process while another application is active, so `run` and `record` make
+  the runner a regular application that takes the activation when it
+  starts, hands it to each Wine process of its prefix that asks for it,
+  and takes it back from any other application in between
+  ([`activation.rs`](../conformance/src/activation.rs)). The line before
+  the result counts both. Leave the keyboard and mouse alone until
+  the run ends.
+- `run` and `record` refuse to start on a locked screen, where no process
+  becomes active (`IOConsoleLocked` of `ioreg -n Root -d1`). They check
+  the selection, the bundle, the baselines, the triage file, the state
+  directory and the running wineservers before they take the activation.
 - Every process gets the caller's environment without the variables that
   change Wine, the libraries it loads, its graphics stack or the test
   framework (`SCRUBBED` in
@@ -303,9 +310,20 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   - `record` writes the baselines and `baseline-raw/` once every suite of
     the invocation is done.
 - Interrupts:
-  - Ctrl-C, `SIGTERM` or `SIGHUP` ends the prefix's Wine processes and
+  - `SIGINT`, `SIGTERM` or `SIGHUP` ends the prefix's Wine processes and
     exits with 130; a second signal ends the runner at once, and the next
     invocation ends what is left.
+  - The terminal the run was started from is not the active application
+    during the run, so a Ctrl-C typed there does not arrive. Choose Quit
+    in the Dock menu of the runner's icon, or send `kill -INT <pid>` from
+    a shell that does not need the keyboard of this Mac, such as an SSH
+    session; the first output line names the pid. The runner also takes a
+    Ctrl-C or Command-Q key event that reaches it as a stop request, but a
+    key press during a run does not reach it reliably.
+  - A Quit, Ctrl-C or Command-Q ends the run as the first signal does,
+    but leaves the signal handling as it was: another Quit changes
+    nothing, and the next signal still counts as the first, so only the
+    signal after that ends the runner at once.
   - The same command continues where it stopped, unless the test
     executable, `VERSION` or `COMPONENTS` changed
     ([`resume.rs`](../conformance/src/resume.rs)).
@@ -324,7 +342,7 @@ cargo run -p conformance -- record d3d11     # write the baselines again
 | Stale baseline | `run`: a key got better or is new: record the suite | 1 |
 | Unstable | `run`: a changed key gave its baseline's result the second time. `record`: a key gave two results and is written with the higher status and the larger of each count | 1 |
 | Error | Bad arguments, no baseline, or a bundle, state directory or implementation the runner cannot use | 2 |
-| Interrupted | Stopped by a signal | 130 |
+| Interrupted | Stopped by a signal, or for `run` and `record` by a quit request or a stop key | 130 |
 
 - The last line of the output names the result. What counts as worse or
   better, and what is only listed as `flaky` or `info`, is in
@@ -337,7 +355,7 @@ cargo run -p conformance -- record d3d11     # write the baselines again
 
 After a regression:
 
-- The first line of the output names the invocation's log directory. A
+- The second line of the output names the invocation's log directory. A
   test's log in it is `<leg>/<suite>/<unit>/<key>.log` (`whole.log` for a
   whole unit), with every run of the key and how each ended; a stall also
   leaves a sample beside it. A resumed test's log is in the directory of

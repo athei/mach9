@@ -9,6 +9,7 @@ use std::{
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use conformance::{
+    activation::Host,
     baseline,
     deqp::{self, groups::Groups},
     exec::Limits,
@@ -285,12 +286,25 @@ fn run(config: &Config, mode: Mode, args: RunArgs) -> ExitCode {
             total: Duration::from_secs(args.time_limit),
         },
     };
-    finish(runner::execute(
-        config,
-        &options,
-        std::env::vars_os().collect(),
-        &interrupt::REQUESTED,
-    ))
+    // Read before the runner becomes an application, which may set
+    // variables of its own.
+    let caller_env: Vec<_> = std::env::vars_os().collect();
+    // Everything that needs no session is checked before the runner takes
+    // the activation, so a run that cannot start takes none, and none from
+    // a run already in progress.
+    let started = runner::prepare(config, &options).and_then(|prepared| {
+        let host = Host::start(
+            &prepared.bundle.dir,
+            &prepared.state.prefix(),
+            &interrupt::REQUESTED,
+        )?;
+        Ok((prepared, host))
+    });
+    let (prepared, host) = match started {
+        Ok(started) => started,
+        Err(failure) => return finish(Err(failure)),
+    };
+    finish(host.serve(move || prepared.run(&options, caller_env, &interrupt::REQUESTED)))
 }
 
 /// `wine-macros`.

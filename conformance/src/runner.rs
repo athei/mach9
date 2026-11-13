@@ -59,7 +59,7 @@ use crate::{
     output::{self, Ending},
     record::{self, RecordError},
     resume::{Identity, Mode, Pass, Record, Resume},
-    session::{Failure, Session},
+    session::{self, Failure, Session},
     triage::Triage,
 };
 
@@ -323,23 +323,28 @@ pub fn check_expect(expect: &Expect, output: &str, exe_file: &str) -> Result<(),
     Ok(())
 }
 
-/// Run `options` over `config`: check the inputs, start the session, run
-/// or record each executable, end the session.
+/// What [`prepare`] checked and claimed: everything [`Prepared::run`]
+/// needs before it starts the session.
+pub struct Prepared<'c> {
+    plans: Vec<Plan<'c>>,
+    pub bundle: Bundle,
+    header: Header,
+    triage: Triage,
+    olds: Vec<Option<Baseline>>,
+    /// The state directory, locked until the run ends.
+    pub state: State,
+}
+
+/// Check the inputs of `options` over `config` and claim the state
+/// directory, all of which needs no Wine session.
 ///
 /// # Errors
 ///
 /// Returns [`Failure::Setup`] for a bad selection, a bundle without tests,
 /// a missing baseline of `run`, a partial `record` on another build, a
-/// state directory that is not the runner's or is in use, a wineserver of
-/// the bundle that runs already, a failed session step, an untrustworthy
-/// listing, an executable on the wrong implementation and an I/O error,
-/// and [`Failure::Interrupted`] once `stop` is set.
-pub fn execute(
-    config: &Config,
-    options: &Options,
-    caller_env: Vec<(OsString, OsString)>,
-    stop: &AtomicBool,
-) -> Result<Conclusion, Failure> {
+/// state directory that is not the runner's or is in use, and a wineserver
+/// of the bundle that serves another prefix.
+pub fn prepare<'c>(config: &'c Config, options: &Options) -> Result<Prepared<'c>, Failure> {
     let plans = plan(
         config,
         &options.suites,
@@ -376,48 +381,88 @@ pub fn execute(
         olds.push(old);
     }
     let state = State::claim(&options.state).map_err(Failure::Setup)?;
-    let run_dir = state.runs().join(layout::run_id(SystemTime::now()));
-    fs::create_dir_all(&run_dir).map_err(|e| setup_io(&run_dir, &e))?;
-    println!("conformance: raw logs in {}", run_dir.display());
-    let env = environment::wine_env(caller_env, &state.prefix(), &state.work());
-    let session = Session::start(&bundle, &state, &env, &run_dir.join("session.log"), stop)?;
-    let mut runner = Runner {
-        bundle: &bundle,
-        state: &state,
-        run_dir,
-        env: &env,
-        limits: options.limits,
-        session,
-        stop,
-        timings: Vec::new(),
-        resumed: 0,
-        started: Instant::now(),
-        finished: Vec::new(),
-        pending: Vec::new(),
-    };
-    let mut conclusion = match options.mode {
-        Mode::Run => Conclusion::Run(Verdict::Match),
-        Mode::Record => Conclusion::Record { unstable: 0 },
-    };
-    for (plan, old) in plans.iter().zip(&olds) {
-        conclusion = match (conclusion, old) {
-            (Conclusion::Run(verdict), Some(baseline)) => {
-                Conclusion::Run(verdict.max(runner.run_exe(plan, &header, baseline, &triage)?))
-            }
-            (Conclusion::Record { unstable }, old) => Conclusion::Record {
-                unstable: unstable
-                    + runner.record_exe(plan, &header, old.as_ref(), &options.baselines)?,
-            },
-            (Conclusion::Run(_), None) => {
-                return Err(Failure::Setup(format!("no baseline of {}", plan.exe.name)));
-            }
+    session::check_servers(&bundle, &state.prefix())?;
+    Ok(Prepared {
+        plans,
+        bundle,
+        header,
+        triage,
+        olds,
+        state,
+    })
+}
+
+impl Prepared<'_> {
+    /// Run what [`prepare`] checked: start the session, run or record each
+    /// executable, end the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Failure::Setup`] for a wineserver of the bundle that runs
+    /// by now, a failed session step, an untrustworthy listing, an
+    /// executable on the wrong implementation and an I/O error, and
+    /// [`Failure::Interrupted`] once `stop` is set.
+    pub fn run(
+        &self,
+        options: &Options,
+        caller_env: Vec<(OsString, OsString)>,
+        stop: &AtomicBool,
+    ) -> Result<Conclusion, Failure> {
+        let state = &self.state;
+        let run_dir = state.runs().join(layout::run_id(SystemTime::now()));
+        fs::create_dir_all(&run_dir).map_err(|e| setup_io(&run_dir, &e))?;
+        println!("conformance: raw logs in {}", run_dir.display());
+        let env = environment::wine_env(caller_env, &state.prefix(), &state.work());
+        let session = Session::start(
+            &self.bundle,
+            state,
+            &env,
+            &run_dir.join("session.log"),
+            stop,
+        )?;
+        let mut runner = Runner {
+            bundle: &self.bundle,
+            state,
+            run_dir,
+            env: &env,
+            limits: options.limits,
+            session,
+            stop,
+            timings: Vec::new(),
+            resumed: 0,
+            started: Instant::now(),
+            finished: Vec::new(),
+            pending: Vec::new(),
         };
+        let mut conclusion = match options.mode {
+            Mode::Run => Conclusion::Run(Verdict::Match),
+            Mode::Record => Conclusion::Record { unstable: 0 },
+        };
+        for (plan, old) in self.plans.iter().zip(&self.olds) {
+            conclusion = match (conclusion, old) {
+                (Conclusion::Run(verdict), Some(baseline)) => Conclusion::Run(
+                    verdict.max(runner.run_exe(plan, &self.header, baseline, &self.triage)?),
+                ),
+                (Conclusion::Record { unstable }, old) => Conclusion::Record {
+                    unstable: unstable
+                        + runner.record_exe(
+                            plan,
+                            &self.header,
+                            old.as_ref(),
+                            &options.baselines,
+                        )?,
+                },
+                (Conclusion::Run(_), None) => {
+                    return Err(Failure::Setup(format!("no baseline of {}", plan.exe.name)));
+                }
+            };
+        }
+        runner.session.end().map_err(Failure::Setup)?;
+        let finished = std::mem::take(&mut runner.finished);
+        finalize(state, &runner.run_dir, &runner.pending, finished)?;
+        print!("{}", runner.totals());
+        Ok(conclusion)
     }
-    runner.session.end().map_err(Failure::Setup)?;
-    let finished = std::mem::take(&mut runner.finished);
-    finalize(&state, &runner.run_dir, &runner.pending, finished)?;
-    print!("{}", runner.totals());
-    Ok(conclusion)
 }
 
 /// `<baselines>/<exe>.txt`.

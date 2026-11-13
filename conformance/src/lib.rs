@@ -16,7 +16,9 @@
 //! the bundle and its state directory ([`layout`]), runs each process tree
 //! under a watchdog ([`exec`]) with the scrubbed environment of
 //! [`environment`] in one Wine session of a fresh prefix ([`session`],
-//! [`procs`]), and stops cleanly on a signal ([`interrupt`]).
+//! [`procs`]), and stops cleanly on a signal ([`interrupt`]). The command
+//! line runs it beside [`activation`], which hands the activation to each
+//! test process.
 //!
 //! [`deqp`] is the deqp-vk suite: cases of Khronos' Vulkan CTS that
 //! `deqp-vk.toml` selects, run on KosmicKrisp without Wine.
@@ -24,6 +26,7 @@
 //! [`Outcome`]: outcome::Outcome
 //! [`TestId`]: outcome::TestId
 
+pub mod activation;
 pub mod baseline;
 pub mod compatdb_log;
 pub mod deqp;

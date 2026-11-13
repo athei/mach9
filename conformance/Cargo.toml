@@ -10,6 +10,9 @@ description = "Runs Wine's graphics conformance tests against the bundle, one te
 clap = { version = "4.5", features = ["derive"] }
 compatdb-core = { workspace = true }
 nix = { version = "0.31", default-features = false, features = ["poll", "process", "signal"] }
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = ["std", "libc", "NSApplication", "NSEvent", "NSResponder", "NSRunningApplication", "NSWorkspace"] }
+objc2-foundation = { workspace = true, features = ["std", "NSDate", "NSDictionary", "NSDistributedNotificationCenter", "NSNotification", "NSObjCRuntime", "NSObject", "NSRunLoop", "NSString", "NSURL", "NSValue"] }
 toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 
 [lints]

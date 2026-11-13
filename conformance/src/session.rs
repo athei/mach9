@@ -163,7 +163,7 @@ impl<'a> Session<'a> {
             live: false,
         };
         layout::fresh_dir(&session.work, WORK_TREE).map_err(Failure::Setup)?;
-        session.check_servers()?;
+        session.end_leftover_server()?;
         layout::fresh_dir(&session.prefix, PREFIX_TREE).map_err(Failure::Setup)?;
         session.live = true;
         session.step(
@@ -243,34 +243,8 @@ impl<'a> Session<'a> {
     /// Refuse a wineserver of the bundle that serves another prefix, and
     /// end one that serves the runner's prefix, left by an invocation that
     /// did not end it.
-    fn check_servers(&self) -> Result<(), Failure> {
-        let pids = procs::pids_of(&self.bundle.wineserver).map_err(Failure::Setup)?;
-        if pids.is_empty() {
-            return Ok(());
-        }
-        let ours = self
-            .prefix
-            .join(TREE_MARKER)
-            .is_file()
-            .then(|| procs::server_dir_name(&self.prefix).ok())
-            .flatten();
-        let mut leftover = false;
-        for &pid in &pids {
-            if ours.as_deref().is_some_and(|dir| procs::serves(pid, dir)) {
-                leftover = true;
-                continue;
-            }
-            let serving = procs::cwd_of(pid).map_or_else(
-                || String::from("an unknown prefix"),
-                |dir| dir.display().to_string(),
-            );
-            return Err(Failure::Setup(format!(
-                "a wineserver of {} runs (pid {pid}, in {serving}); end what runs in that \
-                 prefix first, the tests share the display and the GPU with it",
-                self.bundle.dir.display()
-            )));
-        }
-        if leftover {
+    fn end_leftover_server(&self) -> Result<(), Failure> {
+        if check_servers(self.bundle, &self.prefix)? {
             println!(
                 "conformance: ending the wineserver a previous run left in {}",
                 self.prefix.display()
@@ -324,6 +298,46 @@ impl<'a> Session<'a> {
             ))),
         }
     }
+}
+
+/// Refuse a wineserver of `bundle` that serves another prefix than
+/// `prefix`.
+///
+/// Such a server would share the display and the GPU with the tests.
+/// Returns whether one serves `prefix`, left by an invocation that did not
+/// end it.
+///
+/// # Errors
+///
+/// Returns [`Failure::Setup`] for a server of another prefix, and when the
+/// servers cannot be listed.
+pub fn check_servers(bundle: &Bundle, prefix: &Path) -> Result<bool, Failure> {
+    let pids = procs::pids_of(&bundle.wineserver).map_err(Failure::Setup)?;
+    if pids.is_empty() {
+        return Ok(false);
+    }
+    let ours = prefix
+        .join(TREE_MARKER)
+        .is_file()
+        .then(|| procs::server_dir_name(prefix).ok())
+        .flatten();
+    let mut leftover = false;
+    for &pid in &pids {
+        if ours.as_deref().is_some_and(|dir| procs::serves(pid, dir)) {
+            leftover = true;
+            continue;
+        }
+        let serving = procs::cwd_of(pid).map_or_else(
+            || String::from("an unknown prefix"),
+            |dir| dir.display().to_string(),
+        );
+        return Err(Failure::Setup(format!(
+            "a wineserver of {} runs (pid {pid}, in {serving}); end what runs in that prefix \
+             first, the tests share the display and the GPU with it",
+            bundle.dir.display()
+        )));
+    }
+    Ok(leftover)
 }
 
 impl Drop for Session<'_> {
