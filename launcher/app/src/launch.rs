@@ -56,7 +56,7 @@ pub fn exec_direct(
     env::set_current_dir(game_dir)?;
     let argv_c = build_argv(wine_bin, exe_arg, arguments)?;
     let argv = argv_refs(&argv_c);
-    Ok(execv(argv[0], &argv)?)
+    execv(argv[0], &argv).map_err(io::Error::from)
 }
 
 /// Replace this process with wine, with a pty as its stdin, stdout and
@@ -129,7 +129,7 @@ pub fn exec_via_pty(
     // SAFETY: this process does not use the descriptor again; the child has
     // its own copy.
     unsafe { libc::close(log_fd) };
-    Ok(execv(argv[0], &argv)?)
+    execv(argv[0], &argv).map_err(io::Error::from)
 }
 
 /// The command line of `exe`, this executable, in its `--log-pump` mode, for
