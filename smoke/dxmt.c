@@ -13,6 +13,19 @@
  *   keeps the state alive. The installed state is then the only holder.
  * - deferred: a deferred context the program releases after the device
  *   keeps the device alive and is destroyed before it.
+ * - depth-bias: draws on a D24_UNORM_S8_UINT target, which DXMT stores in a
+ *   float format, get the constant depth bias Direct3D gives a 24-bit
+ *   buffer, DepthBias / (2^24 - 1), at a depth of 0.25, where Metal's own
+ *   bias for a float buffer is half of it. Each check clears depth to 1 and
+ *   the color to 0, draws a quad and reads back one pixel's depth and
+ *   color: with a pixel shader at a DepthBias of +1000 and -1000, both in
+ *   one render pass (the second draw switches DXMT's pipeline and bias, and
+ *   under LESS its depth is the one left), with DepthBias 1000 and
+ *   SlopeScaledDepthBias -2 on a sloped quad, the sloped quad without a
+ *   pixel shader, and through a geometry shader (DXMT's mesh pipeline). The
+ *   depth must be within 1 unit of 24 bits of the expected one, 3 with a
+ *   slope term, the color the pixel shader's red, and without a pixel
+ *   shader the cleared 0.
  *
  * The two lifetime cases watch destruction through a tracker object attached
  * with SetPrivateDataInterface: the object holds the tracker's only
@@ -66,6 +79,70 @@ static const D3D11_INPUT_ELEMENT_DESC layout_desc[] = {
 
 static const D3D11_SO_DECLARATION_ENTRY so_decl[] = {
     {0, "POSITION", 0, 0, 4, 0},
+};
+
+/* The default vertex shader of Wine's d3d11 draw_quad: POSITION as
+   SV_POSITION. */
+static const DWORD quad_vs_code[] = {
+    0x43425844, 0x4fb19b86, 0x955fa240, 0x1a630688, 0x24eb9db4, 0x00000001, 0x000001e0, 0x00000006,
+    0x00000038, 0x00000084, 0x000000d0, 0x00000134, 0x00000178, 0x000001ac, 0x53414e58, 0x00000044,
+    0x00000044, 0xfffe0200, 0x00000020, 0x00000024, 0x00240000, 0x00240000, 0x00240000, 0x00240000,
+    0x00240000, 0xfffe0200, 0x0200001f, 0x80000005, 0x900f0000, 0x02000001, 0xc00f0000, 0x80e40000,
+    0x0000ffff, 0x50414e58, 0x00000044, 0x00000044, 0xfffe0200, 0x00000020, 0x00000024, 0x00240000,
+    0x00240000, 0x00240000, 0x00240000, 0x00240000, 0xfffe0200, 0x0200001f, 0x80000005, 0x900f0000,
+    0x02000001, 0xc00f0000, 0x80e40000, 0x0000ffff, 0x396e6f41, 0x0000005c, 0x0000005c, 0xfffe0200,
+    0x00000034, 0x00000028, 0x00240000, 0x00240000, 0x00240000, 0x00240000, 0x00240001, 0x00000000,
+    0xfffe0200, 0x0200001f, 0x80000005, 0x900f0000, 0x04000004, 0xc0030000, 0x90ff0000, 0xa0e40000,
+    0x90e40000, 0x02000001, 0xc00c0000, 0x90e40000, 0x0000ffff, 0x52444853, 0x0000003c, 0x00010040,
+    0x0000000f, 0x0300005f, 0x001010f2, 0x00000000, 0x04000067, 0x001020f2, 0x00000000, 0x00000001,
+    0x05000036, 0x001020f2, 0x00000000, 0x00101e46, 0x00000000, 0x0100003e, 0x4e475349, 0x0000002c,
+    0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000000, 0x00000003, 0x00000000, 0x00000f0f,
+    0x49534f50, 0x4e4f4954, 0xababab00, 0x4e47534f, 0x0000002c, 0x00000001, 0x00000008, 0x00000020,
+    0x00000000, 0x00000001, 0x00000003, 0x00000000, 0x0000000f, 0x505f5653, 0x5449534f, 0x004e4f49,
+};
+
+/* A pixel shader of Wine's d3d11 tests: float4(1.0f, 0.0f, 0.0f, 0.5f). */
+static const DWORD red_ps_code[] = {
+    0x43425844, 0xb70eda74, 0xc9a7f982, 0xebc31bbf, 0x952a1360, 0x00000001, 0x00000168, 0x00000005,
+    0x00000034, 0x0000008c, 0x000000e4, 0x00000124, 0x00000134, 0x53414e58, 0x00000050, 0x00000050,
+    0xffff0200, 0x0000002c, 0x00000024, 0x00240000, 0x00240000, 0x00240000, 0x00240000, 0x00240000,
+    0xffff0200, 0x05000051, 0xa00f0000, 0x3f800000, 0x00000000, 0x00000000, 0x3f000000, 0x02000001,
+    0x800f0800, 0xa0e40000, 0x0000ffff, 0x396e6f41, 0x00000050, 0x00000050, 0xffff0200, 0x0000002c,
+    0x00000024, 0x00240000, 0x00240000, 0x00240000, 0x00240000, 0x00240000, 0xffff0200, 0x05000051,
+    0xa00f0000, 0x3f800000, 0x00000000, 0x00000000, 0x3f000000, 0x02000001, 0x800f0800, 0xa0e40000,
+    0x0000ffff, 0x52444853, 0x00000038, 0x00000040, 0x0000000e, 0x03000065, 0x001020f2, 0x00000000,
+    0x08000036, 0x001020f2, 0x00000000, 0x00004002, 0x3f800000, 0x00000000, 0x00000000, 0x3f000000,
+    0x0100003e, 0x4e475349, 0x00000008, 0x00000000, 0x00000008, 0x4e47534f, 0x0000002c, 0x00000001,
+    0x00000008, 0x00000020, 0x00000000, 0x00000000, 0x00000003, 0x00000000, 0x0000000f, 0x545f5653,
+    0x45475241, 0xabab0054,
+};
+
+/* The simple_gs of Wine's d3d11 test_clear_state: a point at POSITION
+   becomes a quad 0.2 * w wide in a triangle strip. It is not a pass-through
+   shader, so DXMT draws it with its mesh pipeline. */
+static const DWORD point_quad_gs_code[] = {
+    0x43425844, 0x000ee786, 0xc624c269, 0x885a5cbe, 0x444b3b1f, 0x00000001, 0x0000023c, 0x00000003,
+    0x0000002c, 0x00000060, 0x00000094, 0x4e475349, 0x0000002c, 0x00000001, 0x00000008, 0x00000020,
+    0x00000000, 0x00000000, 0x00000003, 0x00000000, 0x00000f0f, 0x49534f50, 0x4e4f4954, 0xababab00,
+    0x4e47534f, 0x0000002c, 0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000001, 0x00000003,
+    0x00000000, 0x0000000f, 0x505f5653, 0x5449534f, 0x004e4f49, 0x52444853, 0x000001a0, 0x00020040,
+    0x00000068, 0x0400005f, 0x002010f2, 0x00000001, 0x00000000, 0x02000068, 0x00000001, 0x0100085d,
+    0x0100285c, 0x04000067, 0x001020f2, 0x00000000, 0x00000001, 0x0200005e, 0x00000004, 0x0f000032,
+    0x00100032, 0x00000000, 0x80201ff6, 0x00000041, 0x00000000, 0x00000000, 0x00004002, 0x3dcccccd,
+    0x3dcccccd, 0x00000000, 0x00000000, 0x00201046, 0x00000000, 0x00000000, 0x05000036, 0x00102032,
+    0x00000000, 0x00100046, 0x00000000, 0x06000036, 0x001020c2, 0x00000000, 0x00201ea6, 0x00000000,
+    0x00000000, 0x01000013, 0x05000036, 0x00102012, 0x00000000, 0x0010000a, 0x00000000, 0x0e000032,
+    0x00100052, 0x00000000, 0x00201ff6, 0x00000000, 0x00000000, 0x00004002, 0x3dcccccd, 0x00000000,
+    0x3dcccccd, 0x00000000, 0x00201106, 0x00000000, 0x00000000, 0x05000036, 0x00102022, 0x00000000,
+    0x0010002a, 0x00000000, 0x06000036, 0x001020c2, 0x00000000, 0x00201ea6, 0x00000000, 0x00000000,
+    0x01000013, 0x05000036, 0x00102012, 0x00000000, 0x0010000a, 0x00000000, 0x05000036, 0x00102022,
+    0x00000000, 0x0010001a, 0x00000000, 0x06000036, 0x001020c2, 0x00000000, 0x00201ea6, 0x00000000,
+    0x00000000, 0x01000013, 0x05000036, 0x00102032, 0x00000000, 0x00100086, 0x00000000, 0x06000036,
+    0x001020c2, 0x00000000, 0x00201ea6, 0x00000000, 0x00000000, 0x01000013, 0x0100003e,
+};
+
+static const D3D11_INPUT_ELEMENT_DESC quad_layout_desc[] = {
+    {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
 };
 
 /* The private data key the trackers are attached under. */
@@ -287,6 +364,281 @@ static int check_deferred(ID3D11Device *device, ID3D11DeviceContext *context)
     return 0;
 }
 
+#define BIAS_SIZE 64
+/* The pixel read back, near the centre, inside every quad drawn. */
+#define BIAS_X 31
+#define BIAS_Y 31
+#define D24_MAX 16777215.0
+
+struct bias_target
+{
+    ID3D11Texture2D *color, *color_staging, *depth, *depth_staging;
+    ID3D11RenderTargetView *rtv;
+    ID3D11DepthStencilView *dsv;
+};
+
+static HRESULT create_bias_texture(ID3D11Device *device, DXGI_FORMAT format, UINT bind, BOOL staging,
+                                   ID3D11Texture2D **texture)
+{
+    D3D11_TEXTURE2D_DESC desc = {0};
+
+    desc.Width = BIAS_SIZE;
+    desc.Height = BIAS_SIZE;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = staging ? D3D11_USAGE_STAGING : D3D11_USAGE_DEFAULT;
+    desc.BindFlags = staging ? 0 : bind;
+    desc.CPUAccessFlags = staging ? D3D11_CPU_ACCESS_READ : 0;
+    return ID3D11Device_CreateTexture2D(device, &desc, NULL, texture);
+}
+
+/* read_bias_pixel: copy both targets to their staging textures and return
+   the 24-bit depth and the color of the pixel read back, or FALSE when a
+   Map fails. */
+static BOOL read_bias_pixel(ID3D11DeviceContext *context, struct bias_target *target, UINT *depth, UINT *color)
+{
+    D3D11_MAPPED_SUBRESOURCE map;
+
+    ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)target->depth_staging,
+                                     (ID3D11Resource *)target->depth);
+    ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)target->color_staging,
+                                     (ID3D11Resource *)target->color);
+    if (FAILED(ID3D11DeviceContext_Map(context, (ID3D11Resource *)target->depth_staging, 0, D3D11_MAP_READ, 0, &map)))
+        return FALSE;
+    /* D24_UNORM_S8_UINT: depth in the low 24 bits, stencil in the high 8 */
+    *depth = ((const UINT *)((const BYTE *)map.pData + BIAS_Y * map.RowPitch))[BIAS_X] & 0xffffff;
+    ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)target->depth_staging, 0);
+    if (FAILED(ID3D11DeviceContext_Map(context, (ID3D11Resource *)target->color_staging, 0, D3D11_MAP_READ, 0, &map)))
+        return FALSE;
+    *color = ((const UINT *)((const BYTE *)map.pData + BIAS_Y * map.RowPitch))[BIAS_X];
+    ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)target->color_staging, 0);
+    return TRUE;
+}
+
+/* draw_bias: clear, then for each of the draws DepthBias values set a
+   rasterizer state with it and draw count vertices of the bound input, all
+   in one render pass, and return the pixel's depth and color. */
+static BOOL draw_bias(ID3D11Device *device, ID3D11DeviceContext *context, struct bias_target *target,
+                      const int *depth_biases, UINT draws, float slope_scaled_depth_bias, UINT count, UINT *depth,
+                      UINT *color)
+{
+    static const float zero[4];
+    D3D11_RASTERIZER_DESC rs_desc = {0};
+    ID3D11RasterizerState *rs[2] = {0};
+    BOOL ok = TRUE;
+    UINT i;
+
+    if (draws > ARRAYSIZE(rs))
+        return FALSE;
+    rs_desc.FillMode = D3D11_FILL_SOLID;
+    rs_desc.CullMode = D3D11_CULL_NONE;
+    rs_desc.SlopeScaledDepthBias = slope_scaled_depth_bias;
+    rs_desc.DepthClipEnable = TRUE;
+    for (i = 0; i < draws && ok; i++)
+    {
+        rs_desc.DepthBias = depth_biases[i];
+        ok = SUCCEEDED(ID3D11Device_CreateRasterizerState(device, &rs_desc, &rs[i]));
+    }
+    if (ok)
+    {
+        ID3D11DeviceContext_ClearRenderTargetView(context, target->rtv, zero);
+        ID3D11DeviceContext_ClearDepthStencilView(context, target->dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL,
+                                                  1.0f, 0);
+        for (i = 0; i < draws; i++)
+        {
+            ID3D11DeviceContext_RSSetState(context, rs[i]);
+            ID3D11DeviceContext_Draw(context, count, 0);
+        }
+        ID3D11DeviceContext_RSSetState(context, NULL);
+        ok = read_bias_pixel(context, target, depth, color);
+    }
+    for (i = 0; i < draws; i++)
+        if (rs[i])
+            ID3D11RasterizerState_Release(rs[i]);
+    return ok;
+}
+
+/* check_bias_result: print one draw's result and return whether its depth is
+   within tolerance units of expected and its color is want_color. */
+static int check_bias_result(const char *what, UINT depth, double expected, UINT tolerance, UINT color,
+                             UINT want_color)
+{
+    UINT want = (UINT)(expected + 0.5);
+    UINT diff = depth > want ? depth - want : want - depth;
+    int ok = diff <= tolerance && (color & 0x00ffffff) == want_color;
+
+    printf(PREFIX "depth-bias: %s: depth %#x, expected %#x (+-%u), color %#x %s\n", what, depth, want, tolerance,
+           color, ok ? "ok" : "FAILED");
+    return ok;
+}
+
+static int check_depth_bias(ID3D11Device *device, ID3D11DeviceContext *context)
+{
+    /* Triangle strips over the whole target: flat at 0.25, and sloped from
+       0.375 at the bottom to 0.125 at the top. */
+    static const float flat_quad[] = {
+        -1.0f, -1.0f, 0.25f, -1.0f, 1.0f, 0.25f, 1.0f, -1.0f, 0.25f, 1.0f, 1.0f, 0.25f,
+    };
+    static const float sloped_quad[] = {
+        -1.0f, -1.0f, 0.375f, -1.0f, 1.0f, 0.125f, 1.0f, -1.0f, 0.375f, 1.0f, 1.0f, 0.125f,
+    };
+    /* One point for the geometry shader; vs_code reads POSITION, COLOR and
+       COLOR1. */
+    static const float point[] = {
+        0.0f, 0.0f, 0.25f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    };
+    /* The pixel shader's red with any alpha, and the cleared color. */
+    static const UINT red = 0x0000ff, cleared = 0;
+    static const int plus[] = {1000}, minus[] = {-1000}, none[] = {0}, plus_then_minus[] = {1000, -1000};
+    D3D11_BUFFER_DESC buffer_desc = {0};
+    D3D11_SUBRESOURCE_DATA data = {0};
+    ID3D11Buffer *flat_vb = NULL, *sloped_vb = NULL, *point_vb = NULL;
+    ID3D11InputLayout *quad_layout = NULL, *point_layout = NULL;
+    ID3D11VertexShader *quad_vs = NULL, *point_vs = NULL;
+    ID3D11GeometryShader *gs = NULL;
+    ID3D11PixelShader *ps = NULL;
+    struct bias_target target = {0};
+    UINT quad_stride = 3 * sizeof(float), point_stride = 12 * sizeof(float), offset = 0;
+    UINT depth, color, sloped_ref;
+    D3D11_VIEWPORT vp = {0.0f, 0.0f, BIAS_SIZE, BIAS_SIZE, 0.0f, 1.0f};
+    /* MaxDepthSlope of the sloped quad: 0.25 over BIAS_SIZE rows */
+    const double slope = 0.25 / BIAS_SIZE;
+    int ok = 1, ret = 3;
+    HRESULT hr;
+
+    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    buffer_desc.ByteWidth = sizeof(flat_quad);
+    data.pSysMem = flat_quad;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &flat_vb)))
+        goto done;
+    data.pSysMem = sloped_quad;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &sloped_vb)))
+        goto done;
+    buffer_desc.ByteWidth = sizeof(point);
+    data.pSysMem = point;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &point_vb)))
+        goto done;
+    if (FAILED(hr = ID3D11Device_CreateVertexShader(device, quad_vs_code, sizeof(quad_vs_code), NULL, &quad_vs))
+        || FAILED(hr = ID3D11Device_CreateVertexShader(device, vs_code, sizeof(vs_code), NULL, &point_vs))
+        || FAILED(hr = ID3D11Device_CreateGeometryShader(device, point_quad_gs_code, sizeof(point_quad_gs_code),
+                                                         NULL, &gs))
+        || FAILED(hr = ID3D11Device_CreatePixelShader(device, red_ps_code, sizeof(red_ps_code), NULL, &ps))
+        || FAILED(hr = ID3D11Device_CreateInputLayout(device, quad_layout_desc, 1, quad_vs_code,
+                                                      sizeof(quad_vs_code), &quad_layout))
+        || FAILED(hr = ID3D11Device_CreateInputLayout(device, layout_desc, 3, vs_code, sizeof(vs_code),
+                                                      &point_layout)))
+        goto done;
+    if (FAILED(hr = create_bias_texture(device, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET, FALSE,
+                                        &target.color))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_R8G8B8A8_UNORM, 0, TRUE, &target.color_staging))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_D24_UNORM_S8_UINT, D3D11_BIND_DEPTH_STENCIL, FALSE,
+                                           &target.depth))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_D24_UNORM_S8_UINT, 0, TRUE, &target.depth_staging))
+        || FAILED(hr = ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)target.color, NULL,
+                                                           &target.rtv))
+        || FAILED(hr = ID3D11Device_CreateDepthStencilView(device, (ID3D11Resource *)target.depth, NULL,
+                                                           &target.dsv)))
+        goto done;
+
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &target.rtv, target.dsv);
+    ID3D11DeviceContext_RSSetViewports(context, 1, &vp);
+    ID3D11DeviceContext_IASetInputLayout(context, quad_layout);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    ID3D11DeviceContext_VSSetShader(context, quad_vs, NULL, 0);
+    ID3D11DeviceContext_PSSetShader(context, ps, NULL, 0);
+    hr = E_FAIL;
+
+    /* A constant bias of each sign, with a pixel shader. */
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &flat_vb, &quad_stride, &offset);
+    if (!draw_bias(device, context, &target, plus, 1, 0.0f, 4, &depth, &color))
+        goto done;
+    ok &= check_bias_result("pixel shader, DepthBias 1000", depth, 0.25 * D24_MAX + 1000, 1, color, red);
+    if (!draw_bias(device, context, &target, minus, 1, 0.0f, 4, &depth, &color))
+        goto done;
+    ok &= check_bias_result("pixel shader, DepthBias -1000", depth, 0.25 * D24_MAX - 1000, 1, color, red);
+
+    /* +1000, then -1000 in the same render pass, which switches the pipeline
+       and the bias between the draws: under LESS the second draw's depth is
+       the one left. */
+    if (!draw_bias(device, context, &target, plus_then_minus, 2, 0.0f, 4, &depth, &color))
+        goto done;
+    ok &= check_bias_result("pixel shader, DepthBias 1000 then -1000 in one pass", depth, 0.25 * D24_MAX - 1000, 1,
+                            color, red);
+
+    /* Both terms, of opposite signs, on the sloped quad; the reference is
+       the same draw without a bias. */
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &sloped_vb, &quad_stride, &offset);
+    if (!draw_bias(device, context, &target, none, 1, 0.0f, 4, &sloped_ref, &color))
+        goto done;
+    if (!draw_bias(device, context, &target, plus, 1, -2.0f, 4, &depth, &color))
+        goto done;
+    ok &= check_bias_result("pixel shader, DepthBias 1000, SlopeScaledDepthBias -2", depth,
+                            sloped_ref + 1000 - 2.0 * slope * D24_MAX, 3, color, red);
+
+    /* The same without a pixel shader: depth only, the color stays
+       cleared. */
+    ID3D11DeviceContext_PSSetShader(context, NULL, NULL, 0);
+    if (!draw_bias(device, context, &target, plus, 1, -2.0f, 4, &depth, &color))
+        goto done;
+    ok &= check_bias_result("no pixel shader, DepthBias 1000, SlopeScaledDepthBias -2", depth,
+                            sloped_ref + 1000 - 2.0 * slope * D24_MAX, 3, color, cleared);
+
+    /* Through the geometry shader, with the pixel shader. */
+    ID3D11DeviceContext_PSSetShader(context, ps, NULL, 0);
+    ID3D11DeviceContext_IASetInputLayout(context, point_layout);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &point_vb, &point_stride, &offset);
+    ID3D11DeviceContext_VSSetShader(context, point_vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, gs, NULL, 0);
+    if (!draw_bias(device, context, &target, plus, 1, 0.0f, 1, &depth, &color))
+        goto done;
+    ok &= check_bias_result("geometry shader, DepthBias 1000", depth, 0.25 * D24_MAX + 1000, 1, color, red);
+    ID3D11DeviceContext_GSSetShader(context, NULL, NULL, 0);
+
+    printf(PREFIX "depth-bias check %s\n", ok ? "ok" : "FAILED");
+    ret = ok ? 0 : 1;
+
+done:
+    if (ret == 3)
+        printf(PREFIX "depth-bias: setup or readback failed, %#lx\n", (unsigned long)hr);
+    if (target.dsv)
+        ID3D11DepthStencilView_Release(target.dsv);
+    if (target.rtv)
+        ID3D11RenderTargetView_Release(target.rtv);
+    if (target.depth_staging)
+        ID3D11Texture2D_Release(target.depth_staging);
+    if (target.depth)
+        ID3D11Texture2D_Release(target.depth);
+    if (target.color_staging)
+        ID3D11Texture2D_Release(target.color_staging);
+    if (target.color)
+        ID3D11Texture2D_Release(target.color);
+    if (point_layout)
+        ID3D11InputLayout_Release(point_layout);
+    if (quad_layout)
+        ID3D11InputLayout_Release(quad_layout);
+    if (ps)
+        ID3D11PixelShader_Release(ps);
+    if (gs)
+        ID3D11GeometryShader_Release(gs);
+    if (point_vs)
+        ID3D11VertexShader_Release(point_vs);
+    if (quad_vs)
+        ID3D11VertexShader_Release(quad_vs);
+    if (point_vb)
+        ID3D11Buffer_Release(point_vb);
+    if (sloped_vb)
+        ID3D11Buffer_Release(sloped_vb);
+    if (flat_vb)
+        ID3D11Buffer_Release(flat_vb);
+    ID3D11DeviceContext_Release(context);
+    ID3D11Device_Release(device);
+    return ret;
+}
+
 static const struct
 {
     const char *name;
@@ -295,6 +647,7 @@ static const struct
     {"bytecode", check_bytecode},
     {"swap-state", check_swap_state},
     {"deferred", check_deferred},
+    {"depth-bias", check_depth_bias},
 };
 
 int main(int argc, char **argv)
@@ -310,7 +663,7 @@ int main(int argc, char **argv)
             break;
     if (i == ARRAYSIZE(cases))
     {
-        printf(PREFIX "usage: dxmt.exe bytecode|swap-state|deferred\n");
+        printf(PREFIX "usage: dxmt.exe bytecode|swap-state|deferred|depth-bias\n");
         return 4;
     }
 

@@ -1320,16 +1320,21 @@ check_streamout_runs() {
 # every case passes: DXMT's CreateInputLayout and
 # CreateGeometryShaderWithStreamOutput refuse bytecode whose header states
 # more than the length passed (bytecode), SwapDeviceContextState keeps the
-# installed state it swaps in again (swap-state), and a deferred context
+# installed state it swaps in again (swap-state), a deferred context
 # released after its device keeps the device until it is destroyed itself
-# (deferred); smoke/dxmt.c says how. Each case is a process of its own, so
+# (deferred), and draws on a D24 target get Direct3D's constant depth bias
+# with and without a pixel shader and through a geometry shader
+# (depth-bias); smoke/dxmt.c says how. Each case is a process of its own, so
 # a case that crashes cannot hide the result of another, and each has to get
 # the default dxmt tree from compatdb.so, since Wine's own d3d11 passes them
-# too. On a Mac without a Metal 4 GPU (METAL4=0, see metal4_probe) DXMT
-# takes its experimental path for other GPUs (dxmt_device.cpp), which the
-# check is not for, so the programs are only built there. A clean run of
-# a case takes about 0.5 seconds; the limit of 5 seconds leaves room for a
-# loaded machine and for winedbg's backtrace of a case that crashes.
+# too. DXMT's shader cache is off, so that a shader variant an earlier DXMT
+# compiled and cached, such as the depth bias of a converted pixel shader,
+# cannot stand in for the one under test. On a Mac without a Metal 4 GPU
+# (METAL4=0, see metal4_probe) DXMT takes its experimental path for other
+# GPUs (dxmt_device.cpp), which the check is not for, so the programs are
+# only built there. A clean run of a case takes about 0.5 seconds; the limit
+# of 5 seconds leaves room for a loaded machine and for winedbg's backtrace
+# of a case that crashes.
 check_dxmt_runs() {
     local arch exe log name want
     for arch in x86_64 i686; do
@@ -1343,10 +1348,10 @@ check_dxmt_runs() {
     for arch in x86_64 i686; do
         exe="$TMP_DIR/dxmt-$arch.exe"
         time_mark "smoke: dxmt.exe $arch"
-        for name in bytecode swap-state deferred; do
+        for name in bytecode swap-state deferred depth-bias; do
             log="$TMP_DIR/dxmt-$arch-$name.log"
             echo "  Running dxmt.exe $name for $arch..."
-            run_limited 5 "$log" "$@" "$WINE_DIR/bin/wine" "$exe" "$name"
+            run_limited 5 "$log" "$@" DXMT_SHADER_CACHE=0 "$WINE_DIR/bin/wine" "$exe" "$name"
             smoke_check "dxmt.exe $name for $arch" 5 "$log"
             for want in "wine-build smoke test: $arch $name check ok" \
                         "compatdb: .*dxgi = ${DXGI_IMPLS%% *} (from"; do
