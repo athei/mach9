@@ -390,14 +390,11 @@ mod tests {
 
     fn launch_rules(own: Rule, toml: &str) -> LaunchRules {
         let doc: toml_edit::DocumentMut = toml.parse().unwrap();
-        let named = doc
-            .get("process")
-            .map(|item| {
-                rules::parse(item, &mut rules::Ignored::default())
-                    .expect("valid")
-                    .rules
-            })
-            .unwrap_or_default();
+        let named = doc.get("process").map_or_default(|item| {
+            rules::parse(item, &mut rules::Ignored::default())
+                .expect("valid")
+                .rules
+        });
         rules::table(own, named)
     }
 

@@ -186,7 +186,7 @@ fn rule<'a>(table: &'a Table, exe: &str) -> Result<&'a Rule, String> {
 /// The version resource that the built-in `rule` pins, filled in with
 /// its own fingerprint values.
 fn version_of(rule: &Rule) -> VersionInfo {
-    let text = |pin: Option<&Fingerprint>| pin.map(|p| p.as_str().to_owned()).unwrap_or_default();
+    let text = |pin: Option<&Fingerprint>| pin.map_or_default(|p| p.as_str().to_owned());
     VersionInfo {
         company: text(rule.company()),
         product: text(rule.product()),

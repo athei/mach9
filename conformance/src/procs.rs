@@ -113,8 +113,7 @@ fn txt_paths(pid: u32) -> Vec<PathBuf> {
         &["-w", "-a", "-p", &pid.to_string(), "-d", "txt", "-Fn"],
         HELPER_LIMIT,
     )
-    .map(|report| lsof_names(&report).map(PathBuf::from).collect())
-    .unwrap_or_default()
+    .map_or_default(|report| lsof_names(&report).map(PathBuf::from).collect())
 }
 
 /// The name of the server directory of the prefix `prefix`.

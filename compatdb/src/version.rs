@@ -131,9 +131,7 @@ impl Headers {
 }
 
 fn from_image<R: Rva + ?Sized>(img: &R) -> VersionInfo {
-    version_blob(img)
-        .map(|blob| compatdb_core::runtime::version_info(&blob))
-        .unwrap_or_default()
+    version_blob(img).map_or_default(|blob| compatdb_core::runtime::version_info(&blob))
 }
 
 fn version_blob<R: Rva + ?Sized>(img: &R) -> Option<Vec<u16>> {

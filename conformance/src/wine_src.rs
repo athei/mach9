@@ -197,8 +197,7 @@ fn source_files(exe: &Exe, root: &Path) -> Result<Vec<String>, String> {
         text.lines()
             .filter_map(|line| line.split_once('='))
             .find(|(key, _)| key.trim() == name)
-            .map(|(_, value)| value.split_whitespace().collect())
-            .unwrap_or_default()
+            .map_or_default(|(_, value)| value.split_whitespace().collect())
     };
     let dirs: Vec<String> = std::iter::once(exe.dir.clone())
         .chain(

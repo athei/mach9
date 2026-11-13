@@ -303,7 +303,7 @@ fn list_line(
         .iter()
         .enumerate()
         .map(|(i, entry)| {
-            let label = from.get(i).map(Origin::label).unwrap_or_default();
+            let label = from.get(i).map_or_default(Origin::label);
             match applied.map(|applied| applied.get(i).copied().unwrap_or(false)) {
                 Some(true) => format!("{entry} ({label}, appended)"),
                 Some(false) => format!("{entry} ({label}, already present)"),

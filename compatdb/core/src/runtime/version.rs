@@ -113,8 +113,7 @@ fn string_value(blob: &[u16], key: &str) -> String {
         .flat_map(|table| VersionNode::siblings(table.children))
         .find(|entry| entry.key_is(key))
         .and_then(|entry| entry.value.split(|&u| u == 0).next())
-        .map(String::from_utf16_lossy)
-        .unwrap_or_default()
+        .map_or_default(String::from_utf16_lossy)
 }
 
 #[cfg(test)]
