@@ -581,7 +581,8 @@ Mesa is our fork at the ref in [`mesa-src.ref`](../pins/mesa-src.ref)
   pointing at the local clone; the default builds what the remote has.
 - The Vulkan loader and headers are pinned together, from one Vulkan SDK
   release, in [`redist.env`](../pins/redist.env). Bump both tags and
-  commits together.
+  commits together, and the [validation layers](#vulkan-validation-layers)
+  with them.
 - A Wine build tree configured without Vulkan has no `SONAME_LIBVULKAN`,
   and one configured before EGL was built has no `SONAME_LIBEGL`;
   `build-wine.sh` stops and asks for `--clean`.
@@ -601,6 +602,20 @@ in [`redist.env`](../pins/redist.env).
 - Check that each pattern and `exclude` of
   [`deqp-vk.toml`](../conformance/deqp-vk.toml) still selects what its
   comment says, against the new `mustpass.txt`.
+
+### Vulkan validation layers
+
+Khronos' validation layers, which checks of the bundle step run under
+([what the bundle step checks](internals.md#what-the-bundle-step-checks)),
+are pinned by tag and commit in [`redist.env`](../pins/redist.env), at
+the SDK release of the Vulkan loader.
+
+- Bump tag and commit together with the loader's and the headers'.
+  `build-vulkan-validation-layers.sh` stops when the Vulkan-Headers of the
+  tag's `scripts/known_good.json` are not the pinned ones.
+- Rebuild with `build-vulkan-validation-layers.sh` and run a full bundle
+  step. A new release can report what the old one did not: explain every
+  new validation error before the bundle step takes it.
 
 ### FEX
 

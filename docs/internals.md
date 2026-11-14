@@ -61,6 +61,11 @@ script's header says what it builds and stages.
   `build-vk-gl-cts.sh` needs git, CMake, Ninja and Python 3, all of them
   build tools of `brew-formulae` or macOS, and the network for its clone
   and the sources VK-GL-CTS's `external/fetch_sources.py` fetches.
+- For the bundle step on a Mac with a Metal 4 GPU: Khronos' validation
+  layers, which `build-vulkan-validation-layers.sh` builds with the same
+  tools, and the network for its clone and the sources the layers'
+  `scripts/update_deps.py` fetches
+  ([what the bundle step checks](#what-the-bundle-step-checks)).
 
 ## Commands
 
@@ -74,6 +79,7 @@ script's header says what it builds and stages.
 | [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | vkd3d-proton's D3D12 DLLs, after a Wine build ([vkd3d-proton](#vkd3d-proton)) |
 | [`bundle-wine.sh`](../bin/bundle-wine.sh) | Assembles the bundle, signs the loader and checks the result ([what the bundle step checks](#what-the-bundle-step-checks)) |
 | [`build-vk-gl-cts.sh`](../bin/build-vk-gl-cts.sh) | `deqp-vk` for the [deqp-vk suite](#deqp-vk-suite); not run by `build-wine.sh` |
+| [`build-vulkan-validation-layers.sh`](../bin/build-vulkan-validation-layers.sh) | Khronos' Vulkan validation layers, for the bundle step's checks that run under them ([what the bundle step checks](#what-the-bundle-step-checks)); not run by `build-wine.sh`, and not in the bundle |
 
 The flags are in [building.md](building.md#commands). The five component
 scripts also run alone.
@@ -101,9 +107,9 @@ scripts also run alone.
 Every tree lives under `build/` and the bundle in `dist/wine`, in the
 [layout](building.md#layout). Each variable below overrides the default of
 the same name, set in [`profile.sh`](../bin/lib/profile.sh) or, for
-`MINGW_DIR`, `CACHE_DIR` and the `VK_GL_CTS_*` ones, at the top of the
-scripts that use them. A `MACOSX_DEPLOYMENT_TARGET` may raise the floor
-but not lower it.
+`MINGW_DIR`, `CACHE_DIR` and the `VK_GL_CTS_*` and
+`VULKAN_VALIDATION_LAYERS_*` ones, at the top of the scripts that use
+them. A `MACOSX_DEPLOYMENT_TARGET` may raise the floor but not lower it.
 
 | Variable | What it is |
 |----------|------------|
@@ -119,6 +125,7 @@ but not lower it.
 | `FEX_DIST`, `MESA_DIST`, `DXMT_DIST`, `VKD3D_PROTON_DIST`, `GSTREAMER_DIST` | What the bundle installs from each component, with the commits it was built from; by default inside the component's build directory |
 | `LOADER_PROFILE` | The provisioning profile the loader is signed for |
 | `VK_GL_CTS_BUILD_DIR`, `VK_GL_CTS_DIST` | The tree of [`build-vk-gl-cts.sh`](../bin/build-vk-gl-cts.sh), with its VK-GL-CTS clone, and the `deqp-vk` it stages |
+| `VULKAN_VALIDATION_LAYERS_BUILD_DIR`, `VULKAN_VALIDATION_LAYERS_DIST` | The tree of [`build-vulkan-validation-layers.sh`](../bin/build-vulkan-validation-layers.sh), with its clone and the sources it builds on, and the layers it stages, which the bundle step reads |
 | `MINGW_DIR` | llvm-mingw |
 | `CACHE_DIR` | Downloaded redistributables |
 
@@ -793,3 +800,4 @@ A `*-src.ref` file names a branch, tag or commit of the component's
 | Provisioning profile | [`signing/loader.provisionprofile`](../signing/loader.provisionprofile); replace it when it expires or the App ID changes |
 | Sparkle, Mach9.app's updater | [`redist.env`](../pins/redist.env): version and SHA-256 of the release tarball |
 | VK-GL-CTS, for the [deqp-vk suite](#deqp-vk-suite) | [`redist.env`](../pins/redist.env): tag and commit; the sources it builds on at the commits and checksums its `external/fetch_sources.py` pins |
+| Vulkan validation layers, for the [bundle step](#what-the-bundle-step-checks) | [`redist.env`](../pins/redist.env): tag and commit; the sources they build on at what the tag's `scripts/known_good.json` names |
