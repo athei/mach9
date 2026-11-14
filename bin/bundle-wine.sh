@@ -1434,6 +1434,29 @@ check_egl_host() {
         exit 1
     fi
     grep "^egl: depth-bias check" "$log" | sed 's/^egl: /    /'
+    check_gl_host glpbo "texels copied unchanged through pixel buffer objects"
+}
+
+# check_gl_host <program> <what>: build smoke/<program>.c for the host and run
+# it on the bundle's lib/external/libEGL.1.dylib, as check_egl_host runs
+# smoke/egl.c. Exit unless it reports no wrong value. glpbo.c checks float
+# and signed normalized texels moved through pixel buffer objects, which
+# Mesa's state tracker copies as unsigned integers.
+check_gl_host() {
+    local log="$TMP_DIR/$1.log"
+    xcrun clang -O2 -o "$TMP_DIR/$1" "$REPO_DIR/smoke/$1.c"
+    run_limited 60 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/$1" "$EXT_DIR/libEGL.1.dylib"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/$1.c did not exit within 60 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/$1.c failed on the bundle's EGL (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    echo "    Zink: $2"
 }
 
 # The GStreamer elements the host check and Wine need: what winegstreamer
