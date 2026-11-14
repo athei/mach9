@@ -18,6 +18,7 @@ RUNTIME_DEST=""
 STRICT_FLOOR=0
 WITH_SYMBOLS=0
 KEEP_SYMBOLS=0
+SKIP_SMOKE=0
 ASSUME_YES=0
 # Whether wine.app gets a secure timestamp, which needs Apple's timestamp
 # server. LOADER_TIMESTAMP=0 signs without one, for an offline local build;
@@ -34,7 +35,7 @@ if [ -d "$MINGW_DIR/bin" ]; then
 fi
 
 usage() {
-    echo "Usage: $0 [--dest <dir>] [--runtime-only | --runtime-dest <dir>] [--strict-floor] [--symbols | --keep-symbols] [--yes]"
+    echo "Usage: $0 [--dest <dir>] [--runtime-only | --runtime-dest <dir>] [--strict-floor] [--symbols | --keep-symbols] [--skip-smoke] [--yes]"
     exit 1
 }
 
@@ -56,7 +57,10 @@ usage() {
 # the finished full bundle there, after the smoke test, and removes what the
 # full bundle has beyond it, so one run and one smoke test give both. The
 # copy has the PE files in the state the full bundle has them in, and no
-# wine-symbols of its own. It excludes --runtime-only.
+# wine-symbols of its own. It excludes --runtime-only. --skip-smoke leaves
+# out the smoke test and the preflight checks only it needs, the validation
+# layers and the llvm-mingw compilers, for a local deploy of a build that was
+# already tested.
 while [ $# -gt 0 ]; do
     case "$1" in
         --dest) [ $# -ge 2 ] || usage; DIST_DIR="$2"; shift 2 ;;
@@ -65,6 +69,7 @@ while [ $# -gt 0 ]; do
         --strict-floor) STRICT_FLOOR=1; shift ;;
         --symbols) WITH_SYMBOLS=1; shift ;;
         --keep-symbols) KEEP_SYMBOLS=1; shift ;;
+        --skip-smoke) SKIP_SMOKE=1; shift ;;
         --yes) ASSUME_YES=1; shift ;;
         *) usage ;;
     esac
@@ -2842,13 +2847,15 @@ check_dxmt_build
 check_vkd3d_proton_build
 check_mesa_build
 check_gstreamer_build
-check_validation_layers_build
-for arch in $SMOKE_PE_ARCHS x86_64 i686; do
-    if [ ! -x "$MINGW_DIR/bin/$arch-w64-mingw32-clang" ]; then
-        echo "Error: no $arch-w64-mingw32-clang in $MINGW_DIR/bin (the smoke test needs it)"
-        exit 1
-    fi
-done
+if [ "$SKIP_SMOKE" -eq 0 ]; then
+    check_validation_layers_build
+    for arch in $SMOKE_PE_ARCHS x86_64 i686; do
+        if [ ! -x "$MINGW_DIR/bin/$arch-w64-mingw32-clang" ]; then
+            echo "Error: no $arch-w64-mingw32-clang in $MINGW_DIR/bin (the smoke test needs it)"
+            exit 1
+        fi
+    done
+fi
 for tool in llvm-strip llvm-objdump; do
     if [ ! -x "$MINGW_DIR/bin/$tool" ]; then
         echo "Error: no $tool in $MINGW_DIR/bin (Step 4e needs it)"
@@ -3825,7 +3832,11 @@ if [ -n "$FLOOR_NEWER_FUNCS" ]; then
     check_floor_newer_imports
 fi
 
-smoke_test
+if [ "$SKIP_SMOKE" -eq 1 ]; then
+    echo "  Smoke test skipped (--skip-smoke)."
+else
+    smoke_test
+fi
 
 # ── Step 6: Runtime-only copy ───────────────────────────────────────────
 # With --runtime-dest, the runtime-only bundle from the full one, after the

@@ -15,7 +15,8 @@ bin/bundle-wine.sh                       # assemble the bundle (see Bundle layou
 
 On a Mac with a Metal 4 GPU, `bundle-wine.sh` stops in its preflight,
 before it changes anything, until `build-vulkan-validation-layers.sh` has
-staged the pinned validation layers; the bundle does not carry them
+staged the pinned validation layers, unless `--skip-smoke` leaves out the
+smoke test, part of which runs under them; the bundle does not carry them
 ([what the bundle step checks](internals.md#what-the-bundle-step-checks)).
 Like every component it checks, `bundle-wine.sh` does not build them
 itself.
@@ -27,10 +28,11 @@ itself.
 | `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the bundle in the [layout](#layout) |
 | `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking; a non-empty directory without `bin/wine` is still refused |
 | `bundle-wine.sh` | `--runtime-only` | No development files; the flavor to put into an application |
-| `bundle-wine.sh` | `--runtime-dest <dir>` | Also writes the `--runtime-only` bundle to `<dir>/wine`, copied from the full bundle after the smoke test; the copy gets no `wine-symbols`, even with `--symbols`; excludes `--runtime-only` |
+| `bundle-wine.sh` | `--runtime-dest <dir>` | Also writes the `--runtime-only` bundle to `<dir>/wine`, copied from the full bundle after its checks (Step 5 and the smoke test); the copy gets no `wine-symbols`, even with `--symbols`; excludes `--runtime-only` |
 | `bundle-wine.sh` | `--strict-floor` | A Mach-O above the floor is an error, not a warning ([Homebrew libraries and the floor](internals.md#homebrew-libraries-and-the-floor)) |
 | `bundle-wine.sh` | `--symbols` | Also keeps the unstripped PE files in `wine-symbols` next to the bundle |
 | `bundle-wine.sh` | `--keep-symbols` | Skips the stripping in Step 4e, so the PE files keep their DWARF and COFF symbols; for local bundles that get debugged or profiled, and excludes `--symbols` |
+| `bundle-wine.sh` | `--skip-smoke` | Leaves out the smoke test and the preflight checks only it needs (validation layers, llvm-mingw compilers); Step 5 and Step 6 still run; for local deploys of a build that was already tested |
 
 `usage()` and the argument parsing in
 [`build-wine.sh`](../bin/build-wine.sh) and

@@ -723,7 +723,9 @@ The preflight runs before anything is deleted, Step 5 after assembly, and
 the smoke test last, in [`bundle-wine.sh`](../bin/bundle-wine.sh), with
 `check_pe64_native` in [`profile.sh`](../bin/lib/profile.sh). Each
 function's comment says what it checks and why; each program in
-[`smoke/`](../smoke) says what it does in its header.
+[`smoke/`](../smoke) says what it does in its header. `--skip-smoke`
+leaves out the smoke test and the preflight checks only it needs: the
+validation layers and the llvm-mingw compilers.
 
 | Checks | Where |
 |--------|-------|
