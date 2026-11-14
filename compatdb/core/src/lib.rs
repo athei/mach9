@@ -329,7 +329,7 @@
 //!   append. In a rule for a Steam app id it is ignored
 //!   ([`Rule::arguments_override`]), and the rule's `arguments` still append.
 //! - A `dll_overrides` entry with the order `default`, such as
-//!   `mscoree,mshtml=default`, takes its modules out of the entries the
+//!   `mshtml=default`, takes its modules out of the entries the
 //!   rules folded before it gave them and adds none, so the registry and
 //!   `WINEDLLOVERRIDES` decide for them again.
 //! - The `env` entries of a built-in `*` rule without a fingerprint are
@@ -422,7 +422,9 @@
 //! source of every value, and a launcher rule that sets the same key
 //! changes it. [`builtin::programs`] each name an executable and pin its
 //! version resource, or name a Steam app id, so none of them catches an
-//! unrelated program of the same name; a test enforces this.
+//! unrelated program of the same name; a test enforces this. A rule for
+//! one of Wine's own programs, which have no version resource, names the
+//! executable alone ([`builtin::no_mono_prompt`]).
 //!
 //! # Recipes
 //!
@@ -431,9 +433,10 @@
 //!
 //! | Goal | Rule |
 //! |------|------|
-//! | Re-enable Wine's Mono for every process | `exe=*;dll_overrides=mscoree=b` |
 //! | Prefer a native .NET | `exe=*;dll_overrides=mscoree=n,b` |
-//! | Hand Mono and Gecko back to the registry and `WINEDLLOVERRIDES` | `exe=*;dll_overrides=mscoree,mshtml=default` |
+//! | Re-enable Wine's Gecko for every process | `exe=*;dll_overrides=mshtml=b` |
+//! | Hand Gecko back to the registry and `WINEDLLOVERRIDES` | `exe=*;dll_overrides=mshtml=default` |
+//! | Let wineboot offer to install Mono | `exe=rundll32.exe;dll_overrides=mscoree=default` |
 //! | Make one game DPI-unaware | `exe=Game.exe;dpi_aware=false` |
 //! | Let the registry and the manifest decide DPI awareness | `exe=*;dpi_aware=default` |
 //! | Give one 32-bit game 4 GB | `exe=Game.exe;large_address_aware=true` |

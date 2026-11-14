@@ -7,11 +7,13 @@
 //!
 //! Each rule for one program ([`programs`]) names an executable and pins its
 //! version fingerprint, or names a Steam app id, so none of them can catch an
-//! unrelated program that happens to share a file name. The [`defaults`]
-//! name no executable and match every process on purpose: each is a default
-//! that a built-in rule for one program, or any `WINE_COMPATDB` rule that
-//! sets the same key, overrides. A rule for one program folds after a `*`
-//! rule from `WINE_COMPATDB`, so its fix survives launch-wide settings; a
+//! unrelated program that happens to share a file name. The exception is a
+//! rule for one of Wine's own programs ([`WINE_PROGRAMS`]), which Wine
+//! builds without a version resource. The [`defaults`] name no executable
+//! and match every process on purpose: each is a default that a built-in
+//! rule for one program, or any `WINE_COMPATDB` rule that sets the same key,
+//! overrides. A rule for one program folds after a `*` rule from
+//! `WINE_COMPATDB`, so its fix survives launch-wide settings; a
 //! `WINE_COMPATDB` rule for that program changes it (see
 //! [`Table::resolve`]).
 
@@ -43,9 +45,28 @@ pub fn defaults() -> Vec<Rule> {
         fex_reduced_x87_precision(),
         opengl_egl(),
         force_nx(),
-        no_mono_or_gecko(),
+        no_gecko(),
         native_d3dx_and_d3dcompiler(),
     ]
+}
+
+/// The executables of Wine's own programs that a built-in rule names, in
+/// lowercase.
+///
+/// Wine builds its programs without a version resource, so a rule for one
+/// cannot pin one and names the executable alone; the copy in a prefix is
+/// Wine's builtin. A launcher need not ask for a fingerprint on a rule for
+/// one of them, such as `exe=rundll32.exe;dll_overrides=mscoree=default`
+/// ([`no_mono_prompt`]). [`is_wine_program`] compares a name against them.
+pub const WINE_PROGRAMS: &[&str] = &["rundll32.exe"];
+
+/// Whether `exe` is one of [`WINE_PROGRAMS`], compared
+/// ASCII-case-insensitively as an `exe` matches.
+#[must_use]
+pub fn is_wine_program(exe: &str) -> bool {
+    WINE_PROGRAMS
+        .iter()
+        .any(|program| program.eq_ignore_ascii_case(exe))
 }
 
 /// The rules for one program each, which beat the [`defaults`] for it.
@@ -61,6 +82,7 @@ pub fn programs() -> Vec<Rule> {
         world_of_warcraft(),
         half_life_2(),
         team_fortress_2(),
+        no_mono_prompt(),
     ]
 }
 
@@ -221,20 +243,46 @@ pub fn force_nx() -> Rule {
     }
 }
 
-/// Keeps Wine from prompting to install Mono and Gecko, in wineboot and in
-/// any process that loads either.
+/// Keeps Wine from prompting to install Gecko, in every process.
 ///
-/// The override disables both modules, not only the prompts. ntdll consults
-/// the overrides compatdb adds before the registry `DllOverrides` keys, so an
-/// installed wine-mono, Gecko or native .NET selected there stays disabled
-/// too. A prefix that needs one adds a later entry for the module, such as
-/// `mscoree=n,b`, or hands it back to the registry with `mscoree=default`, in
-/// a `*` rule or a rule for the program.
+/// mshtml prompts when a process first uses it, so the override disables it
+/// in every process, not only the prompt. ntdll consults the overrides
+/// compatdb adds before the registry `DllOverrides` keys, so an installed
+/// Gecko selected there stays disabled too. A prefix that needs it adds a
+/// later entry, such as `mshtml=b`, or hands it back to the registry with
+/// `mshtml=default`, in a `*` rule or a rule for the program.
 #[must_use]
-pub fn no_mono_or_gecko() -> Rule {
+pub fn no_gecko() -> Rule {
     Rule {
         exe: Exe::Any,
-        dll_overrides: vec![DllOverride::literal("mscoree,mshtml=")],
+        dll_overrides: vec![DllOverride::literal("mshtml=")],
+        ..Rule::default()
+    }
+}
+
+/// Keeps Wine from prompting to install Mono when wineboot sets up a
+/// prefix.
+///
+/// The prompt has one trigger: mscoree's `DllRegisterServer`, which opens
+/// the Mono installer when no Mono is installed. wineboot runs it when it
+/// creates or updates a prefix, in the `rundll32.exe` child that installs
+/// wine.inf, so the override disables mscoree in `rundll32.exe` alone. The
+/// 32-bit child skips the installer in any case, as a WoW64 process. Every
+/// other process keeps mscoree, which ntdll loads for every .NET image and
+/// which never prompts at run time. Since rundll32 cannot load mscoree, its
+/// `DllRegisterServer` never runs, and with it `__wine_register_resources`,
+/// so the prefix has no registration of mscoree's CLSIDs (`CorRuntimeHost`,
+/// `CLRRuntimeHost`, `CorMetaDataDispenser`, `CorMetaDataDispenserRuntime`),
+/// as with the override in every process before.
+///
+/// Wine builds its programs without a version resource, so the rule names
+/// the executable alone ([`WINE_PROGRAMS`]). A rule for `rundll32.exe` with
+/// `mscoree=default` hands mscoree back to the registry.
+#[must_use]
+pub fn no_mono_prompt() -> Rule {
+    Rule {
+        exe: Exe::literal("rundll32.exe"),
+        dll_overrides: vec![DllOverride::literal("mscoree=")],
         ..Rule::default()
     }
 }
@@ -265,7 +313,7 @@ pub fn no_mono_or_gecko() -> Rule {
 /// last entry for a module, so a later entry for one of these DLLs, in a `*`
 /// rule or a rule for the program, such as `d3dx9_43=b`, replaces this one
 /// for that DLL. `d3dx9_43=default` hands it back to the registry and
-/// `WINEDLLOVERRIDES`, as for [`no_mono_or_gecko`]: otherwise this entry
+/// `WINEDLLOVERRIDES`, as for [`no_gecko`]: otherwise this entry
 /// wins over their entries for the same name.
 #[must_use]
 pub fn native_d3dx_and_d3dcompiler() -> Rule {
@@ -556,8 +604,9 @@ const FORMER: &[Former] = &[
             extend: Some(
                 "Set `dll_overrides` in a rule for every process or for one program instead",
             ),
-            off: "Set `dll_overrides` to `mscoree,mshtml=default` in a rule for every process to \
-                  take away the built-in overrides of Mono and Gecko",
+            off: "Set `dll_overrides` to `mshtml=default` in a rule for every process to take \
+                  away the built-in override of Gecko, and to `mscoree=default` in a rule for \
+                  `rundll32.exe` to take away the one of Mono",
         },
     },
     Former {

@@ -337,7 +337,8 @@ fn parse_rule(
         }
         return Ok(None);
     }
-    if rule.is_unfingerprinted() {
+    // Wine's own programs have no version resource to pin.
+    if rule.is_unfingerprinted() && !builtin::is_wine_program(rule.exe().as_str()) {
         let fingerprints: Vec<&str> = Key::ALL
             .iter()
             .filter(|key| key.kind() == KeyKind::Matcher && **key != Key::Exe)

@@ -754,6 +754,29 @@ fn warnings_are_kept_for_the_caller() {
     }
 }
 
+/// Wine's own programs have no version resource, so a rule for one, such
+/// as the one that lets wineboot offer to install Mono, has nothing to pin.
+#[test]
+fn a_rule_for_a_wine_program_gets_no_pin_warning() {
+    let rules = parsed(
+        &[
+            block(
+                "mono",
+                &[
+                    exe_line("RunDll32.exe"),
+                    list(Key::DllOverrides, &["mscoree=default"]),
+                ],
+            ),
+            block("bare", &[exe_line("wineboot.exe")]),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    assert_eq!(rules.warnings.len(), 1, "{:?}", rules.warnings);
+    assert!(rules.warnings[0].contains("`bare` matches every program called wineboot.exe"));
+    assert_eq!(rules.rules.len(), 2);
+}
+
 #[test]
 fn two_rules_may_name_the_same_executable() {
     let built = rules_of(

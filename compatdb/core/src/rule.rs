@@ -449,9 +449,9 @@ impl Rule {
     /// ASCII-case-insensitively, with or without `.dll`.
     ///
     /// With no entry, `WINEDLLOVERRIDES` and the registry decide, as in
-    /// upstream Wine. [`builtin::no_mono_or_gecko`] and
+    /// upstream Wine. [`builtin::no_gecko`] and
     /// [`builtin::native_d3dx_and_d3dcompiler`] add entries for every
-    /// process.
+    /// process, [`builtin::no_mono_prompt`] one for `rundll32.exe`.
     #[must_use]
     pub fn dll_overrides(&self) -> &[DllOverride] {
         &self.dll_overrides

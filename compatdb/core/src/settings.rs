@@ -142,8 +142,8 @@ fn env_name(name: &str) -> Result<EnvName, FieldError> {
 ///
 /// - `WINEDLLOVERRIDES`: ntdll reads it for every module, so an inherited
 ///   value would change the load order of the modules the rules'
-///   `dll_overrides` leave alone, and a rule's `mscoree,mshtml=default`
-///   would hand Mono and Gecko to it.
+///   `dll_overrides` leave alone, and a rule's `mshtml=default` would hand
+///   Gecko to it.
 /// - `WINE_LARGE_ADDRESS_AWARE`: it gives every 32-bit process the 4 GB
 ///   address space, which `large_address_aware` decides per process.
 /// - [`FILE_ENV_VAR`]: an inherited path would add rules after the ones the

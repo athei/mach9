@@ -53,11 +53,11 @@ fn wildcard_env() -> Vec<EnvEntry> {
     fex_env()
 }
 
-/// The DLL overrides every process gets from the built-in rules: Mono
-/// and Gecko are disabled, and the D3DX and D3DCompiler DLLs load native,
-/// then builtin.
+/// The DLL overrides every process gets from the built-in rules: Gecko is
+/// disabled, and the D3DX and D3DCompiler DLLs load native, then builtin.
+/// Mono is not: only `rundll32.exe` gets `mscoree=`.
 fn wildcard_overrides() -> Vec<DllOverride> {
-    vec![DllOverride::literal("mscoree,mshtml="), d3dx_override()]
+    vec![DllOverride::literal("mshtml="), d3dx_override()]
 }
 
 /// `wildcard_overrides()` followed by `more`.
@@ -484,9 +484,11 @@ fn only_the_cef_helpers_set_env_and_it_turns_the_metal_hud_off() -> TestResult {
 fn every_builtin_rule_has_an_exe_and_none_matches_a_bare_basename() -> TestResult {
     // A rule naming an executable must also pin its version resource, or
     // it would catch every program of that name; a rule for a Steam app id
-    // names no file and counts as pinned. The `*` rules are a
-    // different case: they are meant for every process, and several of
-    // them are not duplicates of each other.
+    // names no file and counts as pinned. The exception is a rule for one
+    // of Wine's own programs, which have no version resource to pin
+    // (`WINE_PROGRAMS`); it must name the executable alone. The `*` rules
+    // are a different case: they are meant for every process, and several
+    // of them are not duplicates of each other.
     let table = Table::builtin();
     for rule in &table.rules {
         // Its parts are literals, which must be what the checked
@@ -509,12 +511,20 @@ fn every_builtin_rule_has_an_exe_and_none_matches_a_bare_basename() -> TestResul
             let checked = EnvEntry::new(name, entry.value().unwrap_or_default())?;
             assert_eq!(&checked, entry);
         }
-        assert!(
-            !rule.is_unfingerprinted(),
-            "{} matches on its executable alone",
+        assert_eq!(
+            rule.is_unfingerprinted(),
+            is_wine_program(rule.exe.as_str()),
+            "{} matches on its executable alone, or is a Wine program with a pin",
             rule.matchers()
         );
     }
+    // Each Wine program is a lowercase basename that a built-in rule names.
+    for program in WINE_PROGRAMS {
+        assert_eq!(program.to_ascii_lowercase(), *program);
+        assert!(rule(&table, program).is_ok(), "{program}");
+        assert!(is_wine_program(&program.to_ascii_uppercase()), "{program}");
+    }
+    assert!(!is_wine_program("wineboot.exe"));
     assert!(table.sources().iter().all(|s| *s == Source::BuiltIn));
     assert_eq!(table.duplicate_matchers(), []);
     Ok(())
@@ -1051,33 +1061,43 @@ fn default_hands_a_setting_back_to_upstream_wine() {
 }
 
 #[test]
-fn a_default_dll_override_hands_mono_and_gecko_back_to_the_registry() {
-    // Each module comes out of the built-in entry on its own.
+fn a_default_dll_override_hands_gecko_back_to_the_registry() -> TestResult {
+    // The built-in entry for mshtml comes out, whatever the spelling.
+    for text in [
+        "exe=*;dll_overrides=mshtml=default",
+        "exe=*;dll_overrides=MSHTML.dll=default",
+    ] {
+        let table = with_lines(text);
+        let game = table.resolve("game.exe", &VersionInfo::default(), None);
+        assert_eq!(game.dll_overrides, [d3dx_override()], "{text}");
+        assert_eq!(game.dll_overrides_from, [Origin::BuiltIn], "{text}");
+        assert_eq!(game.dll_overrides_reset.len(), 1, "{text}");
+        assert_eq!(
+            game.dll_overrides_reset.first().map(|r| &r.removed),
+            Some(&vec![Origin::BuiltIn]),
+            "{text}"
+        );
+    }
+    // Only rundll32.exe has a built-in entry for mscoree, and a `*` rule
+    // folds before the rule for it, so this resets nothing there.
     let table = with_lines("exe=*;dll_overrides=mscoree=default");
     let game = table.resolve("game.exe", &VersionInfo::default(), None);
-    assert_eq!(
-        game.dll_overrides,
-        [DllOverride::literal("mshtml="), d3dx_override()]
-    );
-    assert_eq!(game.dll_overrides_from, [Origin::BuiltIn, Origin::BuiltIn]);
+    assert_eq!(game.dll_overrides, wildcard_overrides());
     assert_eq!(
         game.dll_overrides_reset,
         [DllOverrideReset {
             module: "mscoree".into(),
             by: Origin::Line(1),
-            removed: vec![Origin::BuiltIn],
+            removed: Vec::new(),
         }]
     );
-    // Both, in one entry or two, leave no entry of theirs at all.
-    for text in [
-        "exe=*;dll_overrides=mscoree,mshtml=default",
-        "exe=*;dll_overrides=mscoree=default;dll_overrides=MSHTML.dll=default",
-    ] {
-        let table = with_lines(text);
-        let game = table.resolve("game.exe", &VersionInfo::default(), None);
-        assert_eq!(game.dll_overrides, [d3dx_override()], "{text}");
-        assert_eq!(game.dll_overrides_reset.len(), 2, "{text}");
-    }
+    let pin = rule(&table, "rundll32.exe")?;
+    let rundll32 = table.resolve("rundll32.exe", &VersionInfo::default(), None);
+    assert_eq!(final_order(&rundll32, "mscoree"), Some(""));
+    assert_eq!(
+        rundll32.dll_overrides_from.last(),
+        Some(&Origin::BuiltInFor(pin.matchers()))
+    );
     // A module no entry names is reported with nothing removed, and a
     // later entry gives a reset module a load order again.
     let table = with_lines("exe=*;dll_overrides=d3d12=default;dll_overrides=mscoree=b");
@@ -1091,6 +1111,7 @@ fn a_default_dll_override_hands_mono_and_gecko_back_to_the_registry() {
             removed: Vec::new(),
         }]
     );
+    Ok(())
 }
 
 #[test]
@@ -1125,22 +1146,66 @@ fn a_rule_for_one_program_makes_it_unaware() {
 }
 
 #[test]
-fn a_launch_wide_rule_re_enables_mono_after_the_builtins() {
+fn a_launch_wide_rule_re_enables_gecko_after_the_builtins() {
     // What a launcher sends for a top-level `dll_overrides`: its own `*`
     // rule. Within the wildcard tier the rules fold in table order, which
     // puts the built-ins first, and ntdll keeps the last entry for a
-    // module, so `mscoree=b` wins while mshtml stays disabled.
-    let table = with_lines("exe=*;dll_overrides=mscoree=b");
+    // module, so `mshtml=b` wins over the built-in `mshtml=`.
+    let table = with_lines("exe=*;dll_overrides=mshtml=b");
     let resolution = table.resolve("game.exe", &VersionInfo::default(), None);
     assert_eq!(
         resolution.dll_overrides,
-        wildcard_overrides_and(&["mscoree=b"])
+        wildcard_overrides_and(&["mshtml=b"])
     );
+    assert_eq!(final_order(&resolution, "mshtml"), Some("b"));
     assert_eq!(
         resolution.dll_overrides_from,
         [Origin::BuiltIn, Origin::BuiltIn, Origin::Line(1)]
     );
     assert_eq!(table.duplicate_matchers(), []);
+}
+
+#[test]
+fn every_process_disables_gecko_and_leaves_mono_alone() {
+    // ntdll loads mscoree for every IL-only image, so a .NET 5+ program
+    // needs it; mshtml prompts for Gecko from any process.
+    let game = plain();
+    assert_eq!(final_order(&game, "mshtml"), Some(""));
+    assert_eq!(final_order(&game, "mscoree"), None);
+    let dotnet = Table::builtin().resolve("DotNetApp.exe", &VersionInfo::default(), None);
+    assert_eq!(dotnet, game);
+}
+
+#[test]
+fn rundll32_disables_mono_where_wineboot_registers_it() -> TestResult {
+    // wineboot runs wine.inf's RegisterDlls in rundll32.exe, whose
+    // DllRegisterServer of mscoree opens the Mono installer. Wine's
+    // rundll32 has no version resource.
+    let table = Table::builtin();
+    let pin = rule(&table, "rundll32.exe")?;
+    assert_eq!(pin.dll_overrides, [DllOverride::literal("mscoree=")]);
+    for exe in ["rundll32.exe", "RUNDLL32.EXE"] {
+        let rundll32 = table.resolve(exe, &VersionInfo::default(), None);
+        assert_eq!(final_order(&rundll32, "mscoree"), Some(""), "{exe}");
+        assert_eq!(final_order(&rundll32, "mshtml"), Some(""), "{exe}");
+        assert_eq!(
+            rundll32.dll_overrides_from.last(),
+            Some(&Origin::BuiltInFor(pin.matchers())),
+            "{exe}"
+        );
+    }
+    assert!(rule(&table, "wineboot.exe").is_err());
+    // A launcher's `*` rule does not reach it; a launcher rule for
+    // rundll32.exe does.
+    let table = with_lines("exe=*;dll_overrides=mscoree=n,b");
+    let rundll32 = table.resolve("rundll32.exe", &VersionInfo::default(), None);
+    assert_eq!(final_order(&rundll32, "mscoree"), Some(""));
+    let game = table.resolve("game.exe", &VersionInfo::default(), None);
+    assert_eq!(final_order(&game, "mscoree"), Some("n,b"));
+    let table = with_lines("exe=rundll32.exe;dll_overrides=mscoree=default");
+    let rundll32 = table.resolve("rundll32.exe", &VersionInfo::default(), None);
+    assert_eq!(final_order(&rundll32, "mscoree"), None);
+    Ok(())
 }
 
 #[test]
@@ -1245,7 +1310,7 @@ fn a_later_rule_changes_the_order_of_one_d3dx_or_d3dcompiler_dll() {
     assert_eq!(
         game.dll_overrides,
         [
-            DllOverride::literal("mscoree,mshtml="),
+            DllOverride::literal("mshtml="),
             d3dx_override_without(&["d3dx9_34"])
         ]
     );
@@ -1673,7 +1738,12 @@ fn every_former_name_of_a_builtin_rule_says_what_does_it_now() -> TestResult {
     assert!(
         gecko
             .instead_of_turning_off()
-            .contains("`mscoree,mshtml=default`")
+            .contains("`mshtml=default` in a rule for every process")
+    );
+    assert!(
+        gecko
+            .instead_of_turning_off()
+            .contains("`mscoree=default` in a rule for `rundll32.exe`")
     );
     let fex = former("fex-x87-reduced-precision").ok_or("fex-x87-reduced-precision")?;
     assert!(
