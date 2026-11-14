@@ -11,10 +11,9 @@
 #
 # A unit test fails on a line whose test no baseline here has.
 
-ddraw/ddraw1/test_coop_level_mode_set issue=119  # three checks fail with the test process active
-ddraw/ddraw2/test_coop_level_mode_set issue=119  # three checks fail with the test process active; the full screen rect line is #113
-ddraw/ddraw4/test_coop_level_mode_set issue=119  # three checks fail with the test process active; the full screen rect line is #113
-ddraw/ddraw7/test_coop_level_mode_set issue=119  # three checks fail with the test process active; the full screen rect line is #113
+ddraw/ddraw2/test_coop_level_mode_set issue=113  # AppKit moves the full screen window below the menu bar
+ddraw/ddraw4/test_coop_level_mode_set issue=113  # AppKit moves the full screen window below the menu bar
+ddraw/ddraw7/test_coop_level_mode_set issue=113  # AppKit moves the full screen window below the menu bar
 # once ddraw x86_64 ddraw/ddraw7/test_ck_default: exited with code 5 0.8 s in, right after wt-run, without a summary or an exception line; code 5 is consistent with the low byte of 0xC0000005, an access violation; its second run and a run of the key alone passed VERSION=wine-11.21-42-gf93e7ca0ff0 mesa=689c916008cf608744f2d01e93cf8aa55103931e vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df dxmt=60074945359c4cded59c1a1a8501d58548d2fbf3 vkd3d-proton=c5e2c9b8c55872893e3ba47d60448dd4f35185ef fex=83f8be25aa270c263600bcda6e89232c2284441a
 # once ddraw x86_64 ddraw/ddraw4/test_edge_antialiasing_blending: exited with code 5 0.8 s in, after its todo line "Failed to attach depth buffer", without a summary or an exception line; its second run passed VERSION=wine-11.21-42-gf93e7ca0ff0 mesa=2339a6f225b3db1d6df34efc13f92e1815f9c7e3 vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df dxmt=7429bb9e6de678aada18065bcae534bb72ab1d85 vkd3d-proton=c5e2c9b8c55872893e3ba47d60448dd4f35185ef fex=83f8be25aa270c263600bcda6e89232c2284441a
 
