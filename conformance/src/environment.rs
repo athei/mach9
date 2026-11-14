@@ -45,8 +45,6 @@ pub fn check_winedebug(channels: &str) -> Result<(), String> {
 /// The caller's variables without the [`SCRUBBED`] ones, then:
 ///
 /// - `WINEPREFIX` the runner's `prefix`;
-/// - `WINEDLLOVERRIDES=mscoree,mshtml=`, so no Mono or Gecko installer
-///   opens a dialog;
 /// - `WINEDEBUG=-all`, or the channels of `winedebug` ([`check_winedebug`]),
 ///   whose traces then go where the process's output goes;
 /// - `WINETEST_NO_MT_D3D=1`, which runs the queued tests of the d3d units
@@ -55,6 +53,11 @@ pub fn check_winedebug(channels: &str) -> Result<(), String> {
 /// - `VKD3D_SHADER_CACHE_PATH` the runner's `work` directory, since
 ///   vkd3d-proton writes `vkd3d-proton.cache` into the working directory
 ///   otherwise.
+///
+/// There is no `WINEDLLOVERRIDES`, so the DLL overrides are those of
+/// compatdb's built-in rules, as in a prefix the launcher runs: mshtml is
+/// disabled in every process and mscoree only in `rundll32.exe`, which
+/// keeps the Gecko and Mono installers from opening a dialog.
 ///
 /// The selection variables (`WT_ONLY`, `WT_LIST`) are the caller's to add
 /// per process.
@@ -71,7 +74,6 @@ pub fn wine_env(
         .collect();
     for (name, value) in [
         ("WINEPREFIX", prefix.as_os_str()),
-        ("WINEDLLOVERRIDES", OsStr::new("mscoree,mshtml=")),
         ("WINEDEBUG", OsStr::new(winedebug.unwrap_or("-all"))),
         ("WINETEST_NO_MT_D3D", OsStr::new("1")),
         ("WINETEST_TIME", OsStr::new("1")),

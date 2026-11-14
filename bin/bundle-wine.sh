@@ -698,25 +698,25 @@ check_default_trees() {
 # smoke_test: run the bundled wine through the signed loader and check that
 # native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
-# hang rather than an error. The caller's WINE_COMPATDB, WINE_COMPATDB_FILE
-# and WINE_D3D_CONFIG and every WINEMSYNC*, FEX_*, VK_*, VKD3D_*, DXMT_*,
-# MESA_*, MTL_*, METAL_* and GST_* variable are dropped so that the built-in
-# rules and the defaults of Wine, FEX, the Vulkan loader, vkd3d-proton, DXMT,
-# KosmicKrisp, Metal and GStreamer decide; only vkd3d-proton's pipeline cache
-# is moved into the prefix, check_fex_runs sets FEX_SMCCHECKS=full on one run
-# per arch, and check_streamout_runs turns on Metal shader validation and
-# turns off DXMT's shader cache for its runs.
+# hang rather than an error. The caller's WINE_COMPATDB, WINE_COMPATDB_FILE,
+# WINE_D3D_CONFIG and WINEDLLOVERRIDES and every WINEMSYNC*, FEX_*, VK_*,
+# VKD3D_*, DXMT_*, MESA_*, MTL_*, METAL_* and GST_* variable are dropped so
+# that the built-in rules and the defaults of Wine, FEX, the Vulkan loader,
+# vkd3d-proton, DXMT, KosmicKrisp, Metal and GStreamer decide; only
+# vkd3d-proton's pipeline cache is moved into the prefix, check_fex_runs sets
+# FEX_SMCCHECKS=full on one run per arch, and check_streamout_runs turns on
+# Metal shader validation and turns off DXMT's shader cache for its runs.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
 # checks.
 smoke_test() {
     local version log arch cc exe marker markers var dlls
-    local wine_env=(env -u WINE_COMPATDB -u WINE_COMPATDB_FILE -u WINE_D3D_CONFIG)
+    local wine_env=(env -u WINE_COMPATDB -u WINE_COMPATDB_FILE -u WINE_D3D_CONFIG -u WINEDLLOVERRIDES)
     for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|DXMT_|MESA_|MTL_|METAL_|GST_)'); do
         wine_env+=(-u "$var")
     done
-    wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG=-all)
+    wine_env+=(WINEPREFIX="$TMP_DIR/prefix" WINEDEBUG=-all)
     # vkd3d-proton writes its pipeline cache into the working directory
     # unless told otherwise, which would leave a vkd3d-proton.cache in the
     # caller's directory (or BUILD_DIR, where a full bundle runs this). The
@@ -768,8 +768,11 @@ smoke_test() {
     check_egl_host
     check_gst_host
 
-    # wineboot creates the prefix here, so the limit is generous. The Mono
-    # and Gecko installers are kept out so nothing pops a dialog.
+    # wineboot creates the prefix here, so the limit is generous. Only the
+    # built-in rules keep the Mono and Gecko installers from opening a
+    # dialog, as in a prefix the launcher creates: mscoree is disabled in
+    # rundll32.exe, which registers wine.inf's DLLs, and mshtml in every
+    # process. A boot that hangs until the limit can be such a dialog.
     time_mark "smoke: prefix boot"
     echo "  Booting a throwaway prefix..."
     log="$TMP_DIR/smoke.log"

@@ -21,6 +21,7 @@ fn the_caller_s_wine_and_graphics_variables_are_removed() {
     let removed = [
         "WINEPREFIX",
         "WINEDEBUG",
+        "WINEDLLOVERRIDES",
         "WINEMSYNC",
         "WINE_COMPATDB",
         "WINE_D3D_CONFIG",
@@ -60,6 +61,7 @@ fn the_caller_s_wine_and_graphics_variables_are_removed() {
         assert_ne!(value(&env, name), Some(OsStr::new("caller")), "{name}");
     }
     for name in [
+        "WINEDLLOVERRIDES",
         "WINETEST_DEBUG",
         "WINETEST_REPORT_FLAKY",
         "WINETEST_PLATFORM",
@@ -81,7 +83,6 @@ fn the_runner_s_settings_are_set_once() {
     );
     for (name, expected) in [
         ("WINEPREFIX", "/s/prefix"),
-        ("WINEDLLOVERRIDES", "mscoree,mshtml="),
         ("WINEDEBUG", "-all"),
         ("WINETEST_NO_MT_D3D", "1"),
         ("WINETEST_TIME", "1"),
@@ -90,7 +91,10 @@ fn the_runner_s_settings_are_set_once() {
         assert_eq!(value(&env, name), Some(OsStr::new(expected)), "{name}");
     }
     assert_eq!(value(&env, "WT_ONLY"), None);
-    assert_eq!(env.len(), 7);
+    // compatdb's built-in rules decide the DLL overrides, as they do for a
+    // game.
+    assert_eq!(value(&env, "WINEDLLOVERRIDES"), None);
+    assert_eq!(env.len(), 6);
 }
 
 #[test]
@@ -105,7 +109,6 @@ fn without_channels_the_environment_is_the_untraced_one() {
         ("PATH", "caller"),
         ("HOME", "caller"),
         ("WINEPREFIX", "/s/prefix"),
-        ("WINEDLLOVERRIDES", "mscoree,mshtml="),
         ("WINEDEBUG", "-all"),
         ("WINETEST_NO_MT_D3D", "1"),
         ("WINETEST_TIME", "1"),

@@ -296,7 +296,10 @@ cargo run -p conformance -- record d3d11     # write the baselines again
 - Every process gets the caller's environment without the variables that
   change Wine, the libraries it loads, its graphics stack or the test
   framework (`SCRUBBED` in
-  [`environment.rs`](../conformance/src/environment.rs)).
+  [`environment.rs`](../conformance/src/environment.rs)). The runner sets
+  no `WINEDLLOVERRIDES`: the DLL overrides are those of compatdb's
+  built-in rules, as in a game's prefix, which keep the Mono and Gecko
+  installers from opening a dialog.
 - Before it trusts a result, the runner checks the test process's
   `compatdb:` lines ([logging](compatdb.md#logging-and-verification))
   against the `expect` of its executable in `wine-tests.toml`, and stops on
@@ -737,7 +740,7 @@ validation layers and the llvm-mingw compilers.
 | Vulkan driver and manifest, EGL with Zink, ntdll's compatdb hooks | `check_vulkan`, `check_egl`, `check_compat_hooks` |
 | `wine.app` signature, entitlements and `Info.plist` | `check_loader_app` |
 | `minos` of every Mach-O at most the floor, no import of `FLOOR_NEWER_FUNCS` ([macOS floors](maintenance.md#macos-floors)) | `check_minos`, `check_floor_newer_imports` |
-| A fresh prefix boots with msync and compatdb, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, DXMT's emulated stream output under Metal shader validation, DXMT's bounds on shader bytecode, its context state and deferred context lifetimes and its depth bias on D24 targets, wined3d, WMA decoding, FEX on code that faults or changes, a 64-bit debugger attaching to and detaching from an i386 process, once continuing its break-in and once passing it on, and outside Wine, GStreamer, and EGL with Zink's depth bias on 24-bit depth buffers, its pixel buffer object transfers of float and signed normalized texels and its statistics queries that are active together, the latter also under Khronos' validation layers, which may report no error | `smoke_test` and the `check_*` functions it calls |
+| A fresh prefix boots with msync and compatdb, with the DLL overrides of the built-in rules alone and no Mono or Gecko dialog, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, DXMT's emulated stream output under Metal shader validation, DXMT's bounds on shader bytecode, its context state and deferred context lifetimes and its depth bias on D24 targets, wined3d, WMA decoding, FEX on code that faults or changes, a 64-bit debugger attaching to and detaching from an i386 process, once continuing its break-in and once passing it on, and outside Wine, GStreamer, and EGL with Zink's depth bias on 24-bit depth buffers, its pixel buffer object transfers of float and signed normalized texels and its statistics queries that are active together, the latter also under Khronos' validation layers, which may report no error | `smoke_test` and the `check_*` functions it calls |
 
 On a Mac without a Metal 4 GPU, such as a hosted CI runner, the checks
 that need a KosmicKrisp device or Zink change or are left out, and so are
