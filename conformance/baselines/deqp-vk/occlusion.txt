@@ -1,0 +1,14 @@
+# Expected deqp-vk results of the group occlusion: every case that does not pass.
+# Written by `cargo run -p conformance -- deqp-vk record --group occlusion`: do not edit.
+# component: mesa=4ae7d5fbd098d747b83e5f2334dded37c93e4beb
+# component: vk-gl-cts=e272471311301a35aae6364def1a3f5ea35215f7
+# component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
+# cases: 513
+
+dEQP-VK.query_pool.occlusion_query.copy_reset_results_size_64_stride_32_with_availability_dstoffset_device_address not-supported
+dEQP-VK.query_pool.occlusion_query.copy_reset_results_size_64_stride_40_with_availability_device_address not-supported
+dEQP-VK.query_pool.occlusion_query.copy_results_size_32_stride_16_without_availability_dstoffset_device_address not-supported
+dEQP-VK.query_pool.occlusion_query.copy_results_size_32_stride_20_without_availability_device_address not-supported
+dEQP-VK.query_pool.occlusion_query.copy_results_size_32_stride_4_without_availability_device_address not-supported
+dEQP-VK.query_pool.occlusion_query.copy_results_size_64_stride_32_with_availability_dstoffset_device_address not-supported
+dEQP-VK.query_pool.occlusion_query.copy_results_size_64_stride_40_with_availability_device_address not-supported

@@ -98,6 +98,18 @@ exclude = [
     "dEQP-VK.memory_model.message_passing.ext.u64.*.atomic_atomic.atomicrmw.*.payload_local.*.frag",
 ]
 
+# Occlusion queries, which count into a visibility result buffer that the
+# render encoders of a pass accumulate into (#120). The query_pool cases
+# are in synchronization too.
+[[group]]
+name = "occlusion"
+issues = [120]
+cases = [
+    "dEQP-VK.query_pool.*occlusion*",
+    "dEQP-VK.fragment_operations.occlusion_query.*",
+    "dEQP-VK.api.command_buffers.inherited_occlusion_query*",
+]
+
 # Timestamp queries. The multiview cases, which are in draw too, write
 # timestamps inside render passes.
 [[group]]
