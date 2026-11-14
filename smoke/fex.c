@@ -2,23 +2,22 @@
  * FEX, once in its default mode and once with FEX_SMCCHECKS=full. Its cases run
  * code in reserved memory and on guard pages, writes to compiled pages,
  * instructions FEX cannot decode or fetch whole, pages taken away or changed
- * while code runs from them, a write to a page while it compiles, and memory
- * syscalls with their out-params on a compiled page, queries of one and writes
- * into one from this process and from a child. FEX has
- * hung on or got most of these wrong; the others guard behaviour that already
- * worked.
+ * while code runs from them, also by another process, which starts this program
+ * again as its child, a write to a page while it compiles, and memory syscalls
+ * with their out-params on a compiled page, queries of one and writes into one
+ * from this process and from a child. FEX has hung on or got most of these
+ * wrong; the others guard behaviour that already worked.
  *
  * The cases run in order in one process, or just those named on the command
- * line; trapped_write_other runs the program again as its child. Each prints its
- * name first. A failed case prints why and ends the
+ * line; trapped_write_other and cross_process_protect also run the program as
+ * a child. Each prints its name first. A failed case prints why and ends the
  * process with 1; the usual failure is a hang, and the last line then names the
  * case. There is no watchdog thread, since a stalled JIT stops that as well, so
  * the caller's time limit ends a hang. The exit code is 0 only when every case
  * passed.
  *
- * Do not add a case that changes the memory of a process that is compiling from
- * another process: FEX still hangs on that. Do not use TerminateThread on a
- * thread that has just started, which can leave the guest's loader lock held. */
+ * Do not use TerminateThread on a thread that has just started, which can leave
+ * the guest's loader lock held. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,6 +54,7 @@
 #define WRITE_ROUNDS 500
 #define GUARD_THREADS 2
 #define GUARD_ROUNDS 100
+#define CHILD_MS 1000
 
 static const char *current = "startup";
 
@@ -69,7 +69,7 @@ static const char *current = "startup";
  * is entered with a call and leaves the stack alone. Any other fault ends the
  * case. */
 static volatile ULONG_PTR code_lo, code_hi;
-static volatile LONG faults, fetch_faults, guards;
+static volatile LONG faults, fetch_faults, read_faults, guards, read_guards;
 static volatile DWORD fault_code, fault_params;
 static volatile ULONG_PTR fault_info0, fault_info1, fault_pc, fault_cx;
 static volatile ULONG_PTR guard_info0, guard_info1, guard_pc;
@@ -84,6 +84,7 @@ static LONG CALLBACK handler(EXCEPTION_POINTERS *e)
     if (r->ExceptionCode == EXCEPTION_GUARD_PAGE)
     {
         InterlockedIncrement(&guards);
+        if (r->ExceptionInformation[0] != FETCH) InterlockedIncrement(&read_guards);
         guard_info0 = r->ExceptionInformation[0];
         guard_info1 = r->ExceptionInformation[1];
         guard_pc = pc;
@@ -103,6 +104,7 @@ static LONG CALLBACK handler(EXCEPTION_POINTERS *e)
     fault_cx = (ULONG_PTR)CTX_CX(c);
     /* After the fields, which decommit_race reads once it sees this count */
     if (r->ExceptionCode == AV && r->ExceptionInformation[0] == FETCH) InterlockedIncrement(&fetch_faults);
+    if (r->ExceptionCode == AV && r->ExceptionInformation[0] == 0) InterlockedIncrement(&read_faults);
     CTX_PC(c) = *sp;
     CTX_SP(c) += sizeof(*sp);
     return EXCEPTION_CONTINUE_EXECUTION;
@@ -797,7 +799,7 @@ static void trapped_write_self_cow(void)
  * kernelbase makes the page RWX, writes and restores RX, which FEX takes for a
  * queued protect. On Windows the page stays RWX, so this process's own write
  * after it must not fault. This process waits for the child meanwhile, so it
- * compiles nothing during the child's write (see the header). The code it then
+ * compiles nothing during the child's write. The code it then
  * compiles has FEX process the queued protects first. */
 static int wpm_child(int argc, char **argv)
 {
@@ -1027,10 +1029,11 @@ static DWORD WINAPI sled_caller(void *arg)
  * to RX invalidates the sled, and a decommit can overtake the compile after it.
  * So the page goes once more with the sled compiled. The bytes never change, so
  * only a fetch fault shows the code went: the other thread may finish the calls
- * it is in, and then has to fetch from the page. A call in flight can take a read
- * fault there under FEX_SMCCHECKS=full, where compiled code reads the guest's
- * bytes, and code FEX kept does that every time, so a read does not count. This
- * counts calls, so it does not depend on how fast the machine is. */
+ * it is in, and then has to fetch from the page. Under FEX_SMCCHECKS=full,
+ * compiled code reads the guest's bytes before each instruction, and a fault in
+ * that read must reach the guest as the instruction's fetch fault, so a read
+ * fault fails the case. This counts calls, so it does not depend on how fast the
+ * machine is. */
 static void decommit_race(void)
 {
     BYTE *sled = new_pages(SLED_SIZE, PAGE_READWRITE);
@@ -1074,6 +1077,7 @@ static void decommit_race(void)
     if (fault_info1 != (ULONG_PTR)page) FAIL("[1]=%p, wanted %p", (void *)fault_info1, page);
     stop = 1;
     WaitForSingleObject(thread, INFINITE);
+    if (read_faults) FAIL("%ld read faults in the sled", read_faults);
 }
 
 static volatile LONG go, done;
@@ -1131,6 +1135,49 @@ static void guard_race(void)
     if (guards != GUARD_ROUNDS) FAIL("%ld guard exceptions, wanted %d", guards, GUARD_ROUNDS);
     if (faults) FAIL("%ld faults in threads that lost the race, [0]=%p [1]=%p", faults,
                      (void *)fault_info0, (void *)fault_info1);
+    if (guard_wrong) FAIL("%ld calls returned the wrong value", guard_wrong);
+}
+
+static DWORD WINAPI guard_caller(void *arg)
+{
+    int (*fn)(void) = arg;
+
+    while (!stop)
+        if (fn() != 23) InterlockedIncrement(&guard_wrong);
+    return 0;
+}
+
+/* Arms the guard of a page while another thread keeps calling its code, so a
+ * call can be in code compiled before the arm. Each arm raises one guard
+ * exception, at the fetch of an instruction on the page, and nothing faults.
+ * Under FEX_SMCCHECKS=full that code reads the page before it runs it, and the
+ * read stands in for the fetch. */
+static void guard_while_running(void)
+{
+    BYTE *page = new_pages(PAGE, PAGE_READWRITE);
+    HANDLE thread;
+    int i;
+
+    put_code(page, 23);
+    protect(page, PAGE, PAGE_EXECUTE_READ);
+    set_code(page, PAGE);
+    thread = CreateThread(NULL, 0, guard_caller, page, 0, NULL);
+    if (!thread) FAIL("CreateThread: %lu", GetLastError());
+    for (i = 1; i <= GUARD_ROUNDS; i++)
+    {
+        protect(page, PAGE, PAGE_EXECUTE_READ | PAGE_GUARD);
+        while (guards != i && !faults) YieldProcessor();
+        if (faults) break;
+    }
+    stop = 1;
+    WaitForSingleObject(thread, INFINITE);
+    if (faults) FAIL("%ld faults, [0]=%p [1]=%p", faults, (void *)fault_info0, (void *)fault_info1);
+    /* At either instruction: under FEX_SMCCHECKS=full an arm can land between
+     * the reads of the mov and the ret */
+    if (read_guards || guard_info1 != guard_pc
+            || (guard_pc != (ULONG_PTR)page && guard_pc != (ULONG_PTR)page + 5))
+        FAIL("%ld of %ld guard exceptions not a fetch, last [0]=%p [1]=%p pc %p", read_guards, guards,
+             (void *)guard_info0, (void *)guard_info1, (void *)guard_pc);
     if (guard_wrong) FAIL("%ld calls returned the wrong value", guard_wrong);
 }
 
@@ -1261,6 +1308,93 @@ static void rwx_write_race(void)
     WaitForSingleObject(thread, INFINITE);
 }
 
+/* The child of cross_process_protect, started as "child <pid> <page> <range>":
+ * for CHILD_MS, takes the page of that process away, turn by turn as NOACCESS
+ * and as a guard page, and gives it back, each after a spin below <range>. The
+ * parent compiles the page for every call, and another process does not wait
+ * for that compile, so the page also goes while it reads the page. Returns the
+ * exit code. */
+static int child_protect(char **argv)
+{
+    DWORD pid = strtoul(argv[2], NULL, 0);
+    void *page = (void *)(ULONG_PTR)strtoull(argv[3], NULL, 0);
+    unsigned int range = strtoul(argv[4], NULL, 0);
+    HANDLE process = OpenProcess(PROCESS_VM_OPERATION, FALSE, pid);
+    DWORD start = GetTickCount(), old;
+    int i;
+
+    if (!process) return 2;
+    for (i = 0; GetTickCount() - start < CHILD_MS; i++)
+    {
+        if (!VirtualProtectEx(process, page, PAGE, i % 2 ? PAGE_EXECUTE_READ | PAGE_GUARD : PAGE_NOACCESS, &old))
+            return 3;
+        spin_below(range);
+        if (!VirtualProtectEx(process, page, PAGE, PAGE_EXECUTE_READ, &old)) return 4;
+        spin_below(range);
+    }
+    return 0;
+}
+
+static DWORD WINAPI idle_waiter(void *arg)
+{
+    WaitForSingleObject(arg, INFINITE);
+    return 0;
+}
+
+/* Calls the code of a page while a child process takes the page away and gives
+ * it back. Wine runs the child's protect in a thread of this process that
+ * waits, which a thread that only waits provides, so the page can go while the
+ * calling thread compiles it. Each fault and guard exception is the fetch of an
+ * instruction on the page, and the call after the child ends runs. */
+static void cross_process_protect(void)
+{
+    HANDLE idle = CreateEventA(NULL, TRUE, FALSE, NULL), waiter;
+    BYTE *page = new_pages(PAGE, PAGE_READWRITE);
+    void (*fn)(void) = (void *)page;
+    STARTUPINFOA si = {sizeof(si)};
+    PROCESS_INFORMATION pi;
+    char path[MAX_PATH], cmd[MAX_PATH + 96];
+    LONG before, before_guards;
+    unsigned int range;
+    DWORD code;
+
+    fill_page(page, 1);
+    set_code(page, PAGE);
+    range = compile_spins(page);
+    protect(page, PAGE, PAGE_EXECUTE_READ);
+    if (!idle || !(waiter = CreateThread(NULL, 0, idle_waiter, idle, 0, NULL)))
+        FAIL("CreateThread: %lu", GetLastError());
+    if (!GetModuleFileNameA(NULL, path, sizeof(path))) FAIL("GetModuleFileName: %lu", GetLastError());
+    snprintf(cmd, sizeof(cmd), "\"%s\" child %lu %llu %u", path, GetCurrentProcessId(),
+             (unsigned long long)(ULONG_PTR)page, range);
+    if (!CreateProcessA(path, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+        FAIL("CreateProcess: %lu", GetLastError());
+    while (WaitForSingleObject(pi.hProcess, 0) == WAIT_TIMEOUT)
+    {
+        before = faults;
+        before_guards = guards;
+        /* Drops the compiled code, so every call compiles the page */
+        FlushInstructionCache(GetCurrentProcess(), page, PAGE);
+        fn();
+        if (faults != before && (fault_code != AV || fault_info0 != FETCH || fault_info1 != fault_pc))
+            FAIL("fault %#lx, [0]=%p [1]=%p pc %p, wanted a fetch fault", fault_code, (void *)fault_info0,
+                 (void *)fault_info1, (void *)fault_pc);
+        if (guards != before_guards && (guard_info0 != FETCH || guard_info1 != guard_pc
+                || guard_pc < (ULONG_PTR)page || guard_pc >= (ULONG_PTR)page + PAGE))
+            FAIL("guard exception [0]=%p [1]=%p pc %p, wanted the fetch of an instruction on %p",
+                 (void *)guard_info0, (void *)guard_info1, (void *)guard_pc, page);
+    }
+    if (!GetExitCodeProcess(pi.hProcess, &code) || code) FAIL("the child exited with %lu", code);
+    before = faults;
+    fn();
+    if (faults != before) FAIL("the call after the child faulted, [0]=%p [1]=%p", (void *)fault_info0,
+                               (void *)fault_info1);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    SetEvent(idle);
+    WaitForSingleObject(waiter, INFINITE);
+}
+
 #define CASE(name) { #name, name }
 static const struct
 {
@@ -1305,7 +1439,9 @@ static const struct
     CASE(trapped_write_self_cow),
     CASE(trapped_write_other),
     CASE(guard_race),
+    CASE(guard_while_running),
     CASE(decommit_race),
+    CASE(cross_process_protect),
     CASE(rwx_to_rw_race),
     CASE(rwx_write_race),
 };
@@ -1327,6 +1463,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "wpm_child")) return wpm_child(argc, argv);
     setvbuf(stdout, NULL, _IONBF, 0);
     srand(GetTickCount());
+    if (argc == 5 && !strcmp(argv[1], "child")) return child_protect(argv);
     AddVectoredExceptionHandler(1, handler);
     for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
     {
@@ -1334,7 +1471,7 @@ int main(int argc, char **argv)
         printf("wine-build smoke test: %s case %s\n", ARCH, cases[i].name);
         current = cases[i].name;
         code_lo = code_hi = 0;
-        faults = guards = stop = go = done = 0;
+        faults = read_faults = guards = read_guards = guard_wrong = stop = go = done = 0;
         cases[i].run();
         ran++;
     }

@@ -667,6 +667,10 @@ from one upstream `wine-X.Y` tag to the next. To move FEX to a newer tag:
   - FEX's `__wine_notify_memory_write` export, which they call around
     `NtWriteVirtualMemory` into the current process, so that the
     wineserver's write gets through a page FEX write-protected.
+- `ContextImpl::IsCodeValidationRead` takes a load followed by a plain
+  CRC32 for a full SMC check, which only `DEF_OP(ValidateCode)` emits.
+  Check that `git grep -n 'crc32[bhwx](' FEXCore/Source` still finds
+  only the lines of that function.
 - Push the branch to athei/FEX before building without `FEX_REPO`
   pointing at the local clone; the default builds what the remote has.
 - After the bundle step, run all suites with the

@@ -1613,13 +1613,13 @@ check_wmadec_runs() {
 # <env-command> drops the caller's FEX_* variables, so each run gets the mode it
 # names and only that run has it. A hang is how these cases usually fail, so the
 # limits are lower than the 120 seconds of the other runs. The slowest clean runs
-# took about 1 and 4 seconds on a busy current Mac, and small programs take up to
-# 4 times as long on a hosted runner, so the limits are 2 to 3 times that.
+# took about 1.9 and 4.5 seconds on a busy current Mac, and small programs take up
+# to 4 times as long on a hosted runner, so the limits are 2 to 3 times that.
 check_fex_runs() {
     local arch
     for arch in x86_64 i686; do
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/fex-$arch.exe" "$REPO_DIR/smoke/fex.c"
-        run_fex "$arch" "default mode" 10 "$@"
+        run_fex "$arch" "default mode" 20 "$@"
         run_fex "$arch" FEX_SMCCHECKS=full 40 "$@" FEX_SMCCHECKS=full
     done
 }
