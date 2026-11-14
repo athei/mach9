@@ -1646,42 +1646,53 @@ run_fex() {
     grep "$want" "$log" | sed 's/^/    /'
 }
 
-# check_attach_runs <env-command>...: build smoke/attach.c for aarch64 and
-# i686 and run the aarch64 program, a debugger like the bundle's winedbg, in
-# the booted throwaway prefix on the i686 one (run_attach), once continuing the
-# break-in and once passing it on to the target. The second run puts an
-# exception on a thread FEX never ran through FEX's exception hook.
+# check_attach_runs <env-command>...: build smoke/attach.c for aarch64, i686
+# and x86_64 and run it as a debugger in the booted throwaway prefix
+# (run_attach), each pair once continuing the break-in and once passing it on
+# to the target. The second run puts an exception on a thread FEX never ran
+# through FEX's exception hook. The aarch64 program, a debugger like the
+# bundle's winedbg, runs on the i686 and the x86_64 one. The x86_64 program
+# runs on the i686 one: an x86_64 debugger is an ARM64EC process, whose
+# DbgUiRemoteBreakin the 64-bit side of the target cannot run either, and
+# which names it by another address than the aarch64 debugger does.
 check_attach_runs() {
-    local target
-    "$MINGW_DIR/bin/aarch64-w64-mingw32-clang" -O2 -o "$TMP_DIR/attach-aarch64.exe" "$REPO_DIR/smoke/attach.c"
-    "$MINGW_DIR/bin/i686-w64-mingw32-clang" -O2 -o "$TMP_DIR/attach-i686.exe" "$REPO_DIR/smoke/attach.c"
-    target="Z:$(tr / '\\' <<< "$TMP_DIR/attach-i686.exe")"
-    run_attach continue continued "$target" "$@"
-    run_attach pass "passed on" "$target" "$@"
+    local arch
+    for arch in aarch64 i686 x86_64; do
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/attach-$arch.exe" "$REPO_DIR/smoke/attach.c"
+    done
+    for arch in i686 x86_64; do
+        run_attach continue continued aarch64 "$arch" "$@"
+        run_attach pass "passed on" aarch64 "$arch" "$@"
+    done
+    run_attach continue continued x86_64 i686 "$@"
+    run_attach pass "passed on" x86_64 i686 "$@"
 }
 
-# run_attach <mode> <verb> <target> <env-command>...: run the aarch64 attach.exe
-# in <mode> on the i686 <target>, and exit with the log unless it attached to
-# the running process, got the break-in, saw the break-in thread exit with no
-# other exception and detached without killing the process, and printed <verb>
-# in its line (smoke/attach.c says how). The program's own waits of 5 seconds
-# end a failure, and it fails at the first unexpected exception, so the limit
-# only catches a hang of Wine itself. A clean run takes about 0.1 seconds.
+# run_attach <mode> <verb> <debugger> <arch> <env-command>...: run the
+# attach.exe built for <debugger> in <mode> on the one built for <arch>, and
+# exit with the log unless it attached to the running process, found it
+# running as <arch>, got the break-in, saw the break-in thread exit with no
+# other exception and detached without killing the process, and printed
+# <verb> in its line (smoke/attach.c says how). The program's own waits of 5
+# seconds end a failure, and it fails at the first unexpected exception, so
+# the limit only catches a hang of Wine itself. A clean run takes about 0.1
+# seconds.
 run_attach() {
-    local mode="$1" verb="$2" target="$3" log="$TMP_DIR/attach-$1.log" want
-    shift 3
-    time_mark "smoke: attach.exe aarch64 on i686 ($mode)"
-    echo "  Attaching the aarch64 attach.exe to the i686 one ($mode)..."
-    run_limited 10 "$log" "$@" "$WINE_DIR/bin/wine" "$TMP_DIR/attach-aarch64.exe" "$mode" "$target"
-    smoke_check "attach.exe for aarch64 on the i686 process ($mode)" 10 "$log"
-    want="wine-build smoke test: aarch64 attached to the WoW64 process, $verb the break-in"
+    local mode="$1" verb="$2" debugger="$3" arch="$4" log="$TMP_DIR/attach-$3-$4-$1.log" target want
+    shift 4
+    target="Z:$(tr / '\\' <<< "$TMP_DIR/attach-$arch.exe")"
+    time_mark "smoke: attach.exe $debugger on $arch ($mode)"
+    echo "  Attaching the $debugger attach.exe to the $arch one ($mode)..."
+    run_limited 10 "$log" "$@" "$WINE_DIR/bin/wine" "$TMP_DIR/attach-$debugger.exe" "$mode" "$target"
+    smoke_check "attach.exe for $debugger on the $arch process ($mode)" 10 "$log"
+    want="wine-build smoke test: $debugger attached to the $arch process, $verb the break-in"
     if ! grep -q "$want" "$log"; then
-        echo "Error: attach.exe for aarch64 ($mode) did not print '$want'"
+        echo "Error: attach.exe for $debugger on the $arch process ($mode) did not print '$want'"
         cat "$log"
         smoke_stop
         exit 1
     fi
-    grep "wine-build smoke test: aarch64 attached" "$log" | sed 's/^/    /'
+    grep "wine-build smoke test: $debugger attached" "$log" | sed 's/^/    /'
 }
 
 # check_wgl_runs <env-command>...: build smoke/wgl.c for each arch of

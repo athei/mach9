@@ -1,25 +1,35 @@
 /* The program bundle-wine.sh builds for aarch64, the architecture of the
- * bundle's winedbg, and for i686, to check that a 64-bit debugger attaches to a
- * running 32-bit (WoW64) process and detaches again without killing it. The
- * break-in thread starts at the debugger's DbgUiRemoteBreakin, which is above
- * 4 GB, so the WoW64 process has to run it on its 64-bit context instead of
- * in the 32-bit simulation.
+ * bundle's winedbg, and for i686 and x86_64, to check that a 64-bit debugger
+ * attaches to a running x86 process and detaches again without killing it.
+ * The debugger asks for the break-in thread at its own DbgUiRemoteBreakin,
+ * which neither target can run as it is. For a 32-bit (WoW64) process it is
+ * above 4 GB, so the process has to run it on its 64-bit context instead of
+ * in the 32-bit simulation. For an x86_64 (ARM64EC) process it is in the
+ * ARM64 half of ntdll, which is not set up there and which a call from
+ * ARM64EC code hands to the emulator as x86 code, so the process has to run
+ * the DbgUiRemoteBreakin of its own half. The x86_64 build is also run as the
+ * debugger of the i686 one: it is an ARM64EC process, so its
+ * DbgUiRemoteBreakin is in the ARM64EC half, which the 64-bit side of a WoW64
+ * process, the ARM64 half, cannot run.
  *
  * attach.exe <continue|pass> <target.exe> starts "<target.exe> target <ready>
  * <quit>", where the two are handles of events it inherits, and attaches to it
- * once the target set <ready>. It then expects one breakpoint, at an address
- * above 4 GB, and the exit with 0 of the thread that raised it, detaches, sets
- * <quit> and waits for the target to exit. With continue it continues the
- * breakpoint as handled. With pass it passes it on to the target, as winedbg's
- * pass does, so that the exception dispatch of the break-in thread runs and
+ * once the target set <ready>. The target has to run as an i386 or x86_64
+ * process. The program then expects one breakpoint, at an address above 4 GB,
+ * and the exit with 0 of the thread that raised it, detaches, sets <quit> and
+ * waits for the target to exit. With continue it continues the breakpoint as
+ * handled. With pass it passes it on to the target, as winedbg's pass does, so
+ * that the exception dispatch of the break-in thread runs and
  * DbgUiRemoteBreakin's own handler takes it; the emulator then sees an
  * exception on a thread it never ran. Any other exception fails the run when
- * the debugger gets it. The program prints one line and exits with 0 when
- * every step worked and the target exited with 0, else it prints what failed,
- * ends the target and exits with 1. Every wait has a time limit, and the
- * target exits with 2 when <quit> does not come in time, so a failure never
- * hangs. */
+ * the debugger gets it. The program prints one line, which names the
+ * target's architecture, and exits with 0 when every step worked and the
+ * target exited with 0, else it prints what failed, ends the target and exits
+ * with 1. Every wait has a time limit, and the target exits with 2 when
+ * <quit> does not come in time, so a failure never hangs. */
 
+/* for GetProcessInformation() and ProcessMachineTypeInfo */
+#define _WIN32_WINNT 0x0A00
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -73,7 +83,9 @@ static int debugger(BOOL pass, const char *path)
     HANDLE ready, quit;
     DWORD breakin_tid = 0, code = ~0u, status;
     void *breakin_addr = NULL;
-    BOOL wow64 = FALSE, done = FALSE;
+    PROCESS_MACHINE_INFORMATION machine = { 0 };
+    const char *target_arch = NULL;
+    BOOL done = FALSE;
     char cmd[MAX_PATH + 64];
 
     ready = CreateEventA(&sa, TRUE, FALSE, NULL);
@@ -83,8 +95,12 @@ static int debugger(BOOL pass, const char *path)
              (unsigned long)(ULONG_PTR)ready, (unsigned long)(ULONG_PTR)quit);
     if (!CreateProcessA(NULL, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
         fail("cannot start %s, error %lu", path, GetLastError());
-    if (!IsWow64Process(pi.hProcess, &wow64) || !wow64)
-        fail("%s is not a WoW64 process", path);
+    if (!GetProcessInformation(pi.hProcess, ProcessMachineTypeInfo, &machine, sizeof(machine)))
+        fail("cannot read the machine of %s, error %lu", path, GetLastError());
+    if (machine.ProcessMachine == IMAGE_FILE_MACHINE_I386) target_arch = "i686";
+    else if (machine.ProcessMachine == IMAGE_FILE_MACHINE_AMD64) target_arch = "x86_64";
+    else fail("%s runs as machine %04x, not as an i386 or x86_64 process", path,
+              machine.ProcessMachine);
     if (WaitForSingleObject(ready, WAIT_MS))
         fail("the target was not ready within %u ms", WAIT_MS);
 
@@ -137,8 +153,8 @@ static int debugger(BOOL pass, const char *path)
         fail("the target did not exit within %u ms after the detach", WAIT_MS);
     if (!GetExitCodeProcess(pi.hProcess, &code) || code)
         fail("the target exited with %lu after the detach", code);
-    printf("wine-build smoke test: %s attached to the WoW64 process, %s the break-in at %p and detached\n",
-           ARCH, pass ? "passed on" : "continued", breakin_addr);
+    printf("wine-build smoke test: %s attached to the %s process, %s the break-in at %p and detached\n",
+           ARCH, target_arch, pass ? "passed on" : "continued", breakin_addr);
     return 0;
 }
 
