@@ -138,3 +138,20 @@ cases = [
     "dEQP-VK.pipeline.monolithic.timestamp.*",
     "dEQP-VK.multiview.*timestamp*",
 ]
+
+# Fragment shaders that run per sample, whose fragment coordinate
+# KosmicKrisp moves to the sample (#124): the cases guard x and y, a
+# constant z and depth writes under sample shading. None checks a sloped z;
+# smoke/egl.c depth-bias does.
+[[group]]
+name = "sample-shading"
+issues = [124]
+cases = [
+    "dEQP-VK.glsl.builtin_var.fragcoord_msaa*",
+    "dEQP-VK.glsl.builtin_var.fragdepth.*",
+    "dEQP-VK.glsl.builtin_var.simple.fragcoord_xyz",
+    "dEQP-VK.pipeline.monolithic.multisample_shader_builtin.*",
+    "dEQP-VK.pipeline.monolithic.multisample.min_sample_shading*",
+    "dEQP-VK.pipeline.monolithic.multisample.z_export.*",
+    "dEQP-VK.pipeline.monolithic.multisample.sample_mask_with_depth_test.*",
+]
