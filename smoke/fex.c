@@ -2,22 +2,23 @@
  * FEX, once in its default mode and once with FEX_SMCCHECKS=full. Its cases run
  * code in reserved memory and on guard pages, writes to compiled pages,
  * instructions FEX cannot decode or fetch whole, pages taken away or changed
- * while code runs from them, and a write to a page while it compiles. FEX has
+ * while code runs from them, a write to a page while it compiles, and memory
+ * syscalls with their out-params on a compiled page, queries of one and writes
+ * into one from this process and from a child. FEX has
  * hung on or got most of these wrong; the others guard behaviour that already
  * worked.
  *
  * The cases run in order in one process, or just those named on the command
- * line. Each prints its name first. A failed case prints why and ends the
+ * line; trapped_write_other runs the program again as its child. Each prints its
+ * name first. A failed case prints why and ends the
  * process with 1; the usual failure is a hang, and the last line then names the
  * case. There is no watchdog thread, since a stalled JIT stops that as well, so
  * the caller's time limit ends a hang. The exit code is 0 only when every case
  * passed.
  *
- * Do not add a case that passes the old protection or another out-param of an
- * Nt call pointing into a compiled RWX page, or that changes the memory of a
- * process that is compiling from another process: FEX still hangs on those. Do
- * not use TerminateThread on a thread that has just started, which can leave the
- * guest's loader lock held. */
+ * Do not add a case that changes the memory of a process that is compiling from
+ * another process: FEX still hangs on that. Do not use TerminateThread on a
+ * thread that has just started, which can leave the guest's loader lock held. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -588,6 +589,269 @@ static void call_gone_page(BYTE *page)
     check_fault(AV, page, FETCH, page);
 }
 
+typedef LONG (WINAPI *alloc_fn)(HANDLE, void **, ULONG_PTR, SIZE_T *, ULONG, ULONG);
+typedef LONG (WINAPI *free_fn)(HANDLE, void **, SIZE_T *, ULONG);
+typedef LONG (WINAPI *protect_fn)(HANDLE, void **, SIZE_T *, ULONG, ULONG *);
+
+static void *ntdll_func(const char *name)
+{
+    void *p = (void *)GetProcAddress(GetModuleHandleA("ntdll.dll"), name);
+
+    if (!p) FAIL("no %s", name);
+    return p;
+}
+
+/* An RWX page with mov eax, 1; ret, called once, so that FEX write-protects it.
+ * The out-params go at 0x800, after the code. */
+static BYTE *trapped_page(void)
+{
+    BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)page;
+
+    put_code(page, 1);
+    if (fn() != 1) FAIL("first call");
+    return page;
+}
+
+static void call_again(BYTE *page)
+{
+    int (*fn)(void) = (void *)page;
+
+    if (fn() != 1) FAIL("call of the trapped page");
+}
+
+static DWORD WINAPI alloc_thread(void *arg)
+{
+    void *p = VirtualAlloc(NULL, PAGE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+
+    if (p) VirtualFree(p, 0, MEM_RELEASE);
+    return !p;
+}
+
+/* A virtual memory call of another thread returns: one that faulted in the
+ * syscall can leave Wine's virtual memory mutex held. */
+static void check_other_thread(void)
+{
+    HANDLE thread = CreateThread(NULL, 0, alloc_thread, NULL, 0, NULL);
+    DWORD code;
+
+    if (!thread) FAIL("CreateThread: %lu", GetLastError());
+    if (WaitForSingleObject(thread, 5000)) FAIL("a VirtualAlloc of another thread did not return");
+    if (!GetExitCodeThread(thread, &code) || code) FAIL("VirtualAlloc of another thread failed");
+    CloseHandle(thread);
+}
+
+/* NtAllocateVirtualMemory and NtFreeVirtualMemory with the address and size on
+ * a trapped page. On Windows the page is writable, so both succeed. */
+static void trapped_alloc_free(void)
+{
+    alloc_fn alloc = ntdll_func("NtAllocateVirtualMemory");
+    free_fn release = ntdll_func("NtFreeVirtualMemory");
+    BYTE *page = trapped_page();
+    void **addr = (void **)(page + 0x800);
+    SIZE_T *size = (SIZE_T *)(page + 0x800 + sizeof(void *));
+    MEMORY_BASIC_INFORMATION info;
+    void *mem;
+    LONG status;
+
+    *addr = NULL;
+    *size = 3 * PAGE;
+    call_again(page);
+    status = alloc(GetCurrentProcess(), addr, 0, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (status || !*addr || *size != 3 * PAGE)
+        FAIL("alloc: status %#lx, %p size %#lx", status, *addr, (ULONG)*size);
+    mem = *addr;
+    ((volatile BYTE *)mem)[0] = 1;
+
+    call_again(page);
+    *size = 0;
+    status = release(GetCurrentProcess(), addr, size, MEM_RELEASE);
+    if (status || *addr != mem || *size != 3 * PAGE)
+        FAIL("free: status %#lx, %p size %#lx, wanted %p", status, *addr, (ULONG)*size, mem);
+    if (!VirtualQuery(mem, &info, sizeof(info)) || info.State != MEM_FREE)
+        FAIL("state %#lx after the free", info.State);
+    check_other_thread();
+    call_again(page);
+}
+
+/* NtProtectVirtualMemory with all its out-params on a trapped page, taking the
+ * code of an RX page away. The protect succeeds, as on Windows, and the code
+ * then faults. VirtualProtect passes old_prot on as it is. */
+static void trapped_protect(void)
+{
+    protect_fn protect_nt = ntdll_func("NtProtectVirtualMemory");
+    BYTE *code = compiled_page();
+    BYTE *page = trapped_page();
+    void **addr = (void **)(page + 0x800);
+    SIZE_T *size = (SIZE_T *)(page + 0x800 + sizeof(void *));
+    ULONG *old = (ULONG *)(page + 0x800 + 2 * sizeof(void *));
+    MEMORY_BASIC_INFORMATION info;
+    LONG status;
+
+    *addr = code;
+    *size = PAGE;
+    call_again(page);
+    status = protect_nt(GetCurrentProcess(), addr, size, PAGE_NOACCESS, old);
+    if (status || *addr != code || *size != PAGE || *old != PAGE_EXECUTE_READ)
+        FAIL("status %#lx, %p size %#lx old %#lx", status, *addr, (ULONG)*size, *old);
+    if (!VirtualQuery(code, &info, sizeof(info)) || info.Protect != PAGE_NOACCESS)
+        FAIL("protection %#lx after the protect", info.Protect);
+    call_gone_page(code);
+
+    call_again(page);
+    if (!VirtualProtect(code, PAGE, PAGE_EXECUTE_READ, (DWORD *)old)) FAIL("VirtualProtect: %lu", GetLastError());
+    if (*old != PAGE_NOACCESS) FAIL("old protection %#lx", *old);
+    check_other_thread();
+    call_again(page);
+}
+
+static void check_region(BYTE *addr, BYTE *base, SIZE_T size, DWORD prot)
+{
+    MEMORY_BASIC_INFORMATION info;
+
+    if (!VirtualQuery(addr, &info, sizeof(info))) FAIL("VirtualQuery: %lu", GetLastError());
+    if (info.BaseAddress != base || info.RegionSize != size || info.Protect != prot || info.State != MEM_COMMIT)
+        FAIL("at %p: base %p size %#lx protection %#lx state %#lx, wanted %p %#lx %#lx", addr, info.BaseAddress,
+             (ULONG)info.RegionSize, info.Protect, info.State, base, (ULONG)size, prot);
+}
+
+/* VirtualQuery of RWX pages that FEX traps, between one it untrapped and one
+ * the guest made RX. Windows reports one RWX region before the RX one. The last
+ * query puts its result on a trapped page. */
+static void trapped_query(void)
+{
+    BYTE *base = new_pages(4 * PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)base;
+    MEMORY_BASIC_INFORMATION *info = (MEMORY_BASIC_INFORMATION *)(base + 0x800);
+
+    protect(base + 3 * PAGE, PAGE, PAGE_EXECUTE_READ);
+    put_code(base, 1);
+    if (fn() != 1) FAIL("first call");
+    base[2 * PAGE] = 1;
+
+    check_region(base, base, 3 * PAGE, PAGE_EXECUTE_READWRITE);
+    check_region(base + PAGE, base + PAGE, 2 * PAGE, PAGE_EXECUTE_READWRITE);
+    check_region(base + 2 * PAGE, base + 2 * PAGE, PAGE, PAGE_EXECUTE_READWRITE);
+    check_region(base + 3 * PAGE, base + 3 * PAGE, PAGE, PAGE_EXECUTE_READ);
+
+    if (fn() != 1) FAIL("second call");
+    if (!VirtualQuery(base, info, sizeof(*info))) FAIL("VirtualQuery into the page: %lu", GetLastError());
+    if (info->Protect != PAGE_EXECUTE_READWRITE || info->RegionSize != 3 * PAGE)
+        FAIL("into the page: protection %#lx size %#lx", info->Protect, (ULONG)info->RegionSize);
+    check_other_thread();
+}
+
+/* The same with no page untrapped, between pages the guest made RX before the
+ * code ran. Wine can then report the trapped pages and the RX ones as one
+ * region. */
+static void trapped_query_rx_neighbours(void)
+{
+    BYTE *base = new_pages(5 * PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)(base + PAGE);
+
+    protect(base, PAGE, PAGE_EXECUTE_READ);
+    protect(base + 4 * PAGE, PAGE, PAGE_EXECUTE_READ);
+    put_code(base + PAGE, 1);
+    if (fn() != 1) FAIL("first call");
+
+    check_region(base, base, PAGE, PAGE_EXECUTE_READ);
+    check_region(base + PAGE, base + PAGE, 3 * PAGE, PAGE_EXECUTE_READWRITE);
+    check_region(base + 3 * PAGE, base + 3 * PAGE, PAGE, PAGE_EXECUTE_READWRITE);
+    check_region(base + 4 * PAGE, base + 4 * PAGE, PAGE, PAGE_EXECUTE_READ);
+}
+
+/* WriteProcessMemory into a trapped page of this process. The query reports it
+ * writable, as on Windows, so kernelbase writes without a protect, and the
+ * wineserver's write has to get through FEX's trap. The code it wrote runs. */
+static void trapped_write_self(void)
+{
+    static const BYTE new_code[6] = {0xb8, 0x02, 0x00, 0x00, 0x00, 0xc3};
+    BYTE *page = trapped_page();
+    int (*fn)(void) = (void *)page;
+    SIZE_T written = 0;
+
+    call_again(page);
+    if (!WriteProcessMemory(GetCurrentProcess(), page, new_code, sizeof(new_code), &written))
+        FAIL("WriteProcessMemory: %lu", GetLastError());
+    if (written != sizeof(new_code)) FAIL("%lu bytes written", (ULONG)written);
+    if (fn() != 2) FAIL("call after the write");
+    page[0x800] = 1;
+    if (fn() != 2 || faults) FAIL("call after a write of the guest: %ld faults", faults);
+}
+
+/* The same on a copy-on-write view of a section, where Wine refuses
+ * PAGE_EXECUTE_READWRITE and FEX makes the page writable with
+ * PAGE_EXECUTE_WRITECOPY */
+static void trapped_write_self_cow(void)
+{
+    static const BYTE new_code[6] = {0xb8, 0x05, 0x00, 0x00, 0x00, 0xc3};
+    HANDLE section = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE, 0, PAGE, NULL);
+    BYTE *view = section ? MapViewOfFile(section, FILE_MAP_COPY | FILE_MAP_EXECUTE, 0, 0, PAGE) : NULL;
+    int (*fn)(void) = (void *)view;
+    SIZE_T written = 0;
+
+    if (!view) FAIL("MapViewOfFile: %lu", GetLastError());
+    put_code(view, 1);
+    if (fn() != 1) FAIL("first call");
+    if (fn() != 1) FAIL("second call");
+    if (!WriteProcessMemory(GetCurrentProcess(), view, new_code, sizeof(new_code), &written))
+        FAIL("WriteProcessMemory: %lu", GetLastError());
+    if (written != sizeof(new_code)) FAIL("%lu bytes written", (ULONG)written);
+    if (fn() != 5) FAIL("call after the write");
+}
+
+/* The same from another process, this program run as "wpm_child <pid> <address>",
+ * which writes a byte of data. Its query of this process reports FEX's trap, so
+ * kernelbase makes the page RWX, writes and restores RX, which FEX takes for a
+ * queued protect. On Windows the page stays RWX, so this process's own write
+ * after it must not fault. This process waits for the child meanwhile, so it
+ * compiles nothing during the child's write (see the header). The code it then
+ * compiles has FEX process the queued protects first. */
+static int wpm_child(int argc, char **argv)
+{
+    static const BYTE value = 0x5a;
+    HANDLE process;
+    SIZE_T written = 0;
+    void *addr;
+
+    if (argc != 4) return 2;
+    addr = (void *)(ULONG_PTR)strtoull(argv[3], NULL, 16);
+    /* Without PROCESS_VM_READ and PROCESS_DUP_HANDLE, Wine can't queue the
+     * notifications of the write for FEX in the parent */
+    process = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION |
+                          PROCESS_DUP_HANDLE, FALSE, strtoul(argv[2], NULL, 10));
+    if (!process) return 3;
+    if (!WriteProcessMemory(process, addr, &value, 1, &written)) return 4;
+    return written == 1 ? 0 : 5;
+}
+
+static void trapped_write_other(void)
+{
+    BYTE *page = trapped_page();
+    BYTE *other = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)page;
+    int (*compile)(void) = (void *)other;
+    char path[MAX_PATH], cmdline[MAX_PATH + 64];
+    STARTUPINFOA si = {sizeof(si)};
+    PROCESS_INFORMATION pi;
+    DWORD code;
+
+    if (!GetModuleFileNameA(NULL, path, sizeof(path))) FAIL("GetModuleFileName: %lu", GetLastError());
+    snprintf(cmdline, sizeof(cmdline), "\"%s\" wpm_child %lu %p", path, GetCurrentProcessId(), page + 0x10);
+    put_code(other, 4);
+    call_again(page);
+    if (!CreateProcessA(path, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+        FAIL("CreateProcess: %lu", GetLastError());
+    if (WaitForSingleObject(pi.hProcess, 20000)) FAIL("the child did not end");
+    if (!GetExitCodeProcess(pi.hProcess, &code) || code) FAIL("the child exited with %lu", code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    if (compile() != 4) FAIL("call of new code");
+    if (page[0x10] != 0x5a) FAIL("byte %#x after the child's write", page[0x10]);
+    page[0x800] = 1;
+    if (fn() != 1 || faults) FAIL("call after a write of the guest: %ld faults", faults);
+}
+
 static void decommit_compiled(void)
 {
     BYTE *page = compiled_page();
@@ -1041,6 +1305,13 @@ static const struct
     CASE(rwx_to_rx_write_three_pages),
     CASE(rwx_patch_restore),
     CASE(rwx_query_restore),
+    CASE(trapped_alloc_free),
+    CASE(trapped_protect),
+    CASE(trapped_query),
+    CASE(trapped_query_rx_neighbours),
+    CASE(trapped_write_self),
+    CASE(trapped_write_self_cow),
+    CASE(trapped_write_other),
     CASE(guard_race),
     CASE(decommit_race),
     CASE(rwx_to_rw_race),
@@ -1061,6 +1332,7 @@ int main(int argc, char **argv)
     size_t i;
     int ran = 0;
 
+    if (argc > 1 && !strcmp(argv[1], "wpm_child")) return wpm_child(argc, argv);
     setvbuf(stdout, NULL, _IONBF, 0);
     srand(GetTickCount());
     AddVectoredExceptionHandler(1, handler);

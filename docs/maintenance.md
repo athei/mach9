@@ -652,7 +652,21 @@ from one upstream `wine-X.Y` tag to the next. To move FEX to a newer tag:
   - ntdll's `__wine_syscall_dispatcher` and
     `__wine_unix_call_dispatcher_arm64ec`;
   - the `BTCpuProcessTerm` calls of wow64 and the `ProcessTerm` calls of
-    ARM64EC ntdll.
+    ARM64EC ntdll;
+  - the memory syscall wrappers of wow64 and ARM64EC ntdll, which pass
+    the syscall locals for the out-params and write them after FEX's
+    hooks, where FEX handles a write to a page it write-protected;
+  - FEX's `__wine_fix_memory_info` export, which they call after each
+    `MemoryBasicInformation` query a process makes of its own memory so
+    that a page FEX write-protected reports the guest's protection, and
+    once without a query at process start. Either side works without the
+    other: a FEX without the export gets no call, and a FEX that got no
+    call at start keeps the pages it write-protected writable when the
+    guest makes them read-only, as it does for a protect queued by
+    another process, whose queries still report FEX's protection;
+  - FEX's `__wine_notify_memory_write` export, which they call around
+    `NtWriteVirtualMemory` into the current process, so that the
+    wineserver's write gets through a page FEX write-protected.
 - Push the branch to athei/FEX before building without `FEX_REPO`
   pointing at the local clone; the default builds what the remote has.
 - After the bundle step, run all suites with the
