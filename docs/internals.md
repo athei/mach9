@@ -678,6 +678,17 @@ core and 2.1 compatibility.
   `SONAME_LIBEGL` is patched to `lib/external/` like the Vulkan loader.
 - Zink reports OpenGL above 2.1 only with transform feedback, which our
   KosmicKrisp always advertises.
+- KosmicKrisp has no 24-bit depth format, so Zink stores such buffers as
+  32-bit float. The device would apply a constant `glPolygonOffset` with
+  the float rule, whose step depends on the depth, so Zink applies it in
+  the fragment shader with the 24-bit step; on a multisampled buffer the
+  draw then runs once per sample. The float rule stays for fragment
+  shaders that declare early fragment tests, since the depth test runs
+  before the shader, for shaders that write depth, for lines, points and
+  polygons drawn as lines or points, and on a multisampled buffer for
+  shaders that write memory, whose stores would run once per sample, and
+  for shaders that read `gl_SampleMaskIn`, which would hold one sample
+  instead of the fragment's coverage.
 - The Mac driver takes the choice from compatdb's `opengl` setting
   ([`Rule::opengl`](https://mach9.app/compatdb_core/struct.Rule.html#method.opengl)).
 - With `egl` it does not fall back: where EGL does not start, as on a Mac
@@ -815,7 +826,7 @@ validation layers and the llvm-mingw compilers.
 | Vulkan driver and manifest, EGL with Zink, ntdll's compatdb hooks | `check_vulkan`, `check_egl`, `check_compat_hooks` |
 | `wine.app` signature, entitlements and `Info.plist` | `check_loader_app` |
 | `minos` of every Mach-O at most the floor, no import of `FLOOR_NEWER_FUNCS` ([macOS floors](maintenance.md#macos-floors)) | `check_minos`, `check_floor_newer_imports` |
-| A fresh prefix boots with msync and compatdb, with the DLL overrides of the built-in rules alone and no Mono or Gecko dialog, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, DXMT's emulated stream output under Metal shader validation, DXMT's bounds on shader bytecode, its context state and deferred context lifetimes and its depth bias on D24 targets, wined3d, WMA decoding, FEX on code that faults or changes and memory calls on its pages, an aarch64 debugger attaching to and detaching from an i386 and an x86_64 process and an x86_64 debugger doing so with an i386 process, each once continuing its break-in and once passing it on, and outside Wine, GStreamer, and EGL with Zink's depth bias on 24-bit depth buffers, its pixel buffer object transfers of float and signed normalized texels and its statistics queries that are active together, the latter also under Khronos' validation layers, which may report no error | `smoke_test` and the `check_*` functions it calls |
+| A fresh prefix boots with msync and compatdb, with the DLL overrides of the built-in rules alone and no Mono or Gecko dialog, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, DXMT's emulated stream output under Metal shader validation, DXMT's bounds on shader bytecode, its context state and deferred context lifetimes and its depth bias on D24 targets, wined3d, WMA decoding, FEX on code that faults or changes and memory calls on its pages, an aarch64 debugger attaching to and detaching from an i386 and an x86_64 process and an x86_64 debugger doing so with an i386 process, each once continuing its break-in and once passing it on, and outside Wine, GStreamer, and EGL with Zink's depth bias on 24-bit depth buffers, multisampled ones included, its pixel buffer object transfers of float and signed normalized texels and its statistics queries that are active together, the latter also under Khronos' validation layers, which may report no error | `smoke_test` and the `check_*` functions it calls |
 
 On a Mac without a Metal 4 GPU, such as a hosted CI runner, the checks
 that need a KosmicKrisp device or Zink change or are left out, and so are

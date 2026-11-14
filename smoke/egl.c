@@ -26,7 +26,14 @@
  * from float derivatives is off by up to the factor; the sloped quad drawn as
  * lines with GL_POLYGON_OFFSET_LINE, which keeps the device's bias; shaders
  * that read gl_FragCoord.z or only gl_FragCoord.xy; and a quad at the far
- * plane, which a 24-bit buffer saturates to 1.0.
+ * plane, which a 24-bit buffer saturates to 1.0. Then, with 4 samples, the
+ * difference at each sample of the centre pixel, which a shader reads from
+ * the multisampled depth texture: a flat quad at several depths, and the
+ * quad with the slope of 256 units per pixel, whose samples differ in depth,
+ * also with a slope factor; with a shader that reads gl_FragCoord.z, whose
+ * red has to equal the sample's depth, sloped in x, in y and in both; and the
+ * quad sloped in x with its right edge through the centre pixel left of the
+ * centre, whose covered samples have to get the offset too.
  *
  * The EGL and GL declarations it needs are written out here, so it builds
  * without EGL or GL headers. */
@@ -97,6 +104,9 @@ enum
 #define GL_DEPTH_COMPONENT24 0x81A6
 #define GL_DEPTH24_STENCIL8 0x88F0
 #define GL_R32F 0x822E
+#define GL_RGBA 0x1908
+#define GL_RGBA32F 0x8814
+#define GL_TEXTURE_2D_MULTISAMPLE 0x9100
 #define GL_FRAMEBUFFER 0x8D40
 #define GL_RENDERBUFFER 0x8D41
 #define GL_COLOR_ATTACHMENT0 0x8CE0
@@ -142,6 +152,10 @@ static struct
     void (*GetProgramiv)(unsigned int, unsigned int, int *);
     void (*UseProgram)(unsigned int);
     void (*PolygonMode)(unsigned int, unsigned int);
+    void (*GenTextures)(int, unsigned int *);
+    void (*BindTexture)(unsigned int, unsigned int);
+    void (*TexImage2DMultisample)(unsigned int, int, unsigned int, int, int, unsigned char);
+    void (*FramebufferTexture2D)(unsigned int, unsigned int, unsigned int, unsigned int, int);
 } gl;
 
 static const char *const gl_names[] = {
@@ -151,10 +165,12 @@ static const char *const gl_names[] = {
     "glCheckFramebufferStatus", "glGenRenderbuffers", "glBindRenderbuffer", "glRenderbufferStorage",
     "glCreateShader", "glShaderSource", "glCompileShader", "glGetShaderiv", "glCreateProgram",
     "glAttachShader", "glLinkProgram", "glGetProgramiv", "glUseProgram", "glPolygonMode",
+    "glGenTextures", "glBindTexture", "glTexImage2DMultisample", "glFramebufferTexture2D",
 };
 
 #define SIZE 64
 #define UNIT (1.0 / (1 << 24))
+#define SAMPLES 4
 
 /* the fragment shaders of the gl_FragCoord cases; the vertex shader passes the
  * vertex through */
@@ -163,11 +179,18 @@ static const char fs_z_source[] =
     "#version 120\nvoid main() { gl_FragColor = vec4(gl_FragCoord.z, 0.0, 0.0, 1.0); }\n";
 static const char fs_xy_source[] =
     "#version 120\nvoid main() { gl_FragColor = vec4(gl_FragCoord.x + gl_FragCoord.y, 0.0, 0.0, 1.0); }\n";
+/* reads samples 0 to 3 of a multisampled texture's red into red, green, blue
+ * and alpha */
+static const char vs_fetch_source[] = "#version 130\nvoid main() { gl_Position = gl_Vertex; }\n";
+static const char fs_fetch_source[] =
+    "#version 130\n#extension GL_ARB_texture_multisample : require\nuniform sampler2DMS tex;\n"
+    "void main() { ivec2 p = ivec2(gl_FragCoord.xy); gl_FragColor = vec4(texelFetch(tex, p, 0).r, "
+    "texelFetch(tex, p, 1).r, texelFetch(tex, p, 2).r, texelFetch(tex, p, 3).r); }\n";
 
-static unsigned int make_program(const char *fs_source)
+static unsigned int make_program(const char *vs, const char *fs_source)
 {
     unsigned int program = gl.CreateProgram(), shader;
-    const char *sources[2] = { vs_source, fs_source };
+    const char *sources[2] = { vs, fs_source };
     unsigned int types[2] = { GL_VERTEX_SHADER, GL_FRAGMENT_SHADER };
     int i, ok;
 
@@ -374,10 +397,189 @@ static int check_depth_format(const char *name, unsigned int format, unsigned in
     return ok;
 }
 
+/* the centre pixel's samples of a multisampled texture, read with
+ * program_fetch into the single-sampled framebuffer fetch_fbo */
+static void read_samples(unsigned int texture, unsigned int fetch_fbo, unsigned int program_fetch,
+                         float samples[SAMPLES])
+{
+    gl.BindFramebuffer(GL_FRAMEBUFFER, fetch_fbo);
+    gl.Disable(GL_DEPTH_TEST);
+    gl.UseProgram(program_fetch);
+    gl.BindTexture(GL_TEXTURE_2D_MULTISAMPLE, texture);
+    draw_quad(0.5, 0.5);
+    gl.BindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+    gl.UseProgram(0);
+    gl.ReadPixels(SIZE / 2, SIZE / 2, 1, 1, GL_RGBA, GL_FLOAT, samples);
+}
+
+/* a quad over the framebuffer from its left edge to the x of right, in
+ * pixels, with the window depth z0 + dzdx * x + dzdy * y at pixel position
+ * (x, y) */
+struct plane
+{
+    double right, z0, dzdx, dzdy;
+};
+
+static void draw_plane(const struct plane *p)
+{
+    static const double corners[4][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 } };
+    int i;
+
+    gl.Begin(GL_TRIANGLE_STRIP);
+    for (i = 0; i < 4; i++)
+    {
+        double x = corners[i][0] * p->right, y = corners[i][1] * SIZE;
+        double z = p->z0 + p->dzdx * x + p->dzdy * y;
+        gl.Vertex3f((float)(2.0 * x / SIZE - 1.0), (float)(2.0 * y / SIZE - 1.0), (float)(2.0 * z - 1.0));
+    }
+    gl.End();
+}
+
+/* draw_twice on the multisampled framebuffer ms_fbo with program, reading
+ * the centre pixel's samples of its depth and colour textures */
+static void draw_twice_ms(unsigned int ms_fbo, const unsigned int textures[2], unsigned int fetch_fbo,
+                          unsigned int program_fetch, unsigned int program, const struct plane *plane,
+                          float factor, float units, float depth[2][SAMPLES], float red[2][SAMPLES])
+{
+    int i;
+
+    for (i = 0; i < 2; i++)
+    {
+        gl.BindFramebuffer(GL_FRAMEBUFFER, ms_fbo);
+        gl.Enable(GL_DEPTH_TEST);
+        gl.DepthFunc(GL_ALWAYS);
+        gl.ClearDepth(1.0);
+        gl.ClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        gl.Clear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        if (i)
+        {
+            gl.Enable(GL_POLYGON_OFFSET_FILL);
+            gl.PolygonOffset(factor, units);
+        }
+        gl.UseProgram(program);
+        draw_plane(plane);
+        gl.UseProgram(0);
+        gl.Disable(GL_POLYGON_OFFSET_FILL);
+        read_samples(textures[0], fetch_fbo, program_fetch, depth[i]);
+        read_samples(textures[1], fetch_fbo, program_fetch, red[i]);
+    }
+}
+
+/* the cases on one depth format with 4 samples; every sample has to get the
+ * offset of its own depth. A sloped quad's samples differ by up to 192 units
+ * at 256 units per pixel, so an offset depth computed at the pixel centre
+ * misses at every sample. Returns whether all passed */
+static int check_depth_format_ms(const char *name, unsigned int format, unsigned int attachment,
+                                 unsigned int program_z, unsigned int program_fetch)
+{
+    static const double depths[] = { 0.125, 0.25, 0.5, 0.75 };
+    static const float units[] = { 100.0f, -100.0f };
+    const double slope = 256.0 * UNIT;
+    const struct plane in_x = { SIZE, 0.25, slope, 0.0 };
+    /* the sloped cases that read gl_FragCoord.z: in x, in y and diagonal */
+    const struct plane sloped[] = { in_x, { SIZE, 0.25, 0.0, slope }, { SIZE, 0.25, slope, slope } };
+    static const char *const sloped_names[] = { "slope 256 in x", "slope 256 in y", "slope 256 in x and y" };
+    /* the right edge through the centre pixel left of its centre, which
+     * leaves the centre uncovered and the samples left of it covered */
+    const struct plane edge = { SIZE / 2 + 0.45, 0.25, slope, 0.0 };
+    unsigned int fbo[2], textures[2], rb;
+    float depth[2][SAMPLES], red[2][SAMPLES];
+    char what[96];
+    int ok = 1, s, covered;
+    size_t i, j;
+
+    gl.GenTextures(2, textures);
+    gl.BindTexture(GL_TEXTURE_2D_MULTISAMPLE, textures[0]);
+    gl.TexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, SAMPLES, format, SIZE, SIZE, 1);
+    gl.BindTexture(GL_TEXTURE_2D_MULTISAMPLE, textures[1]);
+    gl.TexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, SAMPLES, GL_R32F, SIZE, SIZE, 1);
+    gl.BindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+    gl.GenFramebuffers(2, fbo);
+    gl.BindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+    gl.FramebufferTexture2D(GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D_MULTISAMPLE, textures[0], 0);
+    gl.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE, textures[1], 0);
+    if (gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        printf("egl: depth-bias: %s: multisampled framebuffer incomplete\n", name);
+        return 0;
+    }
+    gl.GenRenderbuffers(1, &rb);
+    gl.BindRenderbuffer(GL_RENDERBUFFER, rb);
+    gl.RenderbufferStorage(GL_RENDERBUFFER, GL_RGBA32F, SIZE, SIZE);
+    gl.BindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+    gl.FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb);
+    if (gl.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        printf("egl: depth-bias: %s: fetch framebuffer incomplete\n", name);
+        return 0;
+    }
+    gl.Viewport(0, 0, SIZE, SIZE);
+    gl.Color4f(1.0f, 0.0f, 0.0f, 1.0f);
+
+    for (i = 0; i < sizeof(depths) / sizeof(depths[0]); i++)
+    {
+        const struct plane flat = { SIZE, depths[i], 0.0, 0.0 };
+
+        for (j = 0; j < sizeof(units) / sizeof(units[0]); j++)
+        {
+            draw_twice_ms(fbo[0], textures, fbo[1], program_fetch, 0, &flat, 0.0f, units[j], depth, red);
+            for (s = 0; s < SAMPLES; s++)
+            {
+                snprintf(what, sizeof(what), "z %.3f, units %g, sample %d", depths[i], units[j], s);
+                ok &= report(name, what, (depth[1][s] - depth[0][s]) / UNIT, 2.0 * units[j], 1.0);
+            }
+        }
+    }
+
+    draw_twice_ms(fbo[0], textures, fbo[1], program_fetch, 0, &in_x, 0.0f, 100.0f, depth, red);
+    for (s = 0; s < SAMPLES; s++)
+    {
+        snprintf(what, sizeof(what), "slope 256 in x, units 100, sample %d", s);
+        ok &= report(name, what, (depth[1][s] - depth[0][s]) / UNIT, 200.0, 2.0);
+    }
+    draw_twice_ms(fbo[0], textures, fbo[1], program_fetch, 0, &in_x, 1.0f, 10.0f, depth, red);
+    for (s = 0; s < SAMPLES; s++)
+    {
+        snprintf(what, sizeof(what), "slope 256 in x, factor 1, units 10, sample %d", s);
+        ok &= report(name, what, (depth[1][s] - depth[0][s]) / UNIT, 276.0, 2.0);
+    }
+    /* gl_FragCoord.z reads the biased depth of the sample */
+    for (i = 0; i < sizeof(sloped) / sizeof(sloped[0]); i++)
+    {
+        draw_twice_ms(fbo[0], textures, fbo[1], program_fetch, program_z, &sloped[i], 0.0f, 100.0f, depth, red);
+        for (s = 0; s < SAMPLES; s++)
+        {
+            snprintf(what, sizeof(what), "gl_FragCoord.z, %s, units 100, sample %d, depth", sloped_names[i], s);
+            ok &= report(name, what, (depth[1][s] - depth[0][s]) / UNIT, 200.0, 2.0);
+            snprintf(what, sizeof(what), "gl_FragCoord.z, %s, units 100, sample %d, red minus depth",
+                     sloped_names[i], s);
+            ok &= report(name, what, (red[1][s] - depth[1][s]) / UNIT, 0.0, 1.0);
+        }
+    }
+    /* the covered samples of a pixel whose centre is not covered */
+    draw_twice_ms(fbo[0], textures, fbo[1], program_fetch, 0, &edge, 0.0f, 100.0f, depth, red);
+    for (s = covered = 0; s < SAMPLES; s++)
+    {
+        if (red[0][s] != 1.0f || red[1][s] != 1.0f)
+            continue;
+        covered++;
+        snprintf(what, sizeof(what), "edge at x 32.45, slope 256 in x, units 100, sample %d", s);
+        ok &= report(name, what, (depth[1][s] - depth[0][s]) / UNIT, 200.0, 2.0);
+    }
+    if (!covered || covered == SAMPLES)
+    {
+        printf("egl: depth-bias: %s: edge at x 32.45: %d of %d samples covered FAILED\n", name, covered,
+               SAMPLES);
+        ok = 0;
+    }
+    gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
+    return ok;
+}
+
 static int check_depth_bias(get_proc_address_t get_proc_address)
 {
     void **entries = (void **)&gl;
-    unsigned int program_z, program_xy, error;
+    unsigned int program_z, program_xy, program_fetch, error;
     size_t i;
     int ok;
 
@@ -389,7 +591,9 @@ static int check_depth_bias(get_proc_address_t get_proc_address)
             return FAIL_DEPTH_BIAS;
         }
     }
-    if (!(program_z = make_program(fs_z_source)) || !(program_xy = make_program(fs_xy_source)))
+    if (!(program_z = make_program(vs_source, fs_z_source)) ||
+        !(program_xy = make_program(vs_source, fs_xy_source)) ||
+        !(program_fetch = make_program(vs_fetch_source, fs_fetch_source)))
     {
         printf("egl: depth-bias: a shader did not compile or link\n");
         return FAIL_DEPTH_BIAS;
@@ -398,6 +602,10 @@ static int check_depth_bias(get_proc_address_t get_proc_address)
                             program_z, program_xy);
     ok &= check_depth_format("GL_DEPTH24_STENCIL8", GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL_ATTACHMENT,
                              program_z, program_xy);
+    ok &= check_depth_format_ms("GL_DEPTH_COMPONENT24, 4 samples", GL_DEPTH_COMPONENT24,
+                                GL_DEPTH_ATTACHMENT, program_z, program_fetch);
+    ok &= check_depth_format_ms("GL_DEPTH24_STENCIL8, 4 samples", GL_DEPTH24_STENCIL8,
+                                GL_DEPTH_STENCIL_ATTACHMENT, program_z, program_fetch);
     if ((error = gl.GetError()))
     {
         printf("egl: depth-bias: GL error %#x\n", error);
