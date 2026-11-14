@@ -20,12 +20,10 @@ ddraw/ddraw7/test_coop_level_mode_set issue=113  # AppKit moves the full screen 
 # once ddraw x86_64 ddraw/ddraw7/test_signed_formats: read black for all 60 checks at ddraw7.c:12023, then stalled 45 s with the test thread in a Sleep loop and the Cocoa main thread idle; its second run and a run of the key alone passed VERSION=wine-11.21-42-g7e9aaa39bfb mesa=689c916008cf608744f2d01e93cf8aa55103931e vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df dxmt=7429bb9e6de678aada18065bcae534bb72ab1d85 vkd3d-proton=c5e2c9b8c55872893e3ba47d60448dd4f35185ef fex=83f8be25aa270c263600bcda6e89232c2284441a
 
 d3d10core/d3d10core/test_depth_bias issue=80  # the D16 lines
-d3d10core/d3d10core/test_index_buffer_offset issue=74  # conjecture: appends of later draws lost
 d3d10core/d3d10core/test_stream_output_resume issue=75
 d3d11/d3d11/test_depth_bias issue=80  # the D16 lines
-d3d11/d3d11/test_index_buffer_offset issue=74  # conjecture: appends of later draws lost
 d3d11/d3d11/test_quad_tessellation issue=75
-d3d11/d3d11/test_so_statistics_query issue=74
+d3d11/d3d11/test_so_statistics_query issue=75  # geometry shader with 4 streams
 d3d11/d3d11/test_stream_output_resume issue=75
 d3d11/d3d11/test_vertex_id issue=75  # RasterizedStream 0
 d3d11/d3d11/test_video_support  # accepted: DXMT takes VIDEO_SUPPORT for Media Foundation games, has no ID3D11VideoDevice

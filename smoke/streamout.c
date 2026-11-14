@@ -9,8 +9,8 @@
  *                    vertices of 16 bytes), 64 vertices drawn: the 12 that fit
  *                    are written, nothing before the offset, nothing into 8
  *                    buffers created after the target
- *   append           the append offset 0xffffffff: nothing written, or the 4
- *                    vertices at offset 0
+ *   append           the append offset 0xffffffff on a target that was never
+ *                    streamed into: the 4 vertices at offset 0, its filled size
  *   unbind           a draw, then slot 0 unbound and a draw with other
  *                    vertices: only the first draw's vertices
  *   no-target        a draw with no target ever bound: nothing written
@@ -25,8 +25,34 @@
  *                    nothing
  *   swap-state       a context state binds target A, the default state target
  *                    B; after swapping back, a draw of 8 other vertices writes
- *                    them into A, at offset 0 or after the first draw's, and
- *                    nothing into B
+ *                    them into A after the first draw's, and nothing into B
+ *   append-draws     draws into one target with nothing between them, then
+ *                    after binding it again at 0xffffffff, also after unbinding
+ *                    it: each continues where the one before ended
+ *   rewrite          a target bound at offset 0 again after a draw, with no
+ *                    readback between: the second draw's vertices replace the
+ *                    first draw's, 16 times
+ *   overflow         triangles into a target with room for 5: the sixth is not
+ *                    written, not even in part; SO_STATISTICS and
+ *                    SO_OVERFLOW_PREDICATE count it
+ *   topology         indexed draws write in index order, with 16-bit and 32-bit
+ *                    indices, an index buffer offset, a start index and a base
+ *                    vertex; strips are written as lists; a line list drops the
+ *                    vertex that completes no line; instances follow each
+ *                    other, also from a start instance other than 0
+ *   slots            a declaration that writes two slots with a stride each:
+ *                    both stop at the primitive the smaller one has no room
+ *                    for, and nothing is written while one has no target
+ *   draw-auto        DrawAuto draws what stream output wrote, from the offset
+ *                    of the vertex buffer on
+ *   indirect         indirect draws append and overflow like the others, the
+ *                    queries count them, DrawAuto draws what they wrote, and a
+ *                    draw after it appends
+ *   deferred         a command list with a target, two draws and a query runs
+ *                    twice: the second run continues after the first, and the
+ *                    query has the counts of each run
+ *   adjacency        the four topologies with adjacency write their primitives
+ *                    without the adjacent vertices
  *   start-component  a draw with {POSITION .xyzw}, then a new geometry shader
  *                    with {POSITION .zw} drawn into another target: that
  *                    target holds .z and .w of each vertex and nothing else
@@ -35,9 +61,9 @@
  *                    is one whose header gives a size past the length passed
  *
  * Every case runs on a device of its own, and every buffer starts filled with
- * a pattern. A case reads its targets back between draws that write the same
- * range, which waits for the GPU, so no two draws of a case run at the same
- * time; DXMT does not order such draws.
+ * a pattern. The cases up to signature-blob read their targets back between
+ * draws, which waits for the GPU; the ones after it draw without a readback
+ * between, so DXMT has to order what two draws of a render pass write.
  *
  * A store outside a buffer may land where no readback sees it. Metal shader
  * validation (MTL_SHADER_VALIDATION=1) reports such a store, or a load of an
@@ -204,10 +230,10 @@ static float position(unsigned s, unsigned v, unsigned c)
     return 1000.0f * (float)s + (float)v + 0.25f * (float)c + 1.0f;
 }
 
-static ID3D11Buffer *create_buffer(UINT size, uint32_t fill)
+static ID3D11Buffer *create_buffer_bind(UINT size, uint32_t fill, UINT bind)
 {
     static uint32_t data[TARGET_WORDS];
-    D3D11_BUFFER_DESC desc = { size, D3D11_USAGE_DEFAULT, D3D11_BIND_STREAM_OUTPUT, 0, 0, 0 };
+    D3D11_BUFFER_DESC desc = { size, D3D11_USAGE_DEFAULT, bind, 0, 0, 0 };
     D3D11_SUBRESOURCE_DATA init = { data, 0, 0 };
     ID3D11Buffer *buffer;
     unsigned i;
@@ -215,6 +241,46 @@ static ID3D11Buffer *create_buffer(UINT size, uint32_t fill)
     for (i = 0; i < size / 4; i++) data[i] = fill;
     check_hr(ID3D11Device_CreateBuffer(device, &desc, &init, &buffer), "CreateBuffer");
     return buffer;
+}
+
+static ID3D11Buffer *create_buffer(UINT size, uint32_t fill)
+{
+    return create_buffer_bind(size, fill, D3D11_BIND_STREAM_OUTPUT);
+}
+
+/* A buffer with <data>, for indices (<bind>) or the arguments of indirect
+ * draws (<misc>) */
+static ID3D11Buffer *create_data_buffer(const void *data, UINT size, UINT bind, UINT misc)
+{
+    D3D11_BUFFER_DESC desc = { size, D3D11_USAGE_DEFAULT, bind, 0, misc, 0 };
+    D3D11_SUBRESOURCE_DATA init = { data, 0, 0 };
+    ID3D11Buffer *buffer;
+
+    check_hr(ID3D11Device_CreateBuffer(device, &desc, &init, &buffer), "CreateBuffer");
+    return buffer;
+}
+
+static ID3D11Query *create_query(D3D11_QUERY type)
+{
+    D3D11_QUERY_DESC desc = { type, 0 };
+    ID3D11Query *query;
+
+    check_hr(ID3D11Device_CreateQuery(device, &desc, &query), "CreateQuery");
+    return query;
+}
+
+/* Wait for the data of <query>, up to 5 seconds */
+static void get_query_data(ID3D11Query *query, void *data, UINT size)
+{
+    HRESULT hr = S_FALSE;
+    unsigned i;
+
+    for (i = 0; i < 500 && hr == S_FALSE; i++)
+    {
+        hr = ID3D11DeviceContext_GetData(context, (ID3D11Asynchronous *)query, data, size, 0);
+        if (hr == S_FALSE) Sleep(10);
+    }
+    if (hr != S_OK) fail(2, "GetData returned %#lx", hr);
 }
 
 /* Vertex buffer of VERTEX_COUNT vertices of VERTEX_STRIDE bytes: POSITION of
@@ -277,6 +343,17 @@ static int has_vertices(const uint32_t *data, unsigned first, unsigned n, unsign
 
     for (v = 0; v < n; v++)
         if (!is_vertex(data, (first + v) * 4, s, v)) return 0;
+    return 1;
+}
+
+/* Whether the <n> slots of <words> words from slot <first> on hold the
+ * vertices v[0] to v[n - 1] of set s */
+static int has_list(const uint32_t *data, unsigned words, unsigned first, unsigned n, unsigned s, const unsigned *v)
+{
+    unsigned i;
+
+    for (i = 0; i < n; i++)
+        if (!is_vertex(data, (first + i) * words, s, v[i])) return 0;
     return 1;
 }
 
@@ -379,9 +456,8 @@ static void bounds_case(void)
              has_vertices(data, 4, 12, 0) ? "written" : "not written", changed);
 }
 
-/* DXMT does not track the filled size the offset 0xffffffff appends at, and
- * writes nothing; a D3D11 that tracks it writes the 4 vertices at offset 0 of
- * this buffer, which was never streamed into. */
+/* The offset 0xffffffff appends at the filled size of the buffer, which is 0
+ * for one that was never streamed into. */
 static void append_case(void)
 {
     static uint32_t data[TARGET_WORDS];
@@ -392,8 +468,9 @@ static void append_case(void)
     ID3D11DeviceContext_Draw(context, 4, 0);
     read_buffer(target, data);
     changed = count_changed(data, 0, TARGET_WORDS, TARGET_FILL);
-    if (changed && !(changed == 16 && has_vertices(data, 0, 4, 0)))
-        fail(1, "words changed %u (want 0, or 16 that are the 4 vertices)", changed);
+    if (changed != 16 || !has_vertices(data, 0, 4, 0))
+        fail(1, "words changed %u (want 16), the 4 vertices at offset 0 %s", changed,
+             has_vertices(data, 0, 4, 0) ? "written" : "not written");
 }
 
 static void unbind_case(void)
@@ -530,9 +607,9 @@ static void clear_state_case(void)
              has_vertices(data, 0, 4, 0) ? "kept" : "not kept", has_set(data, 1) ? "written" : "not written");
 }
 
-/* The last draw goes into A at offset 0 when the target's filled size does not
- * carry over the swaps, as in DXMT, which does not track it, and after the
- * first draw's 4 vertices when it does. */
+/* The filled size belongs to the target, and a swap binds the targets of a
+ * state again without setting it as SOSetTargets does, so the last draw goes
+ * into A after the first draw's 4 vertices. */
 static void swap_state_case(void)
 {
     static const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
@@ -576,9 +653,10 @@ static void swap_state_case(void)
     ID3DDeviceContextState_Release(state_a);
     ID3D11DeviceContext1_Release(context1);
     ID3D11Device1_Release(device1);
-    in_a = has_vertices(data_a, 0, 8, 1) || (has_vertices(data_a, 0, 4, 0) && has_vertices(data_a, 4, 8, 1));
+    in_a = has_vertices(data_a, 0, 4, 0) && has_vertices(data_a, 4, 8, 1);
     if (!in_a || !has_vertices(data_b, 0, 4, 0) || has_set(data_b, 1))
-        fail(1, "the last draw's 8 vertices in A %s, B's own vertices %s, the last draw's in B %s (want none)",
+        fail(1, "the last draw's 8 vertices in A after the first draw's %s, B's own vertices %s, the last draw's "
+             "in B %s (want none)",
              in_a ? "written" : "not written", has_vertices(data_b, 0, 4, 0) ? "kept" : "not kept",
              has_set(data_b, 1) ? "written" : "not written");
 }
@@ -681,6 +759,410 @@ static void signature_blob_case(void)
              oversized_gs ? "returned" : "none");
 }
 
+static void set_vertices(ID3D11Buffer *vb)
+{
+    UINT stride = VERTEX_STRIDE, offset = 0;
+
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &vb, &stride, &offset);
+}
+
+static void append_draws_case(void)
+{
+    static const unsigned first[] = { 0, 1, 2, 3 }, second[] = { 0, 1, 2, 3, 4, 5, 6, 7 }, last[] = { 5 };
+    static uint32_t data[TARGET_WORDS];
+    ID3D11Buffer *null_buffer = NULL;
+    UINT zero = 0;
+    int ok;
+
+    bind_pipeline(vb0);
+    bind_target(target, 0);
+    ID3D11DeviceContext_Draw(context, 4, 0);
+    set_vertices(vb1);
+    ID3D11DeviceContext_Draw(context, 8, 0);
+    bind_target(target, 0xffffffff);
+    ID3D11DeviceContext_Draw(context, 2, 0);
+    ID3D11DeviceContext_SOSetTargets(context, 1, &null_buffer, &zero);
+    bind_target(target, 0xffffffff);
+    set_vertices(vb0);
+    ID3D11DeviceContext_Draw(context, 1, 5);
+    read_buffer(target, data);
+    ok = has_list(data, 4, 0, 4, 0, first) && has_list(data, 4, 4, 8, 1, second) && has_list(data, 4, 12, 2, 1, second)
+         && has_list(data, 4, 14, 1, 0, last);
+    if (!ok || count_changed(data, 60, TARGET_WORDS, TARGET_FILL))
+        fail(1, "the 15 vertices of the four draws one after another %s, words after them changed %u (want 0)",
+             ok ? "written" : "not written", count_changed(data, 60, TARGET_WORDS, TARGET_FILL));
+}
+
+/* Both draws of a round are in one render pass, so the GPU runs them in any
+ * order unless DXMT orders them. */
+static void rewrite_case(void)
+{
+    static const unsigned kept[] = { 4, 5, 6, 7 };
+    static uint32_t data[TARGET_WORDS];
+    unsigned round;
+
+    bind_pipeline(vb0);
+    for (round = 0; round < 16; round++)
+    {
+        set_vertices(vb0);
+        bind_target(target, 0);
+        ID3D11DeviceContext_Draw(context, 8, 0);
+        set_vertices(vb1);
+        bind_target(target, 0);
+        ID3D11DeviceContext_Draw(context, 4, 0);
+        read_buffer(target, data);
+        if (!has_vertices(data, 0, 4, 1) || !has_list(data, 4, 4, 4, 0, kept))
+            fail(1, "round %u: the second draw's 4 vertices %s, the first draw's last 4 %s", round,
+                 has_vertices(data, 0, 4, 1) ? "written" : "not written",
+                 has_list(data, 4, 4, 4, 0, kept) ? "kept" : "not kept");
+    }
+}
+
+static void overflow_case(void)
+{
+    static uint32_t data[TARGET_WORDS];
+    D3D11_QUERY_DATA_SO_STATISTICS statistics;
+    ID3D11Query *statistics_query, *overflow_query;
+    BOOL overflow;
+
+    statistics_query = create_query(D3D11_QUERY_SO_STATISTICS);
+    overflow_query = create_query(D3D11_QUERY_SO_OVERFLOW_PREDICATE);
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    bind_target(target, 0);
+
+    /* 4 triangles, then 2 and 2 vertices of a third, with room for one */
+    ID3D11DeviceContext_Begin(context, (ID3D11Asynchronous *)statistics_query);
+    ID3D11DeviceContext_Begin(context, (ID3D11Asynchronous *)overflow_query);
+    ID3D11DeviceContext_Draw(context, 12, 0);
+    ID3D11DeviceContext_Draw(context, 8, 12);
+    ID3D11DeviceContext_End(context, (ID3D11Asynchronous *)overflow_query);
+    ID3D11DeviceContext_End(context, (ID3D11Asynchronous *)statistics_query);
+    get_query_data(statistics_query, &statistics, sizeof(statistics));
+    get_query_data(overflow_query, &overflow, sizeof(overflow));
+    read_buffer(target, data);
+    if (statistics.NumPrimitivesWritten != 5 || statistics.PrimitivesStorageNeeded != 6 || !overflow
+        || !has_vertices(data, 0, 15, 0) || count_changed(data, 60, TARGET_WORDS, TARGET_FILL))
+        fail(1, "primitives written %u (want 5), storage needed %u (want 6), overflow %d (want 1), the 5 triangles "
+             "%s, words after them changed %u (want 0)", (unsigned)statistics.NumPrimitivesWritten,
+             (unsigned)statistics.PrimitivesStorageNeeded, overflow,
+             has_vertices(data, 0, 15, 0) ? "written" : "not written",
+             count_changed(data, 60, TARGET_WORDS, TARGET_FILL));
+
+    /* A triangle into the full target, then one into the target bound again */
+    ID3D11DeviceContext_Begin(context, (ID3D11Asynchronous *)statistics_query);
+    ID3D11DeviceContext_Draw(context, 3, 0);
+    ID3D11DeviceContext_End(context, (ID3D11Asynchronous *)statistics_query);
+    get_query_data(statistics_query, &statistics, sizeof(statistics));
+    if (statistics.NumPrimitivesWritten != 0 || statistics.PrimitivesStorageNeeded != 1)
+        fail(1, "full target: primitives written %u (want 0), storage needed %u (want 1)",
+             (unsigned)statistics.NumPrimitivesWritten, (unsigned)statistics.PrimitivesStorageNeeded);
+    bind_target(target, 0);
+    ID3D11DeviceContext_Begin(context, (ID3D11Asynchronous *)overflow_query);
+    ID3D11DeviceContext_Draw(context, 3, 0);
+    ID3D11DeviceContext_End(context, (ID3D11Asynchronous *)overflow_query);
+    get_query_data(overflow_query, &overflow, sizeof(overflow));
+    if (overflow) fail(1, "overflow %d for a triangle that fits (want 0)", overflow);
+
+    ID3D11Query_Release(overflow_query);
+    ID3D11Query_Release(statistics_query);
+}
+
+static void topology_case(void)
+{
+    static const uint16_t indices16[] = { 3, 2, 1, 0, 1, 3 };
+    static const uint32_t indices32[] = { 63, 7, 5, 6 };
+    static const unsigned indexed[] = { 4, 3, 2, 3, 5, 7, 5, 6, 8, 9, 9, 10, 12, 13 };
+    static const unsigned strips[] = { 20, 21, 22, 21, 23, 22, 22, 23, 24, 30, 31, 30, 31, 30, 31 };
+    static uint32_t data[TARGET_WORDS], data_strips[TARGET_WORDS];
+    ID3D11Buffer *ib16, *ib32, *target_strips;
+    int ok, ok_strips;
+
+    ib16 = create_data_buffer(indices16, sizeof(indices16), D3D11_BIND_INDEX_BUFFER, 0);
+    ib32 = create_data_buffer(indices32, sizeof(indices32), D3D11_BIND_INDEX_BUFFER, 0);
+    target_strips = create_buffer(TARGET_SIZE, TARGET_FILL);
+
+    bind_pipeline(vb0);
+    bind_target(target, 0);
+    ID3D11DeviceContext_IASetIndexBuffer(context, ib16, DXGI_FORMAT_R16_UINT, 0);
+    ID3D11DeviceContext_DrawIndexed(context, 5, 1, 2);
+    ID3D11DeviceContext_IASetIndexBuffer(context, ib32, DXGI_FORMAT_R32_UINT, 4);
+    ID3D11DeviceContext_DrawIndexed(context, 3, 0, 0);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP);
+    ID3D11DeviceContext_Draw(context, 3, 8);
+    /* One line; the third vertex completes none */
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+    ID3D11DeviceContext_Draw(context, 3, 12);
+
+    /* The first instance is not instance 0: it still comes first */
+    bind_target(target_strips, 0);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    ID3D11DeviceContext_Draw(context, 5, 20);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+    ID3D11DeviceContext_DrawInstanced(context, 2, 3, 30, 1);
+
+    read_buffer(target, data);
+    read_buffer(target_strips, data_strips);
+    ID3D11DeviceContext_ClearState(context);
+    ID3D11Buffer_Release(target_strips);
+    ID3D11Buffer_Release(ib32);
+    ID3D11Buffer_Release(ib16);
+    ok = has_list(data, 4, 0, ARRAY_SIZE(indexed), 0, indexed);
+    ok_strips = has_list(data_strips, 4, 0, ARRAY_SIZE(strips), 0, strips);
+    if (!ok || !ok_strips || count_changed(data, 56, TARGET_WORDS, TARGET_FILL)
+        || count_changed(data_strips, 60, TARGET_WORDS, TARGET_FILL))
+        fail(1, "the indexed draws, the line strip and the line list %s, the triangle strip and the instances %s, "
+             "words after them changed %u and %u (want 0)", ok ? "in order" : "not in order",
+             ok_strips ? "in order" : "not in order", count_changed(data, 56, TARGET_WORDS, TARGET_FILL),
+             count_changed(data_strips, 60, TARGET_WORDS, TARGET_FILL));
+}
+
+/* A topology with adjacency streams out its primitives without the adjacent
+ * vertices: a line of 4 vertices, two lines of a strip of 5, and a triangle
+ * of 6 vertices as a list and as a strip. */
+static void adjacency_case(void)
+{
+    static const unsigned streamed[] = { 1, 2, 5, 6, 6, 7, 10, 12, 14, 20, 22, 24 };
+    static uint32_t data[TARGET_WORDS];
+    int ok;
+
+    bind_pipeline(vb0);
+    bind_target(target, 0);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_LINELIST_ADJ);
+    ID3D11DeviceContext_Draw(context, 4, 0);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ);
+    ID3D11DeviceContext_Draw(context, 5, 4);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ);
+    ID3D11DeviceContext_Draw(context, 6, 10);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ);
+    ID3D11DeviceContext_Draw(context, 6, 20);
+
+    read_buffer(target, data);
+    ID3D11DeviceContext_ClearState(context);
+    ok = has_list(data, 4, 0, ARRAY_SIZE(streamed), 0, streamed);
+    if (!ok || count_changed(data, 48, TARGET_WORDS, TARGET_FILL))
+        fail(1, "the line, the two lines of the strip and the two triangles %s without their adjacent vertices, "
+             "words after them changed %u (want 0)", ok ? "written" : "not written",
+             count_changed(data, 48, TARGET_WORDS, TARGET_FILL));
+}
+
+/* {POSITION .xy} goes to slot 0 and {POSITION .zw} to slot 1, 8 bytes each.
+ * Slot 1 is bound 24 bytes before its end, so both take 3 of the 8 vertices. */
+static void slots_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = {
+        { 0, "POSITION", 0, 0, 2, 0 },
+        { 0, "POSITION", 0, 2, 2, 1 },
+    };
+    static const UINT strides[] = { 8, 8 };
+    static uint32_t data[TARGET_WORDS], data_b[TARGET_WORDS];
+    UINT offsets[] = { 0, TARGET_SIZE - 24 };
+    ID3D11GeometryShader *slots_gs;
+    ID3D11Buffer *targets[2];
+    unsigned correct = 0, v;
+
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, vs_code, sizeof(vs_code), decl, 2, strides, 2,
+                                                               D3D11_SO_NO_RASTERIZED_STREAM, NULL, &slots_gs),
+             "CreateGeometryShaderWithStreamOutput");
+    targets[0] = target;
+    targets[1] = create_buffer(TARGET_SIZE, TARGET_FILL);
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_GSSetShader(context, slots_gs, NULL, 0);
+    ID3D11DeviceContext_SOSetTargets(context, 2, targets, offsets);
+    ID3D11DeviceContext_Draw(context, 8, 0);
+    /* Slot 1 without a target counts as full */
+    offsets[0] = 64;
+    ID3D11DeviceContext_SOSetTargets(context, 1, targets, offsets);
+    ID3D11DeviceContext_Draw(context, 4, 0);
+    read_buffer(targets[0], data);
+    read_buffer(targets[1], data_b);
+    ID3D11DeviceContext_ClearState(context);
+    ID3D11Buffer_Release(targets[1]);
+    ID3D11GeometryShader_Release(slots_gs);
+    for (v = 0; v < 3; v++)
+    {
+        const float *xy = (const float *)&data[v * 2], *zw = (const float *)&data_b[TARGET_WORDS - 6 + v * 2];
+        correct += xy[0] == position(0, v, 0) && xy[1] == position(0, v, 1) && zw[0] == position(0, v, 2)
+                   && zw[1] == position(0, v, 3);
+    }
+    if (correct != 3 || count_changed(data, 0, TARGET_WORDS, TARGET_FILL) != 6
+        || count_changed(data_b, 0, TARGET_WORDS, TARGET_FILL) != 6)
+        fail(1, "vertices with .xy in slot 0 and .zw in slot 1 %u/3, words changed %u and %u (want 6 and 6)", correct,
+             count_changed(data, 0, TARGET_WORDS, TARGET_FILL), count_changed(data_b, 0, TARGET_WORDS, TARGET_FILL));
+}
+
+/* A geometry shader object that streams out whole vertices of vs_code, so a
+ * target it fills can be the vertex buffer of the next draw */
+static ID3D11GeometryShader *create_vertex_gs(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = {
+        { 0, "POSITION", 0, 0, 4, 0 },
+        { 0, "COLOR", 0, 0, 4, 0 },
+        { 0, "COLOR", 1, 0, 4, 0 },
+    };
+    ID3D11GeometryShader *vertex_gs;
+    UINT stride = VERTEX_STRIDE;
+
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, vs_code, sizeof(vs_code), decl, 3, &stride, 1,
+                                                               D3D11_SO_NO_RASTERIZED_STREAM, NULL, &vertex_gs),
+             "CreateGeometryShaderWithStreamOutput");
+    return vertex_gs;
+}
+
+static void draw_auto_case(void)
+{
+    static const unsigned streamed[] = { 1, 2, 3, 10, 11 };
+    static uint32_t data[TARGET_WORDS], data_vertices[TARGET_WORDS];
+    UINT stride = VERTEX_STRIDE, offset = VERTEX_STRIDE;
+    ID3D11GeometryShader *vertex_gs = create_vertex_gs();
+    ID3D11Buffer *vertices;
+    int ok, ok_auto;
+
+    vertices = create_buffer_bind(TARGET_SIZE, TARGET_FILL, D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_VERTEX_BUFFER);
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_GSSetShader(context, vertex_gs, NULL, 0);
+    bind_target(vertices, 0);
+    ID3D11DeviceContext_Draw(context, 3, 1);
+    ID3D11DeviceContext_Draw(context, 2, 10);
+
+    /* From the second of the 5 vertices on, into slots 1 to 4 */
+    ID3D11DeviceContext_GSSetShader(context, gs, NULL, 0);
+    bind_target(target, 16);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &vertices, &stride, &offset);
+    ID3D11DeviceContext_DrawAuto(context);
+
+    read_buffer(vertices, data_vertices);
+    read_buffer(target, data);
+    ID3D11DeviceContext_ClearState(context);
+    ID3D11Buffer_Release(vertices);
+    ID3D11GeometryShader_Release(vertex_gs);
+    ok = has_list(data_vertices, VERTEX_STRIDE / 4, 0, 5, 0, streamed);
+    ok_auto = has_list(data, 4, 1, 4, 0, streamed + 1);
+    if (!ok || !ok_auto || count_changed(data, 0, 4, TARGET_FILL) || count_changed(data, 20, TARGET_WORDS, TARGET_FILL))
+        fail(1, "the 5 vertices of the two draws %s, the 4 of them DrawAuto draws %s, words around them changed %u "
+             "(want 0)", ok ? "written" : "not written", ok_auto ? "written" : "not written",
+             count_changed(data, 0, 4, TARGET_FILL) + count_changed(data, 20, TARGET_WORDS, TARGET_FILL));
+}
+
+/* Only the GPU knows what an indirect draw writes, so it has to count for the
+ * draws after it and for the queries. */
+static void indirect_case(void)
+{
+    static const uint32_t arguments[] = {
+        4, 1, 2, 0,    /* DrawInstancedIndirect: vertices 2 to 5 */
+        3, 1, 1, 2, 0, /* DrawIndexedInstancedIndirect: indices 1 to 3 on base vertex 2 */
+    };
+    static const uint16_t indices[] = { 3, 2, 1, 0 };
+    static const unsigned streamed[] = { 2, 3, 4, 5, 4 }, appended[] = { 0, 1 };
+    static uint32_t data[TARGET_WORDS], data_vertices[TARGET_WORDS];
+    UINT stride = VERTEX_STRIDE, offset = VERTEX_STRIDE;
+    ID3D11GeometryShader *vertex_gs = create_vertex_gs();
+    D3D11_QUERY_DATA_SO_STATISTICS statistics;
+    ID3D11Buffer *vertices, *args, *ib;
+    ID3D11Query *statistics_query;
+    int ok, ok_auto;
+
+    vertices = create_buffer_bind(TARGET_SIZE, TARGET_FILL, D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_VERTEX_BUFFER);
+    args = create_data_buffer(arguments, sizeof(arguments), 0, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS);
+    ib = create_data_buffer(indices, sizeof(indices), D3D11_BIND_INDEX_BUFFER, 0);
+    statistics_query = create_query(D3D11_QUERY_SO_STATISTICS);
+
+    /* 4 vertices, then 3 with room for one */
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_GSSetShader(context, vertex_gs, NULL, 0);
+    ID3D11DeviceContext_IASetIndexBuffer(context, ib, DXGI_FORMAT_R16_UINT, 0);
+    bind_target(vertices, 0);
+    ID3D11DeviceContext_Begin(context, (ID3D11Asynchronous *)statistics_query);
+    ID3D11DeviceContext_DrawInstancedIndirect(context, args, 0);
+    ID3D11DeviceContext_DrawIndexedInstancedIndirect(context, args, 16);
+    ID3D11DeviceContext_End(context, (ID3D11Asynchronous *)statistics_query);
+
+    /* DrawAuto from the second vertex on, then two vertices after them */
+    ID3D11DeviceContext_GSSetShader(context, gs, NULL, 0);
+    bind_target(target, 0);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &vertices, &stride, &offset);
+    ID3D11DeviceContext_DrawAuto(context);
+    set_vertices(vb1);
+    ID3D11DeviceContext_Draw(context, 2, 0);
+
+    get_query_data(statistics_query, &statistics, sizeof(statistics));
+    read_buffer(vertices, data_vertices);
+    read_buffer(target, data);
+    ID3D11DeviceContext_ClearState(context);
+    ID3D11Query_Release(statistics_query);
+    ID3D11Buffer_Release(ib);
+    ID3D11Buffer_Release(args);
+    ID3D11Buffer_Release(vertices);
+    ID3D11GeometryShader_Release(vertex_gs);
+    ok = has_list(data_vertices, VERTEX_STRIDE / 4, 0, 5, 0, streamed);
+    ok_auto = has_list(data, 4, 0, 4, 0, streamed + 1) && has_list(data, 4, 4, 2, 1, appended);
+    if (statistics.NumPrimitivesWritten != 5 || statistics.PrimitivesStorageNeeded != 7 || !ok || !ok_auto
+        || count_changed(data, 24, TARGET_WORDS, TARGET_FILL))
+        fail(1, "primitives written %u (want 5), storage needed %u (want 7), the 5 vertices of the indirect draws "
+             "%s, the 4 DrawAuto draws and the 2 after them %s, words after them changed %u (want 0)",
+             (unsigned)statistics.NumPrimitivesWritten, (unsigned)statistics.PrimitivesStorageNeeded,
+             ok ? "written" : "not written", ok_auto ? "written" : "not written",
+             count_changed(data, 24, TARGET_WORDS, TARGET_FILL));
+}
+
+/* A command list binds the target to append, and draws once with arguments
+ * only the GPU has and once without, inside a query. It runs twice: the
+ * second run continues where the first ended, has room for one vertex, and
+ * the query has the counts of the second run alone. */
+static void deferred_case(void)
+{
+    static const uint32_t arguments[] = { 3, 1, 2, 0 }; /* vertices 2 to 4 */
+    static const unsigned streamed[] = { 2, 3, 4, 10, 2 };
+    static uint32_t data[TARGET_WORDS];
+    D3D11_VIEWPORT viewport = { 0.0f, 0.0f, 64.0f, 64.0f, 0.0f, 1.0f };
+    UINT stride = VERTEX_STRIDE, offset = 0, append = 0xffffffff;
+    ID3D11GeometryShader *vertex_gs = create_vertex_gs();
+    D3D11_QUERY_DATA_SO_STATISTICS first, second;
+    ID3D11DeviceContext *deferred;
+    ID3D11Query *statistics_query;
+    ID3D11Buffer *vertices, *args;
+    ID3D11CommandList *list;
+
+    vertices = create_buffer(TARGET_SIZE, TARGET_FILL);
+    args = create_data_buffer(arguments, sizeof(arguments), 0, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS);
+    statistics_query = create_query(D3D11_QUERY_SO_STATISTICS);
+    check_hr(ID3D11Device_CreateDeferredContext(device, 0, &deferred), "CreateDeferredContext");
+
+    ID3D11DeviceContext_OMSetRenderTargets(deferred, 1, &rtv, NULL);
+    ID3D11DeviceContext_RSSetViewports(deferred, 1, &viewport);
+    ID3D11DeviceContext_IASetInputLayout(deferred, layout);
+    ID3D11DeviceContext_IASetVertexBuffers(deferred, 0, 1, &vb0, &stride, &offset);
+    ID3D11DeviceContext_IASetPrimitiveTopology(deferred, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+    ID3D11DeviceContext_VSSetShader(deferred, vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(deferred, vertex_gs, NULL, 0);
+    ID3D11DeviceContext_SOSetTargets(deferred, 1, &vertices, &append);
+    ID3D11DeviceContext_Begin(deferred, (ID3D11Asynchronous *)statistics_query);
+    ID3D11DeviceContext_DrawInstancedIndirect(deferred, args, 0);
+    ID3D11DeviceContext_Draw(deferred, 1, 10);
+    ID3D11DeviceContext_End(deferred, (ID3D11Asynchronous *)statistics_query);
+    check_hr(ID3D11DeviceContext_FinishCommandList(deferred, FALSE, &list), "FinishCommandList");
+
+    ID3D11DeviceContext_ExecuteCommandList(context, list, FALSE);
+    get_query_data(statistics_query, &first, sizeof(first));
+    ID3D11DeviceContext_ExecuteCommandList(context, list, FALSE);
+    get_query_data(statistics_query, &second, sizeof(second));
+    read_buffer(vertices, data);
+
+    ID3D11CommandList_Release(list);
+    ID3D11DeviceContext_Release(deferred);
+    ID3D11Query_Release(statistics_query);
+    ID3D11Buffer_Release(args);
+    ID3D11Buffer_Release(vertices);
+    ID3D11GeometryShader_Release(vertex_gs);
+    if (first.NumPrimitivesWritten != 4 || first.PrimitivesStorageNeeded != 4 || second.NumPrimitivesWritten != 1
+        || second.PrimitivesStorageNeeded != 4 || !has_list(data, VERTEX_STRIDE / 4, 0, 5, 0, streamed))
+        fail(1, "first run: primitives written %u (want 4), storage needed %u (want 4); second run: written %u "
+             "(want 1), needed %u (want 4); the 4 vertices of the first run and the one of the second %s",
+             (unsigned)first.NumPrimitivesWritten, (unsigned)first.PrimitivesStorageNeeded,
+             (unsigned)second.NumPrimitivesWritten, (unsigned)second.PrimitivesStorageNeeded,
+             has_list(data, VERTEX_STRIDE / 4, 0, 5, 0, streamed) ? "written" : "not written");
+}
+
 static const struct
 {
     const char *name;
@@ -696,6 +1178,15 @@ static const struct
     { "swap-state", swap_state_case },
     { "start-component", start_component_case },
     { "signature-blob", signature_blob_case },
+    { "append-draws", append_draws_case },
+    { "rewrite", rewrite_case },
+    { "overflow", overflow_case },
+    { "topology", topology_case },
+    { "slots", slots_case },
+    { "draw-auto", draw_auto_case },
+    { "indirect", indirect_case },
+    { "deferred", deferred_case },
+    { "adjacency", adjacency_case },
 };
 
 static void run_case(unsigned i)
