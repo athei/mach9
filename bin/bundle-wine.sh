@@ -1435,18 +1435,36 @@ check_egl_host() {
     fi
     grep "^egl: depth-bias check" "$log" | sed 's/^egl: /    /'
     check_gl_host glpbo "texels copied unchanged through pixel buffer objects"
+    check_gl_host glstats "pipeline statistics queries counted at once"
+    check_gl_host glstats "pipeline statistics queries counted at once, under the validation layers" validation
 }
 
-# check_gl_host <program> <what>: build smoke/<program>.c for the host and run
-# it on the bundle's lib/external/libEGL.1.dylib, as check_egl_host runs
-# smoke/egl.c. Exit unless it reports no wrong value. glpbo.c checks float
-# and signed normalized texels moved through pixel buffer objects, which
-# Mesa's state tracker copies as unsigned integers.
+# check_gl_host <program> <what> [validation]: build smoke/<program>.c for the
+# host and run it on the bundle's lib/external/libEGL.1.dylib, as
+# check_egl_host runs smoke/egl.c. Exit unless it reports no wrong value.
+# glpbo.c checks float and signed normalized texels moved through pixel
+# buffer objects, which Mesa's state tracker copies as unsigned integers;
+# glstats.c checks statistics queries that are active together, which Zink
+# counts with one Vulkan query. With validation, the run is under Khronos'
+# validation layers (check_validation_layers_build), and it also has to
+# load them and get no validation error from them: no "Validation Error"
+# line and no VUID. Zink's own blit and clear shaders draw with outputs no
+# attachment takes, which the layers report as warnings without a VUID, so
+# warnings do not count.
 check_gl_host() {
-    local log="$TMP_DIR/$1.log"
+    local log="$TMP_DIR/$1${3:+-$3}.log"
+    local layers=()
+    if [ "${3:-}" = validation ]; then
+        # An empty settings file, so that no vk_layer_settings.txt in the
+        # working directory can send the messages elsewhere: the layers then
+        # print every error on the standard output.
+        : > "$TMP_DIR/vk_layer_settings.txt"
+        layers=(VK_LAYER_PATH="$VVL_LAYER_DIR" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
+                VK_LAYER_SETTINGS_PATH="$TMP_DIR/vk_layer_settings.txt" VK_LOADER_DEBUG=layer)
+    fi
     xcrun clang -O2 -o "$TMP_DIR/$1" "$REPO_DIR/smoke/$1.c"
     run_limited 60 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
-        "$TMP_DIR/$1" "$EXT_DIR/libEGL.1.dylib"
+        "${layers[@]}" "$TMP_DIR/$1" "$EXT_DIR/libEGL.1.dylib"
     if [ "$RUN_STATUS" -eq 142 ]; then
         echo "Error: smoke/$1.c did not exit within 60 seconds"
         cat "$log"
@@ -1455,6 +1473,20 @@ check_gl_host() {
         echo "Error: smoke/$1.c failed on the bundle's EGL (status $RUN_STATUS)"
         cat "$log"
         exit 1
+    fi
+    if [ "${3:-}" = validation ]; then
+        if ! grep -qF 'Insert instance layer "VK_LAYER_KHRONOS_validation"' "$log"; then
+            echo "Error: smoke/$1.c ran without the validation layers of $VVL_LAYER_DIR"
+            cat "$log"
+            exit 1
+        fi
+        # Any line naming a VUID counts as well, so a changed heading in a
+        # new release of the layers cannot hide an error.
+        if grep -qE '^Validation Error:|VUID-' "$log"; then
+            echo "Error: smoke/$1.c got validation errors:"
+            grep -E -A 3 '^Validation Error:|VUID-' "$log"
+            exit 1
+        fi
     fi
     echo "    Zink: $2"
 }
@@ -2773,6 +2805,30 @@ copy_runtime() {
 # The bundle's dylibs.
 EXT_DIR="$WINE_DIR/lib/external"
 
+# Khronos' validation layers, which check_gl_host runs smoke/glstats.c under;
+# the default of build-vulkan-validation-layers.sh. Not part of the bundle.
+VULKAN_VALIDATION_LAYERS_DIST="${VULKAN_VALIDATION_LAYERS_DIST:-$BUILD_TOP/vulkan-validation-layers/dist}"
+VVL_LAYER_DIR="$VULKAN_VALIDATION_LAYERS_DIST/share/vulkan/explicit_layer.d"
+
+# check_validation_layers_build: on a Mac with a Metal 4 GPU, where the smoke
+# test runs smoke/glstats.c under the validation layers (check_gl_host),
+# exit unless build-vulkan-validation-layers.sh staged them completely from
+# the commit redist.env pins. Without such a GPU the smoke test runs no Zink
+# check (metal4_probe), so it needs none.
+check_validation_layers_build() {
+    metal4_probe
+    [ "$METAL4" -eq 1 ] || return 0
+    if [ "$(cat "$VULKAN_VALIDATION_LAYERS_DIST/COMMIT" 2>/dev/null)" != "$VULKAN_VALIDATION_LAYERS_GIT_COMMIT" ] ||
+       [ ! -f "$VULKAN_VALIDATION_LAYERS_DIST/lib/libVkLayer_khronos_validation.dylib" ] ||
+       [ ! -f "$VVL_LAYER_DIR/VkLayer_khronos_validation.json" ]; then
+        echo "Error: $VULKAN_VALIDATION_LAYERS_DIST has no validation layers from"
+        echo "$VULKAN_VALIDATION_LAYERS_GIT_COMMIT, which the smoke test runs a Zink check under"
+        echo "on a Mac with a Metal 4 GPU (run bin/build-vulkan-validation-layers.sh)"
+        exit 1
+    fi
+    echo "  Vulkan validation layers: $VULKAN_VALIDATION_LAYERS_GIT_TAG"
+}
+
 # ── Preflight ───────────────────────────────────────────────────────────
 # What a full bundle needs beyond the Wine build, checked before Step 0
 # deletes anything.
@@ -2786,6 +2842,7 @@ check_dxmt_build
 check_vkd3d_proton_build
 check_mesa_build
 check_gstreamer_build
+check_validation_layers_build
 for arch in $SMOKE_PE_ARCHS x86_64 i686; do
     if [ ! -x "$MINGW_DIR/bin/$arch-w64-mingw32-clang" ]; then
         echo "Error: no $arch-w64-mingw32-clang in $MINGW_DIR/bin (the smoke test needs it)"

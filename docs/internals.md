@@ -715,7 +715,7 @@ function's comment says what it checks and why; each program in
 
 | Checks | Where |
 |--------|-------|
-| macOS SDK, formulae, Wine SDK, each staged component current against its pin or `*_REF` (which needs the network), llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
+| macOS SDK, formulae, Wine SDK, each staged component current against its pin or `*_REF` (which needs the network), on a Mac with a Metal 4 GPU the validation layers at their pin, llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
 | Inherited `com.apple.quarantine` removed, nothing else | Step 4f |
 | No reference to `LEAK_PREFIXES`, no `@rpath` dependency outside the bundle, every dylib loads ([`smoke/dlopen.c`](../smoke/dlopen.c)), GStreamer loads only from the bundle | `check_no_leaks`, `check_rpath_deps`, `check_dylibs_load`, `check_gstreamer` |
 | Copied-in components in place, the [icon font](#icon-font)'s aliases in `wine.inf`, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
@@ -723,7 +723,7 @@ function's comment says what it checks and why; each program in
 | Vulkan driver and manifest, EGL with Zink, ntdll's compatdb hooks | `check_vulkan`, `check_egl`, `check_compat_hooks` |
 | `wine.app` signature, entitlements and `Info.plist` | `check_loader_app` |
 | `minos` of every Mach-O at most the floor, no import of `FLOOR_NEWER_FUNCS` ([macOS floors](maintenance.md#macos-floors)) | `check_minos`, `check_floor_newer_imports` |
-| A fresh prefix boots with msync and compatdb, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, DXMT's emulated stream output under Metal shader validation, DXMT's bounds on shader bytecode, its context state and deferred context lifetimes and its depth bias on D24 targets, wined3d, WMA decoding, FEX on code that faults or changes, a 64-bit debugger attaching to and detaching from an i386 process, once continuing its break-in and once passing it on, and EGL, with Zink's depth bias on 24-bit depth buffers, and GStreamer outside Wine, with Zink's pixel buffer object transfers of float and signed normalized texels | `smoke_test` and the `check_*` functions it calls |
+| A fresh prefix boots with msync and compatdb, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, DXMT's emulated stream output under Metal shader validation, DXMT's bounds on shader bytecode, its context state and deferred context lifetimes and its depth bias on D24 targets, wined3d, WMA decoding, FEX on code that faults or changes, a 64-bit debugger attaching to and detaching from an i386 process, once continuing its break-in and once passing it on, and EGL, with Zink's depth bias on 24-bit depth buffers, and GStreamer outside Wine, with Zink's pixel buffer object transfers of float and signed normalized texels and its statistics queries that are active together, the latter also under Khronos' validation layers, which may report no error | `smoke_test` and the `check_*` functions it calls |
 
 On a Mac without a Metal 4 GPU, such as a hosted CI runner, the checks
 that need a KosmicKrisp device or Zink change or are left out, and so are

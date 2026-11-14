@@ -8,9 +8,17 @@ in [internals.md](internals.md); what the build needs is in its
 ## Commands
 
 ```bash
-bin/build-wine.sh    # Mesa and the Vulkan loader, GStreamer, Wine, the SDK, then FEX, DXMT and vkd3d-proton
-bin/bundle-wine.sh   # assemble the bundle (see Bundle layout)
+bin/build-wine.sh                        # Mesa and the Vulkan loader, GStreamer, Wine, the SDK, then FEX, DXMT and vkd3d-proton
+bin/build-vulkan-validation-layers.sh    # on a Mac with a Metal 4 GPU, once per pin: the bundle step's checks run under them
+bin/bundle-wine.sh                       # assemble the bundle (see Bundle layout)
 ```
+
+On a Mac with a Metal 4 GPU, `bundle-wine.sh` stops in its preflight,
+before it changes anything, until `build-vulkan-validation-layers.sh` has
+staged the pinned validation layers; the bundle does not carry them
+([what the bundle step checks](internals.md#what-the-bundle-step-checks)).
+Like every component it checks, `bundle-wine.sh` does not build them
+itself.
 
 | Script | Flag | Effect |
 |--------|------|--------|
