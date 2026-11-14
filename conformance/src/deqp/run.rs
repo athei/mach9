@@ -55,9 +55,14 @@ use crate::{
     output::Ending,
     procs,
     resume::Mode,
-    runner::Conclusion,
+    runner::{self, Conclusion},
     session::Failure,
+    validation::{self, Known, Layers, Occurrence},
 };
+
+/// The name [`validation::Known`] gives what a `deqp-vk` process reports
+/// before its first case: the instance and device the cases share.
+pub const STARTUP: &str = "startup";
 
 /// macOS's sampler, which a stalled batch is sampled with.
 const SAMPLE_TOOL: &str = "/usr/bin/sample";
@@ -103,6 +108,8 @@ pub struct Options {
     /// stalled case, since a case prints a line when it starts and when it
     /// ends.
     pub limits: Limits,
+    /// `run --validation`: the layers every `deqp-vk` process runs under.
+    pub validation: Option<Layers>,
 }
 
 /// The Vulkan stack the cases run on: a loader and the manifest directory
@@ -260,16 +267,108 @@ pub fn execute(
             "record writes whole groups; --cases is for run",
         )));
     }
+    runner::check_validation(options.mode, options.validation.is_some()).map_err(Failure::Setup)?;
     let vulkan = Vulkan::open(&options.vulkan).map_err(Failure::Setup)?;
     let deqp = Deqp::open(&options.deqp).map_err(Failure::Setup)?;
     let mut components = vulkan.components.clone();
     components.insert(String::from("vk-gl-cts"), deqp.commit.clone());
     let triage = Triage::load(&options.expected.join(TRIAGE_FILE)).map_err(Failure::Setup)?;
+    let known = options
+        .validation
+        .as_ref()
+        .map(|_| Known::load(&options.expected.join(validation::KNOWN_FILE)))
+        .transpose()
+        .map_err(Failure::Setup)?;
     let mustpass = deqp.mustpass().map_err(Failure::Setup)?;
     let mustpass: Vec<&str> = mustpass.lines().filter(|line| !line.is_empty()).collect();
+    let plans = plan(selected, options, &mustpass)?;
+    let state = State::claim_tree(&options.state, DEQP_STATE_TREE).map_err(Failure::Setup)?;
+    refuse_running(&deqp.program)?;
+    let work = state.work();
+    layout::fresh_dir(&work, DEQP_WORK_TREE).map_err(Failure::Setup)?;
+    let run_dir = state.runs().join(layout::run_id(SystemTime::now()));
+    fs::create_dir_all(&run_dir).map_err(|e| setup_io(&run_dir, &e))?;
+    println!("conformance: raw logs in {}", run_dir.display());
+    let layer_env = options
+        .validation
+        .as_ref()
+        .map(|layers| validation::start(layers, &run_dir, "the deqp-vk processes"))
+        .transpose()
+        .map_err(Failure::Setup)?;
+    let occurrences = Mutex::new(Vec::new());
+    let started = Instant::now();
+    let mut total = 0;
+    let mut conclusion: Option<Conclusion> = None;
+    // The groups of one `kk_debug` setting run as a run of their own, so a
+    // case of two groups with different settings runs once in each, and no
+    // process mixes the settings.
+    for setting in settings(&plans) {
+        let plans: Vec<&Planned<'_>> = plans
+            .iter()
+            .filter(|plan| plan.group.kk_debug.as_deref() == setting)
+            .collect();
+        let dir = setting.map_or_else(
+            || run_dir.clone(),
+            |flags| run_dir.join(format!("kk_debug-{}", flags.replace(',', "+"))),
+        );
+        fs::create_dir_all(&dir).map_err(|e| setup_io(&dir, &e))?;
+        let mut env =
+            environment::deqp_env(caller_env.iter().cloned(), &vulkan.icd_dir, &work, setting);
+        if let Some(layer_env) = &layer_env {
+            env.extend(layer_env.iter().cloned());
+        }
+        let runner = Runner {
+            deqp: &deqp,
+            vulkan: &vulkan,
+            env: &env,
+            kk_debug: setting,
+            work: &work,
+            run_dir: &dir,
+            options,
+            stop,
+            occurrences: layer_env.as_ref().map(|_| &occurrences),
+        };
+        let part = runner.run_plans(&plans, &components, &triage)?;
+        total += union_of(&plans).len();
+        conclusion = Some(match conclusion {
+            Some(before) => combine(before, part),
+            None => part,
+        });
+    }
+    println!(
+        "conformance: deqp-vk: {total} cases in {:.1} s",
+        started.elapsed().as_secs_f64()
+    );
+    let conclusion =
+        conclusion.ok_or_else(|| Failure::Setup(String::from("no deqp-vk group selected")))?;
+    match (&known, conclusion) {
+        (Some(known), Conclusion::Run(verdict)) => {
+            let occurrences = occurrences
+                .into_inner()
+                .map_err(|_| Failure::Setup(String::from("a batch thread panicked")))?;
+            let new = runner::report_validation(&occurrences, known, &union(&plans), &run_dir)?;
+            Ok(Conclusion::Validated { verdict, new })
+        }
+        (_, conclusion) => Ok(conclusion),
+    }
+}
+
+/// The plan of each of the `selected` groups: its cases of the `mustpass`
+/// that `options` selects, and its expected results.
+///
+/// # Errors
+///
+/// Returns [`Failure::Setup`] for a group that selects no case, expected
+/// results `run` needs that are missing or do not parse, and patterns that
+/// leave no case.
+fn plan<'g>(
+    selected: Vec<&'g Group>,
+    options: &Options,
+    mustpass: &[&str],
+) -> Result<Vec<Planned<'g>>, Failure> {
     let mut plans = Vec::new();
     for group in selected {
-        let mut cases = group.select(&mustpass);
+        let mut cases = group.select(mustpass);
         if cases.is_empty() {
             return Err(Failure::Setup(format!(
                 "deqp-vk group {} selects no case of the mustpass",
@@ -301,53 +400,7 @@ pub fn execute(
             "--cases matches no case of the groups",
         )));
     }
-    let state = State::claim_tree(&options.state, DEQP_STATE_TREE).map_err(Failure::Setup)?;
-    refuse_running(&deqp.program)?;
-    let work = state.work();
-    layout::fresh_dir(&work, DEQP_WORK_TREE).map_err(Failure::Setup)?;
-    let run_dir = state.runs().join(layout::run_id(SystemTime::now()));
-    fs::create_dir_all(&run_dir).map_err(|e| setup_io(&run_dir, &e))?;
-    println!("conformance: raw logs in {}", run_dir.display());
-    let started = Instant::now();
-    let mut total = 0;
-    let mut conclusion: Option<Conclusion> = None;
-    // The groups of one `kk_debug` setting run as a run of their own, so a
-    // case of two groups with different settings runs once in each, and no
-    // process mixes the settings.
-    for setting in settings(&plans) {
-        let plans: Vec<&Planned<'_>> = plans
-            .iter()
-            .filter(|plan| plan.group.kk_debug.as_deref() == setting)
-            .collect();
-        let dir = setting.map_or_else(
-            || run_dir.clone(),
-            |flags| run_dir.join(format!("kk_debug-{}", flags.replace(',', "+"))),
-        );
-        fs::create_dir_all(&dir).map_err(|e| setup_io(&dir, &e))?;
-        let env =
-            environment::deqp_env(caller_env.iter().cloned(), &vulkan.icd_dir, &work, setting);
-        let runner = Runner {
-            deqp: &deqp,
-            vulkan: &vulkan,
-            env: &env,
-            kk_debug: setting,
-            work: &work,
-            run_dir: &dir,
-            options,
-            stop,
-        };
-        let part = runner.run_plans(&plans, &components, &triage)?;
-        total += union_of(&plans).len();
-        conclusion = Some(match conclusion {
-            Some(before) => combine(before, part),
-            None => part,
-        });
-    }
-    println!(
-        "conformance: deqp-vk: {total} cases in {:.1} s",
-        started.elapsed().as_secs_f64()
-    );
-    conclusion.ok_or_else(|| Failure::Setup(String::from("no deqp-vk group selected")))
+    Ok(plans)
 }
 
 /// The `kk_debug` settings of the plans that have a case, each once, unset
@@ -686,6 +739,8 @@ struct Runner<'a> {
     run_dir: &'a Path,
     options: &'a Options,
     stop: &'a AtomicBool,
+    /// `--validation`: the messages of the layers the processes printed.
+    occurrences: Option<&'a Mutex<Vec<Occurrence>>>,
 }
 
 /// How one process of a batch ended, for the batch's next step.
@@ -730,11 +785,23 @@ impl Runner<'_> {
         let qpa = self.run_dir.join("probe.qpa");
         let args = self.args(&caselist, &qpa);
         let mut env = self.env.to_vec();
-        env.push((OsString::from("VK_LOADER_DEBUG"), OsString::from("driver")));
+        env.retain(|(name, _)| name != "VK_LOADER_DEBUG");
+        let debug = if self.occurrences.is_some() {
+            "driver,layer"
+        } else {
+            "driver"
+        };
+        env.push((OsString::from("VK_LOADER_DEBUG"), OsString::from(debug)));
         let log = self.run_dir.join("probe.log");
         let finished = self.spawn(&args, &env, &log, "probe")?;
         let text = String::from_utf8_lossy(&finished.output);
         let see = format!("its output is in {}", log.display());
+        if self.occurrences.is_some() && validation::scan(&text).instances == 0 {
+            return Err(Failure::Setup(format!(
+                "deqp-vk probe: the loader logged no Vulkan instance, so none ran under the \
+                 validation layers; {see}"
+            )));
+        }
         let output = log::parse(&text);
         if output.results != [(PROBE_CASE.to_owned(), Status::Pass)] {
             return Err(Failure::Setup(format!(
@@ -1083,7 +1150,62 @@ impl Runner<'_> {
             .open(log)
             .and_then(|mut file| file.write_all(text.as_bytes()))
             .map_err(|e| setup_io(log, &e))?;
+        if let Some(occurrences) = self.occurrences {
+            self.collect(&finished.output, log, what, occurrences)?;
+        }
         Ok(finished)
+    }
+
+    /// Check that every Vulkan instance of a process's `output` ran under
+    /// the validation layers, and keep its messages, each with the case it
+    /// came in, in `occurrences`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Failure::Setup`] for an instance without the layer, and for
+    /// a process that ran a case but logged no instance: its loader logged
+    /// nothing, so nothing shows that it ran under the layers.
+    fn collect(
+        &self,
+        output: &[u8],
+        log: &Path,
+        what: &str,
+        occurrences: &Mutex<Vec<Occurrence>>,
+    ) -> Result<(), Failure> {
+        let text = String::from_utf8_lossy(output);
+        let scan = validation::scan(&text);
+        let see = format!("its output is in {}", log.display());
+        if scan.without_layer() > 0 {
+            return Err(Failure::Setup(format!(
+                "deqp-vk {what}: {} of its {} Vulkan instances ran without {}; {see}",
+                scan.without_layer(),
+                scan.instances,
+                validation::LAYER
+            )));
+        }
+        if scan.instances == 0 && text.lines().any(|line| line.starts_with("Test case '")) {
+            return Err(Failure::Setup(format!(
+                "deqp-vk {what}: the loader logged no Vulkan instance, so nothing shows the \
+                 cases ran under the validation layers; {see}"
+            )));
+        }
+        let setting = self
+            .kk_debug
+            .map_or_else(String::new, |flags| format!(" (MESA_KK_DEBUG={flags})"));
+        let found = scan.messages.into_iter().map(|message| {
+            let case = message.case.clone().unwrap_or_else(|| STARTUP.to_owned());
+            Occurrence {
+                label: format!("deqp-vk {case}{setting}"),
+                test: case,
+                log: log.to_path_buf(),
+                message,
+            }
+        });
+        occurrences
+            .lock()
+            .map_err(|_| Failure::Setup(String::from("a batch thread panicked")))?
+            .extend(found);
+        Ok(())
     }
 }
 

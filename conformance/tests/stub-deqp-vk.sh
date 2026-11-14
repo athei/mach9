@@ -21,9 +21,15 @@
 #   *.icb      passes with MESA_KK_DEBUG=force_icb, fails otherwise
 #   *.hang     prints nothing more for 30 seconds
 #   *.silent   ends the process at once, with nothing printed
+#   *.vuid     passes and prints a message of the validation layers
 #
 # The probe's case prints the loader's driver messages for $VK_DRIVER_FILES
 # and $STUB_DRIVER, and writes a test log with a driverVersion.
+#
+# With $VK_LOADER_DEBUG naming `layer`, the process first logs an instance
+# as the loader does, with the layer of $VK_INSTANCE_LAYERS inserted unless
+# $STUB_NO_LAYER is set, or $VK_LOADER_LAYERS_DISABLE is ~all~ and
+# $VK_LOADER_LAYERS_ALLOW does not name the layer, as the loader decides.
 caselist=
 qpa=
 for arg in "$@"; do
@@ -58,6 +64,20 @@ count() {
     echo "$n" > "$STUB_STATE/$1.count"
     echo "$n"
 }
+
+case "$VK_LOADER_DEBUG" in
+    *layer*)
+        disabled=
+        if [ "$VK_LOADER_LAYERS_DISABLE" = "~all~" ] &&
+           [ "$VK_LOADER_LAYERS_ALLOW" != "$VK_INSTANCE_LAYERS" ]; then
+            disabled=1
+        fi
+        if [ -n "$VK_INSTANCE_LAYERS" ] && [ -z "$STUB_NO_LAYER" ] && [ -z "$disabled" ]; then
+            echo "[Vulkan Loader] INFO | LAYER:   Insert instance layer \"$VK_INSTANCE_LAYERS\" ($VK_LAYER_PATH/../../../lib/libVkLayer_khronos_validation.dylib)"
+        fi
+        echo "[Vulkan Loader] LAYER:          vkCreateInstance layer callstack setup to:"
+        ;;
+esac
 
 while read -r case; do
     [ -n "$case" ] || continue
@@ -130,6 +150,14 @@ while read -r case; do
             ;;
         *.hang)
             sleep 30
+            ;;
+        *.vuid)
+            echo "Validation Error: [ VUID-vkCmdDraw-None-08600 ] | MessageID = 0x941b7a8b"
+            echo "vkCmdDraw(): the stub's pipeline layout does not match."
+            echo "Objects: 1"
+            echo "    [0] VkCommandBuffer 0x1"
+            echo
+            echo "  Pass (Pass)"
             ;;
     esac
 done < "$caselist"

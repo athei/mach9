@@ -61,6 +61,7 @@ use crate::{
     resume::{Identity, Mode, Pass, Record, Resume},
     session::{self, Failure, Session},
     triage::Triage,
+    validation::{self, Known, Layers, Occurrence},
 };
 
 /// macOS's sampler, which a stalled test is sampled with.
@@ -86,6 +87,36 @@ pub struct Options {
     /// The `--winedebug` text: the `WINEDEBUG` of every Wine process, to
     /// trace a test. `None` runs them with `-all`.
     pub winedebug: Option<String>,
+    /// `--validation`: the layers the test processes run under.
+    pub validation: Option<Layers>,
+}
+
+/// Check `--validation` for `mode`.
+///
+/// # Errors
+///
+/// Returns a message for `record` under the layers, which slow the tests
+/// down: a baseline is the result of the tests without them.
+pub fn check_validation(mode: Mode, validation: bool) -> Result<(), String> {
+    if validation && matches!(mode, Mode::Record) {
+        return Err(String::from(
+            "record takes no --validation: a baseline is the result of the tests without the \
+             validation layers",
+        ));
+    }
+    Ok(())
+}
+
+/// The resume scope of a plan whose scope text is `scope`, with
+/// `validation` marked, so an invocation under the layers and one without
+/// never continue each other's state.
+#[must_use]
+pub fn validated_scope(scope: String, validation: bool) -> String {
+    if validation {
+        format!("{scope} validation")
+    } else {
+        scope
+    }
 }
 
 /// Check `--winedebug` for `mode`.
@@ -123,17 +154,27 @@ pub fn traced_scope(scope: String, winedebug: Option<&str>) -> String {
 pub enum Conclusion {
     /// `run`: the worst verdict over the executables.
     Run(Verdict),
+    /// `run --validation`: that verdict, and the pairs of a test and a
+    /// message ID of the validation layers that the list of known messages
+    /// does not name ([`validation::report`]).
+    Validated { verdict: Verdict, new: usize },
     /// `record`: the number of unstable keys it wrote.
     Record { unstable: usize },
 }
 
 impl Conclusion {
-    /// 0 for a match or a stable record, else 1.
+    /// 0 for a match without a new validation message or a stable record,
+    /// else 1.
     #[must_use]
     pub const fn exit_code(&self) -> u8 {
         match self {
-            Self::Run(Verdict::Match) | Self::Record { unstable: 0 } => 0,
-            Self::Run(_) | Self::Record { .. } => 1,
+            Self::Run(Verdict::Match)
+            | Self::Validated {
+                verdict: Verdict::Match,
+                new: 0,
+            }
+            | Self::Record { unstable: 0 } => 0,
+            Self::Run(_) | Self::Validated { .. } | Self::Record { .. } => 1,
         }
     }
 
@@ -141,6 +182,16 @@ impl Conclusion {
     #[must_use]
     pub fn last_line(&self) -> String {
         match self {
+            Self::Validated { verdict, new } => {
+                let results = Self::Run(*verdict).last_line();
+                match new {
+                    0 => format!("{results}; validation: no new messages"),
+                    new => format!(
+                        "{results}; validation: {new} new messages: name them in {} or fix them",
+                        validation::KNOWN_FILE
+                    ),
+                }
+            }
             Self::Run(Verdict::Match) => String::from("conformance: match"),
             Self::Run(Verdict::Stale) => String::from(
                 "conformance: stale baseline: results got better or keys are new; record again",
@@ -364,6 +415,8 @@ pub struct Prepared<'c> {
     header: Header,
     triage: Triage,
     olds: Vec<Option<Baseline>>,
+    /// `--validation`: the known messages of the validation layers.
+    known: Option<Known>,
     /// The state directory, locked until the run ends.
     pub state: State,
 }
@@ -374,12 +427,14 @@ pub struct Prepared<'c> {
 /// # Errors
 ///
 /// Returns [`Failure::Setup`] for a bad selection, a bad `--winedebug`
-/// ([`check_winedebug`]), a bundle without tests, a missing baseline of
-/// `run`, a partial `record` on another build, a state directory that is
-/// not the runner's or is in use, and a wineserver of the bundle that
-/// serves another prefix.
+/// ([`check_winedebug`]) or `--validation` ([`check_validation`]), a bundle
+/// without tests, a missing baseline of `run`, a list of known validation
+/// messages that does not parse, a partial `record` on another build, a
+/// state directory that is not the runner's or is in use, and a wineserver
+/// of the bundle that serves another prefix.
 pub fn prepare<'c>(config: &'c Config, options: &Options) -> Result<Prepared<'c>, Failure> {
     check_winedebug(options.mode, options.winedebug.as_deref()).map_err(Failure::Setup)?;
+    check_validation(options.mode, options.validation.is_some()).map_err(Failure::Setup)?;
     let plans = plan(
         config,
         &options.suites,
@@ -390,6 +445,12 @@ pub fn prepare<'c>(config: &'c Config, options: &Options) -> Result<Prepared<'c>
     let bundle = Bundle::open(&options.bundle).map_err(Failure::Setup)?;
     let header = Header::read(&bundle.tests).map_err(Failure::Setup)?;
     let triage = Triage::load(&options.baselines.join(TRIAGE_FILE)).map_err(Failure::Setup)?;
+    let known = options
+        .validation
+        .as_ref()
+        .map(|_| Known::load(&options.baselines.join(validation::KNOWN_FILE)))
+        .transpose()
+        .map_err(Failure::Setup)?;
     let mut olds = Vec::new();
     for plan in &plans {
         let path = baseline_path(&options.baselines, &plan.exe.name);
@@ -423,6 +484,7 @@ pub fn prepare<'c>(config: &'c Config, options: &Options) -> Result<Prepared<'c>
         header,
         triage,
         olds,
+        known,
         state,
     })
 }
@@ -452,6 +514,14 @@ impl Prepared<'_> {
             println!("conformance: WINEDEBUG={channels}: the traces are in the raw logs");
         }
         let env = environment::wine_env(caller_env, &state.prefix(), &state.work(), winedebug);
+        // The session's own processes run without the layers: they are no
+        // test.
+        let layer_env = options
+            .validation
+            .as_ref()
+            .map(|layers| validation::start(layers, &run_dir, "the test processes"))
+            .transpose()
+            .map_err(Failure::Setup)?;
         let session = Session::start(
             &self.bundle,
             state,
@@ -465,6 +535,7 @@ impl Prepared<'_> {
             run_dir,
             env: &env,
             winedebug,
+            layer_env: layer_env.as_deref(),
             limits: options.limits,
             session,
             stop,
@@ -473,6 +544,8 @@ impl Prepared<'_> {
             started: Instant::now(),
             finished: Vec::new(),
             pending: Vec::new(),
+            occurrences: Vec::new(),
+            validated: Vec::new(),
         };
         let mut conclusion = match options.mode {
             Mode::Run => Conclusion::Run(Verdict::Match),
@@ -495,14 +568,51 @@ impl Prepared<'_> {
                 (Conclusion::Run(_), None) => {
                     return Err(Failure::Setup(format!("no baseline of {}", plan.exe.name)));
                 }
+                // Made below, after the last executable.
+                (conclusion @ Conclusion::Validated { .. }, _) => conclusion,
             };
         }
         runner.session.end().map_err(Failure::Setup)?;
         let finished = std::mem::take(&mut runner.finished);
         finalize(state, &runner.run_dir, &runner.pending, finished)?;
         print!("{}", runner.totals());
-        Ok(conclusion)
+        match (&self.known, conclusion) {
+            (Some(known), Conclusion::Run(verdict)) => {
+                let new = report_validation(
+                    &runner.occurrences,
+                    known,
+                    &runner.validated,
+                    &runner.run_dir,
+                )?;
+                Ok(Conclusion::Validated { verdict, new })
+            }
+            (_, conclusion) => Ok(conclusion),
+        }
     }
+}
+
+/// Print the report of the validation messages of a run, write its detail
+/// to [`validation::MESSAGES_FILE`] in `run_dir`, and return the number of
+/// new pairs of a test and a message ID.
+///
+/// # Errors
+///
+/// Returns [`Failure::Setup`] when the detail cannot be written.
+pub fn report_validation(
+    occurrences: &[Occurrence],
+    known: &Known,
+    ran: &[String],
+    run_dir: &Path,
+) -> Result<usize, Failure> {
+    let report = validation::report(occurrences, known, ran);
+    let path = run_dir.join(validation::MESSAGES_FILE);
+    fs::write(&path, &report.detail).map_err(|e| setup_io(&path, &e))?;
+    print!("{}", report.summary);
+    println!(
+        "conformance: validation: every message by test is in {}",
+        path.display()
+    );
+    Ok(report.new)
 }
 
 /// `<baselines>/<exe>.txt`.
@@ -532,6 +642,9 @@ struct Runner<'a> {
     env: &'a [(OsString, OsString)],
     /// The channels of `--winedebug`, part of the resume scope.
     winedebug: Option<&'a str>,
+    /// `--validation`: the variables of [`validation::env`], which every
+    /// test process gets on top of `env`; part of the resume scope.
+    layer_env: Option<&'a [(OsString, OsString)]>,
     limits: Limits,
     session: Session<'a>,
     stop: &'a AtomicBool,
@@ -545,6 +658,10 @@ struct Runner<'a> {
     finished: Vec<Resume>,
     /// The recorded executables, written after the resume files are gone.
     pending: Vec<Pending>,
+    /// `--validation`: the messages of the layers in the tests' logs.
+    occurrences: Vec<Occurrence>,
+    /// `--validation`: the names of the tests whose logs were read.
+    validated: Vec<String>,
 }
 
 impl Runner<'_> {
@@ -564,6 +681,10 @@ impl Runner<'_> {
         let mut second = BTreeMap::new();
         for (id, _) in run_again(&report) {
             second.insert(id.clone(), self.confirm(plan, &mut legs, &id)?);
+        }
+        if self.layer_env.is_some() {
+            let ids: Vec<&TestId> = first.keys().collect();
+            self.read_validation(plan, &ids)?;
         }
         let decided = decide_run(exe, baseline, header, first, &second, &plan.scope, triage);
         print!("{}", decided.report.text());
@@ -626,7 +747,10 @@ impl Runner<'_> {
                     exe: exe.clone(),
                     leg,
                     digest,
-                    scope: traced_scope(plan.scope_text(), self.winedebug),
+                    scope: validated_scope(
+                        traced_scope(plan.scope_text(), self.winedebug),
+                        self.layer_env.is_some(),
+                    ),
                     header: header.clone(),
                 };
                 let dir = self.state.resume();
@@ -890,6 +1014,9 @@ impl Runner<'_> {
         if let Some((name, value)) = selection {
             env.push((OsString::from(name), OsString::from(value)));
         }
+        if let Some(layer_env) = self.layer_env {
+            env.extend(layer_env.iter().cloned());
+        }
         let spec = Spec {
             program: &self.bundle.wine,
             args: &args,
@@ -926,7 +1053,90 @@ impl Runner<'_> {
         if finished.ending == Ending::Stalled {
             self.session.restart()?;
         }
+        if self.layer_env.is_some() {
+            let scan = validation::scan(&String::from_utf8_lossy(&finished.output));
+            if scan.without_layer() > 0 {
+                return Err(Failure::Setup(format!(
+                    "{} {} {unit}: {} of the {} Vulkan instances of the {what} ran without {}; \
+                     its output is in {}",
+                    plan.exe.name,
+                    leg.as_str(),
+                    scan.without_layer(),
+                    scan.instances,
+                    validation::LAYER,
+                    log.display()
+                )));
+            }
+        }
         Ok(finished)
+    }
+
+    /// Read the validation messages of the logs of `ids`, the tests of
+    /// `plan`, and of this run's listings of its units, resumed tests
+    /// included.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Failure::Setup`] for a log that cannot be read and for a leg
+    /// in which no test process created a Vulkan instance: then none ran
+    /// under the layers, which cannot be told from a loader that logged
+    /// nothing.
+    fn read_validation(&mut self, plan: &Plan<'_>, ids: &[&TestId]) -> Result<(), Failure> {
+        let exe = &plan.exe.name;
+        let mut logs: Vec<(String, String, PeDir, PathBuf)> = Vec::new();
+        for id in ids {
+            let file = Path::new(&id.unit).join(layout::log_file(&id.key));
+            if let Some(log) = find_log(self.state, &self.run_dir, id.leg, exe, &file) {
+                logs.push((
+                    format!("{exe}/{}/{}", id.unit, id.key),
+                    format!("{exe} {} {}/{}", id.leg.as_str(), id.unit, id.key),
+                    id.leg,
+                    log,
+                ));
+            }
+        }
+        for &leg in &plan.legs {
+            for unit in plan.exe.units.iter().filter(|u| plan.runs_unit(&u.name)) {
+                let log = self
+                    .run_dir
+                    .join(leg.as_str())
+                    .join(exe)
+                    .join(format!("{}.list.log", unit.name));
+                if log.is_file() {
+                    logs.push((
+                        format!("{exe}/{}/listing", unit.name),
+                        format!("{exe} {} {} listing", leg.as_str(), unit.name),
+                        leg,
+                        log,
+                    ));
+                }
+            }
+        }
+        let mut instances: BTreeMap<PeDir, usize> = plan.legs.iter().map(|&leg| (leg, 0)).collect();
+        for (test, label, leg, log) in logs {
+            let bytes = fs::read(&log).map_err(|e| setup_io(&log, &e))?;
+            let scan = validation::scan(&String::from_utf8_lossy(&bytes));
+            *instances.entry(leg).or_default() += scan.instances;
+            for message in scan.messages {
+                self.occurrences.push(Occurrence {
+                    test: test.clone(),
+                    label: label.clone(),
+                    log: log.clone(),
+                    message,
+                });
+            }
+            self.validated.push(test);
+        }
+        if let Some((leg, _)) = instances.iter().find(|(_, count)| **count == 0) {
+            return Err(Failure::Setup(format!(
+                "{exe} {}: no test process created a Vulkan instance, so none ran under the \
+                 validation layers: the tests run do not reach Vulkan, or the loader logged \
+                 nothing; the logs are in {}",
+                leg.as_str(),
+                self.run_dir.display()
+            )));
+        }
+        Ok(())
     }
 
     /// The totals of the invocation and its slowest tests.

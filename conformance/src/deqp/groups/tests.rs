@@ -146,7 +146,11 @@ fn bad_groups_are_refused() {
         ),
         (
             "[[group]]\nname = \"triage\"\ncases = [\"dEQP-VK.*\"]\n",
-            "taken by the triage",
+            "taken by a file of the expected results",
+        ),
+        (
+            "[[group]]\nname = \"validation\"\ncases = [\"dEQP-VK.*\"]\n",
+            "taken by a file of the expected results",
         ),
         (
             "[[group]]\nname = \"g\"\ncases = [\"dEQP-VK.*\"]\nfraction = 0\n",

@@ -168,9 +168,10 @@ fn parse_group(table: &Table) -> Result<Group, String> {
         })?
         .to_owned();
     let context = format!("deqp-vk.toml: group {name}");
-    if format!("{name}.txt") == crate::deqp::triage::TRIAGE_FILE {
+    let file = format!("{name}.txt");
+    if file == crate::deqp::triage::TRIAGE_FILE || file == crate::validation::KNOWN_FILE {
         return Err(format!(
-            "{context}: the name is taken by the triage file of the expected results"
+            "{context}: the name is taken by a file of the expected results kept by hand"
         ));
     }
     if let Some((key, _)) = table.iter().find(|(key, _)| {

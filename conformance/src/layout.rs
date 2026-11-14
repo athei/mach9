@@ -83,6 +83,15 @@ pub fn default_deqp(root: &Path) -> PathBuf {
     root.join("build").join("vk-gl-cts").join("dist")
 }
 
+/// The default validation layers under `root`, where
+/// `bin/build-vulkan-validation-layers.sh` stages them.
+#[must_use]
+pub fn default_validation_layers(root: &Path) -> PathBuf {
+    root.join("build")
+        .join("vulkan-validation-layers")
+        .join("dist")
+}
+
 /// A bundle with its graphics tests.
 pub struct Bundle {
     pub dir: PathBuf,

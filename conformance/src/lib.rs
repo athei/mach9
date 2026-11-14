@@ -23,6 +23,10 @@
 //! [`deqp`] is the deqp-vk suite: cases of Khronos' Vulkan CTS that
 //! `deqp-vk.toml` selects, run on KosmicKrisp without Wine.
 //!
+//! Either can run its test processes under Khronos' Vulkan validation
+//! layers and compare their messages with a list of known ones
+//! ([`validation`]).
+//!
 //! [`Outcome`]: outcome::Outcome
 //! [`TestId`]: outcome::TestId
 
@@ -45,4 +49,5 @@ pub mod resume;
 pub mod runner;
 pub mod session;
 pub mod triage;
+pub mod validation;
 pub mod wine_src;

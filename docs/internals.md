@@ -61,11 +61,13 @@ script's header says what it builds and stages.
   `build-vk-gl-cts.sh` needs git, CMake, Ninja and Python 3, all of them
   build tools of `brew-formulae` or macOS, and the network for its clone
   and the sources VK-GL-CTS's `external/fetch_sources.py` fetches.
-- For the bundle step on a Mac with a Metal 4 GPU: Khronos' validation
-  layers, which `build-vulkan-validation-layers.sh` builds with the same
-  tools, and the network for its clone and the sources the layers'
+- For the bundle step on a Mac with a Metal 4 GPU, and for the
+  conformance runner's `--validation`: Khronos' validation layers, which
+  `build-vulkan-validation-layers.sh` builds with the same tools, and the
+  network for its clone and the sources the layers'
   `scripts/update_deps.py` fetches
-  ([what the bundle step checks](#what-the-bundle-step-checks)).
+  ([what the bundle step checks](#what-the-bundle-step-checks),
+  [validation layers](#validation-layers)).
 
 ## Commands
 
@@ -79,7 +81,7 @@ script's header says what it builds and stages.
 | [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | vkd3d-proton's D3D12 DLLs, after a Wine build ([vkd3d-proton](#vkd3d-proton)) |
 | [`bundle-wine.sh`](../bin/bundle-wine.sh) | Assembles the bundle, signs the loader and checks the result ([what the bundle step checks](#what-the-bundle-step-checks)) |
 | [`build-vk-gl-cts.sh`](../bin/build-vk-gl-cts.sh) | `deqp-vk` for the [deqp-vk suite](#deqp-vk-suite); not run by `build-wine.sh` |
-| [`build-vulkan-validation-layers.sh`](../bin/build-vulkan-validation-layers.sh) | Khronos' Vulkan validation layers, for the bundle step's checks that run under them ([what the bundle step checks](#what-the-bundle-step-checks)); not run by `build-wine.sh`, and not in the bundle |
+| [`build-vulkan-validation-layers.sh`](../bin/build-vulkan-validation-layers.sh) | Khronos' Vulkan validation layers, for the bundle step's checks that run under them ([what the bundle step checks](#what-the-bundle-step-checks)) and the runner's `--validation` ([validation layers](#validation-layers)); not run by `build-wine.sh`, and not in the bundle |
 
 The flags are in [building.md](building.md#commands). The five component
 scripts also run alone.
@@ -125,7 +127,7 @@ them. A `MACOSX_DEPLOYMENT_TARGET` may raise the floor but not lower it.
 | `FEX_DIST`, `MESA_DIST`, `DXMT_DIST`, `VKD3D_PROTON_DIST`, `GSTREAMER_DIST` | What the bundle installs from each component, with the commits it was built from; by default inside the component's build directory |
 | `LOADER_PROFILE` | The provisioning profile the loader is signed for |
 | `VK_GL_CTS_BUILD_DIR`, `VK_GL_CTS_DIST` | The tree of [`build-vk-gl-cts.sh`](../bin/build-vk-gl-cts.sh), with its VK-GL-CTS clone, and the `deqp-vk` it stages |
-| `VULKAN_VALIDATION_LAYERS_BUILD_DIR`, `VULKAN_VALIDATION_LAYERS_DIST` | The tree of [`build-vulkan-validation-layers.sh`](../bin/build-vulkan-validation-layers.sh), with its clone and the sources it builds on, and the layers it stages, which the bundle step reads |
+| `VULKAN_VALIDATION_LAYERS_BUILD_DIR`, `VULKAN_VALIDATION_LAYERS_DIST` | The tree of [`build-vulkan-validation-layers.sh`](../bin/build-vulkan-validation-layers.sh), with its clone and the sources it builds on, and the layers it stages, which the bundle step reads; the conformance runner takes another directory with `--validation-layers` |
 | `MINGW_DIR` | llvm-mingw |
 | `CACHE_DIR` | Downloaded redistributables |
 
@@ -350,8 +352,9 @@ cargo run -p conformance -- record d3d11     # write the baselines again
 | Match | `run`: no change fails the run. `record`: a baseline with no unstable key | 0 |
 | Regression | `run`: a key got worse, a new key crashes or stalls, or the run no longer lists a key | 1 |
 | Stale baseline | `run`: a key got better or is new: record the suite | 1 |
+| New validation messages | `run --validation`: a message of the [validation layers](#validation-layers) no known message names; the last line also gives the result of the comparison | 1 |
 | Unstable | `run`: a changed key gave its baseline's result the second time. `record`: a key gave two results and is written with the higher status and the larger of each count | 1 |
-| Error | Bad arguments, no baseline, or a bundle, state directory or implementation the runner cannot use | 2 |
+| Error | Bad arguments, no baseline, or a bundle, state directory or implementation the runner cannot use; under `--validation` also layers that are missing or not at the pin, and a test process that ran without them | 2 |
 | Interrupted | Stopped by a signal, or for `run` and `record` by a quit request or a stop key | 130 |
 
 - The last line of the output names the result. What counts as worse or
@@ -490,6 +493,69 @@ cargo run -p conformance -- deqp-vk record --group draw    # write its expected 
 - Like the Wine suites, it needs a Mac with a Metal 4 GPU and runs
   locally only. It opens no windows: the window-system cases the groups
   match end NotSupported.
+
+#### Validation layers
+
+`run --validation` and `deqp-vk run --validation` run the test processes
+under Khronos' validation layers, the ones the bundle step's checks use
+([what the bundle step checks](#what-the-bundle-step-checks)), and fail on
+a message of the layers that no list of known messages names.
+
+```bash
+bin/build-vulkan-validation-layers.sh                              # once per pin
+cargo run -p conformance -- run vulkan-1 d3d12 opengl32 --validation
+cargo run -p conformance -- deqp-vk run --group occlusion --validation
+```
+
+- The layers are those `build-vulkan-validation-layers.sh` staged, by
+  default in `build/vulkan-validation-layers/dist`
+  (`--validation-layers`). The runner refuses them unless their `COMMIT`
+  is the pin in [`redist.env`](../pins/redist.env).
+- Each test process gets `VK_LAYER_PATH`, `VK_INSTANCE_LAYERS`,
+  `VK_LOADER_LAYERS_ALLOW`, a `VK_LAYER_SETTINGS_PATH` file that turns
+  off the layer's limit on the reports of one message ID, and
+  `VK_LOADER_DEBUG=layer`
+  ([`validation.rs`](../conformance/src/validation.rs)); the processes of
+  the Wine session do not. The loader then puts the layer into every
+  instance and logs each instance with the layers it inserted. Without
+  `VK_LOADER_LAYERS_ALLOW`, deqp-vk's `VK_LOADER_LAYERS_DISABLE=~all~`
+  would keep the layer out although `VK_INSTANCE_LAYERS` names it.
+- A process with an instance the layer is not in stops the run as an
+  error. So does a leg of a suite in which no test process created an
+  instance, and a deqp-vk process that ran a case without logging one:
+  nothing would show that the layer ran. The suites that reach Vulkan are
+  `vulkan-1`, those on vkd3d-proton (`d3d12`, the `d3d12:` keys of
+  `dxgi`), and those on Zink (`opengl32`, and `ddraw` and `d3d8` through
+  wined3d's OpenGL).
+- The layers print each message on the standard output, so it is in the
+  test's raw log. A Wine test's messages are its key's; a deqp-vk message
+  belongs to the case that started last before it, or to `startup` before
+  the first case.
+- A Wine test prints a line in several writes, and the layer prints a
+  whole message at once, often from another thread, so a message can
+  split a test's output line. The runner finds the message inside the
+  line, but the check line it split no longer parses whole: a result
+  change seen only under `--validation` is checked with a plain run.
+- Errors and warnings count alike. People keep the known ones in
+  `validation.txt` beside each triage file
+  ([Wine suites](../conformance/baselines/validation.txt),
+  [deqp-vk](../conformance/baselines/deqp-vk/validation.txt)): a pattern
+  over test names, one over message IDs, and the issue. A line whose tests
+  ran without its message is listed as not seen.
+- The output names each message ID with its tests and the log of the
+  first; `validation-messages.txt` in the run's log directory lists every
+  test with each of its message IDs.
+- A run under the layers compares the results with the baselines as
+  always, and continues only a run under the layers. `record` refuses
+  `--validation`: the layers slow the tests down, and a baseline is the
+  result without them.
+- The routine set under the layers is `d3d12`, `dxgi`, `vulkan-1`,
+  `opengl32`, `d3d8` and the deqp-vk groups; `ddraw`, the largest suite,
+  is run under them only now and then. In coarse wall-clock times of
+  runs beside other builds, not timing-class measurements, the layers
+  added nothing measurable to `d3d12`, `opengl32` and the `draw` group
+  and about a third to `synchronization2`; the factor of `d3d8` and of
+  the other sets was not measured.
 
 ## DXMT
 
@@ -817,4 +883,4 @@ A `*-src.ref` file names a branch, tag or commit of the component's
 | Provisioning profile | [`signing/loader.provisionprofile`](../signing/loader.provisionprofile); replace it when it expires or the App ID changes |
 | Sparkle, Mach9.app's updater | [`redist.env`](../pins/redist.env): version and SHA-256 of the release tarball |
 | VK-GL-CTS, for the [deqp-vk suite](#deqp-vk-suite) | [`redist.env`](../pins/redist.env): tag and commit; the sources it builds on at the commits and checksums its `external/fetch_sources.py` pins |
-| Vulkan validation layers, for the [bundle step](#what-the-bundle-step-checks) | [`redist.env`](../pins/redist.env): tag and commit; the sources they build on at what the tag's `scripts/known_good.json` names |
+| Vulkan validation layers, for the [bundle step](#what-the-bundle-step-checks) and the runner's [`--validation`](#validation-layers) | [`redist.env`](../pins/redist.env): tag and commit; the sources they build on at what the tag's `scripts/known_good.json` names |

@@ -21,6 +21,7 @@ use conformance::{
     resume::Mode,
     runner::Conclusion,
     session::Failure,
+    validation::Layers,
 };
 
 const GROUPS: &str = "[[group]]\nname = \"g\"\ncases = [\"dEQP-VK.g.*\"]\n";
@@ -40,6 +41,10 @@ enum Setup {
     ShortIdle,
     /// The interrupt flag is set from the start.
     Stopped,
+    /// Under the validation layers.
+    Validation,
+    /// Under the validation layers, which the loader does not insert.
+    NoLayer,
 }
 
 const PLAIN: Setup = Setup::Plain;
@@ -104,6 +109,18 @@ fn deqp(root: &Path, cases: &[&str]) -> PathBuf {
     deqp
 }
 
+/// Validation layers staged in `root` as built from the commit `eeee`.
+fn layers(root: &Path) -> Layers {
+    let dir = root.join("layers");
+    let manifests = dir.join("share/vulkan/explicit_layer.d");
+    fs::create_dir_all(&manifests).unwrap();
+    fs::create_dir_all(dir.join("lib")).unwrap();
+    fs::write(dir.join("lib/libVkLayer_khronos_validation.dylib"), "").unwrap();
+    fs::write(manifests.join("VkLayer_khronos_validation.json"), "{}").unwrap();
+    fs::write(dir.join("COMMIT"), "eeee\n").unwrap();
+    Layers::open(&dir, "eeee").unwrap()
+}
+
 fn try_execute(
     root: &Path,
     mode: Mode,
@@ -135,6 +152,7 @@ fn try_execute_groups(
             idle: Duration::from_secs(if setup == Setup::ShortIdle { 1 } else { 10 }),
             total: Duration::from_secs(60),
         },
+        validation: matches!(setup, Setup::Validation | Setup::NoLayer).then(|| layers(root)),
     };
     let driver = if setup == Setup::ForeignDriver {
         PathBuf::from("/opt/homebrew/lib/libMoltenVK.dylib")
@@ -151,6 +169,9 @@ fn try_execute_groups(
     ];
     if setup == Setup::CanaryFails {
         env.push((OsString::from("STUB_CANARY_FAILS"), OsString::from("1")));
+    }
+    if setup == Setup::NoLayer {
+        env.push((OsString::from("STUB_NO_LAYER"), OsString::from("1")));
     }
     let groups = Groups::parse(groups).unwrap();
     let stop = AtomicBool::new(setup == Setup::Stopped);
@@ -378,6 +399,72 @@ fn a_process_that_runs_nothing_stops_the_run() {
         PLAIN,
     ));
     assert!(e.contains("without running any of its 1 cases"), "{e}");
+}
+
+#[test]
+fn a_new_validation_message_fails_the_run_and_a_known_one_does_not() {
+    let root = scratch("validation");
+    let cases = ["dEQP-VK.g.a.vuid", "dEQP-VK.g.b.pass"];
+    expect_all_pass(&root, &cases);
+    let run = try_execute(&root, Mode::Run, &cases, Setup::Validation).unwrap();
+    assert!(
+        matches!(
+            run,
+            Conclusion::Validated {
+                verdict: Verdict::Match,
+                new: 1
+            }
+        ),
+        "{run:?}"
+    );
+    assert_eq!(run.exit_code(), 1);
+    let runs: Vec<PathBuf> = fs::read_dir(root.join("deqp-state/runs"))
+        .unwrap()
+        .map(|run| run.unwrap().path())
+        .collect();
+    let detail = fs::read_to_string(runs[0].join("validation-messages.txt")).unwrap();
+    assert!(
+        detail.starts_with("new error VUID-vkCmdDraw-None-08600 deqp-vk dEQP-VK.g.a.vuid: 1 times"),
+        "{detail}"
+    );
+    fs::write(
+        root.join("expected/validation.txt"),
+        "dEQP-VK.g.* VUID-vkCmdDraw-None-08600 issue=9\n",
+    )
+    .unwrap();
+    let run = try_execute(&root, Mode::Run, &cases, Setup::Validation).unwrap();
+    assert!(
+        matches!(
+            run,
+            Conclusion::Validated {
+                verdict: Verdict::Match,
+                new: 0
+            }
+        ),
+        "{run:?}"
+    );
+    assert_eq!(run.exit_code(), 0);
+}
+
+#[test]
+fn an_instance_without_the_validation_layer_stops_the_run() {
+    let root = scratch("no-layer");
+    let cases = ["dEQP-VK.g.a.pass"];
+    expect_all_pass(&root, &cases);
+    let e = setup_error(try_execute(&root, Mode::Run, &cases, Setup::NoLayer));
+    assert!(e.contains("ran without VK_LAYER_KHRONOS_validation"), "{e}");
+}
+
+#[test]
+fn record_refuses_the_validation_layers() {
+    let root = scratch("record-validation");
+    let e = setup_error(try_execute(
+        &root,
+        Mode::Record,
+        &["dEQP-VK.g.a.pass"],
+        Setup::Validation,
+    ));
+    assert!(e.contains("record takes no --validation"), "{e}");
 }
 
 #[test]

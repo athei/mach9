@@ -1,0 +1,34 @@
+# Known messages of Khronos' Vulkan validation layers in the tests of the
+# baselines in this directory, under `run --validation`, kept by hand.
+#
+# One line per pattern over test names, then a pattern over message IDs (a
+# VUID or one of the layer's own names; `*` matches any run of characters
+# in both), then optionally
+#   issue=<n>  the mach9 issue that tracks the message
+# A test is <exe>/<unit>/<key> of every leg, <key> is * for a unit that runs
+# as a whole and `listing` for the listing of a unit's keys. `#` starts a
+# comment, on a line of its own or after the notes:
+#
+#   d3d12/d3d12/test_draw VUID-vkCmdDraw-None-08600 issue=<n>
+#
+# A message an entry matches does not fail the run; any other does, error
+# or warning.
+
+# Zink's own blit and clear shaders write gl_FragData[1] with one attachment
+# bound; a warning, not a usage error.
+d3d8/*/* Undefined-Value-ShaderOutputNotConsumed-DynamicRendering
+ddraw/*/* Undefined-Value-ShaderOutputNotConsumed-DynamicRendering
+opengl32/opengl/test_bitmap_rendering Undefined-Value-ShaderOutputNotConsumed-DynamicRendering
+opengl32/opengl/test_d3dkmt_rendering Undefined-Value-ShaderOutputNotConsumed-DynamicRendering
+d3d12/d3d12/test_create_device Undefined-Value-ShaderOutputNotConsumed-DynamicRendering  # on a Zink command buffer, after vkd3d-proton made its swapchain
+
+d3d8/visual/volume_dxtn_test VUID-vkCmdDraw-None-09600 issue=131  # Zink samples slice 1 of a volume texture in layout UNDEFINED
+ddraw/*/test_blt VUID-vkCmdBlitImage-pRegions-00217 issue=133  # an overlapped blit within one surface
+ddraw/*/test_blt VUID-vkCmdCopyImage-pRegions-00124 issue=133  # the same, as a copy
+
+# The tests' own Vulkan usage, not that of winevulkan or KosmicKrisp:
+vulkan-1/vulkan/test_physical_device_groups VUID-VkPhysicalDeviceGroupProperties-sType-sType  # calloc'ed output structs without sType
+# test_win32_surface destroys the swapchain right after a present without
+# waiting for the queue; queue work of winevulkan's own present is not ruled
+# out.
+vulkan-1/vulkan/test_win32_surface VUID-vkDestroySwapchainKHR-swapchain-01282

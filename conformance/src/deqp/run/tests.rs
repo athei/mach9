@@ -53,7 +53,7 @@ fn a_setting_whose_groups_have_no_case_left_does_not_run() {
 fn the_runs_of_the_settings_combine_to_the_worse() {
     let run = |a, b| match combine(Conclusion::Run(a), Conclusion::Run(b)) {
         Conclusion::Run(verdict) => verdict,
-        Conclusion::Record { .. } => panic!("a record"),
+        other => panic!("not a run: {other:?}"),
     };
     assert_eq!(run(Verdict::Match, Verdict::Match), Verdict::Match);
     assert_eq!(run(Verdict::Match, Verdict::Unstable), Verdict::Unstable);
@@ -63,7 +63,7 @@ fn the_runs_of_the_settings_combine_to_the_worse() {
         Conclusion::Record { unstable: 2 },
     ) {
         Conclusion::Record { unstable } => assert_eq!(unstable, 3),
-        Conclusion::Run(_) => panic!("a run"),
+        other => panic!("not a record: {other:?}"),
     }
 }
 

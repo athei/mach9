@@ -18,7 +18,7 @@ use conformance::{
     resume::Mode,
     runner::{self, Options},
     session::Failure,
-    wine_src,
+    validation, wine_src,
 };
 
 #[derive(Parser)]
@@ -116,6 +116,8 @@ struct DeqpArgs {
     #[arg(long, value_name = "SECONDS", default_value_t = 3600,
           value_parser = clap::value_parser!(u64).range(1..))]
     time_limit: u64,
+    #[command(flatten)]
+    validation: ValidationArgs,
 }
 
 /// The default of `deqp-vk --jobs`.
@@ -172,6 +174,35 @@ struct RunArgs {
     /// `+win,+event`, to trace a test. The traces go into the raw logs.
     #[arg(long, value_name = "CHANNELS")]
     winedebug: Option<String>,
+    #[command(flatten)]
+    validation: ValidationArgs,
+}
+
+#[derive(Args)]
+struct ValidationArgs {
+    /// `run` only: run the test processes under Khronos' Vulkan validation
+    /// layers and fail on a message the list of known ones does not name.
+    #[arg(long)]
+    validation: bool,
+    /// The layers bin/build-vulkan-validation-layers.sh staged; by default
+    /// `<root>/build/vulkan-validation-layers/dist`.
+    #[arg(long, value_name = "DIR", requires = "validation")]
+    validation_layers: Option<PathBuf>,
+}
+
+impl ValidationArgs {
+    /// The layers to run under: those staged at the pin of `pins/redist.env`
+    /// in `--validation-layers` or under `root`, or none without
+    /// `--validation`.
+    fn open(self, root: &Path) -> Result<Option<validation::Layers>, String> {
+        if !self.validation {
+            return Ok(None);
+        }
+        let dir = self
+            .validation_layers
+            .unwrap_or_else(|| layout::default_validation_layers(root));
+        validation::Layers::open(&dir, &validation::pin()?).map(Some)
+    }
 }
 
 /// A leg as the command line spells it.
@@ -225,6 +256,10 @@ fn deqp_vk(mode: Mode, args: DeqpArgs) -> ExitCode {
     };
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let root = layout::root(std::env::var_os("WINE_BUILD_ROOT").as_deref(), manifest);
+    let validation = match open_validation(mode, args.validation, &root) {
+        Ok(validation) => validation,
+        Err(e) => return finish(Err(Failure::Setup(e))),
+    };
     let count = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
     let options = deqp::run::Options {
         mode,
@@ -242,6 +277,7 @@ fn deqp_vk(mode: Mode, args: DeqpArgs) -> ExitCode {
             idle: Duration::from_secs(args.idle_limit),
             total: Duration::from_secs(args.time_limit),
         },
+        validation,
     };
     finish(deqp::run::execute(
         &groups,
@@ -249,6 +285,16 @@ fn deqp_vk(mode: Mode, args: DeqpArgs) -> ExitCode {
         &std::env::vars_os().collect::<Vec<_>>(),
         &interrupt::REQUESTED,
     ))
+}
+
+/// The layers of `--validation` for `mode`, checked before they are opened.
+fn open_validation(
+    mode: Mode,
+    args: ValidationArgs,
+    root: &Path,
+) -> Result<Option<validation::Layers>, String> {
+    runner::check_validation(mode, args.validation)?;
+    args.open(root)
 }
 
 /// Print how a command ended and give its exit code.
@@ -275,6 +321,10 @@ fn finish(result: Result<runner::Conclusion, Failure>) -> ExitCode {
 fn run(config: &Config, mode: Mode, args: RunArgs) -> ExitCode {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let root = layout::root(std::env::var_os("WINE_BUILD_ROOT").as_deref(), manifest);
+    let validation = match open_validation(mode, args.validation, &root) {
+        Ok(validation) => validation,
+        Err(e) => return finish(Err(Failure::Setup(e))),
+    };
     let options = Options {
         mode,
         suites: args.suites,
@@ -290,6 +340,7 @@ fn run(config: &Config, mode: Mode, args: RunArgs) -> ExitCode {
             total: Duration::from_secs(args.time_limit),
         },
         winedebug: args.winedebug,
+        validation,
     };
     // Read before the runner becomes an application, which may set
     // variables of its own.

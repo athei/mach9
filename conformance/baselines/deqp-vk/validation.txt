@@ -1,0 +1,22 @@
+# Known messages of Khronos' Vulkan validation layers in the deqp-vk cases
+# of the expected results in this directory, under `deqp-vk run
+# --validation`, kept by hand.
+#
+# One line per pattern over case names, then a pattern over message IDs (a
+# VUID or one of the layer's own names; `*` matches any run of characters
+# in both), then optionally
+#   issue=<n>  the mach9 issue that tracks the message
+# A message a deqp-vk process reports before its first case belongs to
+# `startup`. `#` starts a comment, on a line of its own or after the notes:
+#
+#   dEQP-VK.query_pool.statistics_query.* VUID-vkCmdBeginQuery-queryPool-01922 issue=<n>
+#
+# A message an entry matches does not fail the run; any other does, error
+# or warning.
+
+# The cases' own Vulkan usage, not that of KosmicKrisp or the loader:
+dEQP-VK.query_pool.occlusion_query.no_attachments_* VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-00749  # a static lineWidth of 0.0 without wideLines
+dEQP-VK.query_pool.occlusion_query.*no_*attachments* Undefined-Value-ShaderOutputNotConsumed  # the fragment shader writes an output no attachment takes
+dEQP-VK.conditional_rendering.draw_clear.draw.update_with_rendering_* Undefined-Value-OutputNotWritten  # the fragment shader leaves attachment 0 unwritten
+dEQP-VK.draw.renderpass.basic_draw.misc.maintenance5 WARNING-VkPipelineCreateFlags2-flags-appending  # both pipeline flag fields set
+dEQP-VK.draw.renderpass.shader_layer.*_shader_1 Undefined-Value-Layer-Written  # writes gl_Layer into a framebuffer of one layer

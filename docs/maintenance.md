@@ -607,8 +607,10 @@ in [`redist.env`](../pins/redist.env).
 
 Khronos' validation layers, which checks of the bundle step run under
 ([what the bundle step checks](internals.md#what-the-bundle-step-checks)),
-are pinned by tag and commit in [`redist.env`](../pins/redist.env), at
-the SDK release of the Vulkan loader.
+as do the conformance runner's
+[`--validation`](internals.md#validation-layers) runs, are pinned by tag
+and commit in [`redist.env`](../pins/redist.env), at the SDK release of
+the Vulkan loader.
 
 - Bump tag and commit together with the loader's and the headers'.
   `build-vulkan-validation-layers.sh` stops when the Vulkan-Headers of the
@@ -616,6 +618,14 @@ the SDK release of the Vulkan loader.
 - Rebuild with `build-vulkan-validation-layers.sh` and run a full bundle
   step. A new release can report what the old one did not: explain every
   new validation error before the bundle step takes it.
+- Then run the suites and the deqp-vk groups that reach Vulkan with
+  `--validation`. A new message is one the new release reports or the old
+  one reported under another ID: explain it, file its cause, and name it
+  in `validation.txt`; remove the lines the output lists as not seen.
+- After a change to Mesa, vkd3d-proton or the Wine Vulkan and OpenGL code,
+  run the suites and groups of the routine set it reaches with
+  `--validation` besides the plain run
+  ([validation layers](internals.md#validation-layers)).
 
 ### FEX
 

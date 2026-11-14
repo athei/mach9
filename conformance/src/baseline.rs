@@ -147,8 +147,8 @@ impl Baseline {
     }
 }
 
-/// Every baseline in `dir`: each `<exe>.txt` but [`TRIAGE_FILE`], in the
-/// order of their names.
+/// Every baseline in `dir`: each `<exe>.txt` but [`TRIAGE_FILE`] and the
+/// list of known validation messages, in the order of their names.
 ///
 /// # Errors
 ///
@@ -160,7 +160,9 @@ pub fn load_dir(dir: &Path) -> Result<Vec<Baseline>, String> {
     for entry in entries {
         let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
         let is_baseline = path.extension().is_some_and(|ext| ext == "txt")
-            && path.file_name().is_some_and(|name| name != TRIAGE_FILE);
+            && path
+                .file_name()
+                .is_some_and(|name| name != TRIAGE_FILE && name != crate::validation::KNOWN_FILE);
         if is_baseline {
             paths.push(path);
         }
