@@ -868,6 +868,15 @@ Static linking:
   of mtld3d, has to keep to that, or a native ARM64 program cannot load
   its module. Which tree such a program gets is compatdb's choice
   ([native ARM64 programs](compatdb.md#native-arm64-programs)).
+- Metal's depth bias on a 16-bit depth buffer stores one step further in
+  the direction of a constant bias than the fixed-point rule, two for a
+  negative constant at a depth on a half step, and its slope term misses
+  by up to a step. This reaches OpenGL through Zink, wined3d's Direct3D 8
+  and DirectDraw, DXMT and Vulkan programs alike. Zink passes the D16 bias
+  to Metal. Applying it in the fragment shader instead, as Zink does for
+  emulated D24, is exact, but the shader then writes the depth, so every
+  fragment of a biased draw is shaded; [`bench/zink.sh`](../bench/zink.sh)
+  measures what that costs a shadow map pass on either format.
 
 ## Pinned inputs
 
