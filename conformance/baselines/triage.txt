@@ -36,4 +36,3 @@ dxgi/dxgi/d3d12:test_set_fullscreen issue=113  # AppKit moves the restored windo
 dxgi/dxgi/test_inexact_modes issue=113  # AppKit moves the restored window below the menu bar
 dxgi/dxgi/d3d10:test_resize_target issue=97
 dxgi/dxgi/d3d12:test_resize_target issue=97
-opengl32/opengl/test_other_process_window issue=49
