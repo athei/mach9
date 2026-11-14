@@ -472,9 +472,8 @@ static void rwx_to_rx_write(void)
     if (fn() != 1) FAIL("call after the fault");
 }
 
-/* The same with code compiled from the page before the protect. Windows raises
- * the access violation, but FEX lets the write through: it cannot tell this RX
- * from one the guest got from VirtualQuery, which reports FEX's trap (#128). */
+/* The same with code compiled from the page before the protect, so with the
+ * page trapped */
 static void rwx_to_rx_write_compiled(void)
 {
     BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
@@ -486,13 +485,13 @@ static void rwx_to_rx_write_compiled(void)
     if (fn() != 1) FAIL("first call");
     protect(page, PAGE, PAGE_EXECUTE_READ);
     store(page + 0x10);
-    if (faults || page[0x10] != 1) FAIL("%ld faults, byte %#x", faults, page[0x10]);
-    if (fn() != 1) FAIL("call after the write");
+    check_fault(AV, insn, 1, page + 0x10);
+    if (page[0x10]) FAIL("the write went through");
+    if (fn() != 1) FAIL("call after the fault");
 }
 
 /* Three RWX pages made RX together, with code compiled from the middle one:
- * writes to the outer two are the guest's access violations, a write to the
- * middle one goes through as in rwx_to_rx_write_compiled */
+ * a write to each is the guest's access violation */
 static void rwx_to_rx_write_three_pages(void)
 {
     BYTE *base = new_pages(3 * PAGE, PAGE_EXECUTE_READWRITE);
@@ -510,15 +509,8 @@ static void rwx_to_rx_write_three_pages(void)
 
         faults = 0;
         store(target);
-        if (i == 1)
-        {
-            if (faults || *target != 1) FAIL("middle page: %ld faults, byte %#x", faults, *target);
-        }
-        else
-        {
-            check_fault(AV, insn, 1, target);
-            if (*target) FAIL("page %d: the write went through", i);
-        }
+        check_fault(AV, insn, 1, target);
+        if (*target) FAIL("page %d: the write went through", i);
     }
     if (fn() != 1) FAIL("call after the writes");
 }
@@ -544,9 +536,8 @@ static void rwx_patch_restore(void)
     if (fn() != 3 || faults) FAIL("call after a write: %ld faults", faults);
 }
 
-/* The same with the protection VirtualQuery reported, which is FEX's trap
- * (#128): the page stays writable as on Windows, where the query reported
- * PAGE_EXECUTE_READWRITE */
+/* The same with the protection VirtualQuery reported for the trapped page,
+ * PAGE_EXECUTE_READWRITE as on Windows */
 static void rwx_query_restore(void)
 {
     BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
@@ -558,6 +549,7 @@ static void rwx_query_restore(void)
     set_code(page, PAGE);
     if (fn() != 1) FAIL("first call");
     if (!VirtualQuery(page, &info, sizeof(info))) FAIL("VirtualQuery: %lu", GetLastError());
+    if (info.Protect != PAGE_EXECUTE_READWRITE) FAIL("queried protection %#lx", info.Protect);
     protect(page, PAGE, PAGE_EXECUTE_READWRITE);
     put_code(page, 2);
     if (!VirtualProtect(page, PAGE, info.Protect, &old)) FAIL("VirtualProtect: %lu", GetLastError());
