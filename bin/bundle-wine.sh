@@ -870,6 +870,7 @@ smoke_test() {
     check_wmadec_runs "${wine_env[@]}"
     check_fex_runs "${wine_env[@]}"
     check_attach_runs "${wine_env[@]}"
+    check_terminate_runs "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
 }
@@ -1695,6 +1696,36 @@ run_attach() {
         exit 1
     fi
     grep "wine-build smoke test: $debugger attached" "$log" | sed 's/^/    /'
+}
+
+# check_terminate_runs <env-command>...: build smoke/terminate.c for each arch
+# of SMOKE_PE_ARCHS and run it in the booted throwaway prefix, and exit with
+# the log unless every case passed. It terminates threads inside calls on an
+# event, in waits and in CloseHandle(); the program prints each case's name
+# before it runs it. A hang is how it fails, so the limit is lower than the
+# 120 seconds of the other runs: the slowest clean run took about one second
+# on a current Mac, and small programs take up to 4 times as long on a hosted
+# runner.
+check_terminate_runs() {
+    local arch exe log want last
+    for arch in $SMOKE_PE_ARCHS; do
+        exe="$TMP_DIR/terminate-$arch.exe"
+        log="$TMP_DIR/terminate-$arch.log"
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/terminate.c"
+        time_mark "smoke: terminate.exe $arch"
+        echo "  Running terminate.exe for $arch..."
+        run_limited 10 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
+        last=$(grep "wine-build smoke test: $arch case " "$log" | tail -n 1 | tr -d '\r' | sed 's/.* case //')
+        smoke_check "terminate.exe for $arch, in case '$last'," 10 "$log"
+        want="wine-build smoke test: $arch TerminateThread cases passed"
+        if ! grep -q "$want" "$log"; then
+            echo "Error: terminate.exe for $arch did not print '$want'"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
+        grep "$want" "$log" | sed 's/^/    /'
+    done
 }
 
 # check_wgl_runs <env-command>...: build smoke/wgl.c for each arch of
