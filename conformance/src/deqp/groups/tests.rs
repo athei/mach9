@@ -36,6 +36,7 @@ fn the_committed_groups_parse_and_name_their_issues() {
             "draw",
             "draw-icb",
             "robust-buffer-access",
+            "robust-buffer-access-forced",
             "synchronization",
             "synchronization2",
             "memory-model",

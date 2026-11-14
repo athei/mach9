@@ -71,6 +71,25 @@ exclude = [
     "dEQP-VK.robustness.robustness2.*.rgen_compute",
 ]
 
+# Storage buffer cases with every storage and uniform buffer access under
+# robust buffer access (#62). The ssbo cases of robust-buffer-access create
+# their devices without it, so only force_robustness sends their row-major
+# columns, bool, 8-bit and 16-bit vectors through the bounded loads. The
+# opatomic cases check the values of atomic loads from storage buffers; the
+# atomicwrite message passing cases read their guard with an atomic load
+# too, but check only that a nonzero guard comes with the payload.
+[[group]]
+name = "robust-buffer-access-forced"
+issues = [62]
+kk_debug = "force_robustness"
+cases = [
+    "dEQP-VK.ssbo.*",
+    "dEQP-VK.spirv_assembly.instruction.compute.8bit_storage.*",
+    "dEQP-VK.spirv_assembly.instruction.compute.16bit_storage.*",
+    "dEQP-VK.spirv_assembly.instruction.compute.opatomic*",
+    "dEQP-VK.memory_model.message_passing.*.atomic_atomic.*.guard_local.buffer.comp",
+]
+
 # The cases of #63 in three groups, so that a record of one of them stays
 # short enough to share the machine.
 [[group]]
