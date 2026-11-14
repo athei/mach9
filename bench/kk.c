@@ -30,6 +30,9 @@
  * | draw-indexed-count-unroll | robustness off, robustBufferAccess2, the pipelineRobustness feature; maxDrawCount 4096 and 32 | the same with the index buffer bound at offset 2, which the last two arms unroll |
  * | draw-count | robustness off; maxDrawCount 4096 and 32 | CALLS vkCmdDrawIndirectCount, the same counts |
  * | draw-indexed-count-mixed | robustBufferAccess2; maxDrawCount 4096 and 32 | the calls of draw-indexed-count and of draw-indexed-count-unroll in turn, in one command buffer: the index buffer bound at offset 0 for every other call and at offset 2 for the rest |
+ * | draw-indexed-count-dense | robustness off; maxDrawCount 4096 and 1024 | CALLS vkCmdDrawIndexedIndirectCount whose count is the maxDrawCount, so every slot draws |
+ * | draw-count-dense | the same | the same with vkCmdDrawIndirectCount |
+ * | draw-indexed-count-half | the same | CALLS vkCmdDrawIndexedIndirectCount whose count is half the maxDrawCount |
  * | dispatch-loads | robustness off, robustBufferAccess, robustBufferAccess2 | DISPATCHES single-workgroup dispatches of 32 threads, LOAD_ITERATIONS iterations of one storage and one uniform buffer load each |
  * | dispatch-loads-wide | the same | the same with four storage and two uniform buffer loads per iteration, each from a buffer of its own |
  * | barrier-chain | barriers on, off | CHAIN_LENGTH single-workgroup dispatches, with a compute-to-compute vkCmdPipelineBarrier2 between each or none |
@@ -111,6 +114,9 @@
 #define CALLS 32
 #define MAX_DRAWS 4096
 #define COUNT 32
+/* The smaller maxDrawCount of the dense cases: where KosmicKrisp starts to
+ * run a call from an indirect command buffer (#61). */
+#define DENSE_DRAWS 1024
 /* The render target, which each draw's triangle covers. */
 #define TARGET_SIZE 16
 /* 161 single-workgroup dispatches run 2.55x slower on KosmicKrisp than on
@@ -257,6 +263,9 @@ struct arm
     /* draw-indexed-count-mixed: every second call binds the index buffer at
      * index_offset, the others at 0. */
     bool mixed;
+    /* The dense and half cases: the draws the count buffer lets run in each
+     * call; COUNT when 0. */
+    uint32_t draws;
     bool barriers;
     /* dispatch-loads-wide: loads_wide.comp instead of loads.comp. */
     bool wide;
@@ -283,6 +292,9 @@ struct arm
 #define MIXED(max)                                                                                 \
     { .name = "draw-indexed-count-mixed", .kind = KIND_INDEXED, .robustness = ROBUST_RBA2,         \
       .max_draws = max, .index_offset = 2, .mixed = true }
+#define FILLED(case_name, draw_kind, max, count)                                                   \
+    { .name = case_name, .kind = draw_kind, .robustness = ROBUST_OFF, .max_draws = max,            \
+      .draws = count }
 #define LOADS(case_name, robust, is_wide)                                                          \
     { .name = case_name, .kind = KIND_LOADS, .robustness = robust, .wide = is_wide }
 #define CHAIN(on) { .name = "barrier-chain", .kind = KIND_CHAIN, .barriers = on }
@@ -304,6 +316,12 @@ static struct arm arms[] = {
     DRAW("draw-count", KIND_NONINDEXED, ROBUST_OFF, COUNT, 0),
     MIXED(MAX_DRAWS),
     MIXED(COUNT),
+    FILLED("draw-indexed-count-dense", KIND_INDEXED, MAX_DRAWS, MAX_DRAWS),
+    FILLED("draw-indexed-count-dense", KIND_INDEXED, DENSE_DRAWS, DENSE_DRAWS),
+    FILLED("draw-count-dense", KIND_NONINDEXED, MAX_DRAWS, MAX_DRAWS),
+    FILLED("draw-count-dense", KIND_NONINDEXED, DENSE_DRAWS, DENSE_DRAWS),
+    FILLED("draw-indexed-count-half", KIND_INDEXED, MAX_DRAWS, MAX_DRAWS / 2),
+    FILLED("draw-indexed-count-half", KIND_INDEXED, DENSE_DRAWS, DENSE_DRAWS / 2),
     LOADS("dispatch-loads", ROBUST_OFF, false),
     LOADS("dispatch-loads", ROBUST_RBA, false),
     LOADS("dispatch-loads", ROBUST_RBA2, false),
@@ -341,18 +359,24 @@ static bool ok(VkResult result, const char *what)
     return false;
 }
 
+/* The draws of each call of a draw arm that run. */
+static uint32_t draw_count(const struct arm *arm)
+{
+    return arm->draws ? arm->draws : COUNT;
+}
+
 static void settings(const struct arm *arm, char *out, size_t size)
 {
     switch (arm->kind)
     {
     case KIND_INDEXED:
         snprintf(out, size, "robustness=%s calls=%u max=%u count=%u index=u16+%s%u",
-                 robustness_names[arm->robustness], CALLS, arm->max_draws, COUNT,
+                 robustness_names[arm->robustness], CALLS, arm->max_draws, draw_count(arm),
                  arm->mixed ? "0/" : "", arm->index_offset);
         break;
     case KIND_NONINDEXED:
         snprintf(out, size, "robustness=%s calls=%u max=%u count=%u",
-                 robustness_names[arm->robustness], CALLS, arm->max_draws, COUNT);
+                 robustness_names[arm->robustness], CALLS, arm->max_draws, draw_count(arm));
         break;
     case KIND_LOADS:
         snprintf(out, size, "robustness=%s dispatches=%u iterations=%u",
@@ -800,7 +824,7 @@ static bool setup_draw(struct arm *arm)
      * reads the first at both offsets: 0, 1, 2 and 1, 2, 0. */
     static const uint16_t aligned[] = { 0, 1, 2, 0 };
     static const uint16_t unaligned[] = { 0, 0, 1, 2 };
-    const uint32_t count = COUNT;
+    const uint32_t count = draw_count(arm);
     const struct buffer *buffers[] = { &arm->result };
     struct device *dev = arm->dev;
     bool indexed = arm->kind == KIND_INDEXED;
@@ -822,7 +846,8 @@ static bool setup_draw(struct arm *arm)
                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, NULL, &arm->indirect))
         return false;
 
-    /* Every slot holds a draw; the count buffer lets COUNT of them run. */
+    /* Every slot holds a draw; the count buffer lets draw_count() of them
+     * run. */
     slots = arm->indirect.map;
     for (i = 0; i < arm->max_draws; i++)
     {
@@ -1018,7 +1043,7 @@ static bool run(struct arm *arm, bool check, double *ms)
         if (arm->kind == KIND_INDEXED || arm->kind == KIND_NONINDEXED)
         {
             uint32_t fragments = *(const uint32_t *)arm->result.map;
-            uint32_t want = CALLS * COUNT * TARGET_SIZE * TARGET_SIZE;
+            uint32_t want = CALLS * draw_count(arm) * TARGET_SIZE * TARGET_SIZE;
             if (fragments != want)
             {
                 printf("kk: FAIL %s %s: the draws produced %u fragments, not %u\n", arm->name,
