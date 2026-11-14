@@ -33,6 +33,11 @@ fn the_server_directory_is_device_and_inode_in_hex() {
 /// A process whose `argv[0]` is a bare name, as for a server started
 /// through `PATH`, is found by its executable, also through a link to the
 /// executable; the test binary is found too.
+///
+/// `pids_of` runs `lsof` on every process named `sleep` or `wineserver`,
+/// and other runs on the machine have many, so a lookup can take seconds
+/// under the background policy: the children sleep far longer than that
+/// and are killed after it.
 #[test]
 fn processes_are_found_by_their_executable_not_their_argv0() {
     let me = std::env::current_exe().unwrap();
@@ -46,7 +51,7 @@ fn processes_are_found_by_their_executable_not_their_argv0() {
     symlink("/bin/sleep", &link).unwrap();
     let mut child = Command::new("/bin/sleep")
         .arg0("sleep")
-        .arg("5")
+        .arg("600")
         .spawn()
         .unwrap();
     let found = pids_of(&link);
@@ -58,7 +63,7 @@ fn processes_are_found_by_their_executable_not_their_argv0() {
     // path: argv[0] has the link's name.
     let renamed = dir.join("wineserver");
     symlink("/bin/sleep", &renamed).unwrap();
-    let mut child = Command::new(&renamed).arg("5").spawn().unwrap();
+    let mut child = Command::new(&renamed).arg("600").spawn().unwrap();
     let found = pids_of(&renamed);
     let _ = child.kill();
     let _ = child.wait();

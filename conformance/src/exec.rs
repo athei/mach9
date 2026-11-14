@@ -373,7 +373,19 @@ fn read_pipe(reader: &mut PipeReader, wait: Duration, output: &mut Vec<u8>) -> i
 /// group that are still dying; [`DRAIN_CAP`] bounds both for a holder that
 /// keeps writing.
 fn drain(reader: &mut PipeReader, output: &mut Vec<u8>) -> bool {
-    let cap = Instant::now() + DRAIN_CAP;
+    drain_within(reader, output, DRAIN_QUIET, DRAIN_CAP)
+}
+
+/// [`drain`] with `quiet` for [`DRAIN_QUIET`] and `cap` for [`DRAIN_CAP`],
+/// so a test can make the limit it does not test long enough that a slow
+/// thread of the test cannot reach it.
+fn drain_within(
+    reader: &mut PipeReader,
+    output: &mut Vec<u8>,
+    quiet: Duration,
+    cap: Duration,
+) -> bool {
+    let cap = Instant::now() + cap;
     loop {
         match read_pipe(reader, Duration::ZERO, output) {
             Ok(Read::Data) if Instant::now() < cap => {}
@@ -384,7 +396,7 @@ fn drain(reader: &mut PipeReader, output: &mut Vec<u8>) -> bool {
     }
     let mut last = Instant::now();
     loop {
-        let wait = (last + DRAIN_QUIET)
+        let wait = (last + quiet)
             .min(cap)
             .saturating_duration_since(Instant::now());
         if wait.is_zero() {
