@@ -20,9 +20,15 @@
  * quartiles, minimum and maximum over the rounds in ms. Before the timed
  * rounds each arm runs once with a check of its result (fragments drawn,
  * values computed); an arm that fails it prints FAIL and is not timed, and
- * the exit status is 1. A draw arm's check counts its fragments with an
- * atomic in the fragment shader of a pipeline of its own, since an occlusion
- * query around the draws counted only those of one indirect-count call.
+ * the exit status is 1. A draw arm's check counts its fragments twice: with
+ * an atomic in the fragment shader of a pipeline of its own, and with a
+ * precise occlusion query around all its calls, reset by vkCmdResetQueryPool
+ * in the same command buffer. Every indirect-count call ends KosmicKrisp's
+ * Metal render encoder, so the query fails on a KosmicKrisp whose encoders
+ * reset the visibility results, as before "kk: Accumulate occlusion results
+ * across the render encoders of a pass" (#120). A wrong fragment count
+ * keeps the arm from being timed; a wrong query count only prints FAIL and
+ * sets the exit status to 1, so the draw cases still time such a build.
  *
  * | Case | Arms | What it times |
  * | --- | --- | --- |
@@ -189,6 +195,9 @@
     X(vkResetQueryPool)                                                                            \
     X(vkGetQueryPoolResults)                                                                       \
     X(vkCmdWriteTimestamp)                                                                         \
+    X(vkCmdResetQueryPool)                                                                         \
+    X(vkCmdBeginQuery)                                                                             \
+    X(vkCmdEndQuery)                                                                               \
     X(vkCmdBindPipeline)                                                                           \
     X(vkCmdBindDescriptorSets)                                                                     \
     X(vkCmdPushConstants)                                                                          \
@@ -250,6 +259,8 @@ struct device
     VkCommandBuffer cmd;
     VkFence fence;
     VkQueryPool timestamps;
+    /* The precise occlusion query of the draw arms' checks. */
+    VkQueryPool occlusion;
     VkDescriptorPool descriptors;
 };
 
@@ -271,6 +282,8 @@ struct arm
     bool wide;
 
     bool selected, ready, failed;
+    /* A draw arm's check: the occlusion query missed the expected count. */
+    bool query_failed;
     struct device *dev;
     VkPipelineLayout layout;
     VkDescriptorSetLayout set_layout;
@@ -470,6 +483,7 @@ static bool create_device(struct device *dev, enum robustness robustness)
         .pNext = &features12,
         .features.robustBufferAccess = robustness == ROBUST_RBA || robustness == ROBUST_RBA2,
         .features.fragmentStoresAndAtomics = VK_TRUE,
+        .features.occlusionQueryPrecise = VK_TRUE,
     };
     VkDeviceQueueCreateInfo queue = { .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                                       .queueFamilyIndex = queue_family,
@@ -490,6 +504,9 @@ static bool create_device(struct device *dev, enum robustness robustness)
     VkQueryPoolCreateInfo timestamps = { .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                                          .queryType = VK_QUERY_TYPE_TIMESTAMP,
                                          .queryCount = 2 };
+    VkQueryPoolCreateInfo occlusion = { .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                                        .queryType = VK_QUERY_TYPE_OCCLUSION,
+                                        .queryCount = 1 };
     VkDescriptorPoolSize sizes[] = {
         { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDINGS * (ARM_COUNT + 1) },
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_BINDINGS * (ARM_COUNT + 1) },
@@ -531,6 +548,8 @@ static bool create_device(struct device *dev, enum robustness robustness)
     if (!ok(vkAllocateCommandBuffers(dev->device, &cmd, &dev->cmd), "vkAllocateCommandBuffers") ||
         !ok(vkCreateFence(dev->device, &fence, NULL, &dev->fence), "vkCreateFence") ||
         !ok(vkCreateQueryPool(dev->device, &timestamps, NULL, &dev->timestamps),
+            "vkCreateQueryPool") ||
+        !ok(vkCreateQueryPool(dev->device, &occlusion, NULL, &dev->occlusion),
             "vkCreateQueryPool") ||
         !ok(vkCreateDescriptorPool(dev->device, &descriptors, NULL, &dev->descriptors),
             "vkCreateDescriptorPool"))
@@ -942,6 +961,7 @@ static void record_draws(struct arm *arm, VkCommandBuffer cmd, bool check)
     vkCmdBindVertexBuffers(cmd, 0, 1, &arm->vertices.buffer, &zero);
     if (arm->kind == KIND_INDEXED)
         vkCmdBindIndexBuffer(cmd, arm->indices.buffer, arm->index_offset, VK_INDEX_TYPE_UINT16);
+    if (check) vkCmdBeginQuery(cmd, arm->dev->occlusion, 0, VK_QUERY_CONTROL_PRECISE_BIT);
     for (i = 0; i < CALLS; i++)
     {
         if (arm->mixed)
@@ -954,6 +974,7 @@ static void record_draws(struct arm *arm, VkCommandBuffer cmd, bool check)
             vkCmdDrawIndirectCount(cmd, arm->indirect.buffer, 0, arm->count.buffer, 0,
                                    arm->max_draws, sizeof(VkDrawIndirectCommand));
     }
+    if (check) vkCmdEndQuery(cmd, arm->dev->occlusion, 0);
     vkCmdEndRendering(cmd);
 }
 
@@ -1022,6 +1043,10 @@ static bool run(struct arm *arm, bool check, double *ms)
         record_dispatches(&loads[arm->robustness], dev->cmd, LOAD_DISPATCHES, LOAD_GROUPS);
         vkCmdWriteTimestamp(dev->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, dev->timestamps, 0);
     }
+    /* Reset by the GPU, since the slot still holds the count of the previous
+     * draw arm's check. */
+    if (check && (arm->kind == KIND_INDEXED || arm->kind == KIND_NONINDEXED))
+        vkCmdResetQueryPool(dev->cmd, dev->occlusion, 0, 1);
     if (arm->kind == KIND_INDEXED || arm->kind == KIND_NONINDEXED)
         record_draws(arm, dev->cmd, check);
     else
@@ -1044,11 +1069,24 @@ static bool run(struct arm *arm, bool check, double *ms)
         {
             uint32_t fragments = *(const uint32_t *)arm->result.map;
             uint32_t want = CALLS * draw_count(arm) * TARGET_SIZE * TARGET_SIZE;
+            uint64_t samples = 0;
             if (fragments != want)
             {
                 printf("kk: FAIL %s %s: the draws produced %u fragments, not %u\n", arm->name,
                        what, fragments, want);
                 return false;
+            }
+            if (!ok(vkGetQueryPoolResults(dev->device, dev->occlusion, 0, 1, sizeof(samples),
+                                          &samples, sizeof(samples),
+                                          VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+                    "vkGetQueryPoolResults"))
+                return false;
+            /* The draws are right, so the arm is still timed. */
+            if (samples != want)
+            {
+                printf("kk: FAIL %s %s: the occlusion query counted %llu samples, not %u\n",
+                       arm->name, what, (unsigned long long)samples, want);
+                arm->query_failed = true;
             }
         }
         else
@@ -1156,6 +1194,7 @@ static void destroy_device(struct device *dev)
     vkDeviceWaitIdle(dev->device);
     if (dev->descriptors) vkDestroyDescriptorPool(dev->device, dev->descriptors, NULL);
     if (dev->timestamps) vkDestroyQueryPool(dev->device, dev->timestamps, NULL);
+    if (dev->occlusion) vkDestroyQueryPool(dev->device, dev->occlusion, NULL);
     if (dev->fence) vkDestroyFence(dev->device, dev->fence, NULL);
     if (dev->pool) vkDestroyCommandPool(dev->device, dev->pool, NULL);
     vkDestroyDevice(dev->device, NULL);
@@ -1344,6 +1383,7 @@ int main(int argc, char **argv)
             arm->failed = failed = true;
             continue;
         }
+        if (arm->query_failed) failed = true;
         if (!(arm->samples = calloc(rounds, sizeof(double))))
         {
             printf("kk: out of memory\n");
