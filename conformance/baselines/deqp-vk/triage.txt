@@ -14,3 +14,5 @@
 #
 # A case that loses the device does not belong here: it harms the cases of
 # other processes. Exclude its family in deqp-vk.toml with its issue instead.
+
+# once deqp-vk memory-model dEQP-VK.memory_model.message_passing.ext.u64.noncoherent.atomic_atomic.atomicwrite.device.payload_local.buffer.guard_local.image.frag: fail, then pass when run again VERSION=none (MESA_DIST) mesa=58d14a2dd0647873c74b80658011fb0ffa59f46b vk-gl-cts=e272471311301a35aae6364def1a3f5ea35215f7 vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
