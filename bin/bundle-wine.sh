@@ -869,6 +869,7 @@ smoke_test() {
     check_wined3d_device "${wine_env[@]}"
     check_wmadec_runs "${wine_env[@]}"
     check_fex_runs "${wine_env[@]}"
+    check_exceptflags_runs "${wine_env[@]}"
     check_attach_runs "${wine_env[@]}"
     check_terminate_runs "${wine_env[@]}"
     smoke_stop
@@ -1647,6 +1648,33 @@ run_fex() {
         exit 1
     fi
     grep "$want" "$log" | sed 's/^/    /'
+}
+
+# check_exceptflags_runs <env-command>...: build smoke/exceptflags.c for x86_64
+# and i686 and run it in the booted throwaway prefix. Exit with its log, which
+# names each check that failed, unless it ended within 2 seconds with all of
+# them passed. Clean runs took 0.02 seconds for x86_64 and 0.05 seconds for
+# i686 on a current Mac with the wineserver already running, as here, and small
+# programs take up to 4 times as long on a hosted runner. The alarm counts whole
+# seconds from before perl's exec, so the limit is 2 seconds.
+check_exceptflags_runs() {
+    local arch log want
+    for arch in x86_64 i686; do
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/exceptflags-$arch.exe" "$REPO_DIR/smoke/exceptflags.c"
+        time_mark "smoke: exceptflags.exe $arch"
+        echo "  Running exceptflags.exe for $arch..."
+        log="$TMP_DIR/exceptflags-$arch.log"
+        run_limited 2 "$log" "$@" "$WINE_DIR/bin/wine" "$TMP_DIR/exceptflags-$arch.exe"
+        smoke_check "exceptflags.exe for $arch" 2 "$log"
+        want="wine-build smoke test: $arch exception flags kept"
+        if ! grep -q "$want" "$log"; then
+            echo "Error: exceptflags.exe for $arch did not print '$want'"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
+        grep "$want" "$log" | sed 's/^/    /'
+    done
 }
 
 # check_attach_runs <env-command>...: build smoke/attach.c for aarch64, i686

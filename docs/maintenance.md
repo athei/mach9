@@ -666,7 +666,11 @@ from one upstream `wine-X.Y` tag to the next. To move FEX to a newer tag:
     another process, whose queries still report FEX's protection;
   - FEX's `__wine_notify_memory_write` export, which they call around
     `NtWriteVirtualMemory` into the current process, so that the
-    wineserver's write gets through a page FEX write-protected.
+    wineserver's write gets through a page FEX write-protected;
+  - the Cpsr bits of an ARM64EC context that carry PF, AF and DF
+    (`eflags_to_cpsr` in `dlls/ntdll/unwind.h`), which FEX writes and
+    reads in `Source/Windows/ARM64EC/Module.cpp`. An upstream Wine drops
+    them, and x86_64 code then loses those flags at every system call.
 - `ContextImpl::IsCodeValidationRead` takes a load followed by a plain
   CRC32 for a full SMC check, which only `DEF_OP(ValidateCode)` emits.
   Check that `git grep -n 'crc32[bhwx](' FEXCore/Source` still finds
