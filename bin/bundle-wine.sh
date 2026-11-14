@@ -1691,23 +1691,25 @@ check_wmadec_runs() {
 }
 
 # check_fex_runs <env-command>...: build smoke/fex.c for x86_64 and i686 and run
-# it in the booted throwaway prefix (run_fex), in FEX's default mode and with
-# FEX_SMCCHECKS=full, under which FEX tracks writes to code another way, and with
-# FEX_DISKCACHE=1 its cases of pages that go away while code runs and of a write
-# that races a compile, as a hit reads the code a compile reads and loads a block
-# instead. The disk cache goes into the prefix.
+# it in the booted throwaway prefix (run_fex), in FEX's default mode, with
+# FEX_SMCCHECKS=full, under which FEX tracks writes to code another way, with
+# FEX_X87REDUCEDPRECISION=0, which overrides compatdb's built-in rule for reduced
+# precision x87, and with FEX_DISKCACHE=1 its cases of pages that go away while
+# code runs and of a write that races a compile, as a hit reads the code a
+# compile reads and loads a block instead. The disk cache goes into the prefix.
 # <env-command> drops the caller's FEX_* variables, so each run gets the mode it
 # names and only that run has it. A hang is how these cases usually fail, so the
 # limits are lower than the 120 seconds of the other runs. The slowest clean runs
-# took about 1.9, 4.5 and 1.9 seconds on a busy current Mac, and small programs
-# take up to 4 times as long on a hosted runner, so the limits are 2 to 3 times
-# that.
+# took about 1.9, 4.5, 1.9 and 1.9 seconds on a busy current Mac, and small
+# programs take up to 4 times as long on a hosted runner, so the limits are 2 to
+# 3 times that.
 check_fex_runs() {
     local arch
     for arch in x86_64 i686; do
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/fex-$arch.exe" "$REPO_DIR/smoke/fex.c"
         run_fex "$arch" "default mode" 20 "$@"
         run_fex "$arch" FEX_SMCCHECKS=full 40 "$@" FEX_SMCCHECKS=full
+        run_fex "$arch" "full precision x87" 20 "$@" FEX_X87REDUCEDPRECISION=0
         rm -rf "$TMP_DIR"/prefix/drive_c/users/*/AppData/Local/fex-emu/DiskCache
         run_fex "$arch" FEX_DISKCACHE=1 15 "$@" FEX_DISKCACHE=1 -- cross_process_protect decommit_race rwx_write_race
         check_fex_disk_cache "$arch"

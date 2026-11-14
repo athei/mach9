@@ -1,15 +1,16 @@
 /* The program bundle-wine.sh builds for each x86 PE architecture and runs under
- * FEX, once in its default mode and once with FEX_SMCCHECKS=full, and with
- * FEX_DISKCACHE=1 for decommit_race, cross_process_protect and rwx_write_race.
- * Its cases run code in reserved memory and on guard pages, writes to compiled
- * pages, instructions FEX cannot decode or fetch whole, pages taken away or
- * changed while code runs from them, also by another process, which starts this
- * program again as its child, a write to a page while it compiles, and memory
- * syscalls with their out-params on a compiled page, queries of one and writes
- * into one from this process and from a child, code and protections a child
- * changes, and other syscalls that write their buffer on a compiled page. FEX
- * has hung on or got most of these wrong; the others guard behaviour that
- * already worked.
+ * FEX, in its default mode, with FEX_SMCCHECKS=full and with full precision x87,
+ * and with FEX_DISKCACHE=1 for decommit_race, cross_process_protect and
+ * rwx_write_race. Its cases run code in reserved memory and on guard pages,
+ * writes to compiled pages, instructions FEX cannot decode or fetch whole, pages
+ * taken away or changed while code runs from them, also by another process,
+ * which starts this program again as its child, a write to a page while it
+ * compiles, memory syscalls with their out-params on a compiled page, queries of
+ * one and writes into one from this process and from a child, code and
+ * protections a child changes, other syscalls that write their buffer on a
+ * compiled page, and x87 code that a fault or a write to its own page
+ * interrupts. FEX has hung on or got most of these wrong; the others guard
+ * behaviour that already worked.
  *
  * The cases run in order in one process, or just those named on the command
  * line; trapped_write_other, cross_process_smc, cross_process_rx,
@@ -1614,6 +1615,263 @@ static void cross_process_protect(void)
     WaitForSingleObject(waiter, INFINITE);
 }
 
+/* The x87 cases compute 12 as (1 + 3) * 3 on the x87 stack, or load it, then
+ * run an instruction that faults on a PAGE_NOACCESS page, which x87_handler
+ * skips, and pop the 12. The instructions before the fault are in the same
+ * block, so they have not written the x87 state back yet. Each case runs with
+ * the precision control as found and with 24 bits, which FEX's reduced
+ * precision runs in another copy of the block. The registers must be empty
+ * again afterwards. */
+static const float x87_three = 3.0f;
+static const float x87_twelve_single = 12.0f;
+static const double x87_twelve_double = 12.0;
+static const LONGLONG x87_twelve_int = 12;
+static volatile ULONG_PTR x87_bad;
+static volatile LONG x87_faults;
+
+/* In front of handler. The faulting instructions, fadds, fstps, fstpl, fistpl
+ * and fistpll of (%eax), are two bytes long in both modes. */
+static LONG CALLBACK x87_handler(EXCEPTION_POINTERS *e)
+{
+    EXCEPTION_RECORD *r = e->ExceptionRecord;
+    const BYTE *pc = (const BYTE *)(ULONG_PTR)CTX_PC(e->ContextRecord);
+
+    if (r->ExceptionCode != AV || r->NumberParameters < 2 || !x87_bad || r->ExceptionInformation[1] != x87_bad)
+        return EXCEPTION_CONTINUE_SEARCH;
+    /* An x87 instruction with the operand (%eax) */
+    if ((pc[0] & 0xf8) != 0xd8 || (pc[1] & 0xc7) != 0)
+        FAIL("fault reported at %p, which holds %02x %02x, not the x87 instruction", pc, pc[0], pc[1]);
+    InterlockedIncrement(&x87_faults);
+    CTX_PC(e->ContextRecord) += 2;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+#define X87_TWELVE "fld1\n\tfadds %[three]\n\tfmuls %[three]\n\t"
+#define X87_OPERANDS                                                                                      \
+    : [r] "=m"(r)                                                                                         \
+    : [three] "m"(x87_three), [twelve_single] "m"(x87_twelve_single), [twelve_double] "m"(x87_twelve_double), \
+      [twelve_int] "m"(x87_twelve_int), [bad] "a"(bad)                                                    \
+    : "memory"
+
+/* The pushes and the arithmetic before the fault are in its block */
+static double __attribute__((noinline)) x87_mid_block(const float *bad)
+{
+    double r;
+
+    asm volatile(X87_TWELVE "fadds (%[bad])\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+/* Two values on the stack at the fault, 4 from an instruction before the one
+ * that pushed the 3 */
+static double __attribute__((noinline)) x87_two_values(const float *bad)
+{
+    double r;
+
+    asm volatile("fld1\n\tfadds %[three]\n\tflds %[three]\n\tfadds (%[bad])\n\tfmulp\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+/* The faulting instruction is the last use of the 12, as a 32-bit float, a
+ * 64-bit float or an integer */
+static double __attribute__((noinline)) x87_store_pop(const float *bad)
+{
+    double r;
+
+    asm volatile(X87_TWELVE "fstps (%[bad])\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+static double __attribute__((noinline)) x87_store_pop_double(const float *bad)
+{
+    double r;
+
+    asm volatile(X87_TWELVE "fstpl (%[bad])\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+static double __attribute__((noinline)) x87_store_pop_int(const float *bad)
+{
+    double r;
+
+    asm volatile(X87_TWELVE "fistpl (%[bad])\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+/* The 12 is the operand of the load, which the store that faults would store
+ * unchanged, as a 32-bit float, a 64-bit float or a 64-bit integer */
+static double __attribute__((noinline)) x87_operand_single(const float *bad)
+{
+    double r;
+
+    asm volatile("flds %[twelve_single]\n\tfstps (%[bad])\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+static double __attribute__((noinline)) x87_operand_double(const float *bad)
+{
+    double r;
+
+    asm volatile("fldl %[twelve_double]\n\tfstpl (%[bad])\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+static double __attribute__((noinline)) x87_operand_int(const float *bad)
+{
+    double r;
+
+    asm volatile("fildll %[twelve_int]\n\tfistpll (%[bad])\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+/* The fault starts a block, which works without FEX keeping a record */
+static double __attribute__((noinline)) x87_block_start(const float *bad)
+{
+    double r;
+
+    asm volatile(X87_TWELVE "jmp 1f\n1:\n\tfadds (%[bad])\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+/* The fmuls reads a register of the block before, which FEX does on its slow
+ * path */
+static double __attribute__((noinline)) x87_live_in(const float *bad)
+{
+    double r;
+
+    asm volatile("fld1\n\tfadds %[three]\n\tjmp 1f\n1:\n\tfmuls %[three]\n\tfadds (%[bad])\n\tfstpl %[r]" X87_OPERANDS);
+    return r;
+}
+
+static void x87_check(const char *what, double (*fn)(const float *), WORD fcw)
+{
+    BYTE area[512 + 16];
+    BYTE *fx = (BYTE *)(((ULONG_PTR)area + 15) & ~(ULONG_PTR)15);
+    WORD old_fcw, fsw;
+    /* In memory before the fxsave, not in ST0 */
+    volatile double r;
+
+    x87_faults = 0;
+    asm volatile("fnstcw %0\n\tfldcw %1" : "=m"(old_fcw) : "m"(fcw));
+    r = fn((const float *)x87_bad);
+    asm volatile("fxsave %0" : "=m"(*(BYTE (*)[512])fx));
+    asm volatile("fldcw %0" : : "m"(old_fcw));
+    memcpy(&fsw, fx + 2, sizeof(fsw));
+    if (x87_faults != 1) FAIL("%s, FCW %#x: %ld faults, wanted 1", what, fcw, x87_faults);
+    if (r != 12.0 || (fsw & 0x3800) || fx[4])
+        FAIL("%s, FCW %#x: got %g with TOP %d and tags %#x, wanted 12 with TOP 0 and no tags", what, fcw, r,
+             (fsw >> 11) & 7, fx[4]);
+}
+
+static void x87_fault(void)
+{
+    static const struct
+    {
+        const char *name;
+        double (*fn)(const float *);
+    } x87_cases[] =
+    {
+        {"fault in the middle of a block", x87_mid_block},
+        {"fault with two values on the stack", x87_two_values},
+        {"fault in a store that pops", x87_store_pop},
+        {"fault in a 64-bit store that pops", x87_store_pop_double},
+        {"fault in an integer store that pops", x87_store_pop_int},
+        {"fault in a store of a loaded 32-bit float", x87_operand_single},
+        {"fault in a store of a loaded 64-bit float", x87_operand_double},
+        {"fault in a store of a loaded 64-bit integer", x87_operand_int},
+        {"fault at the start of a block", x87_block_start},
+        {"fault after a value from the block before", x87_live_in},
+    };
+    void *veh = AddVectoredExceptionHandler(1, x87_handler);
+    WORD fcw;
+    size_t i;
+
+    x87_bad = (ULONG_PTR)new_pages(PAGE, PAGE_NOACCESS);
+    asm volatile("fnstcw %0" : "=m"(fcw));
+    for (i = 0; i < sizeof(x87_cases) / sizeof(x87_cases[0]); i++)
+    {
+        x87_check(x87_cases[i].name, x87_cases[i].fn, fcw);
+        x87_check(x87_cases[i].name, x87_cases[i].fn, fcw & ~0x300);
+    }
+    x87_bad = 0;
+    RemoveVectoredExceptionHandler(veh);
+}
+
+/* The same values in code on an RWX page that writes to its own page, which FEX
+ * handles by running the block again from the store */
+static void x87_inline_smc(void)
+{
+    static const BYTE code[] =
+    {
+        0xd9, 0xe8,       /* fld1 */
+        0xd8, 0x40, 0x40, /* fadds 0x40(%eax) */
+        0xd8, 0x48, 0x40, /* fmuls 0x40(%eax) */
+        0x88, 0x40, 0x48, /* mov %al, 0x48(%eax) */
+        0xdd, 0x19,       /* fstpl (%ecx) */
+        0xc3,             /* ret */
+    };
+    BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+    ULONG_PTR ax;
+    double r, *rp;
+    int i;
+
+    memcpy(page, code, sizeof(code));
+    memcpy(page + 0x40, &x87_three, sizeof(x87_three));
+    set_code(page, PAGE);
+    for (i = 0; i < 3; i++)
+    {
+        r = 0;
+        rp = &r;
+        ax = (ULONG_PTR)page;
+        asm volatile("call *%[fn]\n\tfnstsw %%ax" : "+a"(ax), "+c"(rp) : [fn] "d"(page) : "memory");
+        if (r != 12.0 || (ax & 0x3800)) FAIL("call %d: got %g with TOP %d, wanted 12 with TOP 0", i, r, (int)(ax >> 11) & 7);
+    }
+}
+
+/* A push into the code's own page after a load and a store that pops it: the
+ * x87 state at the push is the one the block started with, which FEX must keep
+ * when it runs the block again from the push. */
+static void x87_push_smc(void)
+{
+    static const BYTE code[] =
+    {
+        0xd9, 0x40, 0x40,             /* flds 0x40(%eax) */
+        0xd9, 0x19,                   /* fstps (%ecx) */
+#ifdef __x86_64__
+        0x48, 0x89, 0xe2,             /* mov %rsp, %rdx */
+        0x48, 0x8d, 0x60, 0x7c,       /* lea 0x7c(%rax), %rsp */
+        0x51,                         /* push %rcx */
+        0x48, 0x89, 0xd4,             /* mov %rdx, %rsp */
+#else
+        0x89, 0xe2,                   /* mov %esp, %edx */
+        0x8d, 0x60, 0x7c,             /* lea 0x7c(%eax), %esp */
+        0x51,                         /* push %ecx */
+        0x89, 0xd4,                   /* mov %edx, %esp */
+#endif
+        0xc3,                         /* ret */
+    };
+    BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+    BYTE area[512 + 16];
+    BYTE *fx = (BYTE *)(((ULONG_PTR)area + 15) & ~(ULONG_PTR)15);
+    ULONG_PTR ax, dx;
+    float f, *fp;
+    int i;
+
+    memcpy(page, code, sizeof(code));
+    memcpy(page + 0x40, &x87_three, sizeof(x87_three));
+    set_code(page, PAGE);
+    for (i = 0; i < 3; i++)
+    {
+        f = 0;
+        fp = &f;
+        ax = (ULONG_PTR)page;
+        asm volatile("call *%[fn]\n\tfnstsw %%ax" : "+a"(ax), "+c"(fp), "=d"(dx) : [fn] "r"(page) : "memory");
+        asm volatile("fxsave %0" : "=m"(*(BYTE (*)[512])fx));
+        if (f != 3.0f || (ax & 0x3800) || fx[4])
+            FAIL("call %d: stored %g with TOP %d and tags %#x, wanted 3 with TOP 0 and no tags", i, f, (int)(ax >> 11) & 7, fx[4]);
+    }
+}
+
 #define CASE(name) { #name, name }
 static const struct
 {
@@ -1668,6 +1926,9 @@ static const struct
     CASE(cross_process_protect),
     CASE(rwx_to_rw_race),
     CASE(rwx_write_race),
+    CASE(x87_fault),
+    CASE(x87_inline_smc),
+    CASE(x87_push_smc),
 };
 
 static int selected(const char *name, int argc, char **argv)
