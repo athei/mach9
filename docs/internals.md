@@ -684,6 +684,15 @@ core and 2.1 compatibility.
   without a GPU of the Metal 4 family, it logs a `winediag` message and
   the process gets no OpenGL.
 
+[`bench/zink.sh`](../bench/zink.sh) builds a native benchmark of a shadow
+map pass on Zink, depth-only draws with polygon offset on 16-bit and
+24-bit depth textures, and runs it on a full bundle or a `MESA_DIST` like
+`bench/kk.sh` ([Vulkan](#vulkan)), whose method of comparing arms and
+alternating stacks it follows. Zink applies the depth bias of some formats
+in the fragment shader, which costs early depth testing; the difference
+between the offset arms of a format is that cost. The arms, the checks and
+the output are in the header of [`bench/zink.c`](../bench/zink.c).
+
 ## GStreamer
 
 `winegstreamer` decodes audio and video for DirectShow, Media Foundation

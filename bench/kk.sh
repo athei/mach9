@@ -23,38 +23,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/../bin" && pwd)"
 # profile.sh says where the bundle and the Mesa trees are.
 # shellcheck source=../bin/lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
+# shellcheck source=stack.sh
+. "$REPO_DIR/bench/stack.sh"
 
 stack="$BUNDLE_DEST/wine"
 if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
     stack="$1"
     shift
 fi
-if [ ! -d "$stack" ]; then
-    echo "Error: $stack is not a directory"
-    exit 2
-fi
-stack="$(cd "$stack" && pwd)"
-if [ -f "$stack/lib/external/libvulkan.1.dylib" ]; then
-    loader="$stack/lib/external/libvulkan.1.dylib"
-    components="$stack/lib/wine/tests/COMPONENTS"
-    if [ ! -f "$components" ]; then
-        echo "Error: $components is missing (a full bundle names its Mesa there)"
-        exit 2
-    fi
-    grep -E '^(mesa|vulkan-loader)=' "$components" | sed 's/^/kk: stack /'
-elif [ -f "$stack/lib/libvulkan.1.dylib" ]; then
-    loader="$stack/lib/libvulkan.1.dylib"
-    echo "kk: stack mesa=$(cat "$stack/COMMIT")"
-    echo "kk: stack vulkan-loader=$(cat "$stack/LOADER_COMMIT")"
-else
-    echo "Error: $stack is neither a bundle nor a MESA_DIST: it has no" \
-        "lib/external/libvulkan.1.dylib or lib/libvulkan.1.dylib"
-    exit 2
-fi
-if [ ! -d "$stack/share/vulkan/icd.d" ]; then
-    echo "Error: $stack/share/vulkan/icd.d is missing"
-    exit 2
-fi
+find_stack kk "$stack"
+loader="$lib/libvulkan.1.dylib"
 
 # HEADERS_PREFIX of build-mesa.sh.
 headers="$MESA_BUILD_DIR/vulkan-headers-install/include"
