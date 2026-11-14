@@ -1376,6 +1376,8 @@ check_dxmt_runs() {
 # shows the chain resolves inside the bundle before Wine is involved. It
 # needs a KosmicKrisp device, so on a Mac without a Metal 4 GPU
 # (metal4_probe) it is skipped. MESA_GALLIUM comes from check_mesa_build.
+# A second run checks glPolygonOffset on the 24-bit depth buffers Zink stores
+# as float (depth-bias).
 check_egl_host() {
     local log="$TMP_DIR/egl.log" lib want
     if [ "$METAL4" -eq 0 ]; then
@@ -1414,6 +1416,24 @@ check_egl_host() {
         exit 1
     fi
     grep "^egl: GL_" "$log" | sed 's/^egl: /    /'
+
+    # glPolygonOffset on the 24-bit depth buffers Zink stores as float
+    # (smoke/egl.c says how): a process of its own, so a failure names the
+    # check.
+    log="$TMP_DIR/egl-depth-bias.log"
+    echo "  Running the host EGL depth bias check..."
+    run_limited 60 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/egl" "$EXT_DIR/libEGL.1.dylib" depth-bias
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/egl.c depth-bias did not exit within 60 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: glPolygonOffset on 24-bit depth buffers is wrong on the bundle's EGL (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    grep "^egl: depth-bias check" "$log" | sed 's/^egl: /    /'
 }
 
 # The GStreamer elements the host check and Wine need: what winegstreamer
