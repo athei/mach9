@@ -276,6 +276,37 @@ static void guard_read_then_call(void)
         FAIL("call: returned %d, %ld guard exceptions, %ld faults", r, guards, faults);
 }
 
+/* The same on an RWX page after an RX one, after a call to code at the end of
+ * the RX page, which counts the RWX page among the pages of its code without
+ * reading it. A write to the code once it ran has to change it. Only FEX's
+ * default mode traps writes for that; FEX_SMCCHECKS=full checks the code of
+ * each block instead and passes without the trap. */
+static void guard_after_block_smc(void)
+{
+    BYTE *base = new_pages(2 * PAGE, PAGE_READWRITE);
+    int (*first)(void) = (void *)(base + PAGE - 6);
+    int (*second)(void) = (void *)(base + PAGE);
+    BYTE value;
+    int r;
+
+    put_code(base + PAGE - 6, 1);
+    put_code(base + PAGE, 2);
+    set_code(base, 2 * PAGE);
+    protect(base, PAGE, PAGE_EXECUTE_READ);
+    protect(base + PAGE, PAGE, PAGE_EXECUTE_READWRITE | PAGE_GUARD);
+    r = first();
+    if (r != 1 || guards) FAIL("first page: returned %d, %ld guard exceptions", r, guards);
+    value = *(volatile BYTE *)(base + PAGE);
+    if (guards != 1 || guard_info0 != 0 || value != 0xb8)
+        FAIL("read: %ld guard exceptions, [0]=%p value %#x", guards, (void *)guard_info0, value);
+    r = second();
+    if (r != 2) FAIL("second page: returned %d", r);
+    put_code(base + PAGE, 3);
+    r = second();
+    if (r != 3 || guards != 1 || faults)
+        FAIL("after the write: returned %d, %ld guard exceptions, %ld faults", r, guards, faults);
+}
+
 /* Each protect arms the guard again, over a page that has compiled code */
 static void guard_rearm(void)
 {
@@ -397,6 +428,141 @@ static void trapped_writes(void)
     }
     asm volatile("cld; rep movsb" : "+S"(src), "+D"(dst), "+c"(count) : : "memory", "cc");
     if (fn() != 2) FAIL("call after rep movs");
+}
+
+/* A function on a page of its own that stores 1 to the byte its argument
+ * points at. *insn is the address of the store. */
+static void (*store_one(BYTE **insn))(BYTE *)
+{
+#if defined(__x86_64__)
+    /* mov byte [rcx], 1; ret */
+    static const BYTE code[] = {0xc6, 0x01, 0x01, 0xc3};
+    const int store = 0;
+#else
+    /* mov eax, [esp+4]; mov byte [eax], 1; ret */
+    static const BYTE code[] = {0x8b, 0x44, 0x24, 0x04, 0xc6, 0x00, 0x01, 0xc3};
+    const int store = 4;
+#endif
+    BYTE *page = new_pages(PAGE, PAGE_READWRITE);
+
+    memcpy(page, code, sizeof(code));
+    protect(page, PAGE, PAGE_EXECUTE_READ);
+    set_code(page, PAGE);
+    *insn = page + store;
+    return (void *)page;
+}
+
+/* A write to a page made RX after RWX is the guest's access violation */
+static void rwx_to_rx_write(void)
+{
+    BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)page;
+    MEMORY_BASIC_INFORMATION info;
+    BYTE *insn;
+    void (*store)(BYTE *) = store_one(&insn);
+
+    put_code(page, 1);
+    protect(page, PAGE, PAGE_EXECUTE_READ);
+    store(page + 0x10);
+    check_fault(AV, insn, 1, page + 0x10);
+    if (page[0x10]) FAIL("the write went through");
+    if (!VirtualQuery(page, &info, sizeof(info))) FAIL("VirtualQuery: %lu", GetLastError());
+    if (info.Protect != PAGE_EXECUTE_READ) FAIL("protection %#lx after the fault", info.Protect);
+    if (fn() != 1) FAIL("call after the fault");
+}
+
+/* The same with code compiled from the page before the protect. Windows raises
+ * the access violation, but FEX lets the write through: it cannot tell this RX
+ * from one the guest got from VirtualQuery, which reports FEX's trap (#128). */
+static void rwx_to_rx_write_compiled(void)
+{
+    BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)page;
+    BYTE *insn;
+    void (*store)(BYTE *) = store_one(&insn);
+
+    put_code(page, 1);
+    if (fn() != 1) FAIL("first call");
+    protect(page, PAGE, PAGE_EXECUTE_READ);
+    store(page + 0x10);
+    if (faults || page[0x10] != 1) FAIL("%ld faults, byte %#x", faults, page[0x10]);
+    if (fn() != 1) FAIL("call after the write");
+}
+
+/* Three RWX pages made RX together, with code compiled from the middle one:
+ * writes to the outer two are the guest's access violations, a write to the
+ * middle one goes through as in rwx_to_rx_write_compiled */
+static void rwx_to_rx_write_three_pages(void)
+{
+    BYTE *base = new_pages(3 * PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)(base + PAGE);
+    BYTE *insn;
+    void (*store)(BYTE *) = store_one(&insn);
+    int i;
+
+    put_code(base + PAGE, 1);
+    if (fn() != 1) FAIL("first call");
+    protect(base, 3 * PAGE, PAGE_EXECUTE_READ);
+    for (i = 0; i < 3; i++)
+    {
+        BYTE *target = base + i * PAGE + 0x10;
+
+        faults = 0;
+        store(target);
+        if (i == 1)
+        {
+            if (faults || *target != 1) FAIL("middle page: %ld faults, byte %#x", faults, *target);
+        }
+        else
+        {
+            check_fault(AV, insn, 1, target);
+            if (*target) FAIL("page %d: the write went through", i);
+        }
+    }
+    if (fn() != 1) FAIL("call after the writes");
+}
+
+/* A patch of compiled RWX code between a protect and the restore of the
+ * protection it reported, which leaves the page writable */
+static void rwx_patch_restore(void)
+{
+    BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)page;
+    DWORD old, tmp;
+
+    put_code(page, 1);
+    set_code(page, PAGE);
+    if (fn() != 1) FAIL("first call");
+    if (!VirtualProtect(page, PAGE, PAGE_EXECUTE_READWRITE, &old))
+        FAIL("VirtualProtect: %lu", GetLastError());
+    if (old != PAGE_EXECUTE_READWRITE) FAIL("old protection %#lx", old);
+    put_code(page, 2);
+    if (!VirtualProtect(page, PAGE, old, &tmp)) FAIL("VirtualProtect: %lu", GetLastError());
+    if (fn() != 2) FAIL("call after the patch");
+    put_code(page, 3);
+    if (fn() != 3 || faults) FAIL("call after a write: %ld faults", faults);
+}
+
+/* The same with the protection VirtualQuery reported, which is FEX's trap
+ * (#128): the page stays writable as on Windows, where the query reported
+ * PAGE_EXECUTE_READWRITE */
+static void rwx_query_restore(void)
+{
+    BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)page;
+    MEMORY_BASIC_INFORMATION info;
+    DWORD old;
+
+    put_code(page, 1);
+    set_code(page, PAGE);
+    if (fn() != 1) FAIL("first call");
+    if (!VirtualQuery(page, &info, sizeof(info))) FAIL("VirtualQuery: %lu", GetLastError());
+    protect(page, PAGE, PAGE_EXECUTE_READWRITE);
+    put_code(page, 2);
+    if (!VirtualProtect(page, PAGE, info.Protect, &old)) FAIL("VirtualProtect: %lu", GetLastError());
+    if (fn() != 2) FAIL("call after the patch");
+    put_code(page, 3);
+    if (fn() != 3 || faults) FAIL("call after a write: %ld faults", faults);
 }
 
 /* mov eax, 34; ret, compiled and run from an RX page, for a case to take away.
@@ -861,6 +1027,7 @@ static const struct
     CASE(guard_fall_through),
     CASE(guard_smc),
     CASE(guard_read_then_call),
+    CASE(guard_after_block_smc),
     CASE(guard_rearm),
     CASE(guard_noexec),
     CASE(guard_straddle_rx_rx),
@@ -869,6 +1036,11 @@ static const struct
     CASE(guard_then_overlong_rx),
     CASE(guard_then_overlong_rwx),
     CASE(trapped_writes),
+    CASE(rwx_to_rx_write),
+    CASE(rwx_to_rx_write_compiled),
+    CASE(rwx_to_rx_write_three_pages),
+    CASE(rwx_patch_restore),
+    CASE(rwx_query_restore),
     CASE(guard_race),
     CASE(decommit_race),
     CASE(rwx_to_rw_race),
