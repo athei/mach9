@@ -704,9 +704,10 @@ check_default_trees() {
 # that the built-in rules and the defaults of Wine, FEX, the Vulkan loader,
 # vkd3d-proton, DXMT, KosmicKrisp, Metal and GStreamer decide; only
 # vkd3d-proton's pipeline cache is moved into the prefix, check_fex_runs sets
-# FEX_SMCCHECKS=full on one run per arch, and check_streamout_runs and
-# check_dxmt_runs turn off DXMT's shader cache for their runs and turn on
-# Metal shader validation, check_dxmt_runs for a second run of each case.
+# FEX_SMCCHECKS=full on one run per arch and FEX_DISKCACHE=1 on another, and
+# check_streamout_runs and check_dxmt_runs turn off DXMT's shader cache for
+# their runs and turn on Metal shader validation, check_dxmt_runs for a second
+# run of each case.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
@@ -1688,31 +1689,67 @@ check_wmadec_runs() {
 
 # check_fex_runs <env-command>...: build smoke/fex.c for x86_64 and i686 and run
 # it in the booted throwaway prefix (run_fex), in FEX's default mode and with
-# FEX_SMCCHECKS=full, under which FEX tracks writes to code another way.
+# FEX_SMCCHECKS=full, under which FEX tracks writes to code another way, and with
+# FEX_DISKCACHE=1 its cases of pages that go away while code runs and of a write
+# that races a compile, as a hit reads the code a compile reads and loads a block
+# instead. The disk cache goes into the prefix.
 # <env-command> drops the caller's FEX_* variables, so each run gets the mode it
 # names and only that run has it. A hang is how these cases usually fail, so the
 # limits are lower than the 120 seconds of the other runs. The slowest clean runs
-# took about 1.9 and 4.5 seconds on a busy current Mac, and small programs take up
-# to 4 times as long on a hosted runner, so the limits are 2 to 3 times that.
+# took about 1.9, 4.5 and 1.9 seconds on a busy current Mac, and small programs
+# take up to 4 times as long on a hosted runner, so the limits are 2 to 3 times
+# that.
 check_fex_runs() {
     local arch
     for arch in x86_64 i686; do
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/fex-$arch.exe" "$REPO_DIR/smoke/fex.c"
         run_fex "$arch" "default mode" 20 "$@"
         run_fex "$arch" FEX_SMCCHECKS=full 40 "$@" FEX_SMCCHECKS=full
+        rm -rf "$TMP_DIR"/prefix/drive_c/users/*/AppData/Local/fex-emu/DiskCache
+        run_fex "$arch" FEX_DISKCACHE=1 15 "$@" FEX_DISKCACHE=1 -- cross_process_protect decommit_race rwx_write_race
+        check_fex_disk_cache "$arch"
     done
 }
 
-# run_fex <arch> <mode> <seconds> <env-command>...: run fex.exe for <arch> and
-# exit with the log unless it ended within <seconds> with every case passed.
-# The program prints each case's name as it starts it, so the last of those is
-# the case that hung or failed.
+# check_fex_disk_cache <arch>: exit with the log unless the FEX_DISKCACHE=1 run
+# of fex.exe for <arch> left a disk cache database in the prefix. FEX runs, and
+# the cases pass, without its cache when DiskCache::Init cannot create the
+# directory or open the database, or when it does not know the option.
+# check_fex_runs deletes the cache before the run, so a database shows that this
+# run opened one; a fresh one holds a metadata entry, so it is never empty.
+check_fex_disk_cache() {
+    local db
+    db=$(find "$TMP_DIR/prefix/drive_c/users" -path '*/AppData/Local/fex-emu/DiskCache/*' \
+        -name 'RWCacheDB_*.foz' -size +0 2>/dev/null | head -n 1)
+    if [ -z "$db" ]; then
+        echo "Error: fex.exe for $1 (FEX_DISKCACHE=1) left no disk cache database in the prefix,"
+        echo "so FEX ran without its disk cache"
+        cat "$TMP_DIR/fex-$1.log"
+        smoke_stop
+        exit 1
+    fi
+    echo "    FEX opened its disk cache: ${db#"$TMP_DIR/prefix/"}"
+}
+
+# run_fex <arch> <mode> <seconds> <env-command>... [-- <case>...]: run fex.exe
+# for <arch>, with the cases named after --, all without, and exit with the log
+# unless it ended within <seconds> with every case passed. The program prints
+# each case's name as it starts it, so the last of those is the case that hung
+# or failed.
 run_fex() {
     local arch="$1" mode="$2" secs="$3" log="$TMP_DIR/fex-$1.log" last want
+    local cmd=()
     shift 3
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do
+        cmd+=("$1")
+        shift
+    done
+    if [ $# -gt 0 ]; then
+        shift
+    fi
     time_mark "smoke: fex.exe $arch ($mode)"
     echo "  Running fex.exe for $arch ($mode)..."
-    run_limited "$secs" "$log" "$@" "$WINE_DIR/bin/wine" "$TMP_DIR/fex-$arch.exe"
+    run_limited "$secs" "$log" "${cmd[@]}" "$WINE_DIR/bin/wine" "$TMP_DIR/fex-$arch.exe" "$@"
     last=$(grep "wine-build smoke test: $arch case " "$log" | tail -n 1 | tr -d '\r' | sed 's/.* case //')
     smoke_check "fex.exe for $arch ($mode), in case '$last'," "$secs" "$log"
     want="wine-build smoke test: $arch FEX cases passed"

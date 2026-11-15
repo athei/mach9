@@ -1,12 +1,13 @@
 /* The program bundle-wine.sh builds for each x86 PE architecture and runs under
- * FEX, once in its default mode and once with FEX_SMCCHECKS=full. Its cases run
- * code in reserved memory and on guard pages, writes to compiled pages,
- * instructions FEX cannot decode or fetch whole, pages taken away or changed
- * while code runs from them, also by another process, which starts this program
- * again as its child, a write to a page while it compiles, and memory syscalls
- * with their out-params on a compiled page, queries of one and writes into one
- * from this process and from a child. FEX has hung on or got most of these
- * wrong; the others guard behaviour that already worked.
+ * FEX, once in its default mode and once with FEX_SMCCHECKS=full, and with
+ * FEX_DISKCACHE=1 for decommit_race, cross_process_protect and rwx_write_race.
+ * Its cases run code in reserved memory and on guard pages, writes to compiled
+ * pages, instructions FEX cannot decode or fetch whole, pages taken away or
+ * changed while code runs from them, also by another process, which starts this
+ * program again as its child, a write to a page while it compiles, and memory
+ * syscalls with their out-params on a compiled page, queries of one and writes
+ * into one from this process and from a child. FEX has hung on or got most of
+ * these wrong; the others guard behaviour that already worked.
  *
  * The cases run in order in one process, or just those named on the command
  * line; trapped_write_other and cross_process_protect also run the program as
