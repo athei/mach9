@@ -1772,11 +1772,12 @@ run_attach() {
 # check_terminate_runs <env-command>...: build smoke/terminate.c for each arch
 # of SMOKE_PE_ARCHS and run it in the booted throwaway prefix, and exit with
 # the log unless every case passed. It terminates threads inside calls on an
-# event, in waits and in CloseHandle(); the program prints each case's name
-# before it runs it. A hang is how it fails, so the limit is lower than the
-# 120 seconds of the other runs: the slowest clean run took about one second
-# on a current Mac, and small programs take up to 4 times as long on a hosted
-# runner.
+# event, in waits and in DuplicateHandle() and CloseHandle(), and runs no case
+# that allocates on ntdll's unix side meanwhile (see the program's header
+# comment); the program prints each case's name before it runs it. A hang is
+# how it fails, so the limit is lower than the 120 seconds of the other runs:
+# the slowest clean run took about one second on a current Mac, and small
+# programs take up to 4 times as long on a hosted runner.
 check_terminate_runs() {
     local arch exe log want last
     for arch in $SMOKE_PE_ARCHS; do

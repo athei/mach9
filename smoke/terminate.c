@@ -10,27 +10,54 @@
  *   pulse     calls PulseEvent() in a loop
  *   wait      waits on the event
  *   wait-two  waits on the event and on one that stays open
- *   close     creates and closes events of its own in a loop
+ *   close     duplicates the event and closes the duplicate in a loop
+ *   create    creates and closes events of its own in a loop; runs only
+ *             when named
  *
  * A thread that the wineserver kills while it is in a server call under
  * ntdll's fd_cache_mutex died with the mutex held, and the next thread that
  * closed a handle or used one that was not cached waited for ever. close
- * puts the thread into such a call directly, in CloseHandle(). The other
- * cases get there through a second defect, which is still open: a thread
- * killed inside a call on the event, or while it waits on it, keeps its
- * reference on the handle's entry in ntdll's cache of sync objects, and
- * every call on a later handle with that value then asks the wineserver
- * under that mutex.
+ * puts the thread into such a call directly, in DuplicateHandle() and
+ * CloseHandle(). The other cases get there through a second defect, which
+ * is still open: a thread killed inside a call on the event, or while it
+ * waits on it, keeps its reference on the handle's entry in ntdll's cache
+ * of sync objects, and every call on a later handle with that value then
+ * asks the wineserver under that mutex.
  *
- * The cases run in order, or just those named on the command line. Each
- * prints its name first. The failure is a hang, which the caller's time
- * limit ends; the last line then names the case. There is no watchdog
- * thread, as in fex.c.
+ * All cases but create run in order, or just those named on the command
+ * line. Each prints its name first. The failure is a hang, which the
+ * caller's time limit ends; the last line then names the case. There is no
+ * watchdog thread, as in fex.c.
  *
- * Without the unlock the native program hangs in all four cases with msync
- * on, and in close alone with WINEMSYNC=0. The i686 and x86_64 programs
- * fail in no case without it, so there they only guard against a
- * regression.
+ * Without the unlock the native program hangs in the four cases the bundle
+ * step runs with msync on, and in close alone with WINEMSYNC=0. The i686
+ * and x86_64 programs fail in no case without it, so there they only guard
+ * against a regression.
+ *
+ * While a thread can be terminated, no case may allocate or free on ntdll's
+ * unix side with the server signals unblocked: a thread killed inside
+ * malloc leaves a lock of libmalloc held, and the next thread that
+ * allocates aborts the process (mach9 #147, #151). close therefore reaches
+ * only NtDuplicateObject() and NtClose() (dlls/ntdll/unix/server.c). Both
+ * take fd_cache_mutex in an uninterrupted section, which blocks those
+ * signals. Without DUPLICATE_CLOSE_SOURCE, NtDuplicateObject() only sends
+ * a dup_handle request in it. NtClose() calls remove_fd_from_cache() and
+ * close_inproc_sync() (dlls/ntdll/unix/sync.c; the duplicate is never
+ * cached, and a release_inproc_sync() that drops the last reference calls
+ * msync_close(), which builds its message on the stack) and sends a
+ * close_handle request; none of them allocates. Outside the section the
+ * thread runs kernelbase's DuplicateHandle() and CloseHandle(), which
+ * allocate nothing either. create keeps the old shape of close for mach9
+ * #138: NtCreateEvent() allocates the object attributes with malloc while
+ * the signals are unblocked (wine_server_alloc_object_attributes()), so a
+ * kill there aborts the process now and then. The bundle step does not
+ * run it.
+ *
+ * Nor may a thread that can be terminated be the first of the process to
+ * use an msync object on a page the process has not mapped: it maps the
+ * page under shm_addrs_lock with the signals unblocked, and a kill there
+ * leaves the lock held (mach9 #138). The main thread therefore resets each
+ * event, the one that stays open included, before a thread uses it.
  *
  * The threads say when they run before they are terminated: terminating a
  * thread that has just started can leave the loader lock of the x86 code
@@ -80,6 +107,23 @@ static DWORD WINAPI wait_two_thread(void *arg)
 
 static DWORD WINAPI close_thread(void *arg)
 {
+    HANDLE dup;
+    volatile unsigned int spin;
+
+    InterlockedExchange(&started, 1);
+    for (;;)
+    {
+        if (DuplicateHandle(GetCurrentProcess(), arg, GetCurrentProcess(), &dup, 0, FALSE, DUPLICATE_SAME_ACCESS))
+            CloseHandle(dup);
+        /* without a pause between the calls a round of the x86_64 program
+         * takes milliseconds, and the run up to seconds (mach9 #152) */
+        for (spin = 4096; spin; spin--) YieldProcessor();
+    }
+    return 0;
+}
+
+static DWORD WINAPI create_thread(void *arg)
+{
     InterlockedExchange(&started, 1);
     for (;;) CloseHandle(CreateEventA(NULL, TRUE, FALSE, NULL));
     return 0;
@@ -89,12 +133,14 @@ static const struct
 {
     const char *name;
     LPTHREAD_START_ROUTINE proc;
+    int by_default;
 } cases[] =
 {
-    { "pulse", pulse_thread },
-    { "wait", wait_thread },
-    { "wait-two", wait_two_thread },
-    { "close", close_thread },
+    { "pulse", pulse_thread, 1 },
+    { "wait", wait_thread, 1 },
+    { "wait-two", wait_two_thread, 1 },
+    { "close", close_thread, 1 },
+    { "create", create_thread, 0 },
 };
 
 static unsigned int rng = 0x2545f491;
@@ -148,11 +194,14 @@ int main(int argc, char **argv)
     int arg, ran = 0;
 
     other_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    /* map its msync page now: a thread killed while it maps one leaves
+     * shm_addrs_lock held (mach9 #138) */
+    ResetEvent(other_event);
     for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
     {
         for (arg = 1; arg < argc; arg++)
             if (!strcmp(argv[arg], cases[i].name)) break;
-        if (argc > 1 && arg == argc) continue;
+        if (argc > 1 ? arg == argc : !cases[i].by_default) continue;
         if (!run_case(cases[i].name, cases[i].proc)) return 1;
         ran++;
     }
