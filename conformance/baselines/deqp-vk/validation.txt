@@ -17,6 +17,7 @@
 # The cases' own Vulkan usage, not that of KosmicKrisp or the loader:
 dEQP-VK.query_pool.occlusion_query.no_attachments_* VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-00749  # a static lineWidth of 0.0 without wideLines
 dEQP-VK.query_pool.occlusion_query.*no_*attachments* Undefined-Value-ShaderOutputNotConsumed  # the fragment shader writes an output no attachment takes
+dEQP-VK.query_pool.statistics_query.*no_color_attachments* Undefined-Value-ShaderOutputNotConsumed  # the fragment shader writes an output no attachment takes
 dEQP-VK.conditional_rendering.draw_clear.draw.update_with_rendering_* Undefined-Value-OutputNotWritten  # the fragment shader leaves attachment 0 unwritten
 dEQP-VK.draw.renderpass.basic_draw.misc.maintenance5 WARNING-VkPipelineCreateFlags2-flags-appending  # both pipeline flag fields set
 dEQP-VK.draw.renderpass.shader_layer.*_shader_1 Undefined-Value-Layer-Written  # writes gl_Layer into a framebuffer of one layer
