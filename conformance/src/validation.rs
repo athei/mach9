@@ -3,7 +3,7 @@
 //!
 //! The layers are those `bin/build-vulkan-validation-layers.sh` staged at
 //! the pin of `pins/redist.env` ([`Layers`]). Each test process gets
-//! [`env`]: the loader inserts the layer into every instance and logs each
+//! [`env()`]: the loader inserts the layer into every instance and logs each
 //! instance it creates, so a process whose instances ran without the layer
 //! is found ([`Scan::without_layer`]). The layer prints each message on
 //! the standard output in the format of its default callback
@@ -143,7 +143,7 @@ pub fn pin() -> Result<String, String> {
 /// known message may not name, would go unseen.
 pub const SETTINGS: &str = "khronos_validation.enable_message_limit = false\n";
 
-/// Write [`SETTINGS`] into `dir`, a run's log directory, and return [`env`]
+/// Write [`SETTINGS`] into `dir`, a run's log directory, and return [`env()`]
 /// with it; print that `what` runs under `layers`. With the file, no
 /// `vk_layer_settings.txt` in a working directory can change the settings.
 ///
@@ -243,7 +243,7 @@ impl Scan {
     }
 }
 
-/// Read the output `text` of a process that ran with [`env`].
+/// Read the output `text` of a process that ran with [`env()`].
 ///
 /// A message is its heading line and every line up to the next empty one.
 /// A line outside a message that names a VUID counts as an error with that
