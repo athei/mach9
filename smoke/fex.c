@@ -6,16 +6,19 @@
  * changed while code runs from them, also by another process, which starts this
  * program again as its child, a write to a page while it compiles, and memory
  * syscalls with their out-params on a compiled page, queries of one and writes
- * into one from this process and from a child. FEX has hung on or got most of
- * these wrong; the others guard behaviour that already worked.
+ * into one from this process and from a child, code and protections a child
+ * changes, and other syscalls that write their buffer on a compiled page. FEX
+ * has hung on or got most of these wrong; the others guard behaviour that
+ * already worked.
  *
  * The cases run in order in one process, or just those named on the command
- * line; trapped_write_other and cross_process_protect also run the program as
- * a child. Each prints its name first. A failed case prints why and ends the
- * process with 1; the usual failure is a hang, and the last line then names the
- * case. There is no watchdog thread, since a stalled JIT stops that as well, so
- * the caller's time limit ends a hang. The exit code is 0 only when every case
- * passed.
+ * line; trapped_write_other, cross_process_smc, cross_process_rx,
+ * cross_process_restore, cross_process_restore_twice and cross_process_protect
+ * also run the program as a child. Each prints its name first. A failed case
+ * prints why and ends the process with 1; the usual failure is a hang, and the
+ * last line then names the case. There is no watchdog thread, since a stalled
+ * JIT stops that as well, so the caller's time limit ends a hang. The exit code
+ * is 0 only when every case passed.
  *
  * Do not use TerminateThread on a thread that has just started, which can leave
  * the guest's loader lock held. */
@@ -795,56 +798,263 @@ static void trapped_write_self_cow(void)
     if (fn() != 5) FAIL("call after the write");
 }
 
-/* The same from another process, this program run as "wpm_child <pid> <address>",
- * which writes a byte of data. Its query of this process reports FEX's trap, so
- * kernelbase makes the page RWX, writes and restores RX, which FEX takes for a
- * queued protect. On Windows the page stays RWX, so this process's own write
- * after it must not fault. This process waits for the child meanwhile, so it
- * compiles nothing during the child's write. The code it then
- * compiles has FEX process the queued protects first. */
-static int wpm_child(int argc, char **argv)
+/* The child of the cases that change this process from another one, this
+ * program run as "<mode> <pid> <address>". It opens this process with the
+ * rights Windows asks for the call it makes, which do not let Wine read the
+ * handle of FEX's cross-process work list out of this process or duplicate it.
+ * wpm_child writes a byte of data, smc_child writes mov eax, 3; ret and flushes
+ * the instruction cache, rx_child protects the page PAGE_EXECUTE_READ, and
+ * rw_child protects it PAGE_READWRITE, writes mov eax, 3; ret and gives the
+ * page back the protection the first protect reported, as a patcher does.
+ * rw2_child then does it again with mov eax, 6; ret, and between its second
+ * protect and its write waits for this process, see
+ * cross_process_restore_twice. denied_child opens this process with
+ * PROCESS_QUERY_LIMITED_INFORMATION alone, for which the wineserver must
+ * refuse the section of the work list. Returns the exit code. */
+static int other_child(int argc, char **argv)
 {
-    static const BYTE value = 0x5a;
-    HANDLE process;
+    static const BYTE value = 0x5a, code[6] = {0xb8, 0x03, 0x00, 0x00, 0x00, 0xc3};
+    static const BYTE code2[6] = {0xb8, 0x06, 0x00, 0x00, 0x00, 0xc3};
+    HANDLE process, ready, popped;
+    char name[64];
     SIZE_T written = 0;
+    DWORD pid, old, tmp;
     void *addr;
 
     if (argc != 4) return 2;
+    pid = strtoul(argv[2], NULL, 10);
     addr = (void *)(ULONG_PTR)strtoull(argv[3], NULL, 16);
-    /* Without PROCESS_VM_READ and PROCESS_DUP_HANDLE, Wine can't queue the
-     * notifications of the write for FEX in the parent */
-    process = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_QUERY_INFORMATION |
-                          PROCESS_DUP_HANDLE, FALSE, strtoul(argv[2], NULL, 10));
+    if (!strcmp(argv[1], "denied_child"))
+    {
+#ifdef __x86_64__
+        /* ProcessWineCrossProcessWorkSection, which wow64 has no thunk for */
+        LONG (WINAPI *query)(HANDLE, ULONG, void *, ULONG, ULONG *) = ntdll_func("NtQueryInformationProcess");
+        HANDLE section = 0;
+        LONG status;
+
+        if (!(process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid))) return 3;
+        status = query(process, 1003, &section, sizeof(section), NULL);
+        if (status != (LONG)0xc0000022 || section) return 4;
+#endif
+        return 0;
+    }
+    if (!strcmp(argv[1], "rx_child"))
+    {
+        if (!(process = OpenProcess(PROCESS_VM_OPERATION, FALSE, pid))) return 3;
+        return VirtualProtectEx(process, addr, PAGE, PAGE_EXECUTE_READ, &old) ? 0 : 4;
+    }
+    /* kernelbase's WriteProcessMemory also queries the page */
+    process = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION, FALSE, pid);
     if (!process) return 3;
+    if (!strcmp(argv[1], "rw_child") || !strcmp(argv[1], "rw2_child"))
+    {
+        if (!VirtualProtectEx(process, addr, PAGE, PAGE_READWRITE, &old)) return 4;
+        if (!WriteProcessMemory(process, addr, code, sizeof(code), &written) || written != sizeof(code)) return 5;
+        if (!VirtualProtectEx(process, addr, PAGE, old, &tmp)) return 6;
+        if (!strcmp(argv[1], "rw_child")) return 0;
+        snprintf(name, sizeof(name), "fex-smoke-ready-%lu", pid);
+        if (!(ready = OpenEventA(EVENT_MODIFY_STATE, FALSE, name))) return 7;
+        snprintf(name, sizeof(name), "fex-smoke-popped-%lu", pid);
+        if (!(popped = OpenEventA(SYNCHRONIZE, FALSE, name))) return 7;
+        if (!VirtualProtectEx(process, addr, PAGE, PAGE_READWRITE, &old)) return 4;
+        SetEvent(ready);
+        if (WaitForSingleObject(popped, 20000)) return 8;
+        if (!WriteProcessMemory(process, addr, code2, sizeof(code2), &written) || written != sizeof(code2)) return 5;
+        return VirtualProtectEx(process, addr, PAGE, old, &tmp) ? 0 : 6;
+    }
+    if (!strcmp(argv[1], "smc_child"))
+    {
+        if (!WriteProcessMemory(process, addr, code, sizeof(code), &written) || written != sizeof(code)) return 4;
+        return FlushInstructionCache(process, addr, sizeof(code)) ? 0 : 5;
+    }
     if (!WriteProcessMemory(process, addr, &value, 1, &written)) return 4;
     return written == 1 ? 0 : 5;
 }
 
-static void trapped_write_other(void)
+/* Starts other_child on the address */
+static HANDLE start_child(const char *mode, void *addr)
 {
-    BYTE *page = trapped_page();
-    BYTE *other = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
-    int (*fn)(void) = (void *)page;
-    int (*compile)(void) = (void *)other;
     char path[MAX_PATH], cmdline[MAX_PATH + 64];
     STARTUPINFOA si = {sizeof(si)};
     PROCESS_INFORMATION pi;
-    DWORD code;
 
     if (!GetModuleFileNameA(NULL, path, sizeof(path))) FAIL("GetModuleFileName: %lu", GetLastError());
-    snprintf(cmdline, sizeof(cmdline), "\"%s\" wpm_child %lu %p", path, GetCurrentProcessId(), page + 0x10);
-    put_code(other, 4);
-    call_again(page);
+    snprintf(cmdline, sizeof(cmdline), "\"%s\" %s %lu %p", path, mode, GetCurrentProcessId(), addr);
     if (!CreateProcessA(path, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
         FAIL("CreateProcess: %lu", GetLastError());
-    if (WaitForSingleObject(pi.hProcess, 20000)) FAIL("the child did not end");
-    if (!GetExitCodeProcess(pi.hProcess, &code) || code) FAIL("the child exited with %lu", code);
     CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    if (compile() != 4) FAIL("call of new code");
+    return pi.hProcess;
+}
+
+static void end_child(const char *mode, HANDLE process)
+{
+    DWORD code;
+
+    if (WaitForSingleObject(process, 20000)) FAIL("the %s did not end", mode);
+    if (!GetExitCodeProcess(process, &code) || code) FAIL("the %s exited with %lu", mode, code);
+    CloseHandle(process);
+}
+
+/* Runs other_child on the address and waits for it. This process compiles
+ * nothing meanwhile. */
+static void run_child(const char *mode, void *addr)
+{
+    end_child(mode, start_child(mode, addr));
+}
+
+/* Code compiled now has FEX process the work other processes queued first */
+static void compile_new_code(void)
+{
+    BYTE *page = new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+    int (*fn)(void) = (void *)page;
+
+    put_code(page, 4);
+    if (fn() != 4) FAIL("call of new code");
+}
+
+/* The same from another process, with wpm_child. Its query of this process
+ * reports FEX's trap, so kernelbase makes the page RWX, writes and restores RX,
+ * which FEX takes for queued protects. On Windows the page stays RWX, so this
+ * process's own write after it must not fault. */
+static void trapped_write_other(void)
+{
+    BYTE *page = trapped_page();
+    int (*fn)(void) = (void *)page;
+
+    call_again(page);
+    run_child("wpm_child", page + 0x10);
+    compile_new_code();
     if (page[0x10] != 0x5a) FAIL("byte %#x after the child's write", page[0x10]);
     page[0x800] = 1;
     if (fn() != 1 || faults) FAIL("call after a write of the guest: %ld faults", faults);
+}
+
+/* Code on a trapped page that smc_child replaces. This process runs the new
+ * code, as on Windows once WriteProcessMemory and FlushInstructionCache have
+ * returned. denied_child then checks the rights the work list needs. */
+static void cross_process_smc(void)
+{
+    BYTE *page = trapped_page();
+    int (*fn)(void) = (void *)page;
+    int r;
+
+    call_again(page);
+    run_child("smc_child", page);
+    compile_new_code();
+    if (page[1] != 3) FAIL("byte %#x after the child's write", page[1]);
+    if ((r = fn()) != 3) FAIL("the call after the child's write returned %d, wanted 3", r);
+    run_child("denied_child", page);
+}
+
+/* A trapped page that rw_child patches through PAGE_READWRITE and gives back
+ * the trap's PAGE_EXECUTE_READ, which its protect reported. On Windows that
+ * protect reported PAGE_EXECUTE_READWRITE, so this process's own write
+ * afterwards must not fault, and the new code runs. */
+static void cross_process_restore(void)
+{
+    BYTE *page = trapped_page();
+    int (*fn)(void) = (void *)page;
+    int r;
+
+    call_again(page);
+    run_child("rw_child", page);
+    compile_new_code();
+    page[0x800] = 1;
+    if ((r = fn()) != 3 || faults) FAIL("the call after the patch returned %d, wanted 3, %ld faults", r, faults);
+}
+
+/* The same patch twice, with rw2_child, which waits after its second protect
+ * to PAGE_READWRITE until this process has compiled new code, which processes
+ * the work queued so far: the first restore then runs while the page is
+ * writable on the host, and the second restore must still give the page
+ * back. */
+static void cross_process_restore_twice(void)
+{
+    BYTE *page = trapped_page();
+    int (*fn)(void) = (void *)page;
+    HANDLE ready, popped, child;
+    char name[64];
+    int r;
+
+    snprintf(name, sizeof(name), "fex-smoke-ready-%lu", GetCurrentProcessId());
+    if (!(ready = CreateEventA(NULL, TRUE, FALSE, name))) FAIL("CreateEvent: %lu", GetLastError());
+    snprintf(name, sizeof(name), "fex-smoke-popped-%lu", GetCurrentProcessId());
+    if (!(popped = CreateEventA(NULL, TRUE, FALSE, name))) FAIL("CreateEvent: %lu", GetLastError());
+    call_again(page);
+    child = start_child("rw2_child", page);
+    if (WaitForSingleObject(ready, 20000)) FAIL("the rw2_child did not get to its second patch");
+    compile_new_code();
+    SetEvent(popped);
+    end_child("rw2_child", child);
+    compile_new_code();
+    page[0x800] = 1;
+    if ((r = fn()) != 6 || faults) FAIL("the call after the patches returned %d, wanted 6, %ld faults", r, faults);
+    CloseHandle(ready);
+    CloseHandle(popped);
+}
+
+/* An RWX page that rx_child makes PAGE_EXECUTE_READ, first with no code
+ * compiled from it, then trapped. A write of this process to it is then the
+ * access violation, as on Windows. */
+static void cross_process_rx(void)
+{
+    BYTE *insn;
+    void (*store)(BYTE *) = store_one(&insn);
+    int trapped;
+
+    for (trapped = 0; trapped < 2; trapped++)
+    {
+        const char *what = trapped ? "trapped" : "not trapped";
+        BYTE *page = trapped ? trapped_page() : new_pages(PAGE, PAGE_EXECUTE_READWRITE);
+        int (*fn)(void) = (void *)page;
+
+        if (!trapped) put_code(page, 1);
+        run_child("rx_child", page);
+        compile_new_code();
+        faults = 0;
+        store(page + 0x10);
+        if (faults != 1 || fault_code != AV || fault_pc != (ULONG_PTR)insn || fault_info0 != 1
+                || fault_info1 != (ULONG_PTR)(page + 0x10))
+            FAIL("%s: %ld faults, code %#lx pc %p [0]=%p [1]=%p, wanted one write fault at %p", what, faults,
+                 fault_code, (void *)fault_pc, (void *)fault_info0, (void *)fault_info1, page + 0x10);
+        if (page[0x10]) FAIL("%s: the write went through", what);
+        if (fn() != 1) FAIL("%s: call after the fault", what);
+    }
+}
+
+typedef LONG (WINAPI *read_fn)(HANDLE, const void *, void *, SIZE_T, SIZE_T *);
+typedef LONG (WINAPI *query_system_fn)(ULONG, void *, ULONG, ULONG *);
+
+/* NtReadVirtualMemory and NtQuerySystemInformation(SystemTimeOfDayInformation)
+ * with their buffer on a trapped page, which is writable on Windows, so both
+ * succeed. Each call has the page trapped again before it. */
+static void trapped_syscall_buffer(void)
+{
+    static const char data[16] = "read into code";
+    read_fn read_nt = ntdll_func("NtReadVirtualMemory");
+    query_system_fn query_nt = ntdll_func("NtQuerySystemInformation");
+    BYTE *page = trapped_page();
+    LARGE_INTEGER *times = (LARGE_INTEGER *)(page + 0x800);
+    ULARGE_INTEGER now;
+    FILETIME ft;
+    SIZE_T done = 0;
+    LONG status;
+
+    call_again(page);
+    status = read_nt(GetCurrentProcess(), data, page + 0x800, sizeof(data), &done);
+    if (status || done != sizeof(data) || memcmp(page + 0x800, data, sizeof(data)))
+        FAIL("NtReadVirtualMemory: status %#lx, %lu bytes", status, (ULONG)done);
+
+    GetSystemTimeAsFileTime(&ft);
+    now.LowPart = ft.dwLowDateTime;
+    now.HighPart = ft.dwHighDateTime;
+    call_again(page);
+    /* SystemTimeOfDayInformation: boot time, system time, time zone bias, id */
+    status = query_nt(3, times, 4 * sizeof(*times), NULL);
+    if (status) FAIL("NtQuerySystemInformation: status %#lx", status);
+    if ((ULONGLONG)times[1].QuadPart < now.QuadPart)
+        FAIL("system time %#llx, before %#llx", (ULONGLONG)times[1].QuadPart, now.QuadPart);
+    call_again(page);
 }
 
 static void decommit_compiled(void)
@@ -1447,6 +1657,11 @@ static const struct
     CASE(trapped_write_self),
     CASE(trapped_write_self_cow),
     CASE(trapped_write_other),
+    CASE(cross_process_smc),
+    CASE(cross_process_rx),
+    CASE(cross_process_restore),
+    CASE(cross_process_restore_twice),
+    CASE(trapped_syscall_buffer),
     CASE(guard_race),
     CASE(guard_while_running),
     CASE(decommit_race),
@@ -1469,7 +1684,10 @@ int main(int argc, char **argv)
     size_t i;
     int ran = 0;
 
-    if (argc > 1 && !strcmp(argv[1], "wpm_child")) return wpm_child(argc, argv);
+    if (argc > 1 && (!strcmp(argv[1], "wpm_child") || !strcmp(argv[1], "smc_child") || !strcmp(argv[1], "rx_child")
+                     || !strcmp(argv[1], "rw_child") || !strcmp(argv[1], "rw2_child")
+                     || !strcmp(argv[1], "denied_child")))
+        return other_child(argc, argv);
     setvbuf(stdout, NULL, _IONBF, 0);
     srand(GetTickCount());
     if (argc == 5 && !strcmp(argv[1], "child")) return child_protect(argv);

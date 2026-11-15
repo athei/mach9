@@ -688,11 +688,28 @@ from one upstream `wine-X.Y` tag to the next. To move FEX to a newer tag:
     once without a query at process start. Either side works without the
     other: a FEX without the export gets no call, and a FEX that got no
     call at start keeps the pages it write-protected writable when the
-    guest makes them read-only, as it does for a protect queued by
-    another process, whose queries still report FEX's protection;
+    guest makes them read-only. Queries from another process still
+    report FEX's protection, so FEX keeps a page writable when another
+    process gives it back read-only after changing its protection;
   - FEX's `__wine_notify_memory_write` export, which they call around
-    `NtWriteVirtualMemory` into the current process, so that the
-    wineserver's write gets through a page FEX write-protected;
+    `NtWriteVirtualMemory` into the current process, and around the
+    second try of `NtReadVirtualMemory` and `NtQuerySystemInformation`
+    after the first one failed with `STATUS_ACCESS_VIOLATION`, so that
+    the write of the wineserver or of the unix side gets through a page
+    FEX write-protected;
+  - the cross-process work list, on which Wine queues the allocations,
+    frees, protects and instruction cache flushes another process makes
+    in this one, the protects around a WriteProcessMemory included. The
+    process gives its section to the wineserver, and
+    `RtlOpenCrossProcessEmulatorWorkConnection` gets it there for a
+    handle with `PROCESS_VM_OPERATION` or `PROCESS_VM_WRITE`
+    (`ProcessWineCrossProcessWorkSection`), so every emulated caller
+    with the rights Windows asks for the call reaches it. A native
+    ARM64 caller queues only the work of kernelbase's
+    WriteProcessMemory and FlushInstructionCache; its VirtualProtectEx
+    and VirtualAllocEx queue nothing. When the list is full, Wine asks
+    for the heavy flush, and FEX drops the queued work and flushes all
+    code;
   - the Cpsr bits of an ARM64EC context that carry PF, AF and DF
     (`eflags_to_cpsr` in `dlls/ntdll/unwind.h`), which FEX writes and
     reads in `Source/Windows/ARM64EC/Module.cpp`. An upstream Wine drops
