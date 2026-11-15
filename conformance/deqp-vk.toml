@@ -109,13 +109,6 @@ cases = ["dEQP-VK.synchronization2.*"]
 name = "memory-model"
 issues = [63]
 cases = ["dEQP-VK.memory_model.*"]
-exclude = [
-    # 64-bit atomic read-modify-write in a fragment shader hangs the GPU in
-    # some runs and not in others (#91): VK_ERROR_DEVICE_LOST, which can
-    # take other processes' devices with it. Remove with #91.
-    "dEQP-VK.memory_model.write_after_read.ext.u64.*.atomic_atomic.atomicrmw.*.payload_local.*.frag",
-    "dEQP-VK.memory_model.message_passing.ext.u64.*.atomic_atomic.atomicrmw.*.payload_local.*.frag",
-]
 
 # Query results and availability the host or vkCmdCopyQueryPoolResults
 # reads, for the query types KosmicKrisp has besides occlusion (in

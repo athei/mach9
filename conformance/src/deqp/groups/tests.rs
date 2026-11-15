@@ -94,43 +94,16 @@ fn exclude_leaves_out_matching_cases() {
 }
 
 #[test]
-fn memory_model_leaves_out_only_the_u64_atomic_rmw_fragment_cases() {
+fn memory_model_runs_the_u64_atomic_rmw_fragment_cases() {
     let groups = Groups::builtin().unwrap();
     let group = groups.select(&[String::from("memory-model")]).unwrap()[0];
-    let base = "dEQP-VK.memory_model.write_after_read.ext.u64.coherent.atomic_atomic";
-    for (case, kept) in [
-        (
-            format!("{base}.atomicrmw.subgroup.payload_local.buffer.guard_local.buffer.frag"),
-            false,
-        ),
-        (
-            format!("{base}.atomicrmw.device.payload_local.image.guard_local.buffer.comp"),
-            true,
-        ),
-        (
-            format!("{base}.atomicrmw.device.payload_nonlocal.image.guard_local.buffer.frag"),
-            true,
-        ),
-        (
-            format!("{base}.atomicwrite.device.payload_local.image.guard_local.buffer.frag"),
-            true,
-        ),
-        (
-            String::from(
-                "dEQP-VK.memory_model.message_passing.ext.u32.coherent.atomic_atomic.atomicrmw.\
-                 device.payload_local.buffer.guard_local.buffer.frag",
-            ),
-            true,
-        ),
-        (
-            String::from(
-                "dEQP-VK.memory_model.message_passing.ext.u64.noncoherent.atomic_atomic.\
-                 atomicrmw.queuefamily.payload_local.physbuffer.guard_local.image.frag",
-            ),
-            false,
-        ),
+    for case in [
+        "dEQP-VK.memory_model.write_after_read.ext.u64.coherent.atomic_atomic.atomicrmw.\
+         subgroup.payload_local.buffer.guard_local.buffer.frag",
+        "dEQP-VK.memory_model.message_passing.ext.u64.noncoherent.atomic_atomic.atomicrmw.\
+         queuefamily.payload_local.physbuffer.guard_local.image.frag",
     ] {
-        assert_eq!(group.matches(&case), kept, "{case}");
+        assert!(group.matches(case), "{case}");
     }
 }
 
