@@ -345,7 +345,9 @@ fn read_field(
         | Key::LargeAddressAware
         | Key::Gcmouse
         | Key::ForceNx
-        | Key::MetalHud => {}
+        | Key::MetalHud
+        | Key::VulkanCapture
+        | Key::MetalCapture => {}
     }
     Ok(())
 }

@@ -56,6 +56,12 @@ macro_rules! summary {
     (MetalHud) => {
         "Whether the Metal performance HUD shows."
     };
+    (VulkanCapture) => {
+        "Whether the Vulkan calls of the process are recorded for replay."
+    };
+    (MetalCapture) => {
+        "Whether Metal frame captures of the process are recorded."
+    };
     (DllOverrides) => {
         "DLL load-order overrides, one WINEDLLOVERRIDES element each."
     };
@@ -152,6 +158,16 @@ pub enum Key {
     /// [`Rule::metal_hud`]). Unset: the process keeps the variables it was
     /// started with.
     MetalHud,
+    #[doc = summary!(VulkanCapture)]
+    ///
+    /// `vulkan_capture` (see [`Rule::vulkan_capture`]). Unset: no capture
+    /// layer, as in upstream Wine.
+    VulkanCapture,
+    #[doc = summary!(MetalCapture)]
+    ///
+    /// `metal_capture` (see [`Rule::metal_capture`]). Unset: Metal's capture
+    /// layer stays off, as in upstream Wine.
+    MetalCapture,
     #[doc = summary!(DllOverrides)]
     ///
     /// `dll_overrides`, repeatable (see [`Rule::dll_overrides`]). None:
@@ -222,6 +238,8 @@ impl Key {
         Self::Gcmouse,
         Self::ForceNx,
         Self::MetalHud,
+        Self::VulkanCapture,
+        Self::MetalCapture,
         Self::DllOverrides,
         Self::ArgumentsOverride,
         Self::Arguments,
@@ -246,6 +264,8 @@ impl Key {
             Self::Gcmouse => "gcmouse",
             Self::ForceNx => "force_nx",
             Self::MetalHud => "metal_hud",
+            Self::VulkanCapture => "vulkan_capture",
+            Self::MetalCapture => "metal_capture",
             Self::DllOverrides => "dll_overrides",
             Self::ArgumentsOverride => "arguments_override",
             Self::Arguments => "arguments",
@@ -268,6 +288,8 @@ impl Key {
             Self::Gcmouse => Some(Scalar::Gcmouse),
             Self::ForceNx => Some(Scalar::ForceNx),
             Self::MetalHud => Some(Scalar::MetalHud),
+            Self::VulkanCapture => Some(Scalar::VulkanCapture),
+            Self::MetalCapture => Some(Scalar::MetalCapture),
             Self::Exe
             | Self::Company
             | Self::Product
@@ -314,6 +336,8 @@ impl Key {
             Self::Gcmouse => "GameController mouse",
             Self::ForceNx => "Force no-execute",
             Self::MetalHud => "Metal HUD",
+            Self::VulkanCapture => "Vulkan capture",
+            Self::MetalCapture => "Metal capture",
             Self::DllOverrides => "DLL overrides",
             Self::ArgumentsOverride => "Arguments override",
             Self::Arguments => "Arguments",
@@ -356,7 +380,9 @@ impl Key {
             | Self::LargeAddressAware
             | Self::Gcmouse
             | Self::ForceNx
-            | Self::MetalHud => &["true", "false", DEFAULT_VALUE],
+            | Self::MetalHud
+            | Self::VulkanCapture
+            | Self::MetalCapture => &["true", "false", DEFAULT_VALUE],
             Self::Exe
             | Self::Company
             | Self::Product
@@ -388,6 +414,8 @@ impl Key {
             Self::Gcmouse => summary!(Gcmouse),
             Self::ForceNx => summary!(ForceNx),
             Self::MetalHud => summary!(MetalHud),
+            Self::VulkanCapture => summary!(VulkanCapture),
+            Self::MetalCapture => summary!(MetalCapture),
             Self::DllOverrides => summary!(DllOverrides),
             Self::ArgumentsOverride => summary!(ArgumentsOverride),
             Self::Arguments => summary!(Arguments),
@@ -414,7 +442,9 @@ impl Key {
             Self::Wined3d => "vulkan",
             Self::OpenGl => "cgl",
             Self::DpiAware | Self::Gcmouse | Self::ForceNx => "false",
-            Self::LargeAddressAware | Self::MetalHud => "true",
+            Self::LargeAddressAware | Self::MetalHud | Self::VulkanCapture | Self::MetalCapture => {
+                "true"
+            }
             Self::DllOverrides => "d3dcompiler_47=n",
             Self::ArgumentsOverride | Self::Arguments => "-windowed",
             Self::DebugChannels => "+relay",
@@ -475,6 +505,12 @@ pub enum Scalar {
     /// [`Key::MetalHud`]: the Metal performance HUD. Unset: the inherited
     /// variables decide.
     MetalHud,
+    /// [`Key::VulkanCapture`]: `GFXReconstruct`'s capture of the Vulkan calls.
+    /// Unset: no capture.
+    VulkanCapture,
+    /// [`Key::MetalCapture`]: Metal frame captures from the backend. Unset:
+    /// no capture.
+    MetalCapture,
 }
 
 impl Scalar {
@@ -489,6 +525,8 @@ impl Scalar {
         Self::Gcmouse,
         Self::ForceNx,
         Self::MetalHud,
+        Self::VulkanCapture,
+        Self::MetalCapture,
     ];
 
     /// The key of this setting.
@@ -504,6 +542,8 @@ impl Scalar {
             Self::Gcmouse => Key::Gcmouse,
             Self::ForceNx => Key::ForceNx,
             Self::MetalHud => Key::MetalHud,
+            Self::VulkanCapture => Key::VulkanCapture,
+            Self::MetalCapture => Key::MetalCapture,
         }
     }
 
@@ -522,7 +562,9 @@ impl Scalar {
             | Self::LargeAddressAware
             | Self::Gcmouse
             | Self::ForceNx
-            | Self::MetalHud => ValueKind::Bool,
+            | Self::MetalHud
+            | Self::VulkanCapture
+            | Self::MetalCapture => ValueKind::Bool,
         }
     }
 
@@ -544,6 +586,8 @@ impl Scalar {
             Self::MetalHud => {
                 "the MTL_HUD_ variables of the environment the process was started with"
             }
+            Self::VulkanCapture => "no capture layer",
+            Self::MetalCapture => "no Metal capture layer",
         }
     }
 
@@ -566,7 +610,9 @@ impl Scalar {
             | Self::LargeAddressAware
             | Self::Gcmouse
             | Self::ForceNx
-            | Self::MetalHud => parse_bool(text).map(ScalarValue::Bool),
+            | Self::MetalHud
+            | Self::VulkanCapture
+            | Self::MetalCapture => parse_bool(text).map(ScalarValue::Bool),
         };
         value.ok_or_else(|| FieldError::BadValue {
             key: self.key(),

@@ -3,12 +3,15 @@
 
 use std::collections::BTreeMap;
 
-#[cfg(doc)]
-use crate::runtime::{basename_of, steam_app};
 use crate::{
     Argument, D3d9, DebugChannel, DllOverride, Dxgi, ENV_VAR, EnvEntry, FILE_ENV_VAR, OpenGl,
     PROF_SERVICE_VAR, Rule, Scalar, ScalarValue, Setting, Source, Specificity, Table, VersionInfo,
     Wined3d, metal_hud_env, runtime,
+};
+#[cfg(doc)]
+use crate::{
+    Key,
+    runtime::{basename_of, steam_app},
 };
 
 /// FEX's option for the extended debug info of [`Resolution::fold_profiler_env`].
@@ -59,6 +62,10 @@ pub struct Resolution {
     pub env: Vec<EnvEntry>,
     /// Where each entry of [`Resolution::env`] came from, at the same index.
     pub env_from: Vec<EnvFrom>,
+    /// Each setting that only a rule naming one program may hold (see
+    /// [`Key::needs_program`]) that a rule for `*` or a Steam app id set or
+    /// reset, in fold order, with that rule. It is ignored there.
+    pub needs_program_ignored: Vec<(Scalar, Origin)>,
     /// Whether [`Resolution::fold_derived_env`] has run.
     derived_env: bool,
     /// Where in [`Resolution::env`] the rule that set `metal_hud` started
@@ -287,6 +294,20 @@ impl Resolution {
         self.switch(Scalar::MetalHud)
     }
 
+    /// Whether `GFXReconstruct` records the Vulkan calls (see
+    /// [`Rule::vulkan_capture`]), `None` when no rule sets it.
+    #[must_use]
+    pub fn vulkan_capture(&self) -> Option<bool> {
+        self.switch(Scalar::VulkanCapture)
+    }
+
+    /// Whether the Metal backend records frame captures (see
+    /// [`Rule::metal_capture`]), `None` when no rule sets it.
+    #[must_use]
+    pub fn metal_capture(&self) -> Option<bool> {
+        self.switch(Scalar::MetalCapture)
+    }
+
     /// The value of the true-or-false setting `scalar`.
     fn switch(&self, scalar: Scalar) -> Option<bool> {
         match self.scalar(scalar).value {
@@ -391,6 +412,38 @@ impl Resolution {
                 default: runtime::env_value(block, FEX_DEBUG_INFO_VAR).is_some(),
             },
         );
+    }
+
+    /// Add `entries`, the variables of a capture setting `scalar`
+    /// ([`runtime::vulkan_capture_env`](crate::runtime::vulkan_capture_env),
+    /// [`runtime::metal_capture_env`](crate::runtime::metal_capture_env)),
+    /// after the other env entries, with the rule that set `scalar` as their
+    /// origin, so they win over a rule's own entries for the same variables;
+    /// the layer lists of `vulkan_capture_env` take in what those entries
+    /// set through [`Resolution::env_value`]. Nothing is added unless a rule
+    /// set it to `true`.
+    pub fn fold_capture_env(&mut self, scalar: Scalar, entries: Vec<EnvEntry>) {
+        let state = self.scalar(scalar);
+        let (Some(ScalarValue::Bool(true)), Some(origin)) = (state.value, state.set_by.clone())
+        else {
+            return;
+        };
+        for entry in entries {
+            self.push_derived(entry, origin.clone());
+        }
+    }
+
+    /// What the env entries leave the variable `name` at, matched
+    /// ASCII-case-insensitively: `Some(Some(value))` when the last entry for
+    /// it sets a value, `Some(None)` when it removes the variable, and
+    /// `None` when no entry names it, which leaves the inherited value.
+    #[must_use]
+    pub fn env_value(&self, name: &str) -> Option<Option<&str>> {
+        self.env
+            .iter()
+            .rev()
+            .find(|entry| entry.name().as_str().eq_ignore_ascii_case(name))
+            .map(EnvEntry::value)
     }
 
     /// Add `entry`, which a setting from `origin` stands for, after the
@@ -632,8 +685,14 @@ impl Table {
         let mut r = Resolution::default();
         for (source, rule) in matching {
             let origin = Origin::of(source, rule);
+            let names_program = !rule.exe.is_any() && !rule.exe.is_steam_app();
             for &scalar in Scalar::ALL {
-                r.fold_scalar(scalar, rule.scalar(scalar), &origin);
+                let setting = rule.scalar(scalar);
+                if scalar.key().needs_program() && !names_program && !setting.is_unset() {
+                    r.needs_program_ignored.push((scalar, origin.clone()));
+                    continue;
+                }
+                r.fold_scalar(scalar, setting, &origin);
             }
             r.fold_dll_overrides(rule, &origin);
             r.fold_arguments(rule, &origin);

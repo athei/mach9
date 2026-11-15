@@ -192,6 +192,11 @@ type FnSetCompatLargeAddressAware = unsafe extern "C" fn(c_int);
 type FnSetCompatGcmouse = unsafe extern "C" fn(c_int);
 type FnSetCompatForceNx = unsafe extern "C" fn(c_int);
 type FnSetCompatOpengl = unsafe extern "C" fn(c_int);
+type FnSetCompatCapture = unsafe extern "C" fn(c_int);
+type FnGetUnixFileName = unsafe extern "C" fn(*const u16, *mut *mut c_char, u32) -> NtStatus;
+
+/// The disposition `ntdll_get_unix_file_name` takes for a file that exists.
+const FILE_OPEN: u32 = 1;
 
 /// The resolved ntdll functions. The first three are required; the hooks are
 /// optional and their features are skipped (with a log line) when absent.
@@ -206,6 +211,8 @@ pub struct Ntdll {
     set_compat_gcmouse: Option<FnSetCompatGcmouse>,
     set_compat_force_nx: Option<FnSetCompatForceNx>,
     set_compat_opengl: Option<FnSetCompatOpengl>,
+    set_compat_capture: Option<FnSetCompatCapture>,
+    get_unix_file_name: Option<FnGetUnixFileName>,
 }
 
 /// Look one symbol up in the default (global) namespace.
@@ -240,6 +247,8 @@ impl Ntdll {
             let set_gcmouse = sym(b"set_compat_gcmouse\0");
             let set_force_nx = sym(b"set_compat_force_nx\0");
             let set_opengl = sym(b"set_compat_opengl\0");
+            let set_capture = sym(b"set_compat_capture\0");
+            let unix_name = sym(b"ntdll_get_unix_file_name\0");
             Some(Self {
                 current_teb: std::mem::transmute::<*mut c_void, FnCurrentTeb>(teb),
                 query_information_process: std::mem::transmute::<
@@ -265,6 +274,10 @@ impl Ntdll {
                     .then(|| std::mem::transmute::<*mut c_void, FnSetCompatForceNx>(set_force_nx)),
                 set_compat_opengl: (!set_opengl.is_null())
                     .then(|| std::mem::transmute::<*mut c_void, FnSetCompatOpengl>(set_opengl)),
+                set_compat_capture: (!set_capture.is_null())
+                    .then(|| std::mem::transmute::<*mut c_void, FnSetCompatCapture>(set_capture)),
+                get_unix_file_name: (!unix_name.is_null())
+                    .then(|| std::mem::transmute::<*mut c_void, FnGetUnixFileName>(unix_name)),
             })
         }
     }
@@ -411,5 +424,46 @@ impl Ntdll {
             // SAFETY: the hook takes a plain int and only stores it.
             unsafe { f(value) }
         }
+    }
+
+    pub const fn has_set_compat_capture(&self) -> bool {
+        self.set_compat_capture.is_some()
+    }
+
+    /// Tell ntdll what win32u records on the capture chord, a mask of
+    /// `WINE_COMPAT_CAPTURE_*` bits. win32u reads the value back through
+    /// `ntdll_get_compat_capture` when it loads the Vulkan loader.
+    pub fn set_compat_capture(&self, value: c_int) {
+        if let Some(f) = self.set_compat_capture {
+            // SAFETY: the hook takes a plain int and only stores it.
+            unsafe { f(value) }
+        }
+    }
+
+    /// The unix path of the existing file the DOS path `dos` names, through
+    /// ntdll's `ntdll_get_unix_file_name`, or why there is none: the export
+    /// is missing, or the NTSTATUS of the call.
+    pub fn unix_file_name(&self, dos: &[u16]) -> Result<Vec<u8>, String> {
+        let Some(f) = self.get_unix_file_name else {
+            return Err(String::from("ntdll lacks ntdll_get_unix_file_name"));
+        };
+        let mut name: Vec<u16> = dos.to_vec();
+        name.push(0);
+        let mut unix: *mut c_char = std::ptr::null_mut();
+        // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives the
+        // call, and `unix` a valid out-parameter, which ntdll sets to a string
+        // it allocated with malloc on success.
+        let status = unsafe { f(name.as_ptr(), std::ptr::from_mut(&mut unix), FILE_OPEN) };
+        if status != 0 || unix.is_null() {
+            return Err(format!("ntdll_get_unix_file_name returned {status:#010x}"));
+        }
+        // SAFETY: on success `unix` is a NUL-terminated string from malloc,
+        // copied out before it is freed once.
+        let path = unsafe {
+            let path = std::ffi::CStr::from_ptr(unix).to_bytes().to_vec();
+            libc::free(unix.cast::<c_void>());
+            path
+        };
+        Ok(path)
     }
 }

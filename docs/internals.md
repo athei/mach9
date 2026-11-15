@@ -55,8 +55,9 @@ script's header says what it builds and stages.
     `build-vkd3d-proton.sh` resolve their ref against `*_REPO` on every
     run, which needs the network unless `*_REPO` is a local clone.
   - When they build: `build-vkd3d-proton.sh` for the submodules,
-    `build-mesa.sh` for a new Vulkan loader or Python environment, and
-    `build-gstreamer.sh` unless its clone and wraps are already there.
+    `build-mesa.sh` for a new Vulkan loader or Python environment,
+    `build-gstreamer.sh` unless its clone and wraps are already there, and
+    `build-gfxreconstruct.sh` unless its clone is.
 - For the [deqp-vk suite](#deqp-vk-suite) only, which no CI build runs:
   `build-vk-gl-cts.sh` needs git, CMake, Ninja and Python 3, all of them
   build tools of `brew-formulae` or macOS, and the network for its clone
@@ -73,9 +74,10 @@ script's header says what it builds and stages.
 
 | Script | What it does |
 |--------|--------------|
-| [`build-wine.sh`](../bin/build-wine.sh) | Runs `build-mesa.sh` and `build-gstreamer.sh`, builds Wine and the [Wine SDK](#wine-sdk), then runs `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; passes `--clean` on to all five |
+| [`build-wine.sh`](../bin/build-wine.sh) | Runs `build-mesa.sh`, `build-gstreamer.sh` and `build-gfxreconstruct.sh`, builds Wine and the [Wine SDK](#wine-sdk), then runs `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; passes `--clean` on to each of them |
 | [`build-mesa.sh`](../bin/build-mesa.sh) | The Vulkan loader, KosmicKrisp, and EGL with Zink ([Vulkan](#vulkan), [OpenGL](#opengl)) |
 | [`build-gstreamer.sh`](../bin/build-gstreamer.sh) | GStreamer with glib and FFmpeg ([GStreamer](#gstreamer)) |
+| [`build-gfxreconstruct.sh`](../bin/build-gfxreconstruct.sh) | GFXReconstruct's capture layer and replay ([Vulkan capture](#vulkan-capture)) |
 | [`build-fex.sh`](../bin/build-fex.sh) | FEX's emulator DLLs and their unix halves ([FEX](#fex)) |
 | [`build-dxmt.sh`](../bin/build-dxmt.sh) | DXMT, after a Wine build ([DXMT](#dxmt)) |
 | [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | vkd3d-proton's D3D12 DLLs, after a Wine build ([vkd3d-proton](#vkd3d-proton)) |
@@ -83,7 +85,7 @@ script's header says what it builds and stages.
 | [`build-vk-gl-cts.sh`](../bin/build-vk-gl-cts.sh) | `deqp-vk` for the [deqp-vk suite](#deqp-vk-suite); not run by `build-wine.sh` |
 | [`build-vulkan-validation-layers.sh`](../bin/build-vulkan-validation-layers.sh) | Khronos' Vulkan validation layers, for the bundle step's checks that run under them ([what the bundle step checks](#what-the-bundle-step-checks)) and the runner's `--validation` ([validation layers](#validation-layers)); not run by `build-wine.sh`, and not in the bundle |
 
-The flags are in [building.md](building.md#commands). The five component
+The flags are in [building.md](building.md#commands). The component
 scripts also run alone.
 
 - FEX, Mesa, DXMT and vkd3d-proton are fetched from their `*_REPO` at the
@@ -109,9 +111,10 @@ scripts also run alone.
 Every tree lives under `build/` and the bundle in `dist/wine`, in the
 [layout](building.md#layout). Each variable below overrides the default of
 the same name, set in [`profile.sh`](../bin/lib/profile.sh) or, for
-`MINGW_DIR`, `CACHE_DIR` and the `VK_GL_CTS_*` and
-`VULKAN_VALIDATION_LAYERS_*` ones, at the top of the scripts that use
-them. A `MACOSX_DEPLOYMENT_TARGET` may raise the floor but not lower it.
+`MINGW_DIR`, `CACHE_DIR` and the `VK_GL_CTS_*`,
+`VULKAN_VALIDATION_LAYERS_*` and `GFXRECONSTRUCT_*` ones, at the top of the
+scripts that use them. A `MACOSX_DEPLOYMENT_TARGET` may raise the floor but
+not lower it.
 
 | Variable | What it is |
 |----------|------------|
@@ -128,6 +131,7 @@ them. A `MACOSX_DEPLOYMENT_TARGET` may raise the floor but not lower it.
 | `LOADER_PROFILE` | The provisioning profile the loader is signed for |
 | `VK_GL_CTS_BUILD_DIR`, `VK_GL_CTS_DIST` | The tree of [`build-vk-gl-cts.sh`](../bin/build-vk-gl-cts.sh), with its VK-GL-CTS clone, and the `deqp-vk` it stages |
 | `VULKAN_VALIDATION_LAYERS_BUILD_DIR`, `VULKAN_VALIDATION_LAYERS_DIST` | The tree of [`build-vulkan-validation-layers.sh`](../bin/build-vulkan-validation-layers.sh), with its clone and the sources it builds on, and the layers it stages, which the bundle step reads; the conformance runner takes another directory with `--validation-layers` |
+| `GFXRECONSTRUCT_BUILD_DIR`, `GFXRECONSTRUCT_DIST` | The tree of [`build-gfxreconstruct.sh`](../bin/build-gfxreconstruct.sh), with its clone, and the layer and tools it stages, which the bundle step and [`bench/gfxr-replay.sh`](../bench/gfxr-replay.sh) read |
 | `MINGW_DIR` | llvm-mingw |
 | `CACHE_DIR` | Downloaded redistributables |
 
@@ -681,6 +685,85 @@ invocations: the absolute times of one build still move between invocations
 while the differences stay put. For a before and after, alternate
 invocations of the two stacks with the same `--case` selection.
 
+### Vulkan capture
+
+compatdb's [`vulkan_capture`](https://mach9.app/compatdb_core/struct.Rule.html#method.vulkan_capture)
+records frames of a game's Vulkan calls with
+[GFXReconstruct](https://github.com/LunarG/gfxreconstruct), so a driver
+change gets a before and after on the game's own frames: the replay runs
+them natively on KosmicKrisp, without the game, Wine or FEX. The rule's doc
+is the spec of the trigger, the frames a capture holds and the file names.
+
+- [`build-gfxreconstruct.sh`](../bin/build-gfxreconstruct.sh), which
+  `build-wine.sh` runs, builds the capture layer and `gfxrecon-replay`
+  from the pin in [`redist.env`](../pins/redist.env), with
+  [`gfxreconstruct-macos-exports.patch`](../pins/gfxreconstruct-macos-exports.patch);
+  its header says what it stages.
+- The bundle carries the layer in `lib/external`, its manifest in
+  `share/vulkan/explicit_layer.d`, which the Vulkan loader does not search
+  by itself, so the layer loads only into a process whose rule asks for it,
+  and the licences in `share/licenses`. `check_capture_layer` in
+  [`bundle-wine.sh`](../bin/bundle-wine.sh) has the bundled loader list
+  the layer from that manifest, without a GPU.
+- compatdb.so makes the folder `captures` next to the executable, gives
+  the process the variables that load the layer
+  ([`runtime::vulkan_capture_env`](https://mach9.app/compatdb_core/runtime/fn.vulkan_capture_env.html))
+  and tells ntdll through `set_compat_capture`
+  ([Wine-side contract](maintenance.md#wine-side-contract)).
+- win32u samples the capture chord once per present
+  (`win32u_vkQueuePresentKHR` in
+  [`dlls/win32u/vulkan.c`](https://github.com/athei/wine/blob/arm64-patched/dlls/win32u/vulkan.c)),
+  starts the layer with `GFXRSetTrimmingState` and stops it after the
+  presents it counts. Without the setting the present path reads no key.
+- A capture starts only from a present through win32u: a game's own
+  Vulkan, D3D12 on vkd3d-proton and wined3d's Vulkan renderer. mtld3d and
+  DXMT do not use Vulkan; Zink loads the layer but presents without win32u,
+  so it records nothing.
+- While it records, the layer writes the whole of each mapped memory range
+  into the capture at every submit (`unassisted`), which makes a capture of
+  a game that keeps much memory mapped large and slow: its default
+  tracking (`page_guard`) loses a program's writes to mapped memory on
+  macOS arm64, and the program reads zeros back.
+- A capture is only of the frames, not a measurement: the layer slows the
+  game while it is loaded.
+
+[`bench/gfxr-replay.sh`](../bench/gfxr-replay.sh) replays a capture on a
+full bundle or a `MESA_DIST` and prints the time of its frames per round;
+its header has the options. The replay draws into images of its own, so it
+opens no window, and no display paces it. Compare two Mesa builds as for
+`bench/kk.sh`, by alternating invocations.
+
+```bash
+bench/gfxr-replay.sh Game/captures/Game-<pid>_trim_trigger_<time>.gfxr
+bench/gfxr-replay.sh ../build/mesa/dist Game/captures/Game-<pid>_trim_trigger_<time>.gfxr
+```
+
+### Metal capture
+
+compatdb's [`metal_capture`](https://mach9.app/compatdb_core/struct.Rule.html#method.metal_capture)
+records Metal frame captures, `.gputrace` documents, on the same chord, into
+the same `captures` folder. A `.gputrace` shows what a backend emits for a
+frame (encoders, barriers, draws, GPU time per pass), and cannot be replayed
+through another driver. The rule's doc says which backend records and how
+the files are named.
+
+- compatdb.so sets `MTL_CAPTURE_ENABLED` for the process, without which
+  Metal loads no capture layer, and the variables of each backend
+  ([`runtime::metal_capture_env`](https://mach9.app/compatdb_core/runtime/fn.metal_capture_env.html)).
+  The layer then sits under every Metal call of the process, capture or
+  not.
+- KosmicKrisp starts and stops on the queue labels win32u inserts on the
+  chord, for which win32u enables `VK_EXT_debug_utils` on the host
+  instance (our Mesa's `kk_device_capture_label`). A capture holds the next
+  three presents of the device whose present took the press, and the end
+  label goes to the queue of the third. Further presses start nothing until
+  it has ended.
+- DXMT samples the chord once per frame on its own (our DXMT's
+  `dxmt_capture.cpp`).
+- mtld3d samples it too and writes beside its log file
+  ([`docs/ARCHITECTURE.md`](https://github.com/athei/mtld3d/blob/main/docs/ARCHITECTURE.md)).
+- Open a `.gputrace` in Xcode, or inspect it with `gpudebug`.
+
 ## OpenGL
 
 OpenGL runs on Zink on KosmicKrisp through Mesa's EGL wherever
@@ -931,3 +1014,4 @@ A `*-src.ref` file names a branch, tag or commit of the component's
 | Sparkle, Mach9.app's updater | [`redist.env`](../pins/redist.env): version and SHA-256 of the release tarball |
 | VK-GL-CTS, for the [deqp-vk suite](#deqp-vk-suite) | [`redist.env`](../pins/redist.env): tag and commit; the sources it builds on at the commits and checksums its `external/fetch_sources.py` pins |
 | Vulkan validation layers, for the [bundle step](#what-the-bundle-step-checks) and the runner's [`--validation`](#validation-layers) | [`redist.env`](../pins/redist.env): tag and commit; the sources they build on at what the tag's `scripts/known_good.json` names |
+| GFXReconstruct, for the [Vulkan capture](#vulkan-capture) | [`redist.env`](../pins/redist.env): tag and commit; its submodules at the commits the tag records; [`gfxreconstruct-macos-exports.patch`](../pins/gfxreconstruct-macos-exports.patch) on top |

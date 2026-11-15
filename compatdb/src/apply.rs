@@ -329,7 +329,7 @@ fn add_override(nt: &Ntdll, entry: &str) {
 
 /// `.../lib/wine` derived from this library's own path (`dladdr`), which is
 /// `.../lib/wine/aarch64-unix/compatdb.so`.
-fn lib_wine_dir() -> Option<PathBuf> {
+pub fn lib_wine_dir() -> Option<PathBuf> {
     // SAFETY: `info` is written by dladdr before it is read; the call takes a
     // valid code address and a valid out-pointer.
     let path = unsafe {

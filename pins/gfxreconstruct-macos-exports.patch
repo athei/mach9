@@ -1,0 +1,14 @@
+Export GFXRSetTrimmingState and GFXRGetCaptureMode from the macOS layer, as
+the Linux version script does, so that win32u can start and stop a capture
+(build-gfxreconstruct.sh applies it to the pinned source).
+
+diff --git a/layer/VkLayer_gfxreconstruct.exp b/layer/VkLayer_gfxreconstruct.exp
+index a9976ec..01f5d53 100644
+--- a/layer/VkLayer_gfxreconstruct.exp
++++ b/layer/VkLayer_gfxreconstruct.exp
+@@ -6,3 +6,5 @@ _vkNegotiateLoaderLayerInterfaceVersion
+ _vkEnumerateDeviceLayerProperties
+ _vkEnumerateDeviceExtensionProperties
+ _xrNegotiateLoaderApiLayerInterface
++_GFXRSetTrimmingState
++_GFXRGetCaptureMode

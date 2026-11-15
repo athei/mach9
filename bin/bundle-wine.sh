@@ -2404,21 +2404,57 @@ check_vulkan() {
     echo "  The Vulkan manifest names lib/external/$(basename "$lib"), and ntdll sets VK_DRIVER_FILES."
 }
 
+# check_capture_layer: exit unless the bundle's Vulkan loader lists
+# GFXReconstruct's capture layer from share/vulkan/explicit_layer.d, the
+# directory compatdb's vulkan_capture adds with VK_ADD_LAYER_PATH, and the
+# manifest names the layer by a path that resolves from its directory. The
+# loader refuses a manifest whose keys it does not expect in their order and
+# leaves the layer out without an error, so only the listing shows it. The
+# listing runs with VK_LAYER_PATH, which limits the search for explicit
+# layers to that directory, so a layer of the same name elsewhere on the Mac,
+# such as a Vulkan SDK's, cannot stand in for it. It needs no driver, so
+# this runs on a Mac without a Metal 4 GPU too. The program comes from
+# smoke/vklayers.c.
+check_capture_layer() {
+    local dir="$WINE_DIR/share/vulkan/explicit_layer.d" log="$TMP_DIR/vklayers.log" lib
+    local layer=VK_LAYER_LUNARG_gfxreconstruct
+    lib=$(plutil -extract layer.library_path raw -o - "$dir/$GFXR_MANIFEST" 2>/dev/null) || {
+        echo "Error: share/vulkan/explicit_layer.d/$GFXR_MANIFEST is missing or has no layer.library_path"
+        exit 1
+    }
+    if [ ! -f "$dir/$lib" ]; then
+        echo "Error: $GFXR_MANIFEST names $lib, which does not resolve from share/vulkan/explicit_layer.d"
+        exit 1
+    fi
+    xcrun clang -O2 -o "$TMP_DIR/vklayers" "$REPO_DIR/smoke/vklayers.c"
+    run_limited 60 "$log" env -i PATH=/usr/bin:/bin VK_LAYER_PATH="$dir" VK_LOADER_DEBUG=error,warn \
+        "$TMP_DIR/vklayers" "$EXT_DIR/libvulkan.1.dylib" "$layer"
+    if [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: lib/external/libvulkan.1.dylib does not list $layer from"
+        echo "share/vulkan/explicit_layer.d/$GFXR_MANIFEST (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    echo "  The Vulkan loader lists $layer from share/vulkan/explicit_layer.d."
+}
+
 # check_compat_hooks: exit unless ntdll exports the hooks compatdb.so hands
 # the settings of its built-in force_nx and opengl rules to:
 # set_compat_force_nx and set_compat_opengl. Without them compatdb.so only
 # logs that a hook is missing, and every 32-bit program without NX_COMPAT
-# runs with no-execute off and every process gets Apple's OpenGL.
+# runs with no-execute off and every process gets Apple's OpenGL. The same
+# for set_compat_capture, without which vulkan_capture and metal_capture
+# record nothing.
 check_compat_hooks() {
     local hook
-    for hook in set_compat_force_nx set_compat_opengl; do
+    for hook in set_compat_force_nx set_compat_opengl set_compat_capture; do
         if ! nm -gU "$unixdir/ntdll.so" 2>/dev/null | awk '{print $NF}' | grep -xF "_$hook" >/dev/null; then
             echo "Error: $UNIX_DIR/ntdll.so does not export $hook, the hook through which"
             echo "compatdb.so hands that setting over; the Wine source lacks it"
             exit 1
         fi
     done
-    echo "  ntdll exports set_compat_force_nx and set_compat_opengl."
+    echo "  ntdll exports set_compat_force_nx, set_compat_opengl and set_compat_capture."
 }
 
 # check_egl: exit unless OpenGL through Zink hangs together in the bundle:
@@ -3024,6 +3060,35 @@ check_validation_layers_build() {
     echo "  Vulkan validation layers: $VULKAN_VALIDATION_LAYERS_GIT_TAG"
 }
 
+# GFXReconstruct's capture layer, which Step 3 copies into lib/external and
+# Step 3c names in share/vulkan/explicit_layer.d, for compatdb's
+# vulkan_capture; the default of build-gfxreconstruct.sh.
+GFXRECONSTRUCT_DIST="${GFXRECONSTRUCT_DIST:-$BUILD_TOP/gfxreconstruct/dist}"
+GFXR_LAYER=libVkLayer_gfxreconstruct.dylib
+GFXR_MANIFEST=VkLayer_gfxreconstruct.json
+# The licences of what the layer is built from, which build-gfxreconstruct.sh
+# stages in share/licenses and Step 3c installs there.
+GFXR_LICENSES="gfxreconstruct.txt gfxreconstruct-third-party.txt spirv-reflect.txt"
+
+# check_gfxreconstruct_build: exit unless build-gfxreconstruct.sh staged the
+# capture layer, its manifest and its licences completely from the commit
+# redist.env pins. Every bundle carries the layer, so this needs no GPU.
+check_gfxreconstruct_build() {
+    local f missing=0
+    for f in $GFXR_LICENSES; do
+        [ -f "$GFXRECONSTRUCT_DIST/share/licenses/$f" ] || missing=1
+    done
+    if [ "$(cat "$GFXRECONSTRUCT_DIST/COMMIT" 2>/dev/null)" != "$GFXRECONSTRUCT_GIT_COMMIT" ] ||
+       [ ! -f "$GFXRECONSTRUCT_DIST/lib/$GFXR_LAYER" ] ||
+       [ ! -f "$GFXRECONSTRUCT_DIST/share/vulkan/explicit_layer.d/$GFXR_MANIFEST" ] ||
+       [ "$missing" -ne 0 ]; then
+        echo "Error: $GFXRECONSTRUCT_DIST has no GFXReconstruct from $GFXRECONSTRUCT_GIT_COMMIT"
+        echo "(run build-wine.sh, or bin/build-gfxreconstruct.sh alone)"
+        exit 1
+    fi
+    echo "  GFXReconstruct: $GFXRECONSTRUCT_GIT_TAG"
+}
+
 # ── Preflight ───────────────────────────────────────────────────────────
 # What a full bundle needs beyond the Wine build, checked before Step 0
 # deletes anything.
@@ -3037,6 +3102,7 @@ check_dxmt_build
 check_vkd3d_proton_build
 check_mesa_build
 check_gstreamer_build
+check_gfxreconstruct_build
 if [ "$SKIP_SMOKE" -eq 0 ]; then
     check_validation_layers_build
     for arch in $SMOKE_PE_ARCHS x86_64 i686; do
@@ -3251,6 +3317,10 @@ LIBS+=("$MESA_DIST/lib/libvulkan_kosmickrisp.dylib")
 # @loader_path, a reference the walk below does not follow. It opens the
 # Vulkan loader next to it, in lib/external.
 LIBS+=("$MESA_DIST/lib/$MESA_GALLIUM")
+# GFXReconstruct's capture layer, which the loader opens by the path in its
+# manifest (Step 3c) only for a process compatdb.so names it for. It links
+# system libraries only.
+LIBS+=("$GFXRECONSTRUCT_DIST/lib/$GFXR_LAYER")
 
 echo "  Copying direct deps..."
 MISSED=0
@@ -3412,15 +3482,15 @@ for dead in "${DEAD[@]}"; do
     fi
 done
 
-# ── Step 3c: Vulkan driver manifest ─────────────────────────────────────
+# ── Step 3c: Vulkan manifests ───────────────────────────────────────────
 # The loader finds KosmicKrisp through its manifest in share/vulkan/icd.d,
 # the directory ntdll names in VK_DRIVER_FILES unless the caller set that
 # variable. The manifest build-mesa.sh staged names the driver relative to
 # MESA_DIST's layout; here it is pointed at lib/external, again relative to
 # the manifest, which is how the loader reads a relative library_path, so the
 # bundle stays relocatable.
-time_mark "Step 3c: Vulkan driver manifest"
-echo "==> Step 3c: Vulkan driver manifest"
+time_mark "Step 3c: Vulkan manifests"
+echo "==> Step 3c: Vulkan manifests"
 ICD_DIR="$WINE_DIR/share/vulkan/icd.d"
 ICD="$ICD_DIR/kosmickrisp_mesa_icd.aarch64.json"
 ICD_LIBRARY=../../../lib/external/libvulkan_kosmickrisp.dylib
@@ -3432,6 +3502,30 @@ if [ "$(plutil -extract ICD.library_path raw -o - "$ICD")" != "$ICD_LIBRARY" ]; 
     exit 1
 fi
 echo "    share/vulkan/icd.d/$(basename "$ICD") -> $ICD_LIBRARY"
+# GFXReconstruct's capture layer, the same way: its manifest names the layer
+# in lib/external relative to share/vulkan/explicit_layer.d. The loader
+# searches no directory of the bundle for layers, and an explicit layer
+# loads only when named, so it stays out of every process that compatdb.so
+# does not give vulkan_capture (VK_ADD_LAYER_PATH and VK_INSTANCE_LAYERS).
+GFXR_LAYER_DIR="$WINE_DIR/share/vulkan/explicit_layer.d"
+GFXR_LIBRARY="../../../lib/external/$GFXR_LAYER"
+mkdir -p "$GFXR_LAYER_DIR"
+# sed rather than plutil, which writes the keys in another order: the loader
+# counts every key after "layer" as one more layer node, and with
+# file_format_version behind it refuses the file and the layer.
+sed "s|\"library_path\": \"[^\"]*\"|\"library_path\": \"$GFXR_LIBRARY\"|" \
+    "$GFXRECONSTRUCT_DIST/share/vulkan/explicit_layer.d/$GFXR_MANIFEST" > "$GFXR_LAYER_DIR/$GFXR_MANIFEST"
+if [ "$(plutil -extract layer.library_path raw -o - "$GFXR_LAYER_DIR/$GFXR_MANIFEST")" != "$GFXR_LIBRARY" ]; then
+    echo "Error: $GFXR_MANIFEST does not name $GFXR_LIBRARY after rewriting it"
+    exit 1
+fi
+echo "    share/vulkan/explicit_layer.d/$GFXR_MANIFEST -> $GFXR_LIBRARY"
+# Its licences, and those of what it links statically, beside the others.
+mkdir -p "$WINE_DIR/share/licenses"
+for f in $GFXR_LICENSES; do
+    cp "$GFXRECONSTRUCT_DIST/share/licenses/$f" "$WINE_DIR/share/licenses/$f"
+done
+echo "    share/licenses: $GFXR_LICENSES"
 
 # ── Step 4: Direct3D backends ───────────────────────────────────────────
 # Direct3D comes from third-party implementations that talk to Metal
@@ -3799,6 +3893,9 @@ WANT=("lib/wine/$UNIX_DIR/compatdb.so"
       "lib/external/libvulkan.1.dylib" "lib/external/libvulkan_kosmickrisp.dylib"
       "lib/external/libEGL.1.dylib" "lib/external/$MESA_GALLIUM"
       "share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json"
+      "lib/external/$GFXR_LAYER" "share/vulkan/explicit_layer.d/$GFXR_MANIFEST"
+      "share/licenses/gfxreconstruct.txt" "share/licenses/gfxreconstruct-third-party.txt"
+      "share/licenses/spirv-reflect.txt"
       "lib/wine/$UNIX_DIR/winevulkan.so"
       "lib/wine/$PE64_DIR/vulkan-1.dll" "lib/wine/$PE64_DIR/winevulkan.dll"
       "lib/wine/i386-windows/vulkan-1.dll" "lib/wine/i386-windows/winevulkan.dll"
@@ -4009,6 +4106,7 @@ echo "  No dangling symlinks."
 
 time_mark "Step 5: Vulkan, EGL, compatdb hooks and loader signature"
 check_vulkan
+check_capture_layer
 check_egl
 check_compat_hooks
 check_loader_app

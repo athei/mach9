@@ -97,6 +97,9 @@ pub enum FieldError {
     /// A setting that a rule whose `exe` is a Steam app id refuses (see
     /// [`Rule::set`]).
     RefusedOnSteamApp(Key),
+    /// A setting that only a rule naming one program may hold, in a rule
+    /// whose `exe` is `*` or a Steam app id (see [`Key::needs_program`]).
+    NeedsProgram(Key),
     /// A list of values for a key that holds one (see [`Rule::set_list`]).
     NotAList(Key),
 }
@@ -171,6 +174,11 @@ impl fmt::Display for FieldError {
                 "{key} needs an exe that names a program: a Steam app id can match more than one \
                  program, and it would take away the arguments the built-in rules give them, \
                  which some of them need to work"
+            ),
+            Self::NeedsProgram(key) => write!(
+                f,
+                "{key} needs an exe that names a program: * and a Steam app id match more than \
+                 one program, and each would record a capture of its own"
             ),
             Self::NotAList(key) => write!(f, "{key} holds one value, not a list"),
         }

@@ -92,6 +92,8 @@ impl Key {
             Self::Gcmouse => variant!(Gcmouse),
             Self::ForceNx => variant!(ForceNx),
             Self::MetalHud => variant!(MetalHud),
+            Self::VulkanCapture => variant!(VulkanCapture),
+            Self::MetalCapture => variant!(MetalCapture),
             Self::DllOverrides => variant!(DllOverrides),
             Self::ArgumentsOverride => variant!(ArgumentsOverride),
             Self::Arguments => variant!(Arguments),

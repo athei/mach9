@@ -399,7 +399,8 @@
 //! - Scalar settings, each a [`Scalar`] with a [`Setting`]:
 //!   [`Key::Dxgi`], [`Key::D3d9`], [`Key::Wined3d`], [`Key::OpenGl`],
 //!   [`Key::DpiAware`], [`Key::LargeAddressAware`], [`Key::Gcmouse`],
-//!   [`Key::ForceNx`], [`Key::MetalHud`].
+//!   [`Key::ForceNx`], [`Key::MetalHud`], [`Key::VulkanCapture`],
+//!   [`Key::MetalCapture`].
 //! - Lists: [`Key::DllOverrides`], [`Key::ArgumentsOverride`],
 //!   [`Key::Arguments`], [`Key::DebugChannels`].
 //! - Environment entries: [`Key::Env`].
@@ -451,6 +452,8 @@
 //! | Give one game Apple's OpenGL | `exe=Game.exe;opengl=cgl` |
 //! | Put wined3d on Vulkan for one game | `exe=Game.exe;wined3d=vulkan` |
 //! | Show the Metal HUD in one game | `exe=Game.exe;metal_hud=true` |
+//! | Record frames of one game's Vulkan calls on Ctrl+Shift+P | `exe=Game.exe;vulkan_capture=true` |
+//! | Record Metal frame captures of one game on Ctrl+Shift+P | `exe=Game.exe;metal_capture=true` |
 //! | Leave one game to upstream Wine for a setting | `exe=Game.exe;<key>=default` |
 //! | Replace the arguments the rules give one game | `exe=Game.exe;arguments_override=-windowed` |
 //! | Give one game no arguments from any rule | `exe=Game.exe;arguments_override=` |
@@ -461,7 +464,9 @@
 //! Most of them with `exe=*` do the same for every process, except where a
 //! built-in rule for one program sets the key. [`Rule::set`] refuses
 //! `arguments_override` in a `*` rule: for every process it would take away
-//! the arguments the built-in rules give single programs.
+//! the arguments the built-in rules give single programs. It refuses
+//! `vulkan_capture` and `metal_capture` in a `*` rule and a rule for a Steam
+//! app id, and [`Table::resolve`] ignores them there ([`Key::needs_program`]).
 //!
 //! Hiding D3D12 disables both of vkd3d-proton's modules, so `d3d12.dll`
 //! fails to load and a game that can use D3D11 falls back to it on DXMT; a

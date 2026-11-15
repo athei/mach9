@@ -201,7 +201,8 @@ impl Key {
     ///
     /// It may hold every scalar setting, every list and `env`, but not
     /// `arguments_override`: for every process that would take away the
-    /// arguments the built-in rules give single programs. A matcher is not a
+    /// arguments the built-in rules give single programs. Nor a setting
+    /// that [`Key::needs_program`]. A matcher is not a
     /// setting, so this is `false` for one: `exe` decides whether the rule
     /// is for every process at all, and a fingerprint narrows the processes
     /// it matches, so neither belongs among the settings a launcher offers
@@ -209,7 +210,8 @@ impl Key {
     ///
     /// [`Rule::set`] and [`Rule::set_list`] refuse a setting for which this
     /// is `false` in a `*` rule, and an `exe` of `*` in a rule that holds
-    /// one, with [`FieldError::ArgumentsOverrideOnAny`]. A rule whose `exe`
+    /// one, with [`FieldError::ArgumentsOverrideOnAny`] (for a setting that
+    /// needs a program [`FieldError::NeedsProgram`]). A rule whose `exe`
     /// is a Steam app id ([`Exe::Steam`]) can match more than one program,
     /// so it refuses the same settings, and `debug_channels` too, with
     /// [`FieldError::RefusedOnSteamApp`]. Reading a table from text refuses
@@ -219,9 +221,26 @@ impl Key {
         match self.kind() {
             KeyKind::Matcher => false,
             KeyKind::Scalar(_) | KeyKind::List | KeyKind::Env => {
-                !matches!(self, Self::ArgumentsOverride)
+                !matches!(self, Self::ArgumentsOverride) && !self.needs_program()
             }
         }
+    }
+
+    /// Whether only a rule that names one program may hold this setting:
+    /// `true` for [`Key::VulkanCapture`] and [`Key::MetalCapture`]. A rule
+    /// whose `exe` is `*` or a Steam app id matches more than one program,
+    /// and every one of them would record a capture of its own,
+    /// `explorer.exe` and the store client included.
+    ///
+    /// [`Rule::set`] refuses such a setting in such a rule, and such an `exe`
+    /// in a rule that holds one, with [`FieldError::NeedsProgram`]. A rule
+    /// read from text keeps it, and [`Table::resolve`](crate::Table::resolve)
+    /// ignores it there and records that in
+    /// [`Resolution::needs_program_ignored`](crate::Resolution::needs_program_ignored),
+    /// which `compatdb.so` logs.
+    #[must_use]
+    pub const fn needs_program(self) -> bool {
+        matches!(self, Self::VulkanCapture | Self::MetalCapture)
     }
 
     /// Whether a later layer's value for this key takes the place of an
@@ -268,6 +287,7 @@ const fn refused_on_any(key: Key) -> bool {
 /// and `debug_channels`, since `WINEDEBUG` scopes an entry by the image name.
 const fn refusal(exe: &Exe, key: Key) -> Option<FieldError> {
     match exe {
+        Exe::Any | Exe::Steam(_) if key.needs_program() => Some(FieldError::NeedsProgram(key)),
         Exe::Any if refused_on_any(key) => Some(FieldError::ArgumentsOverrideOnAny),
         Exe::Steam(_) if refused_on_any(key) || matches!(key, Key::DebugChannels) => {
             Some(FieldError::RefusedOnSteamApp(key))
@@ -353,7 +373,9 @@ impl Rule {
             | Key::LargeAddressAware
             | Key::Gcmouse
             | Key::ForceNx
-            | Key::MetalHud => {}
+            | Key::MetalHud
+            | Key::VulkanCapture
+            | Key::MetalCapture => {}
         }
         Ok(())
     }
@@ -433,7 +455,9 @@ impl Rule {
             | Key::LargeAddressAware
             | Key::Gcmouse
             | Key::ForceNx
-            | Key::MetalHud => key
+            | Key::MetalHud
+            | Key::VulkanCapture
+            | Key::MetalCapture => key
                 .scalar()
                 .is_some_and(|scalar| !self.scalar(scalar).is_unset()),
         }

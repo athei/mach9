@@ -51,7 +51,7 @@ scripts also run alone ([commands](internals.md#commands)).
 | [`launcher/`](../launcher) | The source of [Mach9.app](app.md)'s launcher (`app`), its Dock tile plug-in (`docktile`) and the code both share (`core`), and the Makefile and scripts that assemble, sign and release the app ([Mach9.app](#mach9app)); nothing the bundle step builds depends on it |
 | [`release-notes/`](../release-notes) | The notes the app's update window shows, one file per release ([README](../release-notes/README.md)) |
 | [`smoke/`](../smoke) | The programs the bundle step builds and runs to check the bundle |
-| [`bench/`](../bench) | Benchmarks run by hand: [`kk.sh`](../bench/kk.sh) times KosmicKrisp ([Vulkan](internals.md#vulkan)), [`zink.sh`](../bench/zink.sh) a shadow map pass on Zink ([OpenGL](internals.md#opengl)) |
+| [`bench/`](../bench) | Benchmarks run by hand: [`kk.sh`](../bench/kk.sh) times KosmicKrisp ([Vulkan](internals.md#vulkan)), [`zink.sh`](../bench/zink.sh) a shadow map pass on Zink ([OpenGL](internals.md#opengl)), [`gfxr-replay.sh`](../bench/gfxr-replay.sh) the frames of a Vulkan capture ([Vulkan capture](internals.md#vulkan-capture)) |
 | [`licenses/`](../licenses) | The licence texts the bundle step installs |
 | [`signing/`](../signing) | The loader's provisioning profile |
 | [`docs/`](.) | The documentation the README links to |
@@ -103,8 +103,9 @@ The libraries built here that configure finds are described with them:
 | `lib/external/` | Bundled dylibs, the Vulkan loader, KosmicKrisp, Mesa's EGL with Zink ([OpenGL](internals.md#opengl)), and GStreamer with glib and FFmpeg, which `winegstreamer.so` links ([GStreamer](internals.md#gstreamer)) |
 | `lib/external/gstreamer-1.0/` | GStreamer's plugins, gst-libav with FFmpeg's decoders among them ([GStreamer](internals.md#gstreamer)) |
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
+| `share/vulkan/explicit_layer.d/` | GFXReconstruct's layer manifest, naming the layer in `lib/external/` the same way; the loader reads it only for a process compatdb.so gives `vulkan_capture` ([Vulkan capture](internals.md#vulkan-capture)) |
 | `share/wine/fonts/` | Wine's fonts and the [icon font](internals.md#icon-font) |
-| `share/licenses/` | The licences of the [icon font](internals.md#icon-font) |
+| `share/licenses/` | The licences of the [icon font](internals.md#icon-font) and of GFXReconstruct's layer ([Vulkan capture](internals.md#vulkan-capture)) |
 
 What the Direct3D trees and the default directories hold, and why, is in
 [Direct3D trees](maintenance.md#direct3d-trees).

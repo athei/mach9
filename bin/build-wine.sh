@@ -88,9 +88,9 @@ if [ -n "$WINE_CCACHE" ]; then
     WINE_PATH="$BUILD_DIR/ccache-bin:$PATH"
 fi
 
-# build-fex.sh, build-mesa.sh, build-gstreamer.sh, build-dxmt.sh and
-# build-vkd3d-proton.sh read the same profile.sh and take --clean the same
-# way.
+# build-fex.sh, build-mesa.sh, build-gstreamer.sh, build-gfxreconstruct.sh,
+# build-dxmt.sh and build-vkd3d-proton.sh read the same profile.sh and take
+# --clean the same way.
 SUB_FLAGS=()
 if [ "$CLEAN" -eq 1 ]; then
     SUB_FLAGS=(--clean)
@@ -103,6 +103,9 @@ fi
 # GStreamer, which winegstreamer.so links: configure finds it through the
 # .pc files build-gstreamer.sh stages (PKG_CONFIG_PATH in profile.sh).
 "$SCRIPT_DIR/build-gstreamer.sh" "${SUB_FLAGS[@]}"
+# GFXReconstruct's capture layer, which the bundle carries for compatdb's
+# vulkan_capture. It links nothing of Wine.
+"$SCRIPT_DIR/build-gfxreconstruct.sh" "${SUB_FLAGS[@]}"
 
 # Every optional dependency is switched off unless it is switched back on
 # here, so a package missing from the dependency prefix fails configure

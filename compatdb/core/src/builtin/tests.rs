@@ -1027,14 +1027,19 @@ fn default_hands_a_setting_back_to_upstream_wine() {
     assert_eq!(game.dpi_aware(), None);
     assert_eq!(game.gcmouse(), None);
     assert_eq!(game.force_nx(), None);
-    // Each says which rule reset it; wined3d, large_address_aware and
-    // metal_hud, which no built-in `*` rule sets, the line leaves alone.
+    // Each says which rule reset it; wined3d, large_address_aware,
+    // metal_hud and vulkan_capture, which no built-in `*` rule sets, the line
+    // leaves alone.
     for &scalar in Scalar::ALL {
         let state = game.scalar(scalar);
         assert_eq!(state.set_by, None, "{scalar}");
         let reset = !matches!(
             scalar,
-            Scalar::Wined3d | Scalar::LargeAddressAware | Scalar::MetalHud
+            Scalar::Wined3d
+                | Scalar::LargeAddressAware
+                | Scalar::MetalHud
+                | Scalar::VulkanCapture
+                | Scalar::MetalCapture
         );
         assert_eq!(state.reset_by, reset.then_some(Origin::Line(1)), "{scalar}");
     }

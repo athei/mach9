@@ -323,7 +323,11 @@ fn a_steam_rule_refuses_what_a_star_rule_refuses_and_debug_channels() -> TestRes
             continue;
         }
         let refused = !key.allowed_on_any() || key == Key::DebugChannels;
-        let error = Err(FieldError::RefusedOnSteamApp(key));
+        let error = Err(if key.needs_program() {
+            FieldError::NeedsProgram(key)
+        } else {
+            FieldError::RefusedOnSteamApp(key)
+        });
         // With or without a fingerprint, as for `*`.
         for mut rule in [steam()?, steam()?.with_company(Fingerprint::new("Acme")?)] {
             let mut set = rule.clone();
@@ -486,7 +490,11 @@ fn allowed_on_any_is_what_a_rule_for_every_process_takes() -> TestResult {
             Rule::new(Exe::Any),
             Rule::new(Exe::Any).with_company(Fingerprint::new("Acme")?),
         ] {
-            let refused = Err(FieldError::ArgumentsOverrideOnAny);
+            let refused = Err(if key.needs_program() {
+                FieldError::NeedsProgram(key)
+            } else {
+                FieldError::ArgumentsOverrideOnAny
+            });
             let set = any.clone().set(key, sample(key));
             assert_eq!(set.is_ok(), key.allowed_on_any(), "{key}: {set:?}");
             if !key.allowed_on_any() {

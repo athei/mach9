@@ -12,10 +12,15 @@
 //! [`Resolution`]: crate::Resolution
 //! [`VersionInfo`]: crate::VersionInfo
 
+mod capture;
 mod process;
 mod version;
 
 pub use self::{
+    capture::{
+        CAPTURES_DIR, VULKAN_CAPTURE_LAYER, VULKAN_CAPTURE_TRIGGER, VULKAN_LAYER_DIR,
+        capture_hook_value, metal_capture_env, vulkan_capture_env, vulkan_capture_file,
+    },
     process::{
         Arch, IMAGE_FILE_MACHINE_ARM64, STEAM_APP_VAR, append_cmdline, append_cmdline_each,
         basename_of, env_value, merge_env, steam_app,

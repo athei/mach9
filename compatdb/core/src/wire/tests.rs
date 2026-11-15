@@ -628,6 +628,8 @@ fn every_field_a_record_can_carry_is_a_key_in_the_order_of_key_all() -> TestResu
         gcmouse: Setting::Set(true),
         force_nx: Setting::Set(true),
         metal_hud: Setting::Set(true),
+        vulkan_capture: Setting::Set(true),
+        metal_capture: Setting::Set(true),
         dll_overrides: vec![DllOverride::literal("a=")],
         arguments: vec![Argument::literal("-a")],
         arguments_override: Some(vec![Argument::literal("-b")]),

@@ -166,8 +166,10 @@ impl Gen {
         if self.one_in(3) {
             rule = rule.with_original_filename(self.part(Fingerprint::new)?);
         }
+        let names_program = !rule.exe().is_any() && !rule.exe().is_steam_app();
         for &scalar in Scalar::ALL {
-            if self.one_in(3) {
+            // Rule::set refuses such a setting in a rule for `*` or an app id.
+            if self.one_in(3) || (scalar.key().needs_program() && !names_program) {
                 continue;
             }
             let value = self

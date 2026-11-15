@@ -122,6 +122,11 @@ with `compatdb:`.
 | `dxgi = <impl> (from <path>), <source>`, `d3d9 = ...` | The trees it prepended; a family no rule chose gets `wined3d` |
 | `wined3d = ...` | The wined3d renderer a rule set, or the one a `WINE_D3D_CONFIG` from a rule's `env` or inherited asks for; unset, wined3d's registry settings or its default decide |
 | `metal_hud = <value>, <source>` | The HUD setting; its variables are in the `env` lines |
+| `vulkan_capture = true, <source>: Ctrl+Shift+P records into <folder>` | The capture layer is loaded and the chord armed; its variables are in the `env` lines ([Vulkan capture](internals.md#vulkan-capture)) |
+| `vulkan_capture = true, <source>: error: <reason>; no capture` | The folder cannot be made or written to, the layer is missing, or ntdll lacks a hook; the process runs without the layer |
+| `vulkan_capture = unset ...; GFXRECON_CAPTURE_PROCESS_NAME=<name> inherited: ...` | The process inherited the capture variables from the program that started it: the layer loads and records nothing |
+| `vulkan_capture, <source>: ignored, ...` | A rule for `*` or a Steam app id set it, which only a rule that names one program may |
+| `metal_capture = ...` | The same lines for the Metal capture ([Metal capture](internals.md#metal-capture)); its inherited note names `MTL_CAPTURE_ENABLED` and `MESA_KK_GPU_CAPTURE` |
 | `dll_overrides`, `arguments` | Each entry with its source; for an argument, whether it was appended or already present |
 | `debug_channels` | Each entry with its source; only logged |
 | `dll_overrides <module>=default, <source>: ...` | The overrides an entry with the order `default` removed, or that there was none |

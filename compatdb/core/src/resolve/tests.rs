@@ -1630,3 +1630,71 @@ fn the_env_entries_of_a_star_rule_of_the_file_are_no_defaults() {
         [(&Origin::BuiltIn, false), (&Origin::FileLine(1), true)]
     );
 }
+
+#[test]
+fn the_capture_variables_go_last_with_the_rule_that_set_vulkan_capture() -> TestResult {
+    let entries = || crate::runtime::vulkan_capture_env("/w", "/g/G-1.gfxr", "G", |_| None);
+    let (table, warnings) =
+        parse("exe=G.exe;vulkan_capture=true;env=VK_INSTANCE_LAYERS=other;env=VK_ADD_LAYER_PATH=");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let mut r = table.resolve("G.exe", &VersionInfo::default(), None);
+    assert_eq!(r.vulkan_capture(), Some(true));
+    assert_eq!(r.env_value("vk_instance_layers"), Some(Some("other")));
+    assert_eq!(r.env_value("VK_ADD_LAYER_PATH"), Some(None));
+    assert_eq!(r.env_value("GFXRECON_CAPTURE_FILE"), None);
+    // The rule's own layer list is taken in, the capture layer behind it.
+    let inherited = |name: &str| Some(format!("inherited-{name}"));
+    let capture = crate::runtime::vulkan_capture_env("/w", "/g/G-1.gfxr", "G", |name| {
+        r.env_value(name)
+            .map_or_else(|| inherited(name), |value| value.map(String::from))
+    })?;
+    r.fold_capture_env(Scalar::VulkanCapture, capture);
+    let names: Vec<&str> = r.env.iter().map(|e| e.name().as_str()).collect();
+    assert_eq!(names.first(), Some(&"VK_INSTANCE_LAYERS"));
+    assert_eq!(names.len(), 2 + entries()?.len());
+    assert!(r.env_from.iter().all(|from| from.origin == Origin::Line(1)));
+    assert_eq!(
+        r.env_value("VK_INSTANCE_LAYERS"),
+        Some(Some("other:VK_LAYER_LUNARG_gfxreconstruct"))
+    );
+    assert_eq!(r.env_value("VK_ADD_LAYER_PATH"), Some(Some("/w")));
+    // The rule's own entry for the layer list is replaced by the capture's.
+    let steps = r.env_steps(|_| false);
+    assert_eq!(
+        steps.first().and_then(|s| s.replaced_by.clone()),
+        Some(Origin::Line(1))
+    );
+    // Without `true` nothing is added.
+    for line in [
+        "exe=G.exe;vulkan_capture=false",
+        "exe=G.exe",
+        "exe=*;vulkan_capture=true",
+    ] {
+        let (table, _) = parse(line);
+        let mut r = table.resolve("G.exe", &VersionInfo::default(), None);
+        r.fold_capture_env(Scalar::VulkanCapture, entries()?);
+        assert!(r.env.is_empty(), "{line}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_capture_in_a_rule_for_every_process_or_an_app_id_is_ignored() {
+    let (table, _) = parse(
+        "exe=*;vulkan_capture=true\nexe=steam:220;vulkan_capture=default\n\
+         exe=*;product=P;vulkan_capture=true\nexe=G.exe;dpi_aware=true",
+    );
+    let version = VersionInfo {
+        product: "P".into(),
+        ..VersionInfo::default()
+    };
+    let r = table.resolve("G.exe", &version, Some(220));
+    assert_eq!(r.vulkan_capture(), None);
+    assert_eq!(r.scalar(Scalar::VulkanCapture).reset_by, None);
+    let ignored: Vec<&Origin> = r.needs_program_ignored.iter().map(|(_, by)| by).collect();
+    assert_eq!(
+        ignored,
+        [&Origin::Line(1), &Origin::Line(3), &Origin::Line(2)]
+    );
+    assert_eq!(r.dpi_aware(), Some(true));
+}

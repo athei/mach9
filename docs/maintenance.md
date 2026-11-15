@@ -447,6 +447,8 @@ code runs, and exports for it:
 | `set_compat_gcmouse` | Stored; winemac reads it through `ntdll_get_compat_gcmouse` with its settings ([`Rule::gcmouse`][gcmouse]) |
 | `set_compat_force_nx` | Stored; ntdll reads it when the process asks for or changes its execute flags ([`Rule::force_nx`][force_nx]) |
 | `set_compat_opengl` | Stored; winemac reads it through `ntdll_get_compat_opengl` when the process first uses OpenGL ([`Rule::opengl`][opengl]) |
+| `set_compat_capture` | Stored; win32u reads it through `ntdll_get_compat_capture` when it loads the Vulkan loader, and samples the capture chord per present while it is set ([`Rule::vulkan_capture`][vulkan_capture], [`Rule::metal_capture`][metal_capture]) |
+| `ntdll_get_unix_file_name` | Not a hook: the unix path of the executable, for the `captures` folder |
 
 On an ntdll without one of them, compatdb.so logs that and skips the
 setting; the bundle step checks the `force_nx` and `opengl` hooks
@@ -476,6 +478,8 @@ setting; the bundle step checks the `force_nx` and `opengl` hooks
 [gcmouse]: https://mach9.app/compatdb_core/struct.Rule.html#method.gcmouse
 [force_nx]: https://mach9.app/compatdb_core/struct.Rule.html#method.force_nx
 [opengl]: https://mach9.app/compatdb_core/struct.Rule.html#method.opengl
+[vulkan_capture]: https://mach9.app/compatdb_core/struct.Rule.html#method.vulkan_capture
+[metal_capture]: https://mach9.app/compatdb_core/struct.Rule.html#method.metal_capture
 
 ## Upgrade checklist
 
@@ -582,7 +586,7 @@ Mesa is our fork at the ref in [`mesa-src.ref`](../pins/mesa-src.ref)
 - The Vulkan loader and headers are pinned together, from one Vulkan SDK
   release, in [`redist.env`](../pins/redist.env). Bump both tags and
   commits together, and the [validation layers](#vulkan-validation-layers)
-  with them.
+  and [GFXReconstruct](#gfxreconstruct) with them.
 - A Wine build tree configured without Vulkan has no `SONAME_LIBVULKAN`,
   and one configured before EGL was built has no `SONAME_LIBEGL`;
   `build-wine.sh` stops and asks for `--clean`.
@@ -626,6 +630,28 @@ the Vulkan loader.
   run the suites and groups of the routine set it reaches with
   `--validation` besides the plain run
   ([validation layers](internals.md#validation-layers)).
+
+### GFXReconstruct
+
+GFXReconstruct, whose capture layer the bundle carries for
+[`vulkan_capture`](internals.md#vulkan-capture), is pinned by tag and
+commit in [`redist.env`](../pins/redist.env), at the SDK release of the
+Vulkan loader.
+
+- Bump tag and commit together with the loader's and the headers'.
+  `build-gfxreconstruct.sh` stops when the tag's Vulkan-Headers submodule
+  is not the pinned commit.
+- [`gfxreconstruct-macos-exports.patch`](../pins/gfxreconstruct-macos-exports.patch)
+  exports `GFXRSetTrimmingState` and `GFXRGetCaptureMode` from the macOS
+  layer, which win32u calls. The script stops when the patch no longer
+  applies: drop it once the tag exports both itself, which the stage step
+  checks, else update it.
+- win32u owns the frame count, so the layer's own frame limit
+  (`GFXRECON_CAPTURE_TRIGGER_FRAMES`) stays unset: with it, an external
+  trigger starts one capture per process until upstream PR
+  [#3391](https://github.com/LunarG/gfxreconstruct/pull/3391) is in the tag.
+- After a bump, record a capture of a windowed Vulkan program and replay
+  it with [`bench/gfxr-replay.sh`](../bench/gfxr-replay.sh).
 
 ### FEX
 

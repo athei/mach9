@@ -92,6 +92,8 @@ fn each_key_has_its_kind() {
             (Key::Gcmouse, bool),
             (Key::ForceNx, bool),
             (Key::MetalHud, bool),
+            (Key::VulkanCapture, bool),
+            (Key::MetalCapture, bool),
             (Key::DllOverrides, KeyKind::List),
             (Key::ArgumentsOverride, KeyKind::List),
             (Key::Arguments, KeyKind::List),
@@ -197,6 +199,8 @@ fn the_labels_are_the_ones_a_launcher_shows() {
             "GameController mouse",
             "Force no-execute",
             "Metal HUD",
+            "Vulkan capture",
+            "Metal capture",
         ]
     );
     for &key in Key::ALL {

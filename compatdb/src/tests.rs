@@ -342,6 +342,7 @@ fn process(exe: &str, env: &str) -> Process {
         params: std::ptr::null_mut(),
         params32: None,
         arch: Arch::X86_64,
+        image_path: Vec::new(),
         exe: exe.into(),
         version: VersionInfo::default(),
         cmdline: Vec::new(),

@@ -28,6 +28,7 @@
 #![forbid(clippy::undocumented_unsafe_blocks)]
 
 mod apply;
+mod capture;
 mod log;
 mod ntdll;
 mod prof;
@@ -146,6 +147,8 @@ extern "C" fn run() {
         config.as_ref().map(|(value, rule)| (value.as_str(), *rule)),
     ));
     log::line(&metal_hud_line(&resolution));
+    // The capture layer's variables go in with the env entries below.
+    capture::apply(&nt, &process, &mut resolution);
 
     log::line(&list_line(
         Key::DllOverrides,
@@ -479,6 +482,8 @@ pub(crate) struct Process {
     pub params: *mut ProcessParameters,
     pub params32: Option<*mut ProcessParameters32>,
     pub arch: Arch,
+    /// The image's DOS path, as the process parameters give it.
+    pub image_path: Vec<u16>,
     pub exe: String,
     pub version: VersionInfo,
     pub cmdline: Vec<u16>,
@@ -566,6 +571,7 @@ impl Process {
             params,
             params32,
             arch,
+            image_path,
             exe,
             version,
             cmdline,

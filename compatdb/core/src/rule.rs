@@ -42,6 +42,10 @@ pub struct Rule {
     pub(crate) force_nx: Setting<bool>,
     /// See [`Rule::metal_hud`].
     pub(crate) metal_hud: Setting<bool>,
+    /// See [`Rule::vulkan_capture`].
+    pub(crate) vulkan_capture: Setting<bool>,
+    /// See [`Rule::metal_capture`].
+    pub(crate) metal_capture: Setting<bool>,
     /// See [`Rule::dll_overrides`].
     pub(crate) dll_overrides: Vec<DllOverride>,
     /// See [`Rule::arguments`].
@@ -135,6 +139,8 @@ impl Rule {
             gcmouse: Setting::Unset,
             force_nx: Setting::Unset,
             metal_hud: Setting::Unset,
+            vulkan_capture: Setting::Unset,
+            metal_capture: Setting::Unset,
             dll_overrides: Vec::new(),
             arguments: Vec::new(),
             arguments_override: None,
@@ -225,6 +231,20 @@ impl Rule {
     #[must_use]
     pub fn with_metal_hud(mut self, on: impl Into<Setting<bool>>) -> Self {
         self.metal_hud = on.into();
+        self
+    }
+
+    /// The rule with `on` for [`Rule::metal_capture`].
+    #[must_use]
+    pub fn with_metal_capture(mut self, on: impl Into<Setting<bool>>) -> Self {
+        self.metal_capture = on.into();
+        self
+    }
+
+    /// The rule with `on` for [`Rule::vulkan_capture`].
+    #[must_use]
+    pub fn with_vulkan_capture(mut self, on: impl Into<Setting<bool>>) -> Self {
+        self.vulkan_capture = on.into();
         self
     }
 
@@ -426,6 +446,116 @@ impl Rule {
         self.metal_hud
     }
 
+    /// Whether `GFXReconstruct`'s capture layer, which the bundle carries,
+    /// records the Vulkan calls of the process into a capture file that
+    /// `gfxrecon-replay` replays without the game, Wine or FEX. What records
+    /// is what goes through Wine's `vkQueuePresentKHR`: a game's own Vulkan,
+    /// D3D12 on vkd3d-proton and wined3d's Vulkan renderer. D3D9, D3D10 and
+    /// D3D11 on mtld3d and DXMT do not use Vulkan. OpenGL on Zink loads the
+    /// layer through the same loader, but Zink presents without Wine's
+    /// `vkQueuePresentKHR`, so no capture starts and no file is written.
+    ///
+    /// With `true`, `compatdb.so` makes the folder `captures` next to the
+    /// executable and loads the layer through the bundled Vulkan loader
+    /// with the settings of [`runtime::vulkan_capture_env`], which adds the
+    /// layer to the layers the process has, behind them. The layer records
+    /// nothing until the capture chord:
+    ///
+    /// - Ctrl+Shift+P, sampled once per present: P going down while Control
+    ///   and Shift are held and Alt is not, as mtld3d samples it. On a Mac
+    ///   keyboard that is Control, not Command, which Wine reports as Alt.
+    ///   There is no focus check: the keys are the desktop's, so a press in
+    ///   any Wine window of the session counts, the game's or another's.
+    /// - A press records until three more `vkQueuePresentKHR` calls of the
+    ///   process, on any queue and swapchain, so a game that presents two
+    ///   swapchains one after the other records one and a half frames of
+    ///   each. The layer counts frames the same way. The capture goes into a
+    ///   file of its own,
+    ///   `captures/<exe without .exe>-<pid>_trim_trigger_<time>.gfxr`, the
+    ///   time the second the capture started in (see
+    ///   [`runtime::vulkan_capture_file`]).
+    /// - A press while a capture records, or in the second the last capture
+    ///   started in or the second after it, starts nothing: the layer names
+    ///   a capture after the second it starts in, at the end of the frame
+    ///   after the press, so no capture takes the name of another.
+    ///
+    /// When the folder cannot be made or written to, `compatdb.so` logs an
+    /// error and the process runs without the layer; nothing is written
+    /// anywhere else. A program the process starts inherits the variables
+    /// and loads the layer, but records nothing, and its log line says so.
+    ///
+    /// The layer sits under every Vulkan call of the process while the rule
+    /// is on, whether or not it records, so the rule is for a capture
+    /// session and not for every run. Only a rule that names one program may
+    /// set it ([`Key::needs_program`](crate::Key::needs_program)). With no
+    /// rule setting it, or `false`, the process gets no layer, as in
+    /// upstream Wine.
+    ///
+    /// [`runtime::vulkan_capture_env`]: crate::runtime::vulkan_capture_env
+    /// [`runtime::vulkan_capture_file`]: crate::runtime::vulkan_capture_file
+    #[must_use]
+    pub const fn vulkan_capture(&self) -> Setting<bool> {
+        self.vulkan_capture
+    }
+
+    /// Whether the Metal backend of the process records Metal frame
+    /// captures, `.gputrace` documents that Xcode opens: the encoders,
+    /// barriers, draws and GPU time of each pass of a frame.
+    ///
+    /// With `true`, `compatdb.so` makes the folder `captures` next to the
+    /// executable and gives the process the variables of
+    /// [`runtime::metal_capture_env`]. Metal loads its capture layer only
+    /// when `MTL_CAPTURE_ENABLED` is set at launch, and the layer then sits
+    /// under every Metal call of the process, so the rule is for a capture
+    /// session and not for every run. What records:
+    ///
+    /// - KosmicKrisp, under a game's own Vulkan and D3D12 on vkd3d-proton:
+    ///   on the capture chord of [`Rule::vulkan_capture`], the next three
+    ///   presents of the device whose present took the press (the driver
+    ///   keeps the capture per device; presents of other devices do not
+    ///   count), into `captures/<process name>-<pid>-<n>.gputrace`, `n`
+    ///   counting its captures from 1 for the process. The process name is
+    ///   what Wine gives `getprogname()`, the executable's file name as the
+    ///   path it was started by spells it (`wine game` gives `game.exe`),
+    ///   without a trailing `.exe`. The capture ends with the device when
+    ///   the game destroys it first. Until it has ended, further presses
+    ///   start nothing for either key, so in a game that presents from two
+    ///   devices, a press taken by a device that then stops presenting keeps
+    ///   the capture open until that device presents three times or is
+    ///   destroyed.
+    /// - DXMT, under D3D10 and D3D11: on the same chord, which it samples
+    ///   itself once per frame, three of its frames, into
+    ///   `captures/<exe without .exe>-<pid>-dxmt-<n>.gputrace`. It starts on
+    ///   every press while no capture records, without the pause of two
+    ///   seconds, which its numbered files do not need.
+    /// - mtld3d records on the same chord with the capture of its own,
+    ///   beside its log file.
+    /// - OpenGL on Zink does not record: its presents do not go through
+    ///   Wine's `vkQueuePresentKHR`.
+    /// - KosmicKrisp's timestamp queries read 0 for the whole process:
+    ///   Metal's capture does not take its counter heaps.
+    ///
+    /// Metal records one capture at a time in a process: in a process that
+    /// uses KosmicKrisp and DXMT, a press records with the backend that
+    /// starts first, and the other one's start fails.
+    ///
+    /// Both keys may be set for one process, and each records at its own
+    /// level; one capture distorts the other's timing. When the folder cannot
+    /// be made or written to, `compatdb.so` logs an error and sets nothing.
+    /// A program the process starts inherits `MTL_CAPTURE_ENABLED` and
+    /// `MESA_KK_GPU_CAPTURE`, so Metal's capture layer loads there too, but
+    /// records nothing on the chord, and its log line says so.
+    /// Only a rule that names one program may set it
+    /// ([`Key::needs_program`](crate::Key::needs_program)). With no rule
+    /// setting it, or `false`, the process gets no capture layer, as in
+    /// upstream Wine.
+    ///
+    /// [`runtime::metal_capture_env`]: crate::runtime::metal_capture_env
+    #[must_use]
+    pub const fn metal_capture(&self) -> Setting<bool> {
+        self.metal_capture
+    }
+
     /// `WINEDEBUG` entries for the processes the rule names. Wine reads
     /// `WINEDEBUG` before `compatdb.so` loads, so the library only logs
     /// them; a launcher puts them into the variable it starts Wine with
@@ -524,6 +654,8 @@ impl Rule {
             Scalar::Gcmouse => self.gcmouse.map(ScalarValue::Bool),
             Scalar::ForceNx => self.force_nx.map(ScalarValue::Bool),
             Scalar::MetalHud => self.metal_hud.map(ScalarValue::Bool),
+            Scalar::VulkanCapture => self.vulkan_capture.map(ScalarValue::Bool),
+            Scalar::MetalCapture => self.metal_capture.map(ScalarValue::Bool),
         }
     }
 
@@ -572,6 +704,8 @@ impl Rule {
             Scalar::Gcmouse => put(&mut self.gcmouse, setting, on),
             Scalar::ForceNx => put(&mut self.force_nx, setting, on),
             Scalar::MetalHud => put(&mut self.metal_hud, setting, on),
+            Scalar::VulkanCapture => put(&mut self.vulkan_capture, setting, on),
+            Scalar::MetalCapture => put(&mut self.metal_capture, setting, on),
         }
     }
 
