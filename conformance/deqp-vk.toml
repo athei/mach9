@@ -90,8 +90,8 @@ cases = [
     "dEQP-VK.memory_model.message_passing.*.atomic_atomic.*.guard_local.buffer.comp",
 ]
 
-# The cases of #63 in three groups, so that a record of one of them stays
-# short enough to share the machine.
+# The synchronization and memory model cases of #63 in three groups, so that
+# a record of one of them stays short enough to share the machine.
 [[group]]
 name = "synchronization"
 issues = [63]
@@ -115,6 +115,42 @@ exclude = [
     # take other processes' devices with it. Remove with #91.
     "dEQP-VK.memory_model.write_after_read.ext.u64.*.atomic_atomic.atomicrmw.*.payload_local.*.frag",
     "dEQP-VK.memory_model.message_passing.ext.u64.*.atomic_atomic.atomicrmw.*.payload_local.*.frag",
+]
+
+# Query results and availability the host or vkCmdCopyQueryPoolResults
+# reads, for the query types KosmicKrisp has besides occlusion (in
+# synchronization and occlusion) and timestamps (in timestamp): pipeline
+# statistics and transform feedback streams. #63 lowers the visibility of
+# the barriers that make these writes visible.
+[[group]]
+name = "query"
+issues = [63]
+cases = [
+    "dEQP-VK.query_pool.statistics_query.*",
+    "dEQP-VK.query_pool.frag_invocations.*",
+    "dEQP-VK.query_pool.discard.*",
+    "dEQP-VK.query_pool.concurrent_queries.*",
+    "dEQP-VK.query_pool.maintenance7.*",
+    "dEQP-VK.transform_feedback.simple.*query*",
+]
+
+# Resources that share memory: aliased sparse bindings, buffers and images
+# bound to the same memory, and multi-planar images aliased with
+# VK_IMAGE_CREATE_ALIAS_BIT. #63 lowers the barriers' visibility from
+# ResourceAlias, the Metal option that makes aliased virtual addresses
+# memory consistent, to Device. Only the sparse cases write through one
+# alias and read through the other in one command buffer, with a barrier
+# between; the memory.binding and ycbcr plane_view cases submit and wait
+# between the write and the read, so they check the binding, not the
+# barrier.
+[[group]]
+name = "aliasing"
+issues = [63]
+cases = [
+    "dEQP-VK.sparse_resources.image_sparse_memory_aliasing.*",
+    "dEQP-VK.sparse_resources.buffer.*aliased*",
+    "dEQP-VK.memory.binding.*aliasing.*",
+    "dEQP-VK.ycbcr.plane_view.memory_alias.*",
 ]
 
 # Occlusion queries, which count into a visibility result buffer that the
