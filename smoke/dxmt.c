@@ -26,6 +26,18 @@
  *   depth must be within 1 unit of 24 bits of the expected one, 3 with a
  *   slope term, the color the pixel shader's red, and without a pixel
  *   shader the cleared 0.
+ * - geometry-index, tessellation-index: DXMT's geometry and tessellation
+ *   pipelines (its mesh pipelines) load the indices themselves, with the
+ *   index format they were built for, and read their draw arguments in the
+ *   layout of an indexed or a non-indexed draw. Four units at different
+ *   places, each a point the geometry shader makes a quad of, or a patch of
+ *   four control points the hull and domain shaders make a quad of, are
+ *   drawn two at a time in one render pass with nothing between the draws
+ *   but IASetIndexBuffer: non-indexed then indexed, 16-bit then 32-bit
+ *   indices, and the reverse of each. Each pass then reads back the centre
+ *   of every unit, and exactly the two units drawn must be the pixel
+ *   shader's red. The index values are chosen so that a draw on the
+ *   pipeline of the draw before it lands on another unit.
  *
  * The two lifetime cases watch destruction through a tracker object attached
  * with SetPrivateDataInterface: the object holds the tracker's only
@@ -143,6 +155,60 @@ static const DWORD point_quad_gs_code[] = {
 
 static const D3D11_INPUT_ELEMENT_DESC quad_layout_desc[] = {
     {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+};
+
+/* The hull and domain shaders of Wine's d3d11 test_quad_tessellation: a
+   quad domain over a patch of four SV_POSITION control points, the
+   tessellation factors from constant buffer 0 (float4 edges, float2
+   inside), clockwise triangles; the domain shader interpolates control
+   points 0 and 1, and 2 and 3, along u, and the two results along v. */
+static const DWORD quad_hs_code[] = {
+    0x43425844, 0x1ab30cc8, 0x94174771, 0x61f4cdd0, 0xa287f62c, 0x00000001, 0x000002b8, 0x00000004,
+    0x00000030, 0x00000064, 0x00000098, 0x0000015c, 0x4e475349, 0x0000002c, 0x00000001, 0x00000008,
+    0x00000020, 0x00000000, 0x00000001, 0x00000003, 0x00000000, 0x00000f0f, 0x505f5653, 0x5449534f,
+    0x004e4f49, 0x4e47534f, 0x0000002c, 0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000000,
+    0x00000003, 0x00000000, 0x0000000f, 0x505f5653, 0x5449534f, 0x004e4f49, 0x47534350, 0x000000bc,
+    0x00000006, 0x00000008, 0x00000098, 0x00000000, 0x0000000b, 0x00000003, 0x00000000, 0x00000e01,
+    0x00000098, 0x00000001, 0x0000000b, 0x00000003, 0x00000001, 0x00000e01, 0x00000098, 0x00000002,
+    0x0000000b, 0x00000003, 0x00000002, 0x00000e01, 0x00000098, 0x00000003, 0x0000000b, 0x00000003,
+    0x00000003, 0x00000e01, 0x000000a6, 0x00000000, 0x0000000c, 0x00000003, 0x00000004, 0x00000e01,
+    0x000000a6, 0x00000001, 0x0000000c, 0x00000003, 0x00000005, 0x00000e01, 0x545f5653, 0x46737365,
+    0x6f746361, 0x56530072, 0x736e495f, 0x54656469, 0x46737365, 0x6f746361, 0xabab0072, 0x58454853,
+    0x00000154, 0x00030050, 0x00000055, 0x01000071, 0x01002093, 0x01002094, 0x01001895, 0x01000896,
+    0x01001897, 0x0100086a, 0x04000059, 0x00208e46, 0x00000000, 0x00000002, 0x01000073, 0x04000067,
+    0x00102012, 0x00000000, 0x0000000b, 0x06000036, 0x00102012, 0x00000000, 0x0020800a, 0x00000000,
+    0x00000000, 0x0100003e, 0x01000073, 0x04000067, 0x00102012, 0x00000001, 0x0000000c, 0x06000036,
+    0x00102012, 0x00000001, 0x0020801a, 0x00000000, 0x00000000, 0x0100003e, 0x01000073, 0x04000067,
+    0x00102012, 0x00000002, 0x0000000d, 0x06000036, 0x00102012, 0x00000002, 0x0020802a, 0x00000000,
+    0x00000000, 0x0100003e, 0x01000073, 0x04000067, 0x00102012, 0x00000003, 0x0000000e, 0x06000036,
+    0x00102012, 0x00000003, 0x0020803a, 0x00000000, 0x00000000, 0x0100003e, 0x01000073, 0x04000067,
+    0x00102012, 0x00000004, 0x0000000f, 0x06000036, 0x00102012, 0x00000004, 0x0020800a, 0x00000000,
+    0x00000001, 0x0100003e, 0x01000073, 0x04000067, 0x00102012, 0x00000005, 0x00000010, 0x06000036,
+    0x00102012, 0x00000005, 0x0020801a, 0x00000000, 0x00000001, 0x0100003e,
+};
+
+static const DWORD quad_ds_code[] = {
+    0x43425844, 0xeb6b7631, 0x07f5469e, 0xed0cbf4a, 0x7158b3a6, 0x00000001, 0x00000284, 0x00000004,
+    0x00000030, 0x00000064, 0x00000128, 0x0000015c, 0x4e475349, 0x0000002c, 0x00000001, 0x00000008,
+    0x00000020, 0x00000000, 0x00000000, 0x00000003, 0x00000000, 0x00000f0f, 0x505f5653, 0x5449534f,
+    0x004e4f49, 0x47534350, 0x000000bc, 0x00000006, 0x00000008, 0x00000098, 0x00000000, 0x0000000b,
+    0x00000003, 0x00000000, 0x00000001, 0x00000098, 0x00000001, 0x0000000b, 0x00000003, 0x00000001,
+    0x00000001, 0x00000098, 0x00000002, 0x0000000b, 0x00000003, 0x00000002, 0x00000001, 0x00000098,
+    0x00000003, 0x0000000b, 0x00000003, 0x00000003, 0x00000001, 0x000000a6, 0x00000000, 0x0000000c,
+    0x00000003, 0x00000004, 0x00000001, 0x000000a6, 0x00000001, 0x0000000c, 0x00000003, 0x00000005,
+    0x00000001, 0x545f5653, 0x46737365, 0x6f746361, 0x56530072, 0x736e495f, 0x54656469, 0x46737365,
+    0x6f746361, 0xabab0072, 0x4e47534f, 0x0000002c, 0x00000001, 0x00000008, 0x00000020, 0x00000000,
+    0x00000001, 0x00000003, 0x00000000, 0x0000000f, 0x505f5653, 0x5449534f, 0x004e4f49, 0x58454853,
+    0x00000120, 0x00040050, 0x00000048, 0x01002093, 0x01001895, 0x0100086a, 0x0200005f, 0x0001c032,
+    0x0400005f, 0x002190f2, 0x00000004, 0x00000000, 0x04000067, 0x001020f2, 0x00000000, 0x00000001,
+    0x02000068, 0x00000002, 0x0a000000, 0x001000f2, 0x00000000, 0x80219e46, 0x00000041, 0x00000002,
+    0x00000000, 0x00219e46, 0x00000003, 0x00000000, 0x09000032, 0x001000f2, 0x00000000, 0x0001c006,
+    0x00100e46, 0x00000000, 0x00219e46, 0x00000002, 0x00000000, 0x0a000000, 0x001000f2, 0x00000001,
+    0x80219e46, 0x00000041, 0x00000000, 0x00000000, 0x00219e46, 0x00000001, 0x00000000, 0x09000032,
+    0x001000f2, 0x00000001, 0x0001c006, 0x00100e46, 0x00000001, 0x00219e46, 0x00000000, 0x00000000,
+    0x08000000, 0x001000f2, 0x00000000, 0x00100e46, 0x00000000, 0x80100e46, 0x00000041, 0x00000001,
+    0x08000032, 0x001020f2, 0x00000000, 0x0001c556, 0x00100e46, 0x00000000, 0x00100e46, 0x00000001,
+    0x0100003e,
 };
 
 /* The private data key the trackers are attached under. */
@@ -639,6 +705,301 @@ done:
     return ret;
 }
 
+/* The units of the index cases sit side by side on the middle row of a
+   BIAS_SIZE target, unit u centred at x = -0.75 + 0.5 * u. */
+#define INDEX_UNITS 4
+#define INDEX_UNIT_X(u) (-0.75f + 0.5f * (u))
+#define INDEX_UNIT_PIXEL(u) (BIAS_SIZE / 8 + (u) * BIAS_SIZE / 4)
+
+/* The index buffers in units; each unit u stands for the vertices
+   u * n to u * n + n - 1 of a unit of n vertices. */
+static const UINT index16_units[] = {2, 1, 0, 0};
+static const UINT index32_units[] = {0, 3};
+
+struct index_draw
+{
+    /* DXGI_FORMAT_UNKNOWN for a non-indexed draw */
+    DXGI_FORMAT format;
+    /* The first vertex or index, in units */
+    UINT start;
+};
+
+/* Each pass draws two units and must light exactly those (the mask). On
+   the pipeline of the first draw, the second one would read the vertices
+   of unit 0 instead of those in the comment: DrawIndexed takes StartIndex
+   for its first vertex, Draw reads the indices of index16_units[3], and
+   indices of the other width read as these give unit 0 too, except in the
+   last pass with patches, which then read vertices past the buffer. */
+static const struct
+{
+    const char *what;
+    struct index_draw draws[2];
+    UINT lit;
+} index_passes[] = {
+    /* 0 instead of 2 */
+    {"Draw, then DrawIndexed", {{DXGI_FORMAT_UNKNOWN, 0}, {DXGI_FORMAT_R16_UINT, 0}}, 0x5},
+    /* 0 instead of 3 */
+    {"R16, then R32 indices", {{DXGI_FORMAT_R16_UINT, 1}, {DXGI_FORMAT_R32_UINT, 1}}, 0xa},
+    /* 0 instead of 3 */
+    {"DrawIndexed, then Draw", {{DXGI_FORMAT_R16_UINT, 0}, {DXGI_FORMAT_UNKNOWN, 3}}, 0xc},
+    /* 0 instead of 1 */
+    {"R32, then R16 indices", {{DXGI_FORMAT_R32_UINT, 1}, {DXGI_FORMAT_R16_UINT, 1}}, 0xa},
+};
+
+/* check_index_draws: with the shaders, input layout, topology and vertex
+   buffer of INDEX_UNITS units of n vertices each bound, run index_passes
+   and return 0 when each lit the units it should, 1 when one did not and
+   3 when the setup or a readback failed. */
+static int check_index_draws(ID3D11Device *device, ID3D11DeviceContext *context, const char *name, UINT n)
+{
+    static const float zero[4];
+    D3D11_VIEWPORT vp = {0.0f, 0.0f, BIAS_SIZE, BIAS_SIZE, 0.0f, 1.0f};
+    D3D11_BUFFER_DESC buffer_desc = {0};
+    D3D11_SUBRESOURCE_DATA data = {0};
+    D3D11_RASTERIZER_DESC rs_desc = {0};
+    ID3D11Texture2D *color = NULL, *staging = NULL;
+    ID3D11Buffer *ib16 = NULL, *ib32 = NULL;
+    ID3D11RasterizerState *rs = NULL;
+    ID3D11RenderTargetView *rtv = NULL;
+    D3D11_MAPPED_SUBRESOURCE map;
+    USHORT indices16[ARRAYSIZE(index16_units) * 4];
+    UINT indices32[ARRAYSIZE(index32_units) * 4];
+    UINT i, j, u, lit;
+    int ok = 1, ret = 3;
+    HRESULT hr = E_INVALIDARG;
+
+    if (n > 4)
+        goto done;
+    for (i = 0; i < ARRAYSIZE(index16_units); i++)
+        for (j = 0; j < n; j++)
+            indices16[i * n + j] = index16_units[i] * n + j;
+    for (i = 0; i < ARRAYSIZE(index32_units); i++)
+        for (j = 0; j < n; j++)
+            indices32[i * n + j] = index32_units[i] * n + j;
+    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    buffer_desc.ByteWidth = ARRAYSIZE(index16_units) * n * sizeof(*indices16);
+    data.pSysMem = indices16;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &ib16)))
+        goto done;
+    buffer_desc.ByteWidth = ARRAYSIZE(index32_units) * n * sizeof(*indices32);
+    data.pSysMem = indices32;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &ib32)))
+        goto done;
+    rs_desc.FillMode = D3D11_FILL_SOLID;
+    rs_desc.CullMode = D3D11_CULL_NONE;
+    rs_desc.DepthClipEnable = TRUE;
+    if (FAILED(hr = ID3D11Device_CreateRasterizerState(device, &rs_desc, &rs))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET, FALSE,
+                                           &color))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_R8G8B8A8_UNORM, 0, TRUE, &staging))
+        || FAILED(hr = ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)color, NULL, &rtv)))
+        goto done;
+
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &rtv, NULL);
+    ID3D11DeviceContext_RSSetViewports(context, 1, &vp);
+    ID3D11DeviceContext_RSSetState(context, rs);
+    for (i = 0; i < ARRAYSIZE(index_passes); i++)
+    {
+        /* The clear before and the copy after end the render pass, so the
+           first draw of each pass builds its own pipeline. */
+        ID3D11DeviceContext_ClearRenderTargetView(context, rtv, zero);
+        for (j = 0; j < ARRAYSIZE(index_passes[i].draws); j++)
+        {
+            const struct index_draw *draw = &index_passes[i].draws[j];
+
+            if (draw->format == DXGI_FORMAT_UNKNOWN)
+            {
+                ID3D11DeviceContext_Draw(context, n, draw->start * n);
+                continue;
+            }
+            ID3D11DeviceContext_IASetIndexBuffer(context, draw->format == DXGI_FORMAT_R16_UINT ? ib16 : ib32,
+                                                 draw->format, 0);
+            ID3D11DeviceContext_DrawIndexed(context, n, draw->start * n, 0);
+        }
+        ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)staging, (ID3D11Resource *)color);
+        if (FAILED(hr = ID3D11DeviceContext_Map(context, (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &map)))
+            goto done;
+        lit = 0;
+        for (u = 0; u < INDEX_UNITS; u++)
+        {
+            UINT pixel = ((const UINT *)((const BYTE *)map.pData + BIAS_SIZE / 2 * map.RowPitch))[INDEX_UNIT_PIXEL(u)];
+
+            /* The pixel shader's red with any alpha */
+            if ((pixel & 0x00ffffff) == 0x0000ff)
+                lit |= 1u << u;
+        }
+        ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)staging, 0);
+        printf(PREFIX "%s: %s: units lit %#x, expected %#x %s\n", name, index_passes[i].what, lit,
+               index_passes[i].lit, lit == index_passes[i].lit ? "ok" : "FAILED");
+        ok &= lit == index_passes[i].lit;
+    }
+    printf(PREFIX "%s check %s\n", name, ok ? "ok" : "FAILED");
+    ret = ok ? 0 : 1;
+
+done:
+    if (ret == 3)
+        printf(PREFIX "%s: setup or readback failed, %#lx\n", name, (unsigned long)hr);
+    ID3D11DeviceContext_RSSetState(context, NULL);
+    if (rtv)
+        ID3D11RenderTargetView_Release(rtv);
+    if (staging)
+        ID3D11Texture2D_Release(staging);
+    if (color)
+        ID3D11Texture2D_Release(color);
+    if (rs)
+        ID3D11RasterizerState_Release(rs);
+    if (ib32)
+        ID3D11Buffer_Release(ib32);
+    if (ib16)
+        ID3D11Buffer_Release(ib16);
+    return ret;
+}
+
+static int check_geometry_index(ID3D11Device *device, ID3D11DeviceContext *context)
+{
+    /* One point per unit for the geometry shader; vs_code reads POSITION,
+       COLOR and COLOR1. */
+    float points[INDEX_UNITS][12] = {{0}};
+    D3D11_BUFFER_DESC buffer_desc = {0};
+    D3D11_SUBRESOURCE_DATA data = {0};
+    ID3D11InputLayout *layout = NULL;
+    ID3D11GeometryShader *gs = NULL;
+    ID3D11VertexShader *vs = NULL;
+    ID3D11PixelShader *ps = NULL;
+    ID3D11Buffer *vb = NULL;
+    UINT stride = sizeof(points[0]), offset = 0, u;
+    int ret = 3;
+    HRESULT hr;
+
+    for (u = 0; u < INDEX_UNITS; u++)
+    {
+        points[u][0] = INDEX_UNIT_X(u);
+        points[u][2] = 0.5f;
+        points[u][3] = 1.0f;
+    }
+    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    buffer_desc.ByteWidth = sizeof(points);
+    data.pSysMem = points;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &vb))
+        || FAILED(hr = ID3D11Device_CreateVertexShader(device, vs_code, sizeof(vs_code), NULL, &vs))
+        || FAILED(hr = ID3D11Device_CreateGeometryShader(device, point_quad_gs_code, sizeof(point_quad_gs_code),
+                                                         NULL, &gs))
+        || FAILED(hr = ID3D11Device_CreatePixelShader(device, red_ps_code, sizeof(red_ps_code), NULL, &ps))
+        || FAILED(hr = ID3D11Device_CreateInputLayout(device, layout_desc, 3, vs_code, sizeof(vs_code), &layout)))
+    {
+        printf(PREFIX "geometry-index: setup failed, %#lx\n", (unsigned long)hr);
+        goto done;
+    }
+
+    ID3D11DeviceContext_IASetInputLayout(context, layout);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &vb, &stride, &offset);
+    ID3D11DeviceContext_VSSetShader(context, vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, gs, NULL, 0);
+    ID3D11DeviceContext_PSSetShader(context, ps, NULL, 0);
+    ret = check_index_draws(device, context, "geometry-index", 1);
+    ID3D11DeviceContext_GSSetShader(context, NULL, NULL, 0);
+
+done:
+    if (layout)
+        ID3D11InputLayout_Release(layout);
+    if (ps)
+        ID3D11PixelShader_Release(ps);
+    if (gs)
+        ID3D11GeometryShader_Release(gs);
+    if (vs)
+        ID3D11VertexShader_Release(vs);
+    if (vb)
+        ID3D11Buffer_Release(vb);
+    ID3D11DeviceContext_Release(context);
+    ID3D11Device_Release(device);
+    return ret;
+}
+
+static int check_tessellation_index(ID3D11Device *device, ID3D11DeviceContext *context)
+{
+    /* Tessellation factors of 1: each patch becomes the two triangles of
+       its quad. */
+    static const float factors[8] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    /* One patch per unit, a quad 0.4 wide: control points 0 and 1 along
+       the bottom, 2 and 3 along the top. */
+    float patches[INDEX_UNITS][4][3];
+    D3D11_BUFFER_DESC buffer_desc = {0};
+    D3D11_SUBRESOURCE_DATA data = {0};
+    ID3D11InputLayout *layout = NULL;
+    ID3D11Buffer *vb = NULL, *cb = NULL;
+    ID3D11VertexShader *vs = NULL;
+    ID3D11HullShader *hs = NULL;
+    ID3D11DomainShader *ds = NULL;
+    ID3D11PixelShader *ps = NULL;
+    UINT stride = sizeof(patches[0][0]), offset = 0, u, k;
+    int ret = 3;
+    HRESULT hr;
+
+    for (u = 0; u < INDEX_UNITS; u++)
+    {
+        for (k = 0; k < 4; k++)
+        {
+            patches[u][k][0] = INDEX_UNIT_X(u) + (k & 1 ? 0.2f : -0.2f);
+            patches[u][k][1] = k & 2 ? 0.2f : -0.2f;
+            patches[u][k][2] = 0.5f;
+        }
+    }
+    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    buffer_desc.ByteWidth = sizeof(patches);
+    data.pSysMem = patches;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &vb)))
+        goto failed;
+    buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    buffer_desc.ByteWidth = sizeof(factors);
+    data.pSysMem = factors;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &cb))
+        || FAILED(hr = ID3D11Device_CreateVertexShader(device, quad_vs_code, sizeof(quad_vs_code), NULL, &vs))
+        || FAILED(hr = ID3D11Device_CreateHullShader(device, quad_hs_code, sizeof(quad_hs_code), NULL, &hs))
+        || FAILED(hr = ID3D11Device_CreateDomainShader(device, quad_ds_code, sizeof(quad_ds_code), NULL, &ds))
+        || FAILED(hr = ID3D11Device_CreatePixelShader(device, red_ps_code, sizeof(red_ps_code), NULL, &ps))
+        || FAILED(hr = ID3D11Device_CreateInputLayout(device, quad_layout_desc, 1, quad_vs_code,
+                                                      sizeof(quad_vs_code), &layout)))
+        goto failed;
+
+    ID3D11DeviceContext_IASetInputLayout(context, layout);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &vb, &stride, &offset);
+    ID3D11DeviceContext_VSSetShader(context, vs, NULL, 0);
+    ID3D11DeviceContext_HSSetShader(context, hs, NULL, 0);
+    ID3D11DeviceContext_HSSetConstantBuffers(context, 0, 1, &cb);
+    ID3D11DeviceContext_DSSetShader(context, ds, NULL, 0);
+    ID3D11DeviceContext_PSSetShader(context, ps, NULL, 0);
+    ret = check_index_draws(device, context, "tessellation-index", 4);
+    ID3D11DeviceContext_HSSetShader(context, NULL, NULL, 0);
+    ID3D11DeviceContext_DSSetShader(context, NULL, NULL, 0);
+    goto done;
+
+failed:
+    printf(PREFIX "tessellation-index: setup failed, %#lx\n", (unsigned long)hr);
+done:
+    if (layout)
+        ID3D11InputLayout_Release(layout);
+    if (ps)
+        ID3D11PixelShader_Release(ps);
+    if (ds)
+        ID3D11DomainShader_Release(ds);
+    if (hs)
+        ID3D11HullShader_Release(hs);
+    if (vs)
+        ID3D11VertexShader_Release(vs);
+    if (cb)
+        ID3D11Buffer_Release(cb);
+    if (vb)
+        ID3D11Buffer_Release(vb);
+    ID3D11DeviceContext_Release(context);
+    ID3D11Device_Release(device);
+    return ret;
+}
+
 static const struct
 {
     const char *name;
@@ -648,6 +1009,8 @@ static const struct
     {"swap-state", check_swap_state},
     {"deferred", check_deferred},
     {"depth-bias", check_depth_bias},
+    {"geometry-index", check_geometry_index},
+    {"tessellation-index", check_tessellation_index},
 };
 
 int main(int argc, char **argv)
@@ -663,7 +1026,7 @@ int main(int argc, char **argv)
             break;
     if (i == ARRAYSIZE(cases))
     {
-        printf(PREFIX "usage: dxmt.exe bytecode|swap-state|deferred|depth-bias\n");
+        printf(PREFIX "usage: dxmt.exe bytecode|swap-state|deferred|depth-bias|geometry-index|tessellation-index\n");
         return 4;
     }
 

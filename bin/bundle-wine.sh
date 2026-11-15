@@ -704,8 +704,9 @@ check_default_trees() {
 # that the built-in rules and the defaults of Wine, FEX, the Vulkan loader,
 # vkd3d-proton, DXMT, KosmicKrisp, Metal and GStreamer decide; only
 # vkd3d-proton's pipeline cache is moved into the prefix, check_fex_runs sets
-# FEX_SMCCHECKS=full on one run per arch, and check_streamout_runs turns on
-# Metal shader validation and turns off DXMT's shader cache for its runs.
+# FEX_SMCCHECKS=full on one run per arch, and check_streamout_runs and
+# check_dxmt_runs turn off DXMT's shader cache for their runs and turn on
+# Metal shader validation, check_dxmt_runs for a second run of each case.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
@@ -1335,21 +1336,31 @@ check_streamout_runs() {
 # more than the length passed (bytecode), SwapDeviceContextState keeps the
 # installed state it swaps in again (swap-state), a deferred context
 # released after its device keeps the device until it is destroyed itself
-# (deferred), and draws on a D24 target get Direct3D's constant depth bias
+# (deferred), draws on a D24 target get Direct3D's constant depth bias
 # with and without a pixel shader and through a geometry shader
-# (depth-bias); smoke/dxmt.c says how. Each case is a process of its own, so
-# a case that crashes cannot hide the result of another, and each has to get
-# the default dxmt tree from compatdb.so, since Wine's own d3d11 passes them
-# too. DXMT's shader cache is off, so that a shader variant an earlier DXMT
-# compiled and cached, such as the depth bias of a converted pixel shader,
-# cannot stand in for the one under test. On a Mac without a Metal 4 GPU
+# (depth-bias), and a draw through a geometry shader or tessellation in
+# the render pass of another one with the other index format, or the other
+# of indexed and non-indexed, gets a pipeline of its own (geometry-index,
+# tessellation-index); smoke/dxmt.c says how. Each case is a process of its
+# own, so a case that crashes cannot hide the result of another, and each
+# has to get the default dxmt tree from compatdb.so, since Wine's own d3d11
+# passes them too. DXMT's shader cache is off, so that a shader variant an
+# earlier DXMT compiled and cached, such as the depth bias of a converted
+# pixel shader, cannot stand in for the one under test. Each case runs a
+# second time with Metal shader validation on, as check_streamout_runs runs
+# its program: a load outside a buffer, such as patches whose indices are
+# read at the other width, need not change the pixels a case reads back.
+# DXMT logs each such report of the validation as a failed frame ("Frame
+# <n>: "), which fails the check, and Metal's "Metal GPU Validation
+# Enabled" line has to show that it was on. On a Mac without a Metal 4 GPU
 # (METAL4=0, see metal4_probe) DXMT takes its experimental path for other
 # GPUs (dxmt_device.cpp), which the check is not for, so the programs are
-# only built there. A clean run of a case takes about 0.5 seconds; the limit
-# of 5 seconds leaves room for a loaded machine and for winedbg's backtrace
-# of a case that crashes.
+# only built there. A clean run of a case takes about 0.5 seconds with
+# validation as without, so the validation runs add about 5 seconds; the
+# limits of 5 and 10 seconds leave room for a loaded machine and for
+# winedbg's backtrace of a case that crashes.
 check_dxmt_runs() {
-    local arch exe log name want
+    local arch exe log name
     for arch in x86_64 i686; do
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/dxmt-$arch.exe" \
             "$REPO_DIR/smoke/dxmt.c" -ld3d11
@@ -1361,22 +1372,43 @@ check_dxmt_runs() {
     for arch in x86_64 i686; do
         exe="$TMP_DIR/dxmt-$arch.exe"
         time_mark "smoke: dxmt.exe $arch"
-        for name in bytecode swap-state deferred depth-bias; do
+        for name in bytecode swap-state deferred depth-bias geometry-index tessellation-index; do
             log="$TMP_DIR/dxmt-$arch-$name.log"
             echo "  Running dxmt.exe $name for $arch..."
             run_limited 5 "$log" "$@" DXMT_SHADER_CACHE=0 "$WINE_DIR/bin/wine" "$exe" "$name"
             smoke_check "dxmt.exe $name for $arch" 5 "$log"
-            for want in "wine-build smoke test: $arch $name check ok" \
-                        "compatdb: .*dxgi = ${DXGI_IMPLS%% *} (from"; do
-                if ! grep -q "$want" "$log"; then
-                    echo "Error: dxmt.exe $name for $arch did not print '$want'"
-                    cat "$log"
-                    smoke_stop
-                    exit 1
-                fi
-            done
+            check_dxmt_log "$arch" "$name" "$log"
             grep "wine-build smoke test: $arch " "$log" | sed 's/^/    /'
+            log="$TMP_DIR/dxmt-$arch-$name-validation.log"
+            echo "  Running dxmt.exe $name for $arch with Metal shader validation..."
+            run_limited 10 "$log" "$@" MTL_SHADER_VALIDATION=1 DXMT_SHADER_CACHE=0 "$WINE_DIR/bin/wine" "$exe" "$name"
+            # Before the status: a case whose readback also failed exits 1
+            if grep -Eq "err: +(Device error|Frame [0-9]+: )" "$log"; then
+                echo "Error: Metal shader validation or the GPU reported an error for dxmt.exe $name for $arch:"
+                cat "$log"
+                smoke_stop
+                exit 1
+            fi
+            smoke_check "dxmt.exe $name for $arch with Metal shader validation" 10 "$log"
+            check_dxmt_log "$arch" "$name" "$log" "Metal GPU Validation Enabled"
         done
+    done
+}
+
+# check_dxmt_log <arch> <case> <log> [<line>...]: exit with the log unless
+# the dxmt.exe run of <case> for <arch> in <log> passed on the default dxmt
+# tree and printed each <line>.
+check_dxmt_log() {
+    local arch="$1" name="$2" log="$3" want
+    shift 3
+    for want in "wine-build smoke test: $arch $name check ok" \
+                "compatdb: .*dxgi = ${DXGI_IMPLS%% *} (from" "$@"; do
+        if ! grep -q "$want" "$log"; then
+            echo "Error: dxmt.exe $name for $arch did not print '$want'"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
     done
 }
 
