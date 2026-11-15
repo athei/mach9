@@ -481,8 +481,24 @@ cargo run -p conformance -- deqp-vk record --group draw    # write its expected 
   at a time. `runs/<run id>/` holds the probe's output and test log and
   each batch's output (`first/batch-<n>.log`, `second/` for the cases run
   again, `first-again/` and `second-again/` for the failed cases run
-  again without one that lost the device, and `first-alone/` and
-  `second-alone/` for those run alone).
+  again without one that lost the device, `first-alone/` and
+  `second-alone/` for those run alone, and `record`'s `flaky-<n>/`).
+- deqp's test log, with the messages that say how a case failed, is
+  `batch-<n>.<attempt>.qpa` beside the batch's output, one per process of
+  the batch (a batch starts a new process after a crash or stall). The
+  runner keeps it for a process of any pass but `first`, whose cases all
+  run again or alone, and for a process of `first` that ended a case
+  other than pass or not supported, or other than the case's groups
+  expect; it deletes the others once the process ends. A run in which
+  every case ends as its groups expect keeps only the logs of the
+  batches with a case expected to fail, warn, crash or stall, or with a
+  case whose groups expect different results. A process that an
+  interrupt ends, or whose output stops the run as an error, keeps its
+  partial log, at most one per job. The canary's test log after a lost
+  device, `batch-<n>.<attempt>.canary.<round>.qpa`, stays only when the
+  canary did not pass. Find a case's logs, those of `kk_debug-<names>/`
+  included, with
+  `grep -rlxF --include='*.qpa' '#beginTestCaseResult <case>' runs/<run id>`.
 - Interrupts:
   - Ctrl-C, `SIGTERM` or `SIGHUP` ends the `deqp-vk` processes and exits
     with 130; an interrupted invocation keeps no results, and the next

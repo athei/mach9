@@ -20,13 +20,16 @@
 //!   ([`expected::record`]).
 //!
 //! The output of every process is kept in `runs/<run id>/` of the state
-//! directory, which serves one invocation at a time. An interrupted
-//! invocation keeps nothing for the next one, which starts over.
+//! directory, which serves one invocation at a time, and so is the test log
+//! of each process whose cases ran again or alone, or that settled a case
+//! with a status other than pass and not supported, or than the expected
+//! one (`keeps_log`). An interrupted invocation keeps nothing for the next
+//! one, which starts over.
 //!
 //! [`groups`]: crate::deqp::groups
 
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     ffi::OsString,
     fmt::Write as _,
     fs::{self, OpenOptions},
@@ -74,6 +77,10 @@ pub const PROBE_CASE: &str = "dEQP-VK.info.device_properties";
 /// The case that shows the device works: it draws a triangle and waits for
 /// the submission.
 pub const CANARY: &str = "dEQP-VK.api.smoke.triangle";
+
+/// The pass that runs each case once; every other pass runs cases again or
+/// alone.
+const FIRST_PASS: &str = "first";
 
 /// How many more times `record` runs each case the triage marks flaky.
 const FLAKY_RUNS: usize = 3;
@@ -317,10 +324,12 @@ pub fn execute(
         if let Some(layer_env) = &layer_env {
             env.extend(layer_env.iter().cloned());
         }
+        let expected = expectations(&plans);
         let runner = Runner {
             deqp: &deqp,
             vulkan: &vulkan,
             env: &env,
+            expected: &expected,
             kk_debug: setting,
             work: &work,
             run_dir: &dir,
@@ -450,7 +459,7 @@ impl Runner<'_> {
             options.batch
         );
         let mut isolate = known_crashes(plans);
-        let first = self.run_cases("first", &all, &isolate)?;
+        let first = self.run_cases(FIRST_PASS, &all, &isolate)?;
         // The second pass runs alone every case that crashed or stalled in
         // the first, so its own crashes cannot change the result of another
         // case.
@@ -500,6 +509,61 @@ fn known_crashes(plans: &[&Planned<'_>]) -> HashSet<String> {
         })
         .cloned()
         .collect()
+}
+
+/// The status each case of `plans` is expected to end with: the one its
+/// expected results give, [`Status::Pass`] without them, and `None` for a
+/// case whose groups expect different ones.
+fn expectations<'p>(plans: &[&'p Planned<'_>]) -> HashMap<&'p str, Option<Status>> {
+    let mut expected: HashMap<&str, Option<Status>> = HashMap::new();
+    for &plan in plans {
+        for case in &plan.cases {
+            let status = plan
+                .old
+                .as_ref()
+                .map_or(Status::Pass, |old| old.status(case));
+            expected
+                .entry(case.as_str())
+                .and_modify(|known| {
+                    if *known != Some(status) {
+                        *known = None;
+                    }
+                })
+                .or_insert(Some(status));
+        }
+    }
+    expected
+}
+
+/// Whether the test log of a process that settled `results` is kept: one
+/// of a `rerun` pass, whose cases all run again or alone, is, and so is one
+/// that settled a case with a status other than [`Status::Pass`] and
+/// [`Status::NotSupported`] or than the `expected` one.
+fn keeps_log(
+    rerun: bool,
+    results: &[(String, Status)],
+    expected: &HashMap<&str, Option<Status>>,
+) -> bool {
+    rerun
+        || results.iter().any(|(case, status)| {
+            !matches!(status, Status::Pass | Status::NotSupported)
+                || expected.get(case.as_str()).copied().flatten() != Some(*status)
+        })
+}
+
+/// Whether a process of [`CANARY`] that reported `results` passed it, which
+/// shows that the device works again and its test log need not stay.
+fn canary_passed(results: &[(String, Status)]) -> bool {
+    results == [(CANARY.to_owned(), Status::Pass)]
+}
+
+/// Delete the test log at `path`; a process that ended before it wrote one
+/// left none.
+fn remove_log(path: &Path) -> Result<(), Failure> {
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(setup_io(path, &e)),
+        _ => Ok(()),
+    }
 }
 
 /// The cases of every plan, each once, in the order they first appear.
@@ -733,6 +797,8 @@ struct Runner<'a> {
     deqp: &'a Deqp,
     vulkan: &'a Vulkan,
     env: &'a [(OsString, OsString)],
+    /// The status each case is expected to end with ([`expectations`]).
+    expected: &'a HashMap<&'a str, Option<Status>>,
     /// The `MESA_KK_DEBUG` of `env`, if any.
     kk_debug: Option<&'a str>,
     work: &'a Path,
@@ -968,6 +1034,7 @@ impl Runner<'_> {
         if cases.is_empty() {
             return Ok(BTreeMap::new());
         }
+        let rerun = pass != FIRST_PASS;
         let dir = self.run_dir.join(pass);
         fs::create_dir_all(&dir).map_err(|e| setup_io(&dir, &e))?;
         let batches: Vec<&[String]> = cases.chunks(self.options.batch.max(1)).collect();
@@ -989,7 +1056,7 @@ impl Runner<'_> {
                             return;
                         };
                         let start = Instant::now();
-                        match self.run_batch(&dir, index, batch, jobs <= 1) {
+                        match self.run_batch(&dir, index, batch, jobs <= 1, rerun) {
                             Ok(batch_results) => {
                                 let summary = summary(&batch_results);
                                 let finished = done.lock().map_or(0, |mut done| {
@@ -1037,12 +1104,19 @@ impl Runner<'_> {
     /// cases after the one it died or stalled in, until each has a status.
     /// With `recover`, a process that lost its device is followed by
     /// [`Self::recover`] before the next one.
+    ///
+    /// Each process writes its test log to `batch-<index>.<attempt>.qpa`,
+    /// which stays when [`keeps_log`] says so, with `rerun` for a pass that
+    /// runs its cases again or alone, and is deleted otherwise. A process
+    /// that an interrupt ends, or whose output [`next_step`] refuses, leaves
+    /// its partial log: the run ends there.
     fn run_batch(
         &self,
         dir: &Path,
         index: usize,
         batch: &[String],
         recover: bool,
+        rerun: bool,
     ) -> Result<Vec<(String, Status)>, Failure> {
         let log = dir.join(format!("batch-{index}.log"));
         let mut remaining: Vec<&String> = batch.iter().collect();
@@ -1056,7 +1130,8 @@ impl Runner<'_> {
                 let _ = writeln!(list, "{case}");
             }
             fs::write(&caselist, list).map_err(|e| setup_io(&caselist, &e))?;
-            let args = self.args(&caselist, Path::new("/dev/null"));
+            let qpa = dir.join(format!("batch-{index}.{attempt}.qpa"));
+            let args = self.args(&caselist, &qpa);
             let what = format!("attempt {attempt}, {} cases", remaining.len());
             let finished = self.spawn(&args, self.env, &log, &what)?;
             let output = log::parse(&String::from_utf8_lossy(&finished.output));
@@ -1069,6 +1144,9 @@ impl Runner<'_> {
                 },
             )
             .map_err(|e| Failure::Setup(format!("{e}; its output is in {}", log.display())))?;
+            if !keeps_log(rerun, &step.results, self.expected) {
+                remove_log(&qpa)?;
+            }
             let device_lost = step
                 .results
                 .iter()
@@ -1076,7 +1154,7 @@ impl Runner<'_> {
             results.extend(step.results);
             remaining = step.remaining;
             if recover && device_lost {
-                self.recover(dir, index, &log)?;
+                self.recover(dir, index, attempt, &log)?;
             }
         }
         Ok(results)
@@ -1087,16 +1165,21 @@ impl Runner<'_> {
     /// [`RECOVERY_TRIES`] times. A process started right after another lost
     /// its device can lose its own at the first submission, in a case that
     /// passes otherwise.
-    fn recover(&self, dir: &Path, index: usize, log: &Path) -> Result<(), Failure> {
+    ///
+    /// The test log of each try, `batch-<index>.<attempt>.canary.<round>.qpa`
+    /// after the batch's attempt that lost the device, stays only when the
+    /// canary did not pass.
+    fn recover(&self, dir: &Path, index: usize, attempt: usize, log: &Path) -> Result<(), Failure> {
         let caselist = dir.join(format!("batch-{index}.canary.txt"));
         fs::write(&caselist, format!("{CANARY}\n")).map_err(|e| setup_io(&caselist, &e))?;
-        let args = self.args(&caselist, Path::new("/dev/null"));
-        for attempt in 1..=RECOVERY_TRIES {
-            let what = format!("recovery {attempt}, {CANARY}");
+        for round in 1..=RECOVERY_TRIES {
+            let qpa = dir.join(format!("batch-{index}.{attempt}.canary.{round}.qpa"));
+            let args = self.args(&caselist, &qpa);
+            let what = format!("recovery {round}, {CANARY}");
             let finished = self.spawn(&args, self.env, log, &what)?;
             let output = log::parse(&String::from_utf8_lossy(&finished.output));
-            if output.results == [(CANARY.to_owned(), Status::Pass)] {
-                return Ok(());
+            if canary_passed(&output.results) {
+                return remove_log(&qpa);
             }
         }
         Err(Failure::Setup(format!(
