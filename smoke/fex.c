@@ -1033,14 +1033,17 @@ static DWORD WINAPI sled_caller(void *arg)
  * it is in, and then has to fetch from the page. Under FEX_SMCCHECKS=full,
  * compiled code reads the guest's bytes before each instruction, and a fault in
  * that read must reach the guest as the instruction's fetch fault, so a read
- * fault fails the case. This counts calls, so it does not depend on how fast the
- * machine is. */
+ * fault fails the case. A call in flight on the page then faults at its next
+ * instruction, anywhere in the page, as on Windows, so any fetch fault on the
+ * page passes; the first one's offset is printed. This counts calls, so it does
+ * not depend on how fast the machine is. */
 static void decommit_race(void)
 {
     BYTE *sled = new_pages(SLED_SIZE, PAGE_READWRITE);
     BYTE *page = sled + (SLED_PAGES - 1) * PAGE;
     HANDLE thread;
     LONG calls, ran, before;
+    ULONG_PTR first;
     int i;
 
     for (i = 0; i < SLED_PAGES; i++) fill_page(sled + i * PAGE, i == SLED_PAGES - 1);
@@ -1075,10 +1078,15 @@ static void decommit_race(void)
             FAIL("%d calls after the decommit and no fetch fault, [1]=%p", STALE_CALLS, (void *)fault_info1);
         YieldProcessor();
     }
-    if (fault_info1 != (ULONG_PTR)page) FAIL("[1]=%p, wanted %p", (void *)fault_info1, page);
+    first = fault_info1;
     stop = 1;
     WaitForSingleObject(thread, INFINITE);
+    /* The first fault and, with the thread stopped, the last one */
+    if (first - (ULONG_PTR)page >= PAGE || fault_info1 - (ULONG_PTR)page >= PAGE)
+        FAIL("[1]=%p, last %p, wanted addresses on %p", (void *)first, (void *)fault_info1, page);
     if (read_faults) FAIL("%ld read faults in the sled", read_faults);
+    printf("wine-build smoke test: %s decommit_race fetch fault at page offset %#lx\n", ARCH,
+           (unsigned long)(first - (ULONG_PTR)page));
 }
 
 static volatile LONG go, done;
