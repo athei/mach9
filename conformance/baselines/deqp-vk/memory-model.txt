@@ -1,9 +1,9 @@
 # Expected deqp-vk results of the group memory-model: every case that does not pass.
 # Written by `cargo run -p conformance -- deqp-vk record --group memory-model`: do not edit.
-# component: mesa=b9a4007c72c034beb27cb74e27dc32798c3e702d
+# component: mesa=9c6e908cfdbe79dc1de49fd83b8ead71250d165c
 # component: vk-gl-cts=e272471311301a35aae6364def1a3f5ea35215f7
 # component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
-# cases: 18338
+# cases: 18530
 
 dEQP-VK.memory_model.message_passing.core11.u32.coherent.control_and_memory_barrier.* not-supported
 dEQP-VK.memory_model.message_passing.core11.u32.coherent.control_barrier.* not-supported
