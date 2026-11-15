@@ -1,9 +1,9 @@
 # Conformance baseline of d3d10core_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record d3d10core`: do not edit.
-# wine: wine-11.21-42-gf93e7ca0ff0
-# component: dxmt=7429bb9e6de678aada18065bcae534bb72ab1d85
-# component: fex=83f8be25aa270c263600bcda6e89232c2284441a
-# component: mesa=689c916008cf608744f2d01e93cf8aa55103931e
+# wine: wine-11.21-44-gaabfecff0ab
+# component: dxmt=01e59e9bde030f105937f249afaac92ada01b4d7
+# component: fex=8425ea974e072821c75969723efe49cca605200c
+# component: mesa=7bbfd48b2e7490a2091716087647d7ddf8f7c408
 # component: vkd3d-proton=c5e2c9b8c55872893e3ba47d60448dd4f35185ef
 # component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
 
@@ -61,7 +61,7 @@ test_geometry_shader ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_il_append_aligned ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_immediate_constant_buffer ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_independent_blend ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_index_buffer_offset fail failed=16 sites=1 todo_succeeded=0 skipped=0
+test_index_buffer_offset ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_initial_depth_stencil_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_initial_texture_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_input_assembler ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -174,7 +174,7 @@ test_geometry_shader ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_il_append_aligned ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_immediate_constant_buffer ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_independent_blend ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_index_buffer_offset fail failed=16 sites=1 todo_succeeded=0 skipped=0
+test_index_buffer_offset ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_initial_depth_stencil_state ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_initial_texture_data ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_input_assembler ok failed=0 sites=0 todo_succeeded=0 skipped=0
