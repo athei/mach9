@@ -142,7 +142,8 @@ cases = [
 # alias and read through the other in one command buffer, with a barrier
 # between; the memory.binding and ycbcr plane_view cases submit and wait
 # between the write and the read, so they check the binding, not the
-# barrier.
+# barrier. The bundle's smoke test checks non-sparse aliases across a
+# barrier (smoke/vkalias.c).
 [[group]]
 name = "aliasing"
 issues = [63]

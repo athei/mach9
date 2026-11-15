@@ -766,6 +766,7 @@ smoke_test() {
     fi
     # Outside Wine, so before the prefix boots.
     check_egl_host
+    check_vkalias_host
     check_gst_host
 
     # wineboot creates the prefix here, so the limit is generous. Only the
@@ -1449,6 +1450,48 @@ check_egl_host() {
     check_gl_host glpbo "texels copied unchanged through pixel buffer objects"
     check_gl_host glstats "pipeline statistics queries counted at once"
     check_gl_host glstats "pipeline statistics queries counted at once, under the validation layers" validation
+}
+
+# check_vkalias_host: build smoke/vkalias.c for the host and run it on the
+# bundle's lib/external/libvulkan.1.dylib, outside Wine, with nothing in its
+# environment but VK_DRIVER_FILES naming the bundle's manifest directory.
+# Exit unless every word written through one buffer or image reads back
+# through another bound to the same memory, with a pipeline barrier between,
+# in each case smoke/vkalias.c lists: KosmicKrisp's barriers take a weaker
+# visibility than they used to, and D3D12 placed resources alias memory that
+# way. It compiles against the Vulkan headers build-mesa.sh installs into
+# MESA_BUILD_DIR, so on a Mac with a Metal 4 GPU a bundle made from a
+# MESA_DIST without that build tree stops here. It needs a KosmicKrisp
+# device, so on a Mac without a Metal 4 GPU (metal4_probe) it is skipped.
+check_vkalias_host() {
+    local log="$TMP_DIR/vkalias.log"
+    local headers="$MESA_BUILD_DIR/vulkan-headers-install/include"
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host aliasing check: it needs a KosmicKrisp device."
+        return 0
+    fi
+    if [ ! -f "$headers/vulkan/vulkan_core.h" ]; then
+        echo "Error: no Vulkan headers in $headers for smoke/vkalias.c; bin/build-mesa.sh installs them"
+        exit 1
+    fi
+    xcrun clang -std=c11 -O2 -I "$headers" -o "$TMP_DIR/vkalias" "$REPO_DIR/smoke/vkalias.c"
+    echo "  Running the host aliasing check on lib/external/libvulkan.1.dylib..."
+    run_limited 60 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/vkalias" "$EXT_DIR/libvulkan.1.dylib"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/vkalias.c did not exit within 60 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -eq 1 ]; then
+        echo "Error: aliased memory read back wrong on the bundle's KosmicKrisp"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/vkalias.c could not run a case on the bundle's KosmicKrisp, a failed submit or wait included (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    echo "    KosmicKrisp: $(grep -c '^vkalias: .*: ok$' "$log") aliased memory cases read back"
 }
 
 # check_gl_host <program> <what> [validation]: build smoke/<program>.c for the
