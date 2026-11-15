@@ -15,6 +15,9 @@
  *   alertable  waits alertably on the event, an auto-reset one
  *   two-auto   waits on the event, an auto-reset one, and on one that
  *              stays open
+ *   new-page   resets events in a loop, each on an msync page that the
+ *              process has not mapped
+ *   query      calls VirtualQuery() on a view of reserved pages in a loop
  *   create     creates and closes events of its own in a loop; runs only
  *              when named
  *
@@ -38,32 +41,43 @@
  * A thread that the wineserver kills while it is in a server call under
  * ntdll's fd_cache_mutex died with the mutex held, and the next thread that
  * closed a handle or used one that was not cached waited for ever. close
- * puts the thread into such a call directly, in DuplicateHandle() and
- * CloseHandle(). The other cases get there through a second defect, which
- * is still open: a thread killed inside a call on the event, or while it
- * waits on it, keeps its reference on the handle's entry in ntdll's cache
- * of sync objects, and every call on a later handle with that value then
- * asks the wineserver under that mutex.
+ * puts the thread into such a call directly, in CloseHandle(). The other
+ * cases got there through a second defect: a thread killed inside a call on
+ * the event, or while it waits on it, keeps its reference on the handle's
+ * entry in ntdll's cache of sync objects (mach9 #137). Every call on a later
+ * handle with that value asked the wineserver under that mutex; now such a
+ * handle is cached in a spare entry. pulse checks that: from its second
+ * round on, the main thread times ResetEvent() on the round's event against
+ * the event that stays open, and a round counts as uncached when the
+ * fastest of three batches is over 12 times as slow and over 3 us per call.
+ * Measured per round: an uncached call costs 25 to 3000 times a cached one
+ * (9 us and more), a cached one at most 3.5 times under FEX and 13 times
+ * natively, but at most 2.3 us under FEX and 0.2 us natively, with 8 copies
+ * at once, also in the background. A machine that is slower slows both
+ * events alike, so the ratio holds. The case fails when more than a quarter
+ * of the 300 rounds are uncached; without the spare entries nearly all of
+ * them are.
  *
  * All cases but create run in order, or just those named on the command
  * line. Each prints its name first. A lock left held shows as a hang, which
  * the caller's time limit ends; the last line then names the case. There is
  * no watchdog thread, as in fex.c.
  *
- * Without the unlock the native program hangs in pulse, wait, wait-two and
- * close with msync on, and in close alone with WINEMSYNC=0. The i686
- * and x86_64 programs fail in no case without it, so there they only guard
- * against a regression.
+ * Without the unlock of fd_cache_mutex the native program hangs in close,
+ * with msync on and with WINEMSYNC=0, and without the spare entries also in
+ * pulse, wait and wait-two with msync on. The i686 and x86_64 programs fail
+ * in no case without it, so there they only guard against a regression.
  *
  * While a thread can be terminated, no case may allocate or free on ntdll's
  * unix side with the server signals unblocked: a thread killed inside
  * malloc leaves a lock of libmalloc held, and the next thread that
  * allocates aborts the process (mach9 #147, #151). close therefore reaches
- * only NtDuplicateObject() and NtClose() (dlls/ntdll/unix/server.c). Both
- * take fd_cache_mutex in an uninterrupted section, which blocks those
- * signals. Without DUPLICATE_CLOSE_SOURCE, NtDuplicateObject() only sends
- * a dup_handle request in it. NtClose() calls remove_fd_from_cache() and
- * close_inproc_sync() (dlls/ntdll/unix/sync.c; the duplicate is never
+ * only NtDuplicateObject() and NtClose() (dlls/ntdll/unix/server.c).
+ * Without DUPLICATE_CLOSE_SOURCE, NtDuplicateObject() only sends a
+ * dup_handle request, with those signals blocked. NtClose() takes
+ * fd_cache_mutex in an uninterrupted section, which blocks them too, and
+ * in it calls remove_fd_from_cache() and close_inproc_sync()
+ * (dlls/ntdll/unix/sync.c; the duplicate is never
  * cached, and a release_inproc_sync() that drops the last reference calls
  * msync_close(), which builds its message on the stack) and sends a
  * close_handle request; none of them allocates. Outside the section the
@@ -74,13 +88,26 @@
  * kill there aborts the process now and then. The bundle step does not
  * run it.
  *
- * Nor may a thread that can be terminated be the first of the process to
- * use an msync object on a page the process has not mapped: it maps the
- * page under shm_addrs_lock with the signals unblocked, and a kill there
- * leaves the lock held (mach9 #138). The main thread therefore resets each
- * event, those that stay open included, before a thread uses it, and the
- * thread of alertable gets its alert object, a new one, before it says
- * that it runs.
+ * A thread killed in a server call under ntdll's virtual_mutex died with
+ * that mutex held in the same way, and every later allocation, mapping or
+ * protection change of the process waited for ever (mach9 #138).
+ * VirtualQuery() of a view of a section of reserved pages asks the
+ * wineserver for the committed ranges under the mutex, and allocates
+ * nothing, so query puts its thread there. Only the native program can
+ * fail in it: FEX suspends a thread before it is killed, and the suspend
+ * signal waits until the thread leaves the section, so in the i686 and
+ * x86_64 programs query only guards against a regression.
+ *
+ * The first thread of a process that uses an msync object on a page the
+ * process has not mapped maps the page under ntdll's shm_addrs_lock. That
+ * lock was taken with the signals unblocked, and a thread killed with it
+ * held left it held: the next thread that mapped a page aborted the process
+ * (mach9 #138). new-page puts its thread there, on one new page after the
+ * other, for as many rounds as it has pages; once they are used up, its
+ * thread sleeps. In the other cases the main thread resets each event,
+ * those that stay open included, before a thread uses it, and the thread
+ * of alertable gets its alert object, a new one, before it says that it
+ * runs, so that they check only what they are there for.
  *
  * The threads say when they run before they are terminated: terminating a
  * thread that has just started can leave the loader lock of the x86 code
@@ -103,9 +130,17 @@
 #define ROUNDS 300
 /* the rounds of the cases that sleep before the kill and check a pulse */
 #define PULSE_ROUNDS 10
+/* the calls of a batch of reset_ticks() */
+#define RESET_CALLS 64
+/* an msync slot takes 16 bytes of a 16K page */
+#define PAGE_SLOTS 1024
+#define NEW_PAGES 32
 
 static volatile LONG started;
 static HANDLE other_event, other_auto_event;
+static HANDLE fillers[NEW_PAGES * PAGE_SLOTS];
+static volatile LONG next_page;
+static void *reserve_view;
 
 static DWORD WINAPI pulse_thread(void *arg)
 {
@@ -133,16 +168,12 @@ static DWORD WINAPI wait_two_thread(void *arg)
 static DWORD WINAPI close_thread(void *arg)
 {
     HANDLE dup;
-    volatile unsigned int spin;
 
     InterlockedExchange(&started, 1);
     for (;;)
     {
         if (DuplicateHandle(GetCurrentProcess(), arg, GetCurrentProcess(), &dup, 0, FALSE, DUPLICATE_SAME_ACCESS))
             CloseHandle(dup);
-        /* without a pause between the calls a round of the x86_64 program
-         * takes milliseconds, and the run up to seconds (mach9 #152) */
-        for (spin = 4096; spin; spin--) YieldProcessor();
     }
     return 0;
 }
@@ -165,11 +196,57 @@ static DWORD WINAPI two_auto_thread(void *arg)
     return 0;
 }
 
+static DWORD WINAPI new_page_thread(void *arg)
+{
+    LONG page;
+
+    InterlockedExchange(&started, 1);
+    while ((page = InterlockedIncrement(&next_page) - 1) < NEW_PAGES)
+        ResetEvent(fillers[page * PAGE_SLOTS]);
+    for (;;) Sleep(INFINITE);
+    return 0;
+}
+
+static DWORD WINAPI query_thread(void *arg)
+{
+    MEMORY_BASIC_INFORMATION info;
+
+    InterlockedExchange(&started, 1);
+    for (;;) VirtualQuery(reserve_view, &info, sizeof(info));
+    return 0;
+}
+
 static DWORD WINAPI create_thread(void *arg)
 {
     InterlockedExchange(&started, 1);
     for (;;) CloseHandle(CreateEventA(NULL, TRUE, FALSE, NULL));
     return 0;
+}
+
+/* Events that no thread uses before new-page, PAGE_SLOTS for each of its
+ * pages. The wineserver gives a new object the lowest free msync slot, so
+ * fillers[i * PAGE_SLOTS] are on pages of their own, which the process has
+ * not mapped. They stay open until the process exits. */
+static int create_fillers(void)
+{
+    unsigned int i;
+
+    for (i = 0; i < NEW_PAGES * PAGE_SLOTS; i++)
+        if (!(fillers[i] = CreateEventA(NULL, TRUE, FALSE, NULL))) return 0;
+    return 1;
+}
+
+/* a view of a section of reserved pages, whose committed ranges only the
+ * wineserver knows */
+static int map_reserve_view(void)
+{
+    HANDLE section;
+
+    if (!(section = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE | SEC_RESERVE, 0, 0x10000, NULL)))
+        return 0;
+    reserve_view = MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, 0);
+    CloseHandle(section);
+    return reserve_view != NULL;
 }
 
 static const struct
@@ -178,14 +255,19 @@ static const struct
     LPTHREAD_START_ROUTINE proc;
     int by_default;
     int check_pulse;  /* auto-reset event; checked with pulse_missed() after the kill */
+    int (*prepare)(void);
+    int rounds;  /* 0 for the default */
+    int check_cached;  /* the event of each round is cached; checked with reset_uncached() */
 } cases[] =
 {
-    { "pulse", pulse_thread, 1, 0 },
+    { "pulse", pulse_thread, 1, 0, .check_cached = 1 },
     { "wait", wait_thread, 1, 0 },
     { "wait-two", wait_two_thread, 1, 0 },
     { "close", close_thread, 1, 0 },
     { "alertable", alertable_thread, 1, 1 },
     { "two-auto", two_auto_thread, 1, 1 },
+    { "new-page", new_page_thread, 1, 0, create_fillers, NEW_PAGES },
+    { "query", query_thread, 1, 0, map_reserve_view },
     { "create", create_thread, 0, 0 },
 };
 
@@ -234,16 +316,71 @@ static int pulse_missed(HANDLE event)
     return ret == WAIT_TIMEOUT;
 }
 
-static int run_case(const char *name, LPTHREAD_START_ROUTINE proc, int check_pulse)
+/* the fastest of a few batches of ResetEvent() calls on the event, in
+ * performance counter ticks */
+static LONGLONG reset_ticks(HANDLE event)
+{
+    LARGE_INTEGER start, end;
+    LONGLONG best = -1;
+    int batch, n;
+
+    for (batch = 0; batch < 3; batch++)
+    {
+        QueryPerformanceCounter(&start);
+        for (n = 0; n < RESET_CALLS; n++) ResetEvent(event);
+        QueryPerformanceCounter(&end);
+        if (best < 0 || end.QuadPart - start.QuadPart < best) best = end.QuadPart - start.QuadPart;
+    }
+    return best;
+}
+
+/* whether calls on the event, whose handle has the value of the one of the
+ * round before, ask the wineserver: over 12 times as slow as on the event
+ * that stays open, and over 3 us per call */
+struct reset_stats
+{
+    double min_ratio, max_ratio;  /* of the reused handle value against the open event */
+    double min_us, max_us;        /* per call on the reused handle value */
+};
+
+static int reset_uncached(HANDLE event, struct reset_stats *stats)
+{
+    LARGE_INTEGER freq;
+    LONGLONG ticks = reset_ticks(event), ref = reset_ticks(other_event);
+    double ratio, us;
+
+    QueryPerformanceFrequency(&freq);
+    ratio = (double)ticks / (ref ? ref : 1);
+    us = ticks * 1e6 / freq.QuadPart / RESET_CALLS;
+    if (!stats->max_us || ratio < stats->min_ratio) stats->min_ratio = ratio;
+    if (!stats->max_us || us < stats->min_us) stats->min_us = us;
+    if (ratio > stats->max_ratio) stats->max_ratio = ratio;
+    if (us > stats->max_us) stats->max_us = us;
+    /* Natively a batch of cached calls lasts about 10 ticks of the counter,
+     * so the ratio of a cached round reaches 13 at times: there only the
+     * 3 us floor tells it from an uncached one (0.2 us against 9 us and
+     * more, 0.8 us on a machine 4 times as slow). */
+    return ticks > 12 * ref && ticks * 1000000 > 3 * RESET_CALLS * freq.QuadPart;
+}
+
+static int run_case(const char *name, LPTHREAD_START_ROUTINE proc, int check_pulse,
+                    int (*prepare)(void), int rounds, int check_cached)
 {
     HANDLE event, thread;
     volatile unsigned int spin;
-    int i, tries;
+    struct reset_stats stats = { 0 };
+    int i, tries, uncached = 0;
 
     printf("wine-build smoke test: %s case %s\n", ARCH, name);
     fflush(stdout);
 
-    for (i = 0; i < (check_pulse ? PULSE_ROUNDS : ROUNDS); i++)
+    if (prepare && !prepare())
+    {
+        printf("wine-build smoke test: %s %s failed: setup error %lu\n", ARCH, name, GetLastError());
+        return 0;
+    }
+    if (!rounds) rounds = check_pulse ? PULSE_ROUNDS : ROUNDS;
+    for (i = 0; i < rounds; i++)
     {
         if (!(event = CreateEventA(NULL, !check_pulse, FALSE, NULL)))
         {
@@ -251,6 +388,7 @@ static int run_case(const char *name, LPTHREAD_START_ROUTINE proc, int check_pul
             return 0;
         }
         ResetEvent(event);
+        if (check_cached && i) uncached += reset_uncached(event, &stats);
 
         started = 0;
         if (!(thread = CreateThread(NULL, 0, proc, event, 0, NULL)))
@@ -275,6 +413,16 @@ static int run_case(const char *name, LPTHREAD_START_ROUTINE proc, int check_pul
         }
         CloseHandle(event);
     }
+    if (check_cached)
+        printf("wine-build smoke test: %s %s: %d of %d rounds uncached; reused handle value "
+               "%.2f to %.2f us per call, %.1f to %.1f times the open event\n", ARCH, name, uncached, rounds - 1,
+               stats.min_us, stats.max_us, stats.min_ratio, stats.max_ratio);
+    if (uncached > rounds / 4)
+    {
+        printf("wine-build smoke test: %s %s failed: calls on a reused handle value asked the wineserver in %d of %d rounds\n",
+               ARCH, name, uncached, rounds - 1);
+        return 0;
+    }
     return 1;
 }
 
@@ -285,8 +433,7 @@ int main(int argc, char **argv)
 
     other_event = CreateEventA(NULL, TRUE, FALSE, NULL);
     other_auto_event = CreateEventA(NULL, FALSE, FALSE, NULL);
-    /* map their msync pages now: a thread killed while it maps one leaves
-     * shm_addrs_lock held (mach9 #138) */
+    /* map their msync pages now; only new-page has its thread map pages */
     ResetEvent(other_event);
     ResetEvent(other_auto_event);
     for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
@@ -294,7 +441,9 @@ int main(int argc, char **argv)
         for (arg = 1; arg < argc; arg++)
             if (!strcmp(argv[arg], cases[i].name)) break;
         if (argc > 1 ? arg == argc : !cases[i].by_default) continue;
-        if (!run_case(cases[i].name, cases[i].proc, cases[i].check_pulse)) return 1;
+        if (!run_case(cases[i].name, cases[i].proc, cases[i].check_pulse, cases[i].prepare, cases[i].rounds,
+                      cases[i].check_cached))
+            return 1;
         ran++;
     }
     if (!ran)

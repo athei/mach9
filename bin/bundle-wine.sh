@@ -1841,14 +1841,15 @@ run_attach() {
 # check_terminate_runs <env-command>...: build smoke/terminate.c for each arch
 # of SMOKE_PE_ARCHS and run it in the booted throwaway prefix, and exit with
 # the log unless every case passed. It terminates threads inside calls on an
-# event, in waits, alertable ones and ones on two events included, and in
-# DuplicateHandle() and CloseHandle(), and runs no case that allocates on
-# ntdll's unix side meanwhile (see the program's header comment); the program
-# prints each case's name before it runs it. A hang or a printed failure ends
-# the run; a lock left held shows as a hang, so the limit is lower than the
-# 120 seconds of the other runs: the slowest clean run took about one second
-# on a current Mac, and small programs take up to 4 times as long on a hosted
-# runner.
+# event, in waits, alertable ones and ones on two events included, in
+# DuplicateHandle() and CloseHandle(), while they map new msync pages and in
+# VirtualQuery(), and runs no case that allocates on ntdll's unix side
+# meanwhile (see the program's header comment); the program prints each
+# case's name before it runs it. A hang or a printed failure ends the run; a
+# lock left held shows as a hang, so the limit is lower than the 120 seconds
+# of the other runs. On a current Mac a clean run took at most 1.6 seconds
+# alone and 3.5 seconds with 8 copies at once, and small programs take up to
+# 4 times as long on a hosted runner; the limit is twice that.
 check_terminate_runs() {
     local arch exe log want last
     for arch in $SMOKE_PE_ARCHS; do
@@ -1857,9 +1858,9 @@ check_terminate_runs() {
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/terminate.c"
         time_mark "smoke: terminate.exe $arch"
         echo "  Running terminate.exe for $arch..."
-        run_limited 10 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
+        run_limited 30 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
         last=$(grep "wine-build smoke test: $arch case " "$log" | tail -n 1 | tr -d '\r' | sed 's/.* case //')
-        smoke_check "terminate.exe for $arch, in case '$last'," 10 "$log"
+        smoke_check "terminate.exe for $arch, in case '$last'," 30 "$log"
         want="wine-build smoke test: $arch TerminateThread cases passed"
         if ! grep -q "$want" "$log"; then
             echo "Error: terminate.exe for $arch did not print '$want'"
