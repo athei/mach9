@@ -1275,22 +1275,22 @@ check_d3d12_no_gpu() {
 # check_streamout_runs <env-command>...: build smoke/streamout.c for x86_64
 # and i686 and run it in the booted throwaway prefix, and exit with the log
 # unless each gets the default dxmt tree from compatdb.so, passes every case
-# of DXMT's emulated stream output, and DXMT logged no failed command buffer
+# of DXMT's stream output, and DXMT logged no failed command buffer
 # ("Device error") and no message of one ("Frame <n>: "). The runs have Metal
 # shader validation on, which reports each load or store outside a buffer in
 # such a message: the failure the bounds, unbind, no-target and
 # pipeline-switch cases guard against, and in the first three one no readback
 # sees, and what the functions that count a draw's output on the GPU (the
-# indirect case) must not do either; Metal's "Metal GPU Validation Enabled"
-# line has to show that it was on. DXMT's shader cache is off, so that a
-# shader variant an earlier DXMT compiled and cached cannot stand in for the
-# one under test. The program prints each case's name as it starts it, so the
-# last of those is the case that hung or failed. A clean run takes about a
-# second, so the limit of 10 seconds catches a hang and nothing else. On a
-# Mac without a Metal 4 GPU (METAL4=0, see metal4_probe), whose GPU is not of
-# the Apple7 family either, DXMT takes its experimental path for other GPUs
-# (dxmt_device.cpp), which the check is not for, so the programs are only
-# built there.
+# indirect and geometry cases) must not do either; Metal's "Metal GPU
+# Validation Enabled" line has to show that it was on. DXMT's shader cache is
+# off, so that a shader variant an earlier DXMT compiled and cached cannot
+# stand in for the one under test. The program prints each case's name as it
+# starts it, so the last of those is the case that hung or failed. A clean run
+# takes about a second, so the limit of 10 seconds catches a hang and nothing
+# else. On a Mac without a Metal 4 GPU (METAL4=0, see metal4_probe), whose GPU
+# is not of the Apple7 family either, DXMT takes its experimental path for
+# other GPUs (dxmt_device.cpp), which the check is not for, so the programs
+# are only built there.
 check_streamout_runs() {
     local arch exe log last want
     for arch in x86_64 i686; do
