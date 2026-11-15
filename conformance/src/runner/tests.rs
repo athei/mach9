@@ -85,6 +85,58 @@ fn only_selects_keys_of_one_exe_on_each_leg() {
 }
 
 #[test]
+fn only_runs_a_unit_s_keys_in_listing_order() {
+    let config = config();
+    let d3d12 = config.exes.iter().find(|exe| exe.name == "d3d12").unwrap();
+    let only = parse_only(
+        "d3d12/test_ordinals,d3d12/test_create_device,d3d12/test_interfaces",
+        d3d12,
+    )
+    .unwrap();
+    let listed = suites(&[
+        "test_interfaces",
+        "test_create_device",
+        "test_draw",
+        "test_ordinals",
+    ]);
+    assert_eq!(
+        select_listed(&listed, &only, "d3d12").unwrap(),
+        [
+            function("test_interfaces"),
+            function("test_create_device"),
+            function("test_ordinals"),
+        ]
+    );
+}
+
+#[test]
+fn only_takes_no_key_of_another_unit() {
+    let only = BTreeSet::from([
+        (String::from("ddraw7"), function("test_coop_level")),
+        (String::from("ddraw4"), function("test_surface")),
+        (String::from("ddraw4"), function("test_clipper")),
+    ]);
+    let listed = suites(&["test_surface", "test_coop_level", "test_clipper"]);
+    assert_eq!(
+        select_listed(&listed, &only, "ddraw4").unwrap(),
+        [function("test_surface"), function("test_clipper")]
+    );
+}
+
+#[test]
+fn only_with_a_key_the_listing_lacks_is_an_error() {
+    let only = BTreeSet::from([
+        (String::from("d3d12"), function("test_gone")),
+        (String::from("d3d12"), function("test_ordinals")),
+    ]);
+    let listed = suites(&["test_ordinals", "test_interfaces"]);
+    assert_eq!(
+        select_listed(&listed, &only, "d3d12"),
+        Err(&function("test_gone"))
+    );
+}
+
+#[test]
 fn bad_selections_are_errors() {
     let config = config();
     for (names, leg, only, expected) in [
@@ -346,6 +398,37 @@ fn run_runs_again_the_listed_keys_whose_change_gates() {
         &triage("d3d12/d3d12/test_d flaky\n"),
     );
     assert_eq!(run_again(&report), [(worse, OK), (better, FAIL)]);
+}
+
+/// `run` runs its second runs in the order the first pass ran the keys,
+/// not in name order.
+#[test]
+fn run_runs_the_keys_again_in_the_first_pass_s_order() {
+    let [a, b, c] = ["test_a", "test_b", "test_c"].map(|key| id(PeDir::X86_64, key));
+    let i386 = id(PeDir::I386, "test_c");
+    let old = baseline(&[(&a, OK), (&b, OK), (&c, OK), (&i386, OK)]);
+    let first = map(&[(&a, FAIL), (&b, OK), (&c, FAIL), (&i386, FAIL)]);
+    let report = diff::diff(
+        "d3d12",
+        Some(&old),
+        &header(),
+        &first,
+        &Scope::All,
+        &triage(""),
+    );
+    let order = [i386.clone(), c.clone(), b, a.clone()];
+    assert_eq!(run_again_in_order(&report, &order), [i386, c, a]);
+}
+
+/// `record` runs its second runs in the order the first pass ran the keys,
+/// not in name order; a key the order lacks comes last.
+#[test]
+fn record_runs_the_keys_again_in_the_first_pass_s_order() {
+    let [a, b, c, d] = ["test_a", "test_b", "test_c", "test_d"].map(|key| id(PeDir::I386, key));
+    let old = baseline(&[(&a, OK), (&b, OK), (&c, OK), (&d, OK)]);
+    let first = map(&[(&a, FAIL), (&b, FAIL), (&c, OK), (&d, FAIL)]);
+    let order = [d.clone(), c, a.clone()];
+    assert_eq!(to_confirm_in_order(Some(&old), &first, &order), [d, a, b]);
 }
 
 /// A key whose second run gives the baseline's outcome is unstable and no

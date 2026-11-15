@@ -362,6 +362,7 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   [`diff.rs`](../conformance/src/diff.rs).
 - `run` runs again each baselined key whose change fails the run; `record`
   each key whose result differs from the old baseline, new keys included.
+  Both run them in the order the first pass did.
   Mark an unstable key `flaky` in the triage file.
 - `record` refuses to record one leg or some keys of a suite on another
   build than its baseline's: record the whole suite.
@@ -376,7 +377,8 @@ After a regression:
 - On the machine that recorded the baseline, `baseline-raw/<suite>/` has
   the same test's log from that record.
 - Rerun one key alone, which also rules out a process an earlier key left
-  running; `--only` takes a comma-separated list:
+  running; `--only` takes a comma-separated list, whose keys run in the
+  order a whole leg runs them, whatever the order of the list:
 
   ```bash
   cargo run -p conformance -- run d3d11 --leg x86_64 --only d3d11/test_create_device

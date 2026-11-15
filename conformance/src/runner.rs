@@ -366,6 +366,34 @@ pub fn parse_only(text: &str, exe: &Exe) -> Result<BTreeSet<(String, Key)>, Stri
     Ok(keys)
 }
 
+/// The keys of `unit` that `only` selects, in the order of `listed`, the
+/// unit's listing, so that a selection runs in the order a whole leg does.
+///
+/// # Errors
+///
+/// Returns a selected key of `unit` that `listed` does not name.
+fn select_listed<'o>(
+    listed: &[String],
+    only: &'o BTreeSet<(String, Key)>,
+    unit: &str,
+) -> Result<Vec<Key>, &'o Key> {
+    let wanted = only
+        .iter()
+        .filter(|(selected, _)| selected == unit)
+        .map(|(_, key)| key);
+    if let Some(missing) = wanted
+        .clone()
+        .find(|key| !listed.iter().any(|name| key.as_str() == name))
+    {
+        return Err(missing);
+    }
+    Ok(listed
+        .iter()
+        .filter(|name| wanted.clone().any(|key| key.as_str() == name.as_str()))
+        .map(|name| Key::Function(name.clone()))
+        .collect())
+}
+
 /// Check that the `compatdb:` block of `exe_file`'s process in `output`
 /// names what `expect` asks for; a `wined3d` line that says `unset` counts
 /// as [`Wined3d::Gl`].
@@ -634,6 +662,14 @@ struct LegRun {
     confirm: BTreeMap<(String, Key), Outcome>,
 }
 
+/// What the first pass of one executable gave.
+struct FirstPass {
+    results: BTreeMap<TestId, Outcome>,
+    /// The keys in the order the pass ran them: leg by leg, the keys of each
+    /// unit in the order of its listing.
+    order: Vec<TestId>,
+}
+
 /// What every test of an invocation shares.
 struct Runner<'a> {
     bundle: &'a Bundle,
@@ -676,11 +712,15 @@ impl Runner<'_> {
     ) -> Result<Verdict, Failure> {
         let exe = &plan.exe.name;
         let mut legs = self.open_legs(plan, Mode::Run, header)?;
-        let first = self.first_pass(plan, &mut legs)?;
+        let FirstPass {
+            results: first,
+            order,
+        } = self.first_pass(plan, &mut legs)?;
         let report = diff::diff(exe, Some(baseline), header, &first, &plan.scope, triage);
         let mut second = BTreeMap::new();
-        for (id, _) in run_again(&report) {
-            second.insert(id.clone(), self.confirm(plan, &mut legs, &id)?);
+        for id in run_again_in_order(&report, &order) {
+            let outcome = self.confirm(plan, &mut legs, &id)?;
+            second.insert(id, outcome);
         }
         if self.layer_env.is_some() {
             let ids: Vec<&TestId> = first.keys().collect();
@@ -708,9 +748,12 @@ impl Runner<'_> {
     ) -> Result<usize, Failure> {
         let exe = &plan.exe.name;
         let mut legs = self.open_legs(plan, Mode::Record, header)?;
-        let first = self.first_pass(plan, &mut legs)?;
+        let FirstPass {
+            results: first,
+            order,
+        } = self.first_pass(plan, &mut legs)?;
         let mut second = BTreeMap::new();
-        for id in record::to_confirm(old, &first) {
+        for id in to_confirm_in_order(old, &first, &order) {
             let outcome = self.confirm(plan, &mut legs, &id)?;
             second.insert(id, outcome);
         }
@@ -782,12 +825,9 @@ impl Runner<'_> {
 
     /// Run every key of `plan` once, leg by leg, taking the resumed ones
     /// from the leg's state.
-    fn first_pass(
-        &mut self,
-        plan: &Plan<'_>,
-        legs: &mut [LegRun],
-    ) -> Result<BTreeMap<TestId, Outcome>, Failure> {
+    fn first_pass(&mut self, plan: &Plan<'_>, legs: &mut [LegRun]) -> Result<FirstPass, Failure> {
         let mut results = BTreeMap::new();
+        let mut order = Vec::new();
         for leg_run in legs {
             let leg = leg_run.leg;
             for unit in plan
@@ -810,18 +850,17 @@ impl Runner<'_> {
                         append(&mut leg_run.resume, Pass::First, &unit.name, &key, outcome)?;
                         outcome
                     };
-                    results.insert(
-                        TestId {
-                            leg,
-                            unit: unit.name.clone(),
-                            key,
-                        },
-                        outcome,
-                    );
+                    let id = TestId {
+                        leg,
+                        unit: unit.name.clone(),
+                        key,
+                    };
+                    order.push(id.clone());
+                    results.insert(id, outcome);
                 }
             }
         }
-        Ok(results)
+        Ok(FirstPass { results, order })
     }
 
     /// Run `id` a second time, or take its second result from the state.
@@ -850,8 +889,9 @@ impl Runner<'_> {
         Ok(outcome)
     }
 
-    /// The keys of `unit` the plan runs: those its listing prints, or the
-    /// `--only` ones, which the listing must print.
+    /// The keys of `unit` the plan runs, in the order its listing prints
+    /// them: all of them, or the `--only` ones, which the listing must
+    /// print.
     fn listed_keys(
         &mut self,
         plan: &Plan<'_>,
@@ -862,22 +902,14 @@ impl Runner<'_> {
         let Some(only) = &plan.only else {
             return Ok(listed.into_iter().map(Key::Function).collect());
         };
-        let wanted: Vec<Key> = only
-            .iter()
-            .filter(|(selected, _)| selected == unit)
-            .map(|(_, key)| key.clone())
-            .collect();
-        for key in &wanted {
-            if !listed.iter().any(|name| key.as_str() == name) {
-                return Err(Failure::Setup(format!(
-                    "{} {}: the listing of {unit} has no key {key}; it lists {}",
-                    plan.exe.name,
-                    leg.as_str(),
-                    listed.join(", ")
-                )));
-            }
-        }
-        Ok(wanted)
+        select_listed(&listed, only, unit).map_err(|key| {
+            Failure::Setup(format!(
+                "{} {}: the listing of {unit} has no key {key}; it lists {}",
+                plan.exe.name,
+                leg.as_str(),
+                listed.join(", ")
+            ))
+        })
     }
 
     /// The listing of `unit` on `leg`, which must be trustworthy and come
@@ -1212,6 +1244,35 @@ pub fn run_again(report: &diff::Report) -> Vec<(TestId, Outcome)> {
         .filter(|change| change.run.is_some() && change.class().is_some())
         .filter_map(|change| Some((change.id.clone(), change.baseline?)))
         .collect()
+}
+
+/// The keys [`run_again`] names, in `order`, the order the first pass ran
+/// them, so that their second runs follow each other as in a whole leg.
+fn run_again_in_order(report: &diff::Report, order: &[TestId]) -> Vec<TestId> {
+    in_order(run_again(report).into_iter().map(|(id, _)| id), order)
+}
+
+/// The keys [`record::to_confirm`] names, in `order`, the order the first
+/// pass ran them.
+fn to_confirm_in_order(
+    old: Option<&Baseline>,
+    first: &BTreeMap<TestId, Outcome>,
+    order: &[TestId],
+) -> Vec<TestId> {
+    in_order(record::to_confirm(old, first), order)
+}
+
+/// `ids` sorted by their place in `order`; an id `order` lacks comes after
+/// those it has, in the order of `ids`.
+fn in_order(ids: impl IntoIterator<Item = TestId>, order: &[TestId]) -> Vec<TestId> {
+    let place: BTreeMap<&TestId, usize> = order
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (id, index))
+        .collect();
+    let mut ids: Vec<TestId> = ids.into_iter().collect();
+    ids.sort_by_key(|id| place.get(id).copied().unwrap_or(usize::MAX));
+    ids
 }
 
 /// What `run` concludes for one executable.
