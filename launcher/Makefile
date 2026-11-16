@@ -55,8 +55,13 @@ INFO_SRC := $(LAUNCHER)/app/Info.plist
 
 # The version stamped into the app and the plug-in (scripts/version.sh): the
 # workspace version in the root Cargo.toml unless given here. A release run
-# passes the tag's, X.Y.Z or X.Y.Z-rc.N.
+# passes the tag's, X.Y.Z or X.Y.Z-rc.N. SHORT_VERSION replaces the
+# CFBundleShortVersionString only, for a test build (version.sh
+# --test-build), and leaves CFBundleVersion, which Sparkle compares, at
+# VERSION's.
 VERSION :=
+SHORT_VERSION :=
+SHORT_ARGS = $(if $(SHORT_VERSION),--short "$(SHORT_VERSION)")
 ICON     := $(LAUNCHER)/app/mach9.icns
 APP_NAME := $(shell $(PLIST) -c 'Print :CFBundleName' "$(INFO_SRC)")
 STAGE_APP = $(STAGE)/$(APP_NAME).app
@@ -118,8 +123,8 @@ define populate
 	ditto "$(SPARKLE_FW)" "$(1)/Contents/Frameworks/Sparkle.framework"
 	cp "$(ICON)" "$(1)/Contents/Resources/"
 	cp "$(INFO_SRC)" "$(1)/Contents/Info.plist"
-	$(SCRIPTS)/version.sh --stamp "$(1)" $(VERSION)
-	$(SCRIPTS)/version.sh --stamp "$(1)/Contents/PlugIns/$(PLUGIN_NAME).docktileplugin" $(VERSION)
+	$(SCRIPTS)/version.sh --stamp $(SHORT_ARGS) "$(1)" $(VERSION)
+	$(SCRIPTS)/version.sh --stamp $(SHORT_ARGS) "$(1)/Contents/PlugIns/$(PLUGIN_NAME).docktileplugin" $(VERSION)
 	@set -e; \
 	app_id="$$($(PLIST) -c 'Print :CFBundleIdentifier' "$(1)/Contents/Info.plist")"; \
 	class="$(PLUGIN_NAME)_$$(printf '%s' "$$app_id" | tr -c '[:alnum:]' '_')"; \
