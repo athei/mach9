@@ -759,6 +759,16 @@ from one upstream `wine-X.Y` tag to the next. To move FEX to a newer tag:
   CRC32 for a full SMC check, which only `DEF_OP(ValidateCode)` emits.
   Check that `git grep -n 'crc32[bhwx](' FEXCore/Source` still finds
   only the lines of that function.
+- llvm-mingw can give a local of a `preserve_all` function the stack slot
+  its prologue saves a callee-saved register to
+  ([llvm/llvm-project#242966](https://github.com/llvm/llvm-project/issues/242966)).
+  "FEXCore: Keep locals out of the preserve_all frames of eight F80
+  fallbacks" makes the handlers that hit it wrappers without locals
+  around a normal-ABI `Impl`. Drop the commit once llvm-mingw has the
+  fix. The `x87_callee_saved` case of `smoke/fex.c` fails when a handler
+  it calls is hit again, and Step 4d's `check_fex_save_slots` fails when
+  any function of the FEX DLLs is. An assertion build of FEX has more such
+  handlers and fails the check, so bundles take a release build.
 - Push the branch to athei/FEX before building without `FEX_REPO`
   pointing at the local clone; the default builds what the remote has.
 - After the bundle step, run all suites with the

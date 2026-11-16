@@ -8,9 +8,10 @@
  * compiles, memory syscalls with their out-params on a compiled page, queries of
  * one and writes into one from this process and from a child, code and
  * protections a child changes, other syscalls that write their buffer on a
- * compiled page, and x87 code that a fault or a write to its own page
- * interrupts. FEX has hung on or got most of these wrong; the others guard
- * behaviour that already worked.
+ * compiled page, x87 code that a fault or a write to its own page interrupts,
+ * and x87 operations that must leave the callee-saved registers alone. FEX has
+ * hung on or got most of these wrong; the others guard behaviour that already
+ * worked.
  *
  * The cases run in order in one process, or just those named on the command
  * line; trapped_write_other, cross_process_smc, cross_process_rx,
@@ -1872,6 +1873,153 @@ static void x87_push_smc(void)
     }
 }
 
+/* x87_callee_saved: one x87 operation per function, between a marker in each
+ * callee-saved register (x86_64: also all 128 bits of XMM6 to XMM15) and a
+ * store of them, all in one block. FEX's helpers for these must leave the
+ * guest's callee-saved registers alone. At full precision each operation calls
+ * the F80 helper its name says (load_store, fldt and fstps_m32 the conversions
+ * to f64 and f32, fistp_* and fisttp_* the integer ones, fbld and fbstp the BCD
+ * ones), except fild_m32, whose conversion is inline and which is a control.
+ * At reduced precision only fldt (the m80 conversion), fsin_big (the F64 sine
+ * outside its inline range), fbld and fbstp still call a helper; fsincos uses
+ * the inline sine and cosine. Every changed register is listed, then the case
+ * fails. */
+double x87_res __asm__("x87_res");
+int x87_int __asm__("x87_int") = 3;
+short x87_i16 __asm__("x87_i16");
+long long x87_i64 __asm__("x87_i64");
+unsigned char x87_bcd[10] __asm__("x87_bcd") = {0x42};
+/* 1.0 as an 80-bit value: the significand's integer bit, then exponent 0x3fff */
+const unsigned char x87_m80[10] __asm__("x87_m80") = {0, 0, 0, 0, 0, 0, 0, 0x80, 0xff, 0x3f};
+/* Past 2^23, where FEX's inline sine in reduced precision gives up */
+const double x87_big __asm__("x87_big") = 1e9;
+
+#if defined(__x86_64__)
+#define X87_MEM(s) #s "(%rip)"
+#define X87_XMM_IN(n, off) "movdqu x87_want+" #off "(%rip), %xmm" #n "\n"
+#define X87_XMM_OUT(n, off) "movdqu %xmm" #n ", " #off "(%rax)\n"
+#define X87_ENTER \
+    "push %rbx\npush %rbp\npush %rsi\npush %rdi\npush %r12\npush %r13\npush %r14\npush %r15\n" \
+    "sub $168, %rsp\n" \
+    "movdqu %xmm6, 0(%rsp)\nmovdqu %xmm7, 16(%rsp)\nmovdqu %xmm8, 32(%rsp)\nmovdqu %xmm9, 48(%rsp)\n" \
+    "movdqu %xmm10, 64(%rsp)\nmovdqu %xmm11, 80(%rsp)\nmovdqu %xmm12, 96(%rsp)\nmovdqu %xmm13, 112(%rsp)\n" \
+    "movdqu %xmm14, 128(%rsp)\nmovdqu %xmm15, 144(%rsp)\nmov %rcx, 160(%rsp)\n" \
+    "mov x87_want+0(%rip), %rbx\nmov x87_want+8(%rip), %rbp\nmov x87_want+16(%rip), %rsi\n" \
+    "mov x87_want+24(%rip), %rdi\nmov x87_want+32(%rip), %r12\nmov x87_want+40(%rip), %r13\n" \
+    "mov x87_want+48(%rip), %r14\nmov x87_want+56(%rip), %r15\n" \
+    X87_XMM_IN(6, 64) X87_XMM_IN(7, 80) X87_XMM_IN(8, 96) X87_XMM_IN(9, 112) X87_XMM_IN(10, 128) \
+    X87_XMM_IN(11, 144) X87_XMM_IN(12, 160) X87_XMM_IN(13, 176) X87_XMM_IN(14, 192) X87_XMM_IN(15, 208)
+#define X87_LEAVE \
+    "mov 160(%rsp), %rax\n" \
+    "mov %rbx, 0(%rax)\nmov %rbp, 8(%rax)\nmov %rsi, 16(%rax)\nmov %rdi, 24(%rax)\n" \
+    "mov %r12, 32(%rax)\nmov %r13, 40(%rax)\nmov %r14, 48(%rax)\nmov %r15, 56(%rax)\n" \
+    X87_XMM_OUT(6, 64) X87_XMM_OUT(7, 80) X87_XMM_OUT(8, 96) X87_XMM_OUT(9, 112) X87_XMM_OUT(10, 128) \
+    X87_XMM_OUT(11, 144) X87_XMM_OUT(12, 160) X87_XMM_OUT(13, 176) X87_XMM_OUT(14, 192) X87_XMM_OUT(15, 208) \
+    "movdqu 0(%rsp), %xmm6\nmovdqu 16(%rsp), %xmm7\nmovdqu 32(%rsp), %xmm8\nmovdqu 48(%rsp), %xmm9\n" \
+    "movdqu 64(%rsp), %xmm10\nmovdqu 80(%rsp), %xmm11\nmovdqu 96(%rsp), %xmm12\nmovdqu 112(%rsp), %xmm13\n" \
+    "movdqu 128(%rsp), %xmm14\nmovdqu 144(%rsp), %xmm15\nadd $168, %rsp\n" \
+    "pop %r15\npop %r14\npop %r13\npop %r12\npop %rdi\npop %rsi\npop %rbp\npop %rbx\nret\n"
+typedef unsigned long long x87_reg;
+#define X87_XMM_NAMES(n) "xmm" #n " low", "xmm" #n " high"
+static const char *const x87_reg_names[] = {
+    "rbx", "rbp", "rsi", "rdi", "r12", "r13", "r14", "r15",
+    X87_XMM_NAMES(6), X87_XMM_NAMES(7), X87_XMM_NAMES(8), X87_XMM_NAMES(9), X87_XMM_NAMES(10),
+    X87_XMM_NAMES(11), X87_XMM_NAMES(12), X87_XMM_NAMES(13), X87_XMM_NAMES(14), X87_XMM_NAMES(15),
+};
+#define X87_XMM_MARKS(n) 0xa0a0a0a0a0a0a000ull + n, 0xb0b0b0b0b0b0b000ull + n
+const x87_reg x87_want[] __asm__("x87_want") = {
+    0x1111111111111111ull, 0x2222222222222222ull, 0x3333333333333333ull, 0x4444444444444444ull,
+    0x5555555555555555ull, 0x6666666666666666ull, 0x7777777777777777ull, 0x8888888888888888ull,
+    X87_XMM_MARKS(6), X87_XMM_MARKS(7), X87_XMM_MARKS(8), X87_XMM_MARKS(9), X87_XMM_MARKS(10),
+    X87_XMM_MARKS(11), X87_XMM_MARKS(12), X87_XMM_MARKS(13), X87_XMM_MARKS(14), X87_XMM_MARKS(15),
+};
+#else
+#define X87_MEM(s) #s
+#define X87_ENTER \
+    "push %ebx\npush %ebp\npush %esi\npush %edi\nmov 20(%esp), %eax\npush %eax\n" \
+    "mov x87_want+0, %ebx\nmov x87_want+4, %ebp\nmov x87_want+8, %esi\nmov x87_want+12, %edi\n"
+#define X87_LEAVE \
+    "mov (%esp), %eax\nmov %ebx, 0(%eax)\nmov %ebp, 4(%eax)\nmov %esi, 8(%eax)\nmov %edi, 12(%eax)\n" \
+    "pop %eax\npop %edi\npop %esi\npop %ebp\npop %ebx\nret\n"
+typedef unsigned int x87_reg;
+static const char *const x87_reg_names[] = {"ebx", "ebp", "esi", "edi"};
+const x87_reg x87_want[] __asm__("x87_want") = {0x11111111, 0x22222222, 0x33333333, 0x44444444};
+#endif
+
+#define X87_REGS (sizeof(x87_want) / sizeof(x87_want[0]))
+#define X87_ST "fstpl " X87_MEM(x87_res) "\n"
+#define X87_OP(name, body) \
+    extern void x87op_##name(x87_reg *out) __asm__("x87op_" #name); \
+    __asm__(".text\n.globl x87op_" #name "\n.p2align 4\nx87op_" #name ":\n" X87_ENTER body X87_LEAVE);
+
+X87_OP(load_store, "fld1\n" X87_ST)
+X87_OP(fldt, "fldt " X87_MEM(x87_m80) "\n" X87_ST)
+X87_OP(fstps_m32, "fld1\nfstps " X87_MEM(x87_res) "\n")
+X87_OP(fadd, "fld1\nfld1\nfaddp\n" X87_ST)
+X87_OP(fsub, "fld1\nfld1\nfsubp\n" X87_ST)
+X87_OP(fmul, "fld1\nfld1\nfmulp\n" X87_ST)
+X87_OP(fdiv, "fld1\nfld1\nfdivrp\n" X87_ST)
+X87_OP(fsqrt, "fld1\nfsqrt\n" X87_ST)
+X87_OP(fcompp, "fld1\nfld1\nfcompp\n")
+X87_OP(fsin, "fld1\nfsin\n" X87_ST)
+X87_OP(fsin_big, "fldl " X87_MEM(x87_big) "\nfsin\n" X87_ST)
+X87_OP(fcos, "fld1\nfcos\n" X87_ST)
+X87_OP(fptan, "fld1\nfptan\n" X87_ST X87_ST)
+X87_OP(fpatan, "fld1\nfld1\nfpatan\n" X87_ST)
+X87_OP(fsincos, "fld1\nfsincos\n" X87_ST X87_ST)
+X87_OP(f2xm1, "fld1\nf2xm1\n" X87_ST)
+X87_OP(fyl2x, "fld1\nfld1\nfyl2x\n" X87_ST)
+X87_OP(fyl2xp1, "fld1\nfldz\nfyl2xp1\n" X87_ST)
+X87_OP(fscale, "fld1\nfld1\nfscale\n" X87_ST X87_ST)
+X87_OP(fprem, "fld1\nfld1\nfprem\n" X87_ST X87_ST)
+X87_OP(fprem1, "fld1\nfld1\nfprem1\n" X87_ST X87_ST)
+X87_OP(frndint, "fld1\nfrndint\n" X87_ST)
+X87_OP(fxtract, "fld1\nfxtract\n" X87_ST X87_ST)
+X87_OP(fbstp, "fld1\nfbstp " X87_MEM(x87_bcd) "\n")
+X87_OP(fbld, "fbld " X87_MEM(x87_bcd) "\n" X87_ST)
+X87_OP(fistp_m16, "fld1\nfistps " X87_MEM(x87_i16) "\n")
+X87_OP(fistp_m32, "fld1\nfistpl " X87_MEM(x87_int) "\n")
+X87_OP(fistp_m64, "fld1\nfistpll " X87_MEM(x87_i64) "\n")
+X87_OP(fisttp_m16, "fld1\nfisttps " X87_MEM(x87_i16) "\n")
+X87_OP(fisttp_m32, "fld1\nfisttpl " X87_MEM(x87_int) "\n")
+X87_OP(fisttp_m64, "fld1\nfisttpll " X87_MEM(x87_i64) "\n")
+X87_OP(fild_m32, "fildl " X87_MEM(x87_int) "\n" X87_ST)
+
+static void x87_callee_saved(void)
+{
+#define X87(name) { #name, x87op_##name }
+    static const struct
+    {
+        const char *name;
+        void (*run)(x87_reg *);
+    } ops[] =
+    {
+        X87(load_store), X87(fldt), X87(fstps_m32), X87(fadd), X87(fsub), X87(fmul), X87(fdiv), X87(fsqrt),
+        X87(fcompp), X87(fsin), X87(fsin_big), X87(fcos), X87(fptan), X87(fpatan), X87(fsincos), X87(f2xm1),
+        X87(fyl2x), X87(fyl2xp1), X87(fscale), X87(fprem), X87(fprem1), X87(frndint), X87(fxtract),
+        X87(fbstp), X87(fbld), X87(fistp_m16), X87(fistp_m32), X87(fistp_m64), X87(fisttp_m16),
+        X87(fisttp_m32), X87(fisttp_m64), X87(fild_m32),
+    };
+#undef X87
+    x87_reg out[X87_REGS];
+    char changed[2048] = "";
+    size_t i, r, len;
+
+    for (i = 0; i < sizeof(ops) / sizeof(ops[0]); i++)
+    {
+        memset(out, 0, sizeof(out));
+        ops[i].run(out);
+        for (r = 0; r < X87_REGS; r++)
+        {
+            if (out[r] == x87_want[r]) continue;
+            len = strlen(changed);
+            snprintf(changed + len, sizeof(changed) - len, "%s %s %s=%#llx", len ? "," : "", ops[i].name,
+                     x87_reg_names[r], (unsigned long long)out[r]);
+        }
+    }
+    if (changed[0]) FAIL("changed:%s", changed);
+}
+
 #define CASE(name) { #name, name }
 static const struct
 {
@@ -1929,6 +2077,7 @@ static const struct
     CASE(x87_fault),
     CASE(x87_inline_smc),
     CASE(x87_push_smc),
+    CASE(x87_callee_saved),
 };
 
 static int selected(const char *name, int argc, char **argv)

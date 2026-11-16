@@ -1716,6 +1716,28 @@ check_fex_runs() {
     done
 }
 
+# check_fex_save_slots <pe>...: exit unless bin/check-save-slots.pl finds no
+# function in the FEX DLLs <pe> that stores into the stack slot where its own
+# prologue saved a callee-saved register, before restoring it: llvm-mingw
+# does that in some preserve_all functions (FEX in maintenance.md). The DLLs
+# must still have their COFF symbols, so this runs on FEX_DIST's copies,
+# before Step 4e. Each DLL is checked in its own process, at the same time.
+check_fex_save_slots() {
+    local pe pids=() logs=() failed=0 i
+    for pe in "$@"; do
+        logs+=("$TMP_DIR/save-slots-${#logs[@]}.log")
+        perl "$REPO_DIR/bin/check-save-slots.pl" "$MINGW_DIR/bin/llvm-objdump" "$pe" >"${logs[${#logs[@]}-1]}" 2>&1 &
+        pids+=($!)
+    done
+    for i in "${!pids[@]}"; do
+        wait "${pids[$i]}" || failed=1
+        cat "${logs[$i]}"
+    done
+    if [ "$failed" -ne 0 ]; then
+        exit 1
+    fi
+}
+
 # check_fex_disk_cache <arch>: exit with the log unless the FEX_DISKCACHE=1 run
 # of fex.exe for <arch> left a disk cache database in the prefix. FEX runs, and
 # the cases pass, without its cache when DiskCache::Init cannot create the
@@ -3118,9 +3140,9 @@ if [ "$SKIP_SMOKE" -eq 0 ]; then
         fi
     done
 fi
-for tool in llvm-strip llvm-objdump; do
-    if [ ! -x "$MINGW_DIR/bin/$tool" ]; then
-        echo "Error: no $tool in $MINGW_DIR/bin (Step 4e needs it)"
+for tool in "llvm-strip:Step 4e needs it" "llvm-objdump:Steps 4d and 4e need it"; do
+    if [ ! -x "$MINGW_DIR/bin/${tool%%:*}" ]; then
+        echo "Error: no ${tool%%:*} in $MINGW_DIR/bin (${tool#*:})"
         exit 1
     fi
 done
@@ -3780,6 +3802,7 @@ cp "$fexpe/libarm64ecfex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/"
 cp "$fexpe/libarm64ecfex.dll" "$WINE_DIR/lib/wine/$PE64_DIR/xtajit64.dll"
 echo "    $UNIX_DIR/libwow64fex.so, libarm64ecfex.so"
 cp "$fexunix/libwow64fex.so" "$fexunix/libarm64ecfex.so" "$unixdir/"
+check_fex_save_slots "$fexpe/libwow64fex.dll" "$fexpe/libarm64ecfex.dll"
 
 # ── Step 4e: Split off PE symbols ───────────────────────────────────────
 # Wine, DXMT and FEX are built with DWARF debug info, and most PE files also
