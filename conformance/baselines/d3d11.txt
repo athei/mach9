@@ -1,9 +1,9 @@
 # Conformance baseline of d3d11_test.exe, one line per test.
 # Written by `cargo run -p conformance -- record d3d11`: do not edit.
-# wine: wine-11.21-44-gaabfecff0ab
-# component: dxmt=01e59e9bde030f105937f249afaac92ada01b4d7
-# component: fex=8425ea974e072821c75969723efe49cca605200c
-# component: mesa=7bbfd48b2e7490a2091716087647d7ddf8f7c408
+# wine: wine-11.21-49-g93e47dbe874
+# component: dxmt=10e27aed3f5ce32c70a64ab05db0d50fb117f270
+# component: fex=e7b5fbf07879845530dd0b8fb551ea81adc47849
+# component: mesa=d62ee13d1802dd076267611dbbc09cddece95f9c
 # component: vkd3d-proton=c5e2c9b8c55872893e3ba47d60448dd4f35185ef
 # component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
 
@@ -140,7 +140,7 @@ test_sm4_if_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm4_ret_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm5_bufinfo_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm5_swapc_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_so_statistics_query fail failed=7 sites=7 todo_succeeded=21 skipped=0
+test_so_statistics_query ok failed=0 sites=0 todo_succeeded=21 skipped=0
 test_staging_buffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_standard_pattern ok failed=0 sites=0 todo_succeeded=8 skipped=0
 test_state_refcounting ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -148,7 +148,7 @@ test_stencil_export ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_separate ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output_components ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_stream_output_resume fail failed=18 sites=1 todo_succeeded=0 skipped=0
+test_stream_output_resume ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output_vs ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_flip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_formats ok failed=0 sites=0 todo_succeeded=7 skipped=0
@@ -172,7 +172,7 @@ test_unbound_streams ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_update_subresource ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_user_defined_annotation ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_vertex_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_vertex_id fail failed=19 sites=2 todo_succeeded=0 skipped=0
+test_vertex_id ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_video_support crash failed=1 sites=1 todo_succeeded=0 skipped=0
 test_vs_input_relative_addressing ok failed=0 sites=0 todo_succeeded=0 skipped=0
 
@@ -309,7 +309,7 @@ test_sm4_if_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm4_ret_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm5_bufinfo_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_sm5_swapc_instruction ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_so_statistics_query fail failed=7 sites=7 todo_succeeded=21 skipped=0
+test_so_statistics_query ok failed=0 sites=0 todo_succeeded=21 skipped=0
 test_staging_buffers ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_standard_pattern ok failed=0 sites=0 todo_succeeded=8 skipped=0
 test_state_refcounting ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -317,7 +317,7 @@ test_stencil_export ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stencil_separate ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output_components ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_stream_output_resume fail failed=18 sites=1 todo_succeeded=0 skipped=0
+test_stream_output_resume ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_stream_output_vs ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_flip ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_swapchain_formats ok failed=0 sites=0 todo_succeeded=7 skipped=0
@@ -341,6 +341,6 @@ test_unbound_streams ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_update_subresource ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_user_defined_annotation ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_vertex_formats ok failed=0 sites=0 todo_succeeded=0 skipped=0
-test_vertex_id fail failed=19 sites=2 todo_succeeded=0 skipped=0
+test_vertex_id ok failed=0 sites=0 todo_succeeded=0 skipped=0
 test_video_support crash failed=1 sites=1 todo_succeeded=0 skipped=0
 test_vs_input_relative_addressing ok failed=0 sites=0 todo_succeeded=0 skipped=0
