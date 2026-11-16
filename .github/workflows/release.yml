@@ -6,10 +6,18 @@ name: Build
 # environment. A tag vX.Y.Z or vX.Y.Z-rc.N also notarizes the app, builds
 # its DMG, appcast and deltas, and attaches them, the bundle and its
 # symbols to a draft release of that tag (docs/maintenance.md, releases).
-# A push to main that changes a file the build reads, the schedule, a
-# manual run and a pull request to main build, bundle, assemble and sign
-# the same, pack the app's DMG, check what packaging needs without packing,
-# and publish nothing.
+# A push to main that changes a file the build reads, the schedule and a
+# pull request to main build, bundle, assemble and sign the same, pack the
+# app's DMG, check what packaging needs without packing, and publish
+# nothing.
+#
+# A manual run is a test build, on main only: it builds as a push to main
+# does and also notarizes the app, uploads its DMG as an artifact of the
+# run and names the sources in the job summary. Its app's
+# CFBundleShortVersionString is the workspace version with the commit; its
+# CFBundleVersion, which Sparkle compares, is the workspace version's,
+# which has to be the latest published release's, so the next release is
+# offered to it as an update (version.sh --test-build).
 #
 # The logic lives in bin/, bin/ci/ and launcher/scripts/, which also run on
 # a Mac. Only a run on main saves caches: every later run can read those, so
@@ -60,6 +68,7 @@ on:
   # current.
   schedule:
     - cron: '47 5 * * 1,4'
+  # A test build (header).
   workflow_dispatch:
   # Every pull request to main, without a path filter: merging requires the
   # check this job reports, and a run that a filter skips reports none, which
@@ -74,9 +83,15 @@ on:
 # second tag waits for the first run and then meets its draft instead of
 # building an appcast on the same latest release. GitHub keeps only one
 # waiting run per group: a third tag pushed meanwhile cancels the waiting
-# one, which then has to be re-run.
+# one, which then has to be re-run. A test build takes a group of its own,
+# so a push to main never cancels it and it never waits for a build of main.
+# It is tested first, so one dispatched on a tag, which it then refuses,
+# never joins the tags' group and cancels a waiting release. A test build
+# can run beside a build of main, and both may save caches; the prune job
+# keeps the caches created after its run started, so neither deletes a
+# cache the other saved after it started.
 concurrency:
-  group: ${{ startsWith(github.ref, 'refs/tags/v') && 'release-tags' || format('release-{0}', github.ref) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('release-test-{0}', github.run_id) || startsWith(github.ref, 'refs/tags/v') && 'release-tags' || format('release-{0}', github.ref) }}
   cancel-in-progress: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request' }}
 
 # bash -eo pipefail, so a failure inside a pipe fails the step.
@@ -109,10 +124,23 @@ jobs:
     # release, whose deployment policy refuses the ref of a pull request, so
     # a pull request that changes this line gets no secrets from it. Only
     # release holds the secrets of a tag run's own steps, NOTARY_API_KEY,
-    # NOTARY_KEY_ID, NOTARY_ISSUER and SPARKLE_ED_KEY. A pull request from a
-    # fork gets no secrets at all, and its run stops at the first step.
+    # NOTARY_KEY_ID, NOTARY_ISSUER and SPARKLE_ED_KEY; a test build uses the
+    # NOTARY_ ones. A pull request from a fork gets no secrets at all, and
+    # its run stops at the first step.
     environment: ${{ github.event_name == 'pull_request' && 'pull-request' || 'release' }}
+    # Whether this run is a test build (header), for the steps' conditions.
+    env:
+      MACH9_TEST_BUILD: ${{ github.event_name == 'workflow_dispatch' }}
     steps:
+      # A test build runs on main only: the release environment refuses other
+      # branches, and on a tag the steps below would take it for a release.
+      # First, so a test build on a tag stops before any of them.
+      - name: Refuse a test build off main
+        if: env.MACH9_TEST_BUILD == 'true' && github.ref != 'refs/heads/main'
+        run: |
+          echo "A test build runs on main, not on $GITHUB_REF."
+          exit 1
+
       # A tag is a release version, as check_version in
       # launcher/scripts/lib.sh has it: vX.Y.Z, or vX.Y.Z-rc.N for a release
       # candidate of X.Y.Z, whose draft is a prerelease. Any other tag stops
@@ -190,6 +218,26 @@ jobs:
             exit 1
           fi
           scripts/launcher/scripts/appcast.sh --preflight "$VERSION"
+
+      # Before the build, a test build's workspace version has to be the
+      # latest published release's (version.sh --test-build), and the
+      # notarization secrets are checked for presence, without their values.
+      - name: Check the test build
+        id: test
+        if: env.MACH9_TEST_BUILD == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAVE_NOTARY: ${{ secrets.NOTARY_API_KEY != '' && secrets.NOTARY_KEY_ID != '' && secrets.NOTARY_ISSUER != '' }}
+        run: |
+          if [ "$HAVE_NOTARY" != true ]; then
+            echo "NOTARY_API_KEY, NOTARY_KEY_ID and NOTARY_ISSUER must all be set in the environment release."
+            exit 1
+          fi
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          echo "The latest release is $latest."
+          version=$(scripts/launcher/scripts/version.sh --test-build "$GITHUB_SHA" "${latest#v}")
+          echo "The test build is $version."
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # An empty ref would make the checkout below take the default branch.
       - name: Read the Wine source ref
@@ -554,15 +602,21 @@ jobs:
 
       # Mach9.app around the runtime-only bundle, in target/launcher/stage of
       # the checkout, unsigned (launcher/Makefile). A run on a tag stamps the
-      # tag's version into it, any other run the workspace version.
+      # tag's version into it, any other run the workspace version. A test
+      # build replaces the CFBundleShortVersionString with its own version,
+      # which the outputs carry.
       - name: Assemble Mach9.app
         id: app
         env:
           TAG_VERSION: ${{ steps.tag.outputs.version }}
+          TEST_VERSION: ${{ steps.test.outputs.version }}
         run: |
           if [ -n "$TAG_VERSION" ]; then
             version=$TAG_VERSION
             make -C scripts/launcher app WINE_RUNTIME="$RUNNER_TEMP/runtime/wine" VERSION="$version"
+          elif [ -n "$TEST_VERSION" ]; then
+            version=$TEST_VERSION
+            make -C scripts/launcher app WINE_RUNTIME="$RUNNER_TEMP/runtime/wine" SHORT_VERSION="$version"
           else
             version=$(scripts/launcher/scripts/version.sh)
             make -C scripts/launcher app WINE_RUNTIME="$RUNNER_TEMP/runtime/wine"
@@ -610,22 +664,14 @@ jobs:
 
       # What a release does with the app short of notarizing it: sign it with
       # the Developer ID identity of the keychain above, then pack its DMG on
-      # the runner, Finder styling included. A change that breaks either
-      # fails on main or in its pull request before a tag needs it.
+      # the runner, Finder styling included (Pack the DMG, below). A change
+      # that breaks either fails on main or in its pull request before a tag
+      # needs it. A test build notarizes the app in between.
       - name: Sign Mach9.app
         if: "!startsWith(github.ref, 'refs/tags/')"
         env:
           APP: ${{ steps.app.outputs.path }}
         run: scripts/launcher/scripts/codesign-bundle.sh sign "$APP"
-
-      - name: Pack the DMG
-        if: "!startsWith(github.ref, 'refs/tags/')"
-        env:
-          APP: ${{ steps.app.outputs.path }}
-          NAME: ${{ steps.app.outputs.name }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/app"
-          scripts/launcher/scripts/make-dmg.sh --out "$RUNNER_TEMP/app/$NAME.dmg" "$APP"
 
       # appcast.sh downloads the DMG of every release the appcast keeps, and
       # generate_appcast unpacks each to make the deltas. Nothing reads the
@@ -640,10 +686,11 @@ jobs:
           df -h "$GITHUB_WORKSPACE"
 
       # notarytool reads the App Store Connect API key from a file. Only this
-      # step and the next get the notarization secrets; the file is deleted
-      # at the end of the job.
+      # step and the one that notarizes, Notarize Mach9.app in a test build
+      # or Release Mach9.app on a tag, get the notarization secrets; the file
+      # is deleted at the end of the job.
       - name: Write the notarization key
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || env.MACH9_TEST_BUILD == 'true'
         env:
           NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
         run: |
@@ -653,6 +700,70 @@ jobs:
             echo "NOTARY_API_KEY is not set in the environment release."
             exit 1
           fi
+
+      # A test build is notarized and stapled, so Gatekeeper opens it on any
+      # Mac, before its DMG is packed around it, as make-release.sh does for
+      # a release. It gets no appcast and no deltas: no copy in the field is
+      # ever offered it.
+      - name: Notarize Mach9.app
+        if: env.MACH9_TEST_BUILD == 'true'
+        env:
+          APP: ${{ steps.app.outputs.path }}
+          NOTARY_KEY_PATH: ${{ runner.temp }}/notary-key.p8
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: scripts/launcher/scripts/codesign-bundle.sh notarize "$APP"
+
+      # A test build's DMG has the version in its name, which it keeps as
+      # the artifact below, so testers can tell builds apart.
+      - name: Pack the DMG
+        id: dmg
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        env:
+          APP: ${{ steps.app.outputs.path }}
+          NAME: ${{ steps.app.outputs.name }}
+          VERSION: ${{ steps.app.outputs.version }}
+        run: |
+          dmg=$RUNNER_TEMP/app/$NAME.dmg
+          if [ "$MACH9_TEST_BUILD" = true ]; then
+            dmg=$RUNNER_TEMP/app/$NAME-$VERSION.dmg
+          fi
+          mkdir -p "$RUNNER_TEMP/app"
+          scripts/launcher/scripts/make-dmg.sh --out "$dmg" "$APP"
+          echo "path=$dmg" >> "$GITHUB_OUTPUT"
+
+      # The DMG as it is, not zipped, so the artifact is the file a tester
+      # opens. Kept for a short time: a test build is for one round of
+      # testing, and the next one is a new run.
+      - name: Upload the test build
+        id: upload
+        if: env.MACH9_TEST_BUILD == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.dmg.outputs.path }}
+          archive: false
+          retention-days: 14
+          if-no-files-found: error
+
+      # The version, the download and the sources the bundle was built from
+      # (package.sh), on the run's page.
+      - name: Summarize the test build
+        if: env.MACH9_TEST_BUILD == 'true'
+        env:
+          APP: ${{ steps.app.outputs.path }}
+          NAME: ${{ steps.app.outputs.name }}
+          VERSION: ${{ steps.app.outputs.version }}
+          DMG: ${{ steps.dmg.outputs.path }}
+          URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")
+          {
+            printf '## %s %s\n\n' "$NAME" "$VERSION"
+            printf -- '- Download: [%s](%s)\n' "$(basename "$DMG")" "$URL"
+            printf -- '- CFBundleVersion: %s, so the next release is offered as an update\n' "$build"
+            printf '\n## Components\n\n'
+            cat "$RUNNER_TEMP/release/notes.md"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Signs, notarizes and staples the app, packs its DMG, and builds the
       # appcast and the deltas into this release on the appcast of the latest

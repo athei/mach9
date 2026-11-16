@@ -110,7 +110,8 @@ built before, which runs under Rosetta.
 | Trigger | What the run does |
 |---------|-------------------|
 | `v[0-9]*` tag | Builds the engine and the app, notarizes the app, builds its appcast and attaches everything to a draft release; never cancelled |
-| Push to `main` that changes a file the build or the app reads, the schedule, by hand | Builds and bundles, assembles and signs the app and its DMG, runs `package.sh --notes-only`, saves its caches when on `main`, publishes nothing |
+| Push to `main` that changes a file the build or the app reads, the schedule | Builds and bundles, assembles and signs the app and its DMG, runs `package.sh --notes-only`, saves its caches when on `main`, publishes nothing |
+| By hand, on `main` only | A [test build](#test-builds): as on `main`, and also notarizes the app and uploads its DMG as an artifact of the run |
 | Pull request to `main` (no `paths` filter, since its check is required) | As on `main`, in the environment `pull-request` after the owner approves it ([signing identity](#signing-identity)); saves no cache |
 
 - Every run is on a hosted runner of the floor's major macOS version,
@@ -230,6 +231,42 @@ release to the candidate:
 4. `defaults delete app.mach9 SUFeedURL`. The key is shared with the
    installed app.
 
+### Test builds
+
+Every manual run of `release.yml` is a test build: a notarized Mach9.app
+for testers, built from the pins, at the tips of the branches they name.
+To test a Wine or other fork change, merge it to its fork branch first,
+then:
+
+```bash
+gh workflow run release.yml --repo athei/mach9 --ref main
+```
+
+- A manual run on a tag or another branch is refused; a release comes
+  from pushing its tag.
+- The run signs, notarizes and staples the app and uploads its DMG,
+  `Mach9-<version>.dmg`, as an artifact of the run, which expires after a
+  short time. Its job summary links the DMG and names the sources the
+  bundle was built from (`package.sh`). It builds no appcast, deltas or
+  release.
+- The app's `CFBundleShortVersionString` is the workspace version and the
+  commit of this repository, `X.Y.Z-<commit>`. Its `CFBundleVersion` is
+  X.Y.Z's, so Sparkle offers it no update until the next release, and
+  then that release.
+- Its first update may try the delta from X.Y.Z, whose `CFBundleVersion`
+  it shares, fail the delta's check of the installed app, and download
+  the whole DMG instead.
+- The run refuses unless the workspace version is the latest published
+  release's (`version.sh --test-build`). Above it, as after a version bump
+  that is not released yet, the test build would carry that release's
+  `CFBundleVersion`, and Sparkle would never offer the release to it.
+  Below it, Sparkle would offer the latest release at once.
+- It is the same app as a release, with the same bundle id and settings:
+  installing it replaces the installed Mach9.
+- It saves caches as a push to `main` does. It runs in a concurrency
+  group of its own, so builds of `main` neither cancel it nor wait for
+  it.
+
 ### Updates in the field
 
 Every copy polls the `SUFeedURL` of its
@@ -338,8 +375,11 @@ branches read `main`'s caches and write none.
   `pins-key.sh` call for the downloads cache in `release.yml`. Sparkle is
   not in that cache; it has its own key.
 - A new commit on a branch a pin names, such as the Wine branch, starts no
-  run. The next scheduled run picks it up; or start a run on `main` by
-  hand before tagging.
+  run. The version bump's push to `main` builds the current tips and
+  saves the caches; a commit pushed to a fork after the bump is built by
+  the tag run, from `main`'s caches, or by the next scheduled run. A
+  manual run is a [test build](#test-builds) only, and is refused while
+  the workspace version differs from the latest release's.
 - GitHub evicts caches no run used for a week, which the scheduled runs
   prevent, and disables the scheduled workflows of a public repository
   after 60 days without activity. Re-enable `release.yml` and
@@ -399,8 +439,9 @@ in the field ([updates in the field](#updates-in-the-field)).
 
 ### Notarization and update keys
 
-A tag run also needs these secrets in the environment `release`, and no
-other run does:
+A tag run also needs these secrets in the environment `release`, a
+[test build](#test-builds) the `NOTARY_` ones, and no other run needs
+any:
 
 | Secret | What it holds |
 |--------|---------------|
