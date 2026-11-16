@@ -655,16 +655,147 @@ floor_import_hint() {
 }
 
 # run_limited <seconds> <log> <command>...: run the command with its output in
-# <log>, and stop it with SIGALRM after <seconds>; the alarm survives exec,
-# so the command may start with env. Sets RUN_STATUS to its exit status; 142
-# (128 + SIGALRM) means the alarm fired. perl, because macOS has no
-# timeout(1).
+# <log>, and stop it with SIGALRM after <seconds>. Sets RUN_STATUS to its exit
+# status; 142 (128 + SIGALRM) means the limit was reached. perl, because macOS
+# has no timeout(1).
+# At the limit, before anything is stopped, perl prints the pid and command
+# line of the command and of every process of the prefix that a WINEPREFIX=
+# argument of the command names, and a sample of each, taken side by side:
+# the processes stop with the prefix's wineserver (smoke_stop), and the
+# prefix goes with TMP_DIR. The prefix's processes are its wineserver, the
+# one that works from the prefix's server directory (server-<dev>-<ino> in
+# hex), and each process with a unix socket connected to that wineserver, so
+# the processes of other prefixes are left alone. Their environment cannot
+# tell: Wine writes the Windows command line over the strings that ps -E
+# reads. sample gets -file: without it, sample also keeps a copy of each
+# report in /tmp. ps and lsof run as children with a deadline of 10 seconds
+# for the whole listing and the samples with one of 60, and each that runs
+# past its deadline is killed: lsof can block in stat on an unresponsive
+# mount, and the root must still get its SIGALRM, at most about 75 seconds
+# after the limit. The command is perl's child and only perl reaps it, and
+# the alarm handler goes on only while waitpid says it is not reaped, so the
+# pid it signals cannot have passed to another process; the same holds for
+# each helper it kills.
 run_limited() {
     local secs="$1" log="$2"
     shift 2
     RUN_STATUS=0
-    perl -e 'alarm shift; exec @ARGV or die "exec: $!\n"' "$secs" "$@" >"$log" 2>&1 \
-        || RUN_STATUS=$?
+    perl -e '
+        my ($secs, $log) = splice(@ARGV, 0, 2);
+        my ($prefix, $pid, $status, $late);
+        /^WINEPREFIX=(.+)/s and $prefix = $1 for @ARGV;
+        $pid = fork() // die "fork: $!\n";
+        if (!$pid) {
+            open(STDOUT, ">", $log) or die "$log: $!\n";
+            open(STDERR, ">&STDOUT") or die "$log: $!\n";
+            exec @ARGV or die "exec: $!\n";
+        }
+        $| = 1;
+        $SIG{ALRM} = sub {
+            local ($?, $!);
+            require POSIX;
+            my $r = waitpid($pid, POSIX::WNOHANG());
+            $status = $? if $r == $pid;
+            return if $r != 0;
+            $late = 1;
+            my @pids = ($pid);
+            my (@servers, $server, $p, $cut, %sock, %peer, %client, %cmd, %sampler);
+            my $d = "";
+            my @st = defined $prefix ? stat $prefix : ();
+            my $dir = @st ? sprintf("server-%x-%x", @st[0, 1]) : undef;
+            # Wait for the child $c until $end; past it, kill it and wait two
+            # seconds more for it. True when it ended by itself.
+            my $reap = sub {
+                my ($c, $end) = @_;
+                my $w;
+                select(undef, undef, undef, 0.05)
+                    while ($w = waitpid($c, POSIX::WNOHANG())) == 0 && time < $end;
+                return 1 if $w != 0;
+                kill("KILL", $c);
+                select(undef, undef, undef, 0.05)
+                    while waitpid($c, POSIX::WNOHANG()) == 0 && time < $end + 2;
+                return 0;
+            };
+            my $until = time + 10;
+            # The output lines of a command of the listing, nothing once one
+            # of them has run past the deadline of the listing.
+            my $lines = sub {
+                return () if $cut;
+                my $c = fork() // return ();
+                if (!$c) {
+                    open(STDOUT, ">", "$log.list") or POSIX::_exit(1);
+                    exec(@_) or POSIX::_exit(1);
+                }
+                if (!$reap->($c, $until)) {
+                    $cut = 1;
+                    return ();
+                }
+                open(my $h, "<", "$log.list") or return ();
+                return <$h>;
+            };
+            for (defined $dir ? $lines->(qw(ps -A -o pid= -o comm=)) : ()) {
+                push @servers, $1 if m{^\s*(\d+) (?:.*/)?wineserver\s*$};
+            }
+            for (@servers ? $lines->(qw(lsof -w -a -d cwd -Fn -p), join(",", @servers)) : ()) {
+                $p = $1 if /^p(\d+)$/;
+                $server //= $p if m{^n.*/\Q$dir\E$};
+            }
+            for (defined $server ? $lines->(qw(lsof -w -a -U -Fdn -p), $server) : ()) {
+                $sock{$1} = 1 if /^d(0x[0-9a-f]+)$/;
+                $peer{$1} = 1 if /^n->(0x[0-9a-f]+)$/;
+            }
+            for (%sock ? $lines->(qw(lsof -w -U -Fpdn)) : ()) {
+                if (/^p(\d+)$/) {
+                    $p = $1;
+                } elsif (/^f/) {
+                    $d = "";
+                } elsif (/^d(0x[0-9a-f]+)$/) {
+                    $d = $1;
+                } elsif (/^n->(0x[0-9a-f]+)$/ && ($sock{$1} || $peer{$d})) {
+                    $client{$p} = 1;
+                }
+            }
+            delete $client{$pid};
+            if (defined $server) {
+                delete $client{$server};
+                push @pids, sort({ $a <=> $b } keys %client), $server;
+            }
+            for ($lines->(qw(ps -ww -o pid= -o command= -p), join(",", @pids))) {
+                chomp;
+                $cmd{$1} = $2 if /^\s*(\d+) (.*)/s;
+            }
+            print "  Reached the limit of $secs seconds with these processes:\n";
+            print "  (Listing them took more than 10 seconds and was cut short.)\n" if $cut;
+            print "    $_ ", $cmd{$_} // ($cut ? "" : "(gone)"), "\n" for @pids;
+            for $p (@pids) {
+                my $s = fork() // next;
+                if (!$s) {
+                    open(STDOUT, ">", "$log.sample-$p.log") or POSIX::_exit(1);
+                    open(STDERR, ">&STDOUT") or POSIX::_exit(1);
+                    exec("/usr/bin/sample", $p, 2, "-mayDie", "-file", "$log.sample-$p")
+                        or POSIX::_exit(1);
+                }
+                $sampler{$p} = $s;
+            }
+            my $deadline = time + 60;
+            for $p (@pids) {
+                my $s = $sampler{$p} // next;
+                $reap->($s, $deadline);
+                print "  Sample of $p ", $cmd{$p} // ($cut ? "" : "(gone)"), ":\n";
+                my $f = -s "$log.sample-$p" ? "$log.sample-$p" : "$log.sample-$p.log";
+                if (open(my $h, "<", $f)) {
+                    print while <$h>;
+                    close $h;
+                }
+            }
+            kill("ALRM", $pid);
+        };
+        alarm $secs;
+        $status = $? if waitpid($pid, 0) == $pid;
+        alarm 0;
+        exit 142 if $late;
+        exit(($status & 127) ? 128 + ($status & 127) : $status >> 8);
+    ' "$secs" "$log" "$@" || RUN_STATUS=$?
 }
 
 # check_rules_read <label> <log>: exit unless compatdb.so read every rule of
@@ -1795,7 +1926,7 @@ run_fex() {
 # them passed. Clean runs took 0.02 seconds for x86_64 and 0.05 seconds for
 # i686 on a current Mac with the wineserver already running, as here, and small
 # programs take up to 4 times as long on a hosted runner. The alarm counts whole
-# seconds from before perl's exec, so the limit is 2 seconds.
+# seconds from before the program's exec, so the limit is 2 seconds.
 check_exceptflags_runs() {
     local arch log want
     for arch in x86_64 i686; do

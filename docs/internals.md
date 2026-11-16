@@ -946,6 +946,12 @@ so are those that need Apple's accelerated OpenGL on a Mac without it
 ([`smoke/metal4.m`](../smoke/metal4.m),
 [`smoke/opengl.m`](../smoke/opengl.m)). The step says which.
 
+Each run of the smoke test has a time limit (`run_limited`). A run that
+reaches it fails the step, which first prints the pid and command line of
+the run's process and of every process of its prefix, the wineserver
+included, and a `sample` of each. These and the program's log are all that
+is left of it: the prefix goes when the step ends.
+
 ## Homebrew libraries and the floor
 
 The libraries in `lib/external/` other than Mesa's and GStreamer's are
