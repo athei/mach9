@@ -150,7 +150,16 @@ impl Bundle {
 pub struct State {
     pub dir: PathBuf,
     /// The exclusive lock on `.lock`, held until the state is dropped.
-    _lock: File,
+    lock: File,
+}
+
+impl Drop for State {
+    /// Unlock before the file closes. A `flock` belongs to the open file,
+    /// which closing ends only with its last descriptor, and a child that
+    /// another thread spawns holds a copy until its exec closes it.
+    fn drop(&mut self) {
+        let _ = self.lock.unlock();
+    }
 }
 
 impl State {
@@ -188,7 +197,7 @@ impl State {
                 return Err(format!("{}: cannot lock: {e}", path.display()));
             }
         }
-        Ok(Self { dir, _lock: lock })
+        Ok(Self { dir, lock })
     }
 
     /// The Wine prefix of the run, made fresh by each invocation.

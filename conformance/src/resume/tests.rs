@@ -1,27 +1,5 @@
 use super::*;
-use crate::outcome::Status;
-
-/// A directory under the target directory, removed when dropped.
-struct Dir(PathBuf);
-
-impl Dir {
-    fn new(name: &str) -> Self {
-        let path = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("conformance-test-resume")
-            .join(name);
-        let _ = fs::remove_dir_all(&path);
-        Self(path)
-    }
-}
-
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
+use crate::{outcome::Status, scratch::Scratch};
 
 fn identity() -> Identity {
     Identity {
@@ -75,13 +53,13 @@ fn interrupted(dir: &Path, records: &[Record]) {
 
 #[test]
 fn an_interrupted_run_resumes_with_its_records() {
-    let dir = Dir::new("resume");
-    let opened = Resume::open(&dir.0, &identity()).unwrap();
+    let dir = Scratch::new("resume", "resume");
+    let opened = Resume::open(&dir, &identity()).unwrap();
     assert_eq!(opened.records, []);
     assert_eq!(opened.discarded, None);
     drop(opened);
-    interrupted(&dir.0, &records());
-    let mut opened = Resume::open(&dir.0, &identity()).unwrap();
+    interrupted(&dir, &records());
+    let mut opened = Resume::open(&dir, &identity()).unwrap();
     assert_eq!(opened.records, records());
     assert_eq!(opened.discarded, None);
     opened
@@ -89,9 +67,9 @@ fn an_interrupted_run_resumes_with_its_records() {
         .append(&record(Pass::First, "test_c", 0))
         .unwrap();
     drop(opened);
-    let opened = Resume::open(&dir.0, &identity()).unwrap();
+    let opened = Resume::open(&dir, &identity()).unwrap();
     assert_eq!(opened.records.len(), 4);
-    let path = dir.0.join("record-d3d11-x86_64-windows.txt");
+    let path = dir.join("record-d3d11-x86_64-windows.txt");
     assert!(path.is_file());
     opened.resume.finish().unwrap();
     assert!(!path.exists());
@@ -99,7 +77,7 @@ fn an_interrupted_run_resumes_with_its_records() {
 
 #[test]
 fn another_identity_discards_the_state() {
-    let dir = Dir::new("identity");
+    let dir = Scratch::new("resume", "identity");
     let changes: [fn(&mut Identity); 5] = [
         |identity| identity.digest.push('0'),
         |identity| identity.scope = String::from("legs=x86_64-windows only=d3d11/test_a"),
@@ -115,22 +93,22 @@ fn another_identity_discards_the_state() {
         },
     ];
     for change in changes {
-        interrupted(&dir.0, &records());
+        interrupted(&dir, &records());
         let mut other = identity();
         change(&mut other);
-        let opened = Resume::open(&dir.0, &other).unwrap();
+        let opened = Resume::open(&dir, &other).unwrap();
         assert_eq!(opened.records, []);
         assert_eq!(
             opened.discarded.as_deref(),
             Some("it is the state of another run")
         );
         drop(opened);
-        let opened = Resume::open(&dir.0, &identity()).unwrap();
+        let opened = Resume::open(&dir, &identity()).unwrap();
         assert_eq!(opened.records, [], "the other run replaced the state");
     }
     let mut run = identity();
     run.mode = Mode::Run;
-    let opened = Resume::open(&dir.0, &run).unwrap();
+    let opened = Resume::open(&dir, &run).unwrap();
     assert_eq!(opened.discarded, None, "run and record keep separate files");
 }
 
@@ -138,9 +116,9 @@ fn another_identity_discards_the_state() {
 /// reads as the records before it, and the next append starts a clean line.
 #[test]
 fn a_torn_last_line_is_cut_off() {
-    let dir = Dir::new("torn");
-    interrupted(&dir.0, &records());
-    let path = dir.0.join("record-d3d11-x86_64-windows.txt");
+    let dir = Scratch::new("resume", "torn");
+    interrupted(&dir, &records());
+    let path = dir.join("record-d3d11-x86_64-windows.txt");
     let full = fs::read(&path).unwrap();
     let last_start = full[..full.len() - 1]
         .iter()
@@ -149,7 +127,7 @@ fn a_torn_last_line_is_cut_off() {
         + 1;
     for cut in last_start..full.len() {
         fs::write(&path, &full[..cut]).unwrap();
-        let mut opened = Resume::open(&dir.0, &identity()).unwrap();
+        let mut opened = Resume::open(&dir, &identity()).unwrap();
         assert_eq!(opened.records, records()[..2], "cut at {cut}");
         assert_eq!(opened.discarded, None);
         opened.resume.append(&records()[2]).unwrap();
@@ -162,9 +140,9 @@ fn a_torn_last_line_is_cut_off() {
 /// record, is discarded.
 #[test]
 fn a_broken_file_is_discarded() {
-    let dir = Dir::new("broken");
-    interrupted(&dir.0, &records());
-    let path = dir.0.join("record-d3d11-x86_64-windows.txt");
+    let dir = Scratch::new("resume", "broken");
+    interrupted(&dir, &records());
+    let path = dir.join("record-d3d11-x86_64-windows.txt");
     let full = fs::read_to_string(&path).unwrap();
     let identity_len = identity().text().len();
     for broken in [
@@ -174,7 +152,7 @@ fn a_broken_file_is_discarded() {
         format!("{full}\n"),
     ] {
         fs::write(&path, &broken).unwrap();
-        let opened = Resume::open(&dir.0, &identity()).unwrap();
+        let opened = Resume::open(&dir, &identity()).unwrap();
         assert_eq!(opened.records, [], "{broken:?}");
         assert!(opened.discarded.is_some(), "{broken:?}");
         drop(opened);
@@ -184,17 +162,17 @@ fn a_broken_file_is_discarded() {
 
 #[test]
 fn bad_input_is_refused() {
-    let dir = Dir::new("refused");
+    let dir = Scratch::new("resume", "refused");
     let mut bad = identity();
     bad.digest = String::from("a\nend");
-    let Err(error) = Resume::open(&dir.0, &bad) else {
+    let Err(error) = Resume::open(&dir, &bad) else {
         panic!("a digest with a line break was taken");
     };
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     let mut bad = identity();
     bad.scope = String::from("all\r");
-    assert!(Resume::open(&dir.0, &bad).is_err());
-    let mut opened = Resume::open(&dir.0, &identity()).unwrap();
+    assert!(Resume::open(&dir, &bad).is_err());
+    let mut opened = Resume::open(&dir, &identity()).unwrap();
     let mut record = record(Pass::First, "test_a", 0);
     record.unit = String::from("d3d 11");
     let error = opened.resume.append(&record).unwrap_err();

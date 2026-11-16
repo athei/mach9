@@ -1,5 +1,8 @@
 use super::*;
-use crate::model::{Dispatch, Selection, Unit, Wrapping};
+use crate::{
+    model::{Dispatch, Selection, Unit, Wrapping},
+    scratch::Scratch,
+};
 
 const QUEUED: &str = include_str!("../../tests/fixtures/queued.c");
 const PREFIXED: &str = include_str!("../../tests/fixtures/prefixed.c");
@@ -771,22 +774,16 @@ fn a_macro_of_the_file_called_in_the_body_must_be_setup() {
     assert!(second.stale.is_none());
 }
 
-/// A Wine source tree under the target directory, removed when dropped.
+/// A Wine source tree in a test's directory.
 struct Tree {
-    root: std::path::PathBuf,
+    root: Scratch,
 }
 
 impl Tree {
     fn new(name: &str) -> Self {
-        let exe = std::env::current_exe().unwrap();
-        let root = exe
-            .parent()
-            .unwrap()
-            .join("conformance-test-trees")
-            .join(name);
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        Self { root }
+        Self {
+            root: Scratch::new("trees", name),
+        }
     }
 
     fn write(&self, file: &str, text: &str) {
@@ -797,12 +794,6 @@ impl Tree {
 
     fn read(&self, file: &str) -> String {
         fs::read_to_string(self.root.join(file)).unwrap()
-    }
-}
-
-impl Drop for Tree {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
     }
 }
 

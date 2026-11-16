@@ -15,6 +15,10 @@ use conformance::{
     outcome::{Key, Status},
     output::{Crash, Ending, parse_listing, parse_run},
 };
+use scratch::Scratch;
+
+#[path = "../src/scratch.rs"]
+mod scratch;
 
 const LIMITS: Limits = Limits {
     idle: Duration::from_secs(1),
@@ -23,19 +27,6 @@ const LIMITS: Limits = Limits {
 
 fn tests_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests")
-}
-
-/// A scratch directory under the target directory.
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("conformance-test-exec")
-        .join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 /// The stub's environment: `PATH` for `sleep` and `perl`, and the
@@ -146,12 +137,12 @@ fn a_run_without_summary_is_a_crash() {
 /// before its group is killed.
 #[test]
 fn silence_past_the_idle_limit_is_a_stall_and_is_sampled() {
-    let dir = scratch("idle");
+    let dir = Scratch::new("exec", "idle");
     let sampler = Sampler {
         tool: tests_dir().join("stub-sample.sh"),
-        dir: dir.clone(),
+        dir: dir.to_path_buf(),
         stem: String::from("test_silent"),
-        wineserver: Some((PathBuf::from("/nonexistent/wineserver"), dir.clone())),
+        wineserver: Some((PathBuf::from("/nonexistent/wineserver"), dir.to_path_buf())),
     };
     let start = Instant::now();
     let finished = run_stub("WT_ONLY", "test_silent", Some(&sampler));
@@ -180,10 +171,10 @@ fn silence_past_the_idle_limit_is_a_stall_and_is_sampled() {
 /// skips quietly when its tool does not exist.
 #[test]
 fn a_run_past_the_total_limit_is_a_stall() {
-    let dir = scratch("total");
+    let dir = Scratch::new("exec", "total");
     let sampler = Sampler {
         tool: PathBuf::from("/nonexistent/sample"),
-        dir: dir.clone(),
+        dir: dir.to_path_buf(),
         stem: String::from("test_chatty"),
         wineserver: None,
     };
@@ -237,7 +228,8 @@ impl Drop for Holder {
 /// kill and does not keep the run waiting past the drain.
 #[test]
 fn a_holder_outside_the_group_is_drained_for_a_bounded_time() {
-    let holder = Holder(scratch("holder").join("ready"));
+    let dir = Scratch::new("exec", "holder");
+    let holder = Holder(dir.join("ready"));
     let stop = AtomicBool::new(false);
     let start = Instant::now();
     let finished = run_with("WT_ONLY", "test_holder", Some(&holder.0), None, &stop).unwrap();
@@ -293,7 +285,7 @@ fn the_interrupt_flag_kills_the_tree() {
 
 #[test]
 fn a_step_runs_into_its_log_and_has_a_limit() {
-    let dir = scratch("step");
+    let dir = Scratch::new("exec", "step");
     let log_path = dir.join("session.log");
     let log = fs::File::create(&log_path).unwrap();
     let program = tests_dir().join("stub-wine.sh");

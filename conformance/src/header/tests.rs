@@ -1,4 +1,5 @@
 use super::*;
+use crate::scratch::Scratch;
 
 const COMPONENTS: &str = "mesa=1a2b3c4d5e6f\nvulkan-loader=0f1e2d3c4b5a\ndxmt=8c0b5f1aa\n\
                           vkd3d-proton=77aa88bb99cc\nfex=0123456789ab\n";
@@ -57,19 +58,12 @@ fn bad_headers_are_errors() {
 
 #[test]
 fn a_bundle_without_components_cannot_be_read() {
-    let dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("conformance-test-header");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("header", "components");
     fs::write(dir.join("VERSION"), "wine-11.21-37-g53def89293a\n").unwrap();
     let error = Header::read(&dir).unwrap_err();
     assert!(error.contains("COMPONENTS"), "{error}");
     fs::write(dir.join("COMPONENTS"), COMPONENTS).unwrap();
     assert_eq!(Header::read(&dir).unwrap(), header());
-    fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

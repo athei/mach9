@@ -47,6 +47,8 @@ pub mod procs;
 pub mod record;
 pub mod resume;
 pub mod runner;
+#[cfg(test)]
+mod scratch;
 pub mod session;
 pub mod triage;
 pub mod validation;

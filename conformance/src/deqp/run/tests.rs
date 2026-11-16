@@ -1,4 +1,5 @@
 use super::*;
+use crate::scratch::Scratch;
 
 fn plans_of(groups: &Groups) -> Vec<Planned<'_>> {
     groups
@@ -342,17 +343,10 @@ fn a_canary_keeps_its_log_only_when_it_does_not_pass() {
 
 #[test]
 fn removing_a_test_log_the_process_did_not_write_succeeds() {
-    let dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("conformance-test-deqp-logs");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("deqp-logs", "remove");
     let qpa = dir.join("batch-0.1.qpa");
     fs::write(&qpa, "#beginSession\n").unwrap();
     remove_log(&qpa).unwrap();
     assert!(!qpa.exists());
     remove_log(&qpa).unwrap();
-    fs::remove_dir_all(&dir).unwrap();
 }

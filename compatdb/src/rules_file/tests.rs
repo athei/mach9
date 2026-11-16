@@ -16,12 +16,18 @@ const INLINE: &str = "exe=Game.exe;gcmouse=false";
 const NO_LINES: [String; 0] = [];
 
 /// A directory of one test beside the test binary, in Cargo's target
-/// directory, removed when the test ends however it ends.
+/// directory, removed when the test ends unless it panics: a failed assert
+/// keeps it, with its path printed. The process id keeps two runs of the
+/// test binary, which share the target directory, out of each other's
+/// directories.
 struct Scratch(PathBuf);
 
 impl Scratch {
+    /// A directory of that path is left from an ended process that had the
+    /// same id, so it is deleted first.
     fn new(test: &str) -> io::Result<Self> {
-        let dir = env::current_exe()?.with_extension(test);
+        let dir = env::current_exe()?.with_extension(format!("{test}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir)?;
         Ok(Self(dir))
     }
@@ -41,7 +47,11 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        if thread::panicking() {
+            eprintln!("the test's directory is kept: {}", self.0.display());
+        } else {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
 }
 

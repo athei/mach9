@@ -1,6 +1,7 @@
 use compatdb_core::{Dxgi, OpenGl};
 
 use super::*;
+use crate::scratch::Scratch;
 
 const PASS: &str = include_str!("../../tests/fixtures/output/pass.txt");
 
@@ -478,7 +479,7 @@ fn run_combines_unstable_and_other_changes() {
 /// A state directory with a resume file holding one record, a baselines
 /// directory with an old `d3d12.txt`, and a pending record of a new one.
 struct Finish {
-    dir: PathBuf,
+    dir: Scratch,
     state: State,
     baselines: PathBuf,
     pending: Pending,
@@ -487,13 +488,7 @@ struct Finish {
 
 impl Finish {
     fn new(name: &str) -> Self {
-        let dir = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("conformance-test-finalize")
-            .join(name);
-        let _ = fs::remove_dir_all(&dir);
+        let dir = Scratch::new("finalize", name);
         let state = State::claim(&dir.join("state")).unwrap();
         let baselines = dir.join("baselines");
         fs::create_dir_all(&baselines).unwrap();
@@ -552,12 +547,6 @@ impl Finish {
 
     fn baseline_text(&self) -> String {
         fs::read_to_string(self.baselines.join("d3d12.txt")).unwrap()
-    }
-}
-
-impl Drop for Finish {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.dir);
     }
 }
 

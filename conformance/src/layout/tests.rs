@@ -1,26 +1,5 @@
 use super::*;
-
-/// A directory under the target directory, removed when dropped.
-struct Dir(PathBuf);
-
-impl Dir {
-    fn new(name: &str) -> Self {
-        let path = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("conformance-test-layout")
-            .join(name);
-        let _ = fs::remove_dir_all(&path);
-        Self(path)
-    }
-}
-
-impl Drop for Dir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
+use crate::scratch::Scratch;
 
 #[test]
 fn the_root_is_wine_build_root_or_the_checkout_s_parent() {
@@ -41,28 +20,28 @@ fn the_root_is_wine_build_root_or_the_checkout_s_parent() {
 
 #[test]
 fn a_bundle_needs_its_tests() {
-    let dir = Dir::new("bundle");
-    let error = Bundle::open(&dir.0).err().unwrap_or_default();
+    let dir = Scratch::new("layout", "bundle");
+    let error = Bundle::open(&dir).err().unwrap_or_default();
     assert!(error.contains("bin/wine is missing"), "{error}");
-    fs::create_dir_all(dir.0.join("bin")).unwrap();
-    fs::create_dir_all(dir.0.join("lib/wine/tests")).unwrap();
+    fs::create_dir_all(dir.join("bin")).unwrap();
+    fs::create_dir_all(dir.join("lib/wine/tests")).unwrap();
     for file in ["bin/wine", "bin/wineserver", "lib/wine/tests/VERSION"] {
-        fs::write(dir.0.join(file), "").unwrap();
+        fs::write(dir.join(file), "").unwrap();
     }
-    let error = Bundle::open(&dir.0).err().unwrap_or_default();
+    let error = Bundle::open(&dir).err().unwrap_or_default();
     assert!(error.contains("COMPONENTS is missing"), "{error}");
-    fs::write(dir.0.join("lib/wine/tests/COMPONENTS"), "").unwrap();
-    let bundle = Bundle::open(&dir.0).unwrap();
+    fs::write(dir.join("lib/wine/tests/COMPONENTS"), "").unwrap();
+    let bundle = Bundle::open(&dir).unwrap();
     assert_eq!(
         bundle.test_exe(PeDir::I386, "d3d8"),
-        dir.0.join("lib/wine/tests/i386-windows/d3d8_test.exe")
+        dir.join("lib/wine/tests/i386-windows/d3d8_test.exe")
     );
 }
 
 #[test]
 fn a_directory_is_claimed_only_when_missing_empty_or_marked_so() {
-    let dir = Dir::new("claim");
-    let tree = dir.0.join("state");
+    let dir = Scratch::new("layout", "claim");
+    let tree = dir.join("state");
     claim_dir(&tree, STATE_TREE).unwrap();
     assert_eq!(
         fs::read_to_string(tree.join(TREE_MARKER)).unwrap(),
@@ -75,7 +54,7 @@ fn a_directory_is_claimed_only_when_missing_empty_or_marked_so() {
     let error = claim_dir(&tree, PREFIX_TREE).err().unwrap_or_default();
     assert!(error.contains("is the tree 'conformance', not"), "{error}");
 
-    let foreign = dir.0.join("foreign");
+    let foreign = dir.join("foreign");
     fs::create_dir_all(&foreign).unwrap();
     claim_dir(&foreign, STATE_TREE).unwrap();
     fs::remove_file(foreign.join(TREE_MARKER)).unwrap();
@@ -92,8 +71,8 @@ fn a_directory_is_claimed_only_when_missing_empty_or_marked_so() {
 
 #[test]
 fn a_fresh_directory_replaces_only_its_own_tree() {
-    let dir = Dir::new("fresh");
-    let prefix = dir.0.join("prefix");
+    let dir = Scratch::new("layout", "fresh");
+    let prefix = dir.join("prefix");
     fresh_dir(&prefix, PREFIX_TREE).unwrap();
     fs::write(prefix.join("system.reg"), "").unwrap();
     fresh_dir(&prefix, PREFIX_TREE).unwrap();
@@ -107,10 +86,10 @@ fn a_fresh_directory_replaces_only_its_own_tree() {
 /// neither marked nor emptied.
 #[test]
 fn an_inner_tree_is_never_a_symbolic_link() {
-    let dir = Dir::new("link");
-    let target = dir.0.join("target");
+    let dir = Scratch::new("layout", "link");
+    let target = dir.join("target");
     fs::create_dir_all(&target).unwrap();
-    let link = dir.0.join("prefix");
+    let link = dir.join("prefix");
     std::os::unix::fs::symlink(&target, &link).unwrap();
     for result in [
         fresh_dir(&link, PREFIX_TREE),
@@ -125,17 +104,31 @@ fn an_inner_tree_is_never_a_symbolic_link() {
 
 #[test]
 fn a_state_directory_has_one_user_at_a_time() {
-    let dir = Dir::new("lock");
-    let state = State::claim(&dir.0.join("state")).unwrap();
-    let error = State::claim(&dir.0.join("state")).err().unwrap_or_default();
+    let dir = Scratch::new("layout", "lock");
+    let state = State::claim(&dir.join("state")).unwrap();
+    let error = State::claim(&dir.join("state")).err().unwrap_or_default();
     assert!(error.contains("another conformance run uses"), "{error}");
     drop(state);
-    let state = State::claim(&dir.0.join("state")).unwrap();
+    let state = State::claim(&dir.join("state")).unwrap();
     assert_eq!(state.prefix(), state.dir.join("prefix"));
     assert_eq!(
         state.baseline_raw("d3d12"),
         state.dir.join("baseline-raw/d3d12")
     );
+}
+
+/// A copy of the lock's descriptor, as a child spawned by another thread
+/// holds until its exec, does not keep the state claimed once the claim is
+/// dropped.
+#[test]
+fn a_dropped_claim_frees_the_state_while_a_copy_of_its_descriptor_is_open() {
+    let dir = Scratch::new("layout", "copy");
+    let state = State::claim(&dir.join("state")).unwrap();
+    let copy = state.lock.try_clone().unwrap();
+    drop(state);
+    let again = State::claim(&dir.join("state"));
+    drop(copy);
+    assert!(again.is_ok(), "{:?}", again.err());
 }
 
 #[test]
@@ -157,12 +150,11 @@ fn logs_are_named_by_their_key() {
 
 #[test]
 fn a_digest_names_the_content() {
-    let dir = Dir::new("digest");
-    fs::create_dir_all(&dir.0).unwrap();
-    let file = dir.0.join("a.exe");
+    let dir = Scratch::new("layout", "digest");
+    let file = dir.join("a.exe");
     fs::write(&file, "a").unwrap();
     assert_eq!(file_digest(&file).unwrap(), "fnv1a64:af63dc4c8601ec8c:1");
     fs::write(&file, "").unwrap();
     assert_eq!(file_digest(&file).unwrap(), "fnv1a64:cbf29ce484222325:0");
-    assert!(file_digest(&dir.0.join("missing")).is_err());
+    assert!(file_digest(&dir.join("missing")).is_err());
 }

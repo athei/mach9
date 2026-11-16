@@ -1,6 +1,7 @@
 use std::os::unix::{fs::symlink, process::CommandExt as _};
 
 use super::*;
+use crate::scratch::Scratch;
 
 #[test]
 fn a_ps_table_gives_pids_and_argv0() {
@@ -44,9 +45,7 @@ fn processes_are_found_by_their_executable_not_their_argv0() {
     assert!(pids_of(&me).unwrap().contains(&std::process::id()));
     assert!(pids_of(Path::new("/nonexistent/bin/wineserver")).is_err());
 
-    let dir = me.parent().unwrap().join("conformance-test-procs");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("procs", "links");
     let link = dir.join("sleep");
     symlink("/bin/sleep", &link).unwrap();
     let mut child = Command::new("/bin/sleep")
@@ -67,7 +66,6 @@ fn processes_are_found_by_their_executable_not_their_argv0() {
     let found = pids_of(&renamed);
     let _ = child.kill();
     let _ = child.wait();
-    let _ = fs::remove_dir_all(&dir);
     assert!(found.unwrap().contains(&child.id()));
 }
 

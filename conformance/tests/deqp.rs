@@ -23,6 +23,10 @@ use conformance::{
     session::Failure,
     validation::Layers,
 };
+use scratch::Scratch;
+
+#[path = "../src/scratch.rs"]
+mod scratch;
 
 const GROUPS: &str = "[[group]]\nname = \"g\"\ncases = [\"dEQP-VK.g.*\"]\n";
 
@@ -49,15 +53,10 @@ enum Setup {
 
 const PLAIN: Setup = Setup::Plain;
 
-/// A scratch directory under the target directory.
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("conformance-test-deqp")
-        .join(name);
-    let _ = fs::remove_dir_all(&dir);
+/// The test's directory, with the expected results and the stub's state in
+/// it.
+fn scratch(name: &str) -> Scratch {
+    let dir = Scratch::new("deqp", name);
     fs::create_dir_all(dir.join("expected")).unwrap();
     fs::create_dir_all(dir.join("state")).unwrap();
     dir

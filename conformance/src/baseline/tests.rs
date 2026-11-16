@@ -1,5 +1,5 @@
 use super::*;
-use crate::outcome::Status;
+use crate::{outcome::Status, scratch::Scratch};
 
 /// A baseline as `record` writes it.
 const TEXT: &str = "\
@@ -205,13 +205,7 @@ fn prose_in_the_header_is_free() {
 
 #[test]
 fn load_reads_a_file_or_finds_none() {
-    let dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("conformance-test-baselines");
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new("baselines", "load");
     assert_eq!(Baseline::load(&dir.join("d3d8.txt"), "d3d8").unwrap(), None);
     fs::write(dir.join("d3d8.txt"), TEXT).unwrap();
     fs::write(dir.join(TRIAGE_FILE), "not a baseline\n").unwrap();
@@ -226,7 +220,6 @@ fn load_reads_a_file_or_finds_none() {
         error.contains("ddraw.txt: no `# wine: <version>` line"),
         "{error}"
     );
-    fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
