@@ -111,8 +111,8 @@ fn each_mistake_is_an_error_with_its_line() {
             "d3d8.txt:2: a key line before any section",
         ),
         (
-            format!("# wine: w\n[aarch64-windows device]\n{entry}\n"),
-            "d3d8.txt:2: unknown leg \"aarch64-windows\"",
+            format!("# wine: w\n[arm64ec-windows device]\n{entry}\n"),
+            "d3d8.txt:2: unknown leg \"arm64ec-windows\"",
         ),
         (
             format!("# wine: w\n[i386-windows 3d]\n{entry}\n"),

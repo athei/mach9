@@ -1,0 +1,62 @@
+# Conformance baseline of dinput_test.exe, one line per test.
+# Written by `cargo run -p conformance -- record dinput`: do not edit.
+# wine: wine-11.21-54-g2995bf7afc2
+# component: dxmt=10e27aed3f5ce32c70a64ab05db0d50fb117f270
+# component: fex=e7b5fbf07879845530dd0b8fb551ea81adc47849
+# component: mesa=d62ee13d1802dd076267611dbbc09cddece95f9c
+# component: vkd3d-proton=c5e2c9b8c55872893e3ba47d60448dd4f35185ef
+# component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
+
+[i386-windows device8]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=7
+
+[i386-windows dinput]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[i386-windows force_feedback]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[i386-windows hid]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[i386-windows hotplug]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[i386-windows joystick8]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[x86_64-windows device8]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=7
+
+[x86_64-windows dinput]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[x86_64-windows force_feedback]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[x86_64-windows hid]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[x86_64-windows hotplug]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[x86_64-windows joystick8]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1
+
+[aarch64-windows device8]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=6
+
+[aarch64-windows dinput]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=0
+
+[aarch64-windows force_feedback]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=0
+
+[aarch64-windows hid]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=0
+
+[aarch64-windows hotplug]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=0
+
+[aarch64-windows joystick8]
+* ok failed=0 sites=0 todo_succeeded=0 skipped=1

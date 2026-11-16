@@ -58,6 +58,17 @@ fn a_leg_narrows_the_scope_unless_it_is_the_only_one() {
 }
 
 #[test]
+fn only_dinput_has_an_aarch64_leg() {
+    let config = config();
+    let plans = plan(&config, &suites(&["all"]), Some(PeDir::Aarch64), None).unwrap();
+    let names: Vec<&str> = plans.iter().map(|plan| plan.exe.name.as_str()).collect();
+    assert_eq!(names, ["dinput"]);
+    assert!(matches!(plans[0].scope, Scope::Leg(PeDir::Aarch64)));
+    let dinput = plan(&config, &suites(&["dinput"]), None, None).unwrap();
+    assert_eq!(dinput[0].legs, [PeDir::I386, PeDir::X86_64, PeDir::Aarch64]);
+}
+
+#[test]
 fn only_selects_keys_of_one_exe_on_each_leg() {
     let config = config();
     let plans = plan(

@@ -214,14 +214,22 @@ What goes in, and why, is the Wine SDK step of
 
 ### Graphics tests
 
-The SDK and a full bundle carry Wine's graphics conformance tests as
-`lib/wine/tests/<pe-dir>/<name>_test.exe`, to test the bundle's own stack
-(mtld3d, DXMT, wined3d, the Vulkan loader) with nothing but the bundle.
+The SDK and a full bundle carry Wine's graphics conformance tests, and
+dinput's, as `lib/wine/tests/<pe-dir>/<name>_test.exe`, to test the
+bundle's own stack (mtld3d, DXMT, wined3d, the Vulkan loader, DirectInput)
+with nothing but the bundle.
 mtld3d's conformance suite runs the `d3d9_test.exe` of both directories.
 
-- The tests are `GRAPHICS_TESTS` in [`profile.sh`](../bin/lib/profile.sh),
-  built for `TEST_PE_DIRS`, the x86 architectures games use. An x86_64
-  test runs as ARM64EC, as an x64 game does.
+- The tests are `WINE_TESTS` in
+  [`wine-tests.sh`](../bin/lib/wine-tests.sh), built for `TEST_PE_DIRS` of
+  [`profile.sh`](../bin/lib/profile.sh), the x86 architectures games use,
+  unless their entry names the directories. An x86_64 test runs as ARM64EC,
+  as an x64 game does. The list is kept out of `profile.sh`, whose hash
+  keys every staged dist, so a change to it rebuilds no component.
+- `dinput_test.exe` is also built as native ARM64 code, in
+  `lib/wine/tests/aarch64-windows`. Its test drivers are built for the
+  test's machine and load into the native ARM64 `winedevice.exe`; under
+  i386 the driver tests skip (wow64), and an x86_64 driver does not load.
 - They are plain executables, outside the directories Wine searches for
   modules.
 - `lib/wine/tests/VERSION` holds the `wine --version` string of the Wine
@@ -275,9 +283,10 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   `_test.exe`, or `all` for every one. Direct3D 9 is not a suite:
   mtld3d's conformance suite covers it.
 - A key is one test function of a unit (a `START_TEST` part), named after
-  the function, in one leg (`i386-windows` or `x86_64-windows`). A unit
-  that `wine-tests.toml` marks `whole` runs as one process with the key
-  `*`.
+  the function, in one leg: a PE directory of the tests the executable is
+  built for (`pe_dirs` in `wine-tests.toml`, `--leg` of `run` and
+  `record`). A unit that `wine-tests.toml` marks `whole` runs as one
+  process with the key `*`.
 - `run --help` and `record --help` list the options.
 - Each invocation boots a fresh prefix with the launcher's emulated
   display modes and the retina and DPI values its automatic setting gives

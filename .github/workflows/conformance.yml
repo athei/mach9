@@ -7,8 +7,9 @@ name: Conformance
 # then clippy, the tests and the rustdoc without the Wine build of
 # release.yml, which also tests and lints the workspace. It runs on a change
 # to the crate, to compatdb-core, which it reads the compatdb log with, to
-# the files outside the crate its unit tests read (bin/lib/profile.sh,
-# whose GRAPHICS_TESTS they compare with wine-tests.toml, and the
+# the files outside the crate its unit tests read (bin/lib/wine-tests.sh
+# and bin/lib/profile.sh, whose WINE_TESTS and TEST_PE_DIRS they compare
+# with wine-tests.toml, and the
 # launcher's dpi.rs and registry.rs, whose display values they compare with
 # the prefix's), or to the workspace files. The graphics tests themselves
 # need a Metal 4 GPU, open windows and take the focus, so they run locally
@@ -21,6 +22,7 @@ on:
       - 'conformance/**'
       - 'compatdb/core/**'
       - 'bin/lib/profile.sh'
+      - 'bin/lib/wine-tests.sh'
       - 'launcher/app/src/dpi.rs'
       - 'launcher/app/src/registry.rs'
       - '.cargo/**'
@@ -37,6 +39,7 @@ on:
       - 'conformance/**'
       - 'compatdb/core/**'
       - 'bin/lib/profile.sh'
+      - 'bin/lib/wine-tests.sh'
       - 'launcher/app/src/dpi.rs'
       - 'launcher/app/src/registry.rs'
       - '.cargo/**'

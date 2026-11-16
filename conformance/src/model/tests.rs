@@ -16,29 +16,31 @@ fn wrapping(unit: &Unit) -> &Wrapping {
     }
 }
 
-/// The value of `NAME="..."` in a shell file.
-fn shell_value<'t>(text: &'t str, name: &str) -> &'t str {
+/// The value of `NAME="..."` in the shell file `file`, read as `text`.
+fn shell_value<'t>(text: &'t str, file: &str, name: &str) -> &'t str {
     let prefix = format!("{name}=\"");
     text.lines()
         .find_map(|line| line.strip_prefix(&prefix))
         .and_then(|rest| rest.strip_suffix('"'))
-        .unwrap_or_else(|| panic!("profile.sh sets no {name}"))
+        .unwrap_or_else(|| panic!("{file} sets no {name}"))
 }
 
 /// The exes and their PE directories are what the bundle builds:
-/// `GRAPHICS_TESTS` of `bin/lib/profile.sh` without d3d9, each restricted
-/// to its `:<pe-dir>` or else built for every `TEST_PE_DIRS`.
+/// `WINE_TESTS` of `bin/lib/wine-tests.sh` without d3d9, each built for
+/// the directories its `:<pe-dir>,...` names or else for every
+/// `TEST_PE_DIRS` of `bin/lib/profile.sh`.
 #[test]
-fn the_builtin_config_matches_the_graphics_tests_of_profile_sh() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../bin/lib/profile.sh");
-    let profile = std::fs::read_to_string(path).unwrap();
-    let all_dirs: Vec<&str> = shell_value(&profile, "TEST_PE_DIRS")
+fn the_builtin_config_matches_the_wine_tests_of_wine_tests_sh() {
+    let bin = concat!(env!("CARGO_MANIFEST_DIR"), "/../bin/lib");
+    let profile = std::fs::read_to_string(format!("{bin}/profile.sh")).unwrap();
+    let wine_tests = std::fs::read_to_string(format!("{bin}/wine-tests.sh")).unwrap();
+    let all_dirs: Vec<&str> = shell_value(&profile, "profile.sh", "TEST_PE_DIRS")
         .split_whitespace()
         .collect();
-    let built: Vec<(&str, Vec<&str>)> = shell_value(&profile, "GRAPHICS_TESTS")
+    let built: Vec<(&str, Vec<&str>)> = shell_value(&wine_tests, "wine-tests.sh", "WINE_TESTS")
         .split_whitespace()
         .map(|entry| match entry.split_once(':') {
-            Some((name, dir)) => (name, vec![dir]),
+            Some((name, dirs)) => (name, dirs.split(',').collect()),
             None => (entry, all_dirs.clone()),
         })
         .filter(|(name, _)| *name != "d3d9")
@@ -157,7 +159,7 @@ fn pe_dirs_take_only_the_bundle_directories() {
     let dirs: Vec<&str> = config.exes[0].pe_dirs.iter().map(PeDir::as_str).collect();
     assert_eq!(dirs, ["x86_64-windows"]);
     for (pe_dirs, expected) in [
-        ("[\"aarch64-windows\"]", "holds \"aarch64-windows\""),
+        ("[\"arm64ec-windows\"]", "holds \"arm64ec-windows\""),
         ("[]", "`pe_dirs` is empty"),
         (
             "[\"i386-windows\", \"i386-windows\"]",
@@ -171,7 +173,7 @@ fn pe_dirs_take_only_the_bundle_directories() {
 }
 
 /// The DXGI-family tests need DXMT, the OpenGL and wined3d ones Mesa's EGL
-/// with wined3d on OpenGL, and vulkan-1 nothing.
+/// with wined3d on OpenGL, and vulkan-1 and dinput nothing.
 #[test]
 fn the_builtin_config_expects_the_default_implementations() {
     let config = Config::builtin().unwrap();
@@ -184,7 +186,7 @@ fn the_builtin_config_expects_the_default_implementations() {
             }
             "d3d8" | "ddraw" => (None, Some(OpenGl::Egl), Some(Wined3d::Gl)),
             "opengl32" => (None, Some(OpenGl::Egl), None),
-            "vulkan-1" => (None, None, None),
+            "vulkan-1" | "dinput" => (None, None, None),
             other => panic!("no expectation for {other}"),
         };
         assert_eq!(got, wanted, "{}", exe.name);

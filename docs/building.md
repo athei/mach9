@@ -97,7 +97,7 @@ The libraries built here that configure finds are described with them:
 | `lib/wine/aarch64-unix/wine.app/` | The loader, its `Info.plist` and the embedded provisioning profile ([loader app](internals.md#loader-app)) |
 | `lib/wine/dxgi/<impl>/`, `lib/wine/d3d9/<impl>/` | One tree per Direct3D implementation ([Direct3D backends](compatdb.md#direct3d-backends)) |
 | `lib/wine/x86_64-windows/` | Full bundle only: the x86_64 link libraries of the [Wine SDK](internals.md#wine-sdk). Nothing reads the directory at run time |
-| `lib/wine/tests/i386-windows/`, `lib/wine/tests/x86_64-windows/` | Full bundle only: Wine's graphics conformance tests as `<name>_test.exe` ([graphics tests](internals.md#graphics-tests)) |
+| `lib/wine/tests/<pe-dir>/` | Full bundle only: Wine's graphics and DirectInput conformance tests as `<name>_test.exe` ([graphics tests](internals.md#graphics-tests)) |
 | `lib/wine/tests/VERSION` | Full bundle only: the Wine version the tests were built from ([graphics tests](internals.md#graphics-tests)) |
 | `lib/wine/tests/COMPONENTS` | Full bundle only: the source commits of the components besides Wine that these scripts build and the tests run on ([graphics tests](internals.md#graphics-tests)) |
 | `lib/external/` | Bundled dylibs, the Vulkan loader, KosmicKrisp, Mesa's EGL with Zink ([OpenGL](internals.md#opengl)), and GStreamer with glib and FFmpeg, which `winegstreamer.so` links ([GStreamer](internals.md#gstreamer)) |

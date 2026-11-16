@@ -1,11 +1,12 @@
-# The Wine test executables of the bundle's graphics tests, their units and
-# how each unit's test functions are selected one at a time.
+# The Wine test executables of the bundle's graphics and DirectInput tests,
+# their units and how each unit's test functions are selected one at a time.
 #
 # Each [[exe]] is <name>_test.exe, built from the SOURCES of
 # <dir>/Makefile.in (`dir` is relative to the Wine source root) for the PE
-# directories in `pe_dirs`, both i386-windows and x86_64-windows unless it
-# says otherwise. The exes and their PE directories are GRAPHICS_TESTS in
-# bin/lib/profile.sh without d3d9; a unit test keeps the two equal.
+# directories in `pe_dirs` (i386-windows, x86_64-windows, aarch64-windows),
+# the two x86 ones unless it says otherwise. The exes and their PE
+# directories are WINE_TESTS in bin/lib/wine-tests.sh without d3d9; a unit
+# test keeps the two equal.
 #
 # `expect` names the implementations the exe's tests must run on, in
 # compatdb's spelling: `dxgi` (the DXGI-family tree), `opengl` (the Mac
@@ -216,3 +217,43 @@ dispatch = [
     { name = "for_each_device" },
     { name = "for_each_device_instance", args = 4, key = 3 },
 ]
+
+[[exe]]
+name = "dinput"
+dir = "dlls/dinput/tests"
+# The aarch64 leg is the one whose test drivers load: the 64-bit
+# winedevice.exe is native ARM64, i386 skips the driver tests under wow64,
+# and x86_64 drivers do not load.
+pe_dirs = ["i386-windows", "x86_64-windows", "aarch64-windows"]
+
+# Every unit of dinput_test.exe runs as a whole. `wine-macros --check` wants
+# a unit for each START_TEST of the exe, and whole units need no selection
+# blocks in Wine's sources. Their bodies would not wrap either: hid, hotplug,
+# joystick8 and force_feedback install the test's HID drivers first and run
+# their other test functions only when the first device test finds its
+# device, as a condition and not a statement; device8 does the same for its
+# HID devices after its system mouse and keyboard tests; dinput runs its
+# tests for several DirectInput versions from loops.
+[[exe.unit]]
+name = "device8"
+whole = true
+
+[[exe.unit]]
+name = "dinput"
+whole = true
+
+[[exe.unit]]
+name = "force_feedback"
+whole = true
+
+[[exe.unit]]
+name = "hid"
+whole = true
+
+[[exe.unit]]
+name = "hotplug"
+whole = true
+
+[[exe.unit]]
+name = "joystick8"
+whole = true

@@ -22,8 +22,8 @@ pub struct Exe {
     /// The directory of its sources and its `Makefile.in`, relative to the
     /// Wine source root.
     pub dir: String,
-    /// The PE directories the bundle builds it for; both unless the TOML
-    /// restricts it.
+    /// The PE directories the bundle builds it for; the two x86 ones unless
+    /// the TOML names others.
     pub pe_dirs: Vec<PeDir>,
     /// What the `compatdb:` block of its test process must say before its
     /// results count.
@@ -53,16 +53,20 @@ pub struct Expect {
 pub enum PeDir {
     I386,
     X86_64,
+    /// Native ARM64 code, for the tests whose drivers have to load into the
+    /// native 64-bit `winedevice.exe`.
+    Aarch64,
 }
 
 impl PeDir {
-    /// The directory name, as `TEST_PE_DIRS` in `bin/lib/profile.sh`
-    /// spells it.
+    /// The directory name, as `WINE_TEST_PE_DIRS` in
+    /// `bin/lib/wine-tests.sh` spells it.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::I386 => "i386-windows",
             Self::X86_64 => "x86_64-windows",
+            Self::Aarch64 => "aarch64-windows",
         }
     }
 
@@ -72,6 +76,7 @@ impl PeDir {
         match name {
             "i386-windows" => Some(Self::I386),
             "x86_64-windows" => Some(Self::X86_64),
+            "aarch64-windows" => Some(Self::Aarch64),
             _ => None,
         }
     }
@@ -200,8 +205,8 @@ fn parse_exe(table: &Table) -> Result<Exe, String> {
                 .map(|dir| {
                     PeDir::parse(dir).ok_or_else(|| {
                         format!(
-                            "{context}: `pe_dirs` holds {dir:?}, not i386-windows or \
-                             x86_64-windows"
+                            "{context}: `pe_dirs` holds {dir:?}, not i386-windows, \
+                             x86_64-windows or aarch64-windows"
                         )
                     })
                 })

@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # target build-wine.sh builds with, which every Mach-O is checked against).
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
+# The Wine tests a full bundle carries (WINE_TESTS).
+# shellcheck source=lib/wine-tests.sh
+. "$SCRIPT_DIR/lib/wine-tests.sh"
 CACHE_DIR="${CACHE_DIR:-$ROOT/cache}"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
@@ -2495,7 +2498,7 @@ check_egl() {
 # check_wine_sdk: exit unless the Wine SDK build-wine.sh staged is for the
 # Wine source as it is now, which DXMT's DLLs were linked against and whose
 # x86_64 link libraries and graphics tests a full bundle carries, and, for a
-# full bundle, holds every test of GRAPHICS_TESTS and their VERSION (an SDK
+# full bundle, holds every test of WINE_TESTS and their VERSION (an SDK
 # staged before the tests or VERSION were has a current WINE_COMMIT and lacks
 # them).
 check_wine_sdk() {
@@ -2506,8 +2509,8 @@ check_wine_sdk() {
         exit 1
     fi
     if [ "$RUNTIME_ONLY" -eq 0 ]; then
-        for pe in $TEST_PE_DIRS; do
-            for t in $(graphics_tests "$pe"); do
+        for pe in $WINE_TEST_PE_DIRS; do
+            for t in $(wine_tests "$pe"); do
                 if [ ! -f "$WINE_SDK_DIR/lib/wine/tests/$pe/${t}_test.exe" ]; then
                     echo "Error: the Wine SDK at $WINE_SDK_DIR has no lib/wine/tests/$pe/${t}_test.exe (run build-wine.sh)"
                     exit 1
@@ -3231,9 +3234,10 @@ if [ "$RUNTIME_ONLY" -eq 0 ]; then
 fi
 
 # ── Step 2d: Graphics tests ─────────────────────────────────────────────
-# Wine's graphics conformance tests (GRAPHICS_TESTS in profile.sh), x86 code
-# for i386 and x86_64, from the Wine SDK, so the bundle's Direct3D, OpenGL
-# and Vulkan stack can be tested with nothing but the bundle. `make install`
+# Wine's graphics and DirectInput conformance tests (WINE_TESTS in
+# wine-tests.sh), x86 code for i386 and x86_64 and, for some, native ARM64
+# code, from the Wine SDK, so the bundle's Direct3D, OpenGL, Vulkan and
+# DirectInput stack can be tested with nothing but the bundle. `make install`
 # installs no tests. They go into lib/wine/tests/<pe-dir>/ under the name of
 # their own machine, x86_64-windows and not PE64_DIR, where the 64-bit
 # builtins live: plain executables that Wine runs by path, outside the
@@ -3247,9 +3251,9 @@ fi
 if [ "$RUNTIME_ONLY" -eq 0 ]; then
     time_mark "Step 2d: Graphics tests"
     echo "==> Step 2d: Graphics tests"
-    for pe in $TEST_PE_DIRS; do
+    for pe in $WINE_TEST_PE_DIRS; do
         mkdir -p "$WINE_DIR/lib/wine/tests/$pe"
-        for t in $(graphics_tests "$pe"); do
+        for t in $(wine_tests "$pe"); do
             echo "    tests/$pe/${t}_test.exe"
             cp "$WINE_SDK_DIR/lib/wine/tests/$pe/${t}_test.exe" "$WINE_DIR/lib/wine/tests/$pe/"
         done
@@ -3936,8 +3940,8 @@ if in_list wined3d "$D3D9_IMPLS"; then
 fi
 if [ "$RUNTIME_ONLY" -eq 0 ]; then
     WANT+=("lib/wine/x86_64-windows/libwinecrt0.a" "lib/wine/x86_64-windows/libntdll.a")
-    for pe in $TEST_PE_DIRS; do
-        for t in $(graphics_tests "$pe"); do
+    for pe in $WINE_TEST_PE_DIRS; do
+        for t in $(wine_tests "$pe"); do
             WANT+=("lib/wine/tests/$pe/${t}_test.exe")
         done
     done

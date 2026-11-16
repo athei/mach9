@@ -212,6 +212,8 @@ enum Leg {
     I386,
     #[value(name = "x86_64")]
     X86_64,
+    #[value(name = "aarch64")]
+    Aarch64,
 }
 
 impl From<Leg> for PeDir {
@@ -219,6 +221,7 @@ impl From<Leg> for PeDir {
         match leg {
             Leg::I386 => Self::I386,
             Leg::X86_64 => Self::X86_64,
+            Leg::Aarch64 => Self::Aarch64,
         }
     }
 }
