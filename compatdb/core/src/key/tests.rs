@@ -18,7 +18,7 @@ fn the_example_of_a_scalar_is_one_of_its_values_but_default() {
     for &key in Key::ALL {
         let example = key.example();
         assert!(!example.is_empty(), "{key}");
-        if key.scalar().is_some() {
+        if !key.values().is_empty() {
             assert!(key.values().contains(&example), "{key}: {example}");
             assert_ne!(example, DEFAULT_VALUE, "{key}");
         }
@@ -83,6 +83,7 @@ fn each_key_has_its_kind() {
             (Key::Company, KeyKind::Matcher),
             (Key::Product, KeyKind::Matcher),
             (Key::OriginalFilename, KeyKind::Matcher),
+            (Key::DisplayName, KeyKind::Scalar(ValueKind::Text)),
             (Key::Dxgi, word),
             (Key::D3d9, word),
             (Key::Wined3d, word),
@@ -122,7 +123,7 @@ fn the_values_of_a_scalar_are_its_spellings_then_default() {
             KeyKind::Scalar(ValueKind::Word) => {
                 assert_eq!(key.values().last(), Some(&DEFAULT_VALUE), "{key}");
             }
-            KeyKind::Matcher | KeyKind::List | KeyKind::Env => {
+            KeyKind::Scalar(ValueKind::Text) | KeyKind::Matcher | KeyKind::List | KeyKind::Env => {
                 assert_eq!(key.values(), [] as [&str; 0], "{key}");
             }
         }
@@ -185,11 +186,23 @@ fn a_scalar_value_prints_in_lowercase() {
 }
 
 #[test]
+fn display_name_preserves_text_but_rejects_blank_and_control_characters() {
+    assert_eq!(
+        Scalar::DisplayName.parse_value("Café: A Game"),
+        Ok(ScalarValue::DisplayName("Café: A Game".into()))
+    );
+    for text in ["", "   ", "A\0B", "A\nB", "DEFAULT"] {
+        assert!(Scalar::DisplayName.parse_value(text).is_err(), "{text:?}");
+    }
+}
+
+#[test]
 fn the_labels_are_the_ones_a_launcher_shows() {
     let labels: Vec<&str> = Scalar::ALL.iter().map(|s| s.key().label()).collect();
     assert_eq!(
         labels,
         [
+            "Display name",
             "DXGI",
             "D3D9",
             "wined3d renderer",

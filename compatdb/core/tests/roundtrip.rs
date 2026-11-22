@@ -94,7 +94,7 @@ impl Gen {
                     continue;
                 };
                 let is_word = key.parse::<Key>().is_ok_and(|key| match key.kind() {
-                    KeyKind::Scalar(_) => true,
+                    KeyKind::Scalar(_) => value == "default" || key.values().contains(&value),
                     _ => key == Key::Exe && value.starts_with("steam:"),
                 });
                 let value = if is_word {
@@ -172,9 +172,12 @@ impl Gen {
             if self.one_in(3) || (scalar.key().needs_program() && !names_program) {
                 continue;
             }
-            let value = self
-                .pick(scalar.key().values())
-                .ok_or("a scalar without values")?;
+            let values = if scalar == Scalar::DisplayName {
+                &["Some Game; 100%", "café", "default"]
+            } else {
+                scalar.key().values()
+            };
+            let value = self.pick(values).ok_or("a scalar without values")?;
             let value = self.mangle_case(value);
             rule.set(scalar.key(), &value)?;
         }
@@ -305,6 +308,7 @@ fn the_generator_reaches_every_key_and_setting_state() -> TestResult {
         }
     }
     assert!(text.contains("exe=*"));
+    assert!(text.contains("display_name=default"));
     assert!(text.contains("exe=steam:"));
     assert!(text.contains("arguments_override=\n") || text.contains("arguments_override=;"));
     assert!(text.lines().any(|line| {

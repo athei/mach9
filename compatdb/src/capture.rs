@@ -53,6 +53,7 @@ pub fn apply(nt: &Ntdll, process: &Process, resolution: &mut Resolution) {
             let value = resolution
                 .scalar(scalar)
                 .value
+                .as_ref()
                 .map(|v| format!("{v}, "))
                 .unwrap_or_default();
             let note = if scalar == Scalar::VulkanCapture {

@@ -93,6 +93,31 @@ fn each_variable_is_read_by_its_own_name() {
 }
 
 #[test]
+fn snapshotted_sources_keep_the_path_and_inline_rules_but_not_file_contents() -> TestResult {
+    let scratch = Scratch::new("snapshot")?;
+    let path = scratch.file("rules", b"exe=game.exe;display_name=File")?;
+    let mut environment = std::collections::HashMap::from([
+        (ENV_VAR, String::from("exe=game.exe;display_name=Inline")),
+        (FILE_ENV_VAR, path.clone()),
+    ]);
+    let snapshot = Variables::read_with(|name| environment.get(name).cloned());
+    environment.clear(); // no mutation of the test runner's actual C environment
+    let name = || {
+        crate::load_table(&snapshot)
+            .0
+            .resolve("game.exe", &VersionInfo::default(), None)
+            .display_name()
+            .map(str::to_owned)
+    };
+    assert_eq!(name().as_deref(), Some("File"));
+    fs::write(&path, "exe=game.exe;display_name=Revised")?;
+    assert_eq!(name().as_deref(), Some("Revised"));
+    fs::remove_file(path)?;
+    assert_eq!(name().as_deref(), Some("Inline"));
+    Ok(())
+}
+
+#[test]
 fn without_either_variable_there_are_no_rules_and_nothing_to_log() {
     let gathered = gather(variables(None, None), reads_rule());
     assert_eq!(gathered.inline, None);

@@ -83,6 +83,7 @@ impl Key {
             Self::Company => variant!(Company),
             Self::Product => variant!(Product),
             Self::OriginalFilename => variant!(OriginalFilename),
+            Self::DisplayName => variant!(DisplayName),
             Self::Dxgi => variant!(Dxgi),
             Self::D3d9 => variant!(D3d9),
             Self::Wined3d => variant!(Wined3d),

@@ -580,7 +580,7 @@ mod tests {
         let (old_key, old_value) = crate::test_keys::retired_value(Severity::Warning);
         let invalid = config::launch_wide_keys()
             .into_iter()
-            .filter(|key| key.kind() != KeyKind::List)
+            .filter(|key| !key.values().is_empty())
             .flat_map(|key| [format!("{key}=bogus"), format!("{key}=a b")]);
         for value in [
             String::new(),
@@ -601,6 +601,8 @@ mod tests {
             String::from("env.X=two words"),
             String::from("unknown=value"),
             String::from("retina_mode=true;"),
+            String::from("display_name=''"),
+            String::from("display_name=a b"),
         ]
         .into_iter()
         .chain(invalid)
@@ -622,11 +624,12 @@ mod tests {
             .map(|key| {
                 let value = key.example();
                 expected.set(key, value).unwrap();
-                format!(
-                    "{}={}",
-                    key.as_str().to_ascii_uppercase(),
+                let value = if key.kind() == KeyKind::Scalar(compatdb_core::ValueKind::Text) {
+                    format!("'{value}'")
+                } else {
                     value.to_ascii_uppercase()
-                )
+                };
+                format!("{}={value}", key.as_str().to_ascii_uppercase())
             })
             .collect();
         let batch = OverrideBatch::from_str(&format!(

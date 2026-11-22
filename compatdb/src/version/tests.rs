@@ -206,6 +206,39 @@ fn the_mapped_image_is_read() -> Fallible {
 }
 
 #[test]
+fn disk_fingerprint_uses_wine_section_mapping() -> Fallible {
+    let dir = std::env::temp_dir().join(format!("compatdb-rsrc-{}", std::process::id()));
+    std::fs::create_dir(&dir)?;
+    let path = dir.join("test.exe");
+    let mut file = file_layout()?;
+    let opt = 0x44 + 20;
+    let section = opt + 0xe0;
+    put32(&mut file, section + 20, SECTION_FILE_OFFSET + 7)?;
+    let mapped = map_file(&file)?;
+    std::fs::write(&path, &file)?;
+    assert_eq!(read_file(&path), Some(from_image(mapped.as_slice())));
+    assert_eq!(read_file(&path), Some(expected()));
+    // Flat images are mapped literally, even at a non-sector RVA.
+    let mut flat = mapped_layout()?;
+    let rva = SECTION_RVA + 32;
+    flat.copy_within(SECTION_RVA..SIZE_OF_IMAGE - 32, rva);
+    put32(&mut flat, opt + 32, 0x20)?;
+    put32(&mut flat, opt + 36, 0x20)?;
+    put32(&mut flat, opt + 96 + 16, rva)?;
+    put32(&mut flat, section + 12, rva)?;
+    put32(&mut flat, section + 20, rva)?;
+    put32(&mut flat, rva + 0x48, rva + 0x60)?;
+    std::fs::write(&path, &flat)?;
+    assert_eq!(read_file(&path), Some(from_image(flat.as_slice())));
+    assert_eq!(read_file(&path), Some(expected()));
+    put32(&mut flat, opt + 96 + 16, 0)?;
+    std::fs::write(&path, flat)?;
+    assert_eq!(read_file(&path), None);
+    std::fs::remove_dir_all(dir)?;
+    Ok(())
+}
+
+#[test]
 fn the_mapped_image_reports_its_machine() -> Fallible {
     let mut image = mapped_layout()?;
     assert_eq!(machine(image.as_ptr().cast()), Some(0x14c));

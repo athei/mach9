@@ -120,8 +120,8 @@
 //!   and `original_filename`, are optional (see [Matching](#matching)).
 //!   A matcher or a scalar setting holds one value, and a list takes one
 //!   entry per field, in order.
-//! - A scalar setting takes one of the spellings of [`Key::values`]: one
-//!   of its words, or `default`, which resets it ([`Setting::Reset`]).
+//! - A scalar setting takes one of the spellings of [`Key::values`] or,
+//!   for `display_name`, text. `default` resets it ([`Setting::Reset`]).
 //! - `arguments_override` with an empty value sets the override without
 //!   adding an entry, so `arguments_override=` alone clears the arguments.
 //!   An empty entry of `arguments` or `debug_channels` is refused.
@@ -145,7 +145,8 @@
 //! ASCII-case-insensitively and written in lowercase: the keys, the words
 //! of the scalar settings, `true`, `false`, `default`, the `steam:` of an
 //! `exe` and the `v` of a legacy header. User data is kept byte for byte: the
-//! `exe`, the fingerprint values, list entries and env names and values. So
+//! `exe`, the fingerprint values, display names, list entries and env names
+//! and values. So
 //! `DXGI=WineD3D` reads as `dxgi=wined3d`, and `exe=STEAM:440` as
 //! `exe=steam:440`, while `exe=Game.EXE` keeps its case (matching ignores it,
 //! see [Matching](#matching)).
@@ -397,7 +398,7 @@
 //! - Matchers: [`Key::Exe`], [`Key::Company`], [`Key::Product`],
 //!   [`Key::OriginalFilename`].
 //! - Scalar settings, each a [`Scalar`] with a [`Setting`]:
-//!   [`Key::Dxgi`], [`Key::D3d9`], [`Key::Wined3d`], [`Key::OpenGl`],
+//!   [`Key::DisplayName`], [`Key::Dxgi`], [`Key::D3d9`], [`Key::Wined3d`], [`Key::OpenGl`],
 //!   [`Key::DpiAware`], [`Key::LargeAddressAware`], [`Key::Gcmouse`],
 //!   [`Key::ForceNx`], [`Key::MetalHud`], [`Key::VulkanCapture`],
 //!   [`Key::MetalCapture`].
@@ -406,7 +407,7 @@
 //! - Environment entries: [`Key::Env`].
 //!
 //! [`Key::kind`] says which of these a key is, [`Key::values`] gives the
-//! spellings of a scalar setting, `default` included, [`Key::label`] its
+//! spellings of a word or boolean setting, `default` included, [`Key::label`] its
 //! name for a person, and [`Key::upstream`] what upstream Wine does
 //! without it, as `compatdb.so` logs it. For a launcher's templates and
 //! help, [`Key::summary`] says in one line what a key does,
@@ -607,10 +608,10 @@ pub use crate::{
 /// tree to the library.
 pub const ENV_VAR: &str = "WINE_COMPATDB";
 
-/// The environment variable naming a file that holds what [`ENV_VAR`] would
-/// hold, whose rules come after those of [`ENV_VAR`]: see
-/// [Format](index.html#format). Like [`ENV_VAR`], it is only read by
-/// `compatdb.so`.
+/// The variable naming an additional rules file for `compatdb.so`.
+///
+/// Its rules follow those of [`ENV_VAR`] in the same [format](index.html#format).
+/// The resolver captures both variables at initialization and rereads the file for each child.
 pub const FILE_ENV_VAR: &str = "WINE_COMPATDB_FILE";
 
 /// The environment variable naming the bootstrap service of a profiler.

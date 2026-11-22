@@ -414,8 +414,11 @@ build_compatdb() {
         cargo build --quiet --release --locked --manifest-path "$REPO_DIR/Cargo.toml" \
             -p compatdb --target "$RUST_TARGET")
     echo "    $UNIX_DIR/compatdb.so"
-    cp "$COMPATDB_BUILD" "$unixdir/compatdb.so.new"
-    mv -f "$unixdir/compatdb.so.new" "$unixdir/compatdb.so"
+    # Only the version with deferred process initialization is safe for Wine
+    # to load while selecting the first image. Keep the legacy entry point.
+    cp "$COMPATDB_BUILD" "$unixdir/compatdb-before-image.so.new"
+    mv -f "$unixdir/compatdb-before-image.so.new" "$unixdir/compatdb-before-image.so"
+    ln -sfn compatdb-before-image.so "$unixdir/compatdb.so"
 }
 
 # check_no_leaks <file>...: report every file whose load commands still
@@ -4045,7 +4048,7 @@ check_gstreamer
 # The Direct3D backends and everything else copied in rather than built,
 # which nothing the build does would have caught.
 time_mark "Step 5: copied-in components"
-WANT=("lib/wine/$UNIX_DIR/compatdb.so"
+WANT=("lib/wine/$UNIX_DIR/compatdb-before-image.so" "lib/wine/$UNIX_DIR/compatdb.so"
       "lib/wine/$PE64_DIR/dxgi.dll" "lib/wine/i386-windows/dxgi.dll"
       "lib/wine/$PE64_DIR/d3d9.dll" "lib/wine/i386-windows/d3d9.dll"
       "lib/wine/$PE64_DIR/xtajit.dll" "lib/wine/$PE64_DIR/xtajit64.dll"

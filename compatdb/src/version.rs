@@ -2,19 +2,142 @@
 //! version fingerprint (company, product, original filename) that is stable
 //! across install location and patches.
 //!
-//! The image is the main image of the running process, which is already
-//! mapped when this library loads, so a resource RVA is just an offset from
-//! the image base. Every read is bounds checked against the image's own
-//! extent: a malformed or resource-free image yields an empty
-//! [`VersionInfo`], never a wild read.
+//! For the main image of the running process, a resource RVA is an offset
+//! from the mapped image base. For a pre-exec lookup it is translated to a
+//! file offset through the child's PE section table.
 
 use core::ffi::c_void;
+use std::{
+    fs::{File, OpenOptions},
+    os::unix::fs::{FileExt, OpenOptionsExt},
+    path::Path,
+};
 
 use compatdb_core::VersionInfo;
 
 /// Read the version fingerprint of the image mapped at `image_base`.
 pub fn read(image_base: *const c_void) -> VersionInfo {
     Mapped::new(image_base).map_or_else(VersionInfo::default, |img| from_image(&img))
+}
+
+/// The same fingerprint as [`read`], but from an executable on disk before
+/// the child has mapped it. Read only headers and the version resource.
+pub fn read_file(path: &Path) -> Option<VersionInfo> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    file.metadata().ok()?.is_file().then_some(())?;
+    let blob = version_blob(&OnDisk::new(file)?)?;
+    let version = compatdb_core::runtime::version_info(&blob);
+    (version != VersionInfo::default()).then_some(version)
+}
+
+impl Rva for File {
+    fn read(&self, offset: usize, buf: &mut [u8]) -> Option<()> {
+        self.read_exact_at(buf, u64::try_from(offset).ok()?).ok()
+    }
+}
+
+struct OnDisk {
+    file: File,
+    header_size: usize,
+    sections: Vec<Section>,
+}
+
+struct Section {
+    rva: usize,
+    offset: usize,
+    backed_size: usize,
+}
+
+impl OnDisk {
+    fn new(file: File) -> Option<Self> {
+        let pe = usize::try_from(file.u32(0x3c)?).ok()?;
+        let mut signature = [0; 4];
+        file.read(pe, &mut signature)?;
+        if &signature != b"PE\0\0" {
+            return None;
+        }
+        let coff = pe.checked_add(4)?;
+        let count = usize::from(file.u16(coff.checked_add(2)?)?);
+        // 96 is the PE loader's documented maximum.
+        if count > 96 {
+            return None;
+        }
+        let opt = coff.checked_add(20)?;
+        let opt_size = usize::from(file.u16(coff.checked_add(16)?)?);
+        let header_size = usize::try_from(file.u32(opt.checked_add(60)?)?).ok()?;
+        let image_size = usize::try_from(file.u32(opt.checked_add(56)?)?).ok()?;
+        let alignment = usize::try_from(file.u32(opt.checked_add(32)?)?).ok()?;
+        let file_alignment = usize::try_from(file.u32(opt.checked_add(36)?)?).ok()?;
+        if !alignment.is_power_of_two() || header_size > image_size {
+            return None;
+        }
+        // Wine uses a flat file mapping for images with sub-page section alignment.
+        let flat = alignment < 0x1000;
+        if flat && alignment != file_alignment {
+            return None;
+        }
+        let table = opt.checked_add(opt_size)?;
+        if opt_size < 64 || table.checked_add(count * 40)? > header_size {
+            return None;
+        }
+        let mut sections = Vec::with_capacity(count);
+        for i in 0..count {
+            let entry = table.checked_add(i * 40)?;
+            let field = |n| usize::try_from(file.u32(entry.checked_add(n)?)?).ok();
+            let virtual_size = field(8)?;
+            let raw_size = field(16)?;
+            let rva = field(12)?;
+            let offset = field(20)?;
+            if flat {
+                if rva != offset {
+                    return None;
+                }
+            } else if offset != 0 {
+                // Wine's map_image_into_view rounds the raw file range to sectors
+                // and caps it at the page-aligned extent of the mapped section.
+                let mapped = if virtual_size == 0 {
+                    raw_size
+                } else {
+                    virtual_size
+                };
+                let mapped = mapped.checked_next_multiple_of(alignment)?;
+                let sector_offset = offset % 512;
+                let backed = raw_size
+                    .checked_add(sector_offset)?
+                    .checked_next_multiple_of(512)?;
+                sections.push(Section {
+                    rva,
+                    offset: offset - sector_offset,
+                    backed_size: mapped.min(backed).min(image_size.checked_sub(rva)?),
+                });
+            }
+        }
+        Some(Self {
+            file,
+            header_size: if flat { image_size } else { header_size },
+            sections,
+        })
+    }
+}
+
+impl Rva for OnDisk {
+    fn read(&self, rva: usize, buf: &mut [u8]) -> Option<()> {
+        if rva.checked_add(buf.len())? <= self.header_size {
+            return self.file.read(rva, buf);
+        }
+        let offset = self.sections.iter().find_map(|section| {
+            let start = rva.checked_sub(section.rva)?;
+            if start.checked_add(buf.len())? > section.backed_size {
+                return None;
+            }
+            section.offset.checked_add(start)
+        })?;
+        self.file.read(offset, buf)
+    }
 }
 
 /// The COFF `Machine` of the image mapped at `image_base`, or `None` when its

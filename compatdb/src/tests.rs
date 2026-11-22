@@ -1,4 +1,4 @@
-use compatdb_core::{Argument, D3d9, DllOverride, Dxgi, ENV_VAR, EnvName, FILE_ENV_VAR};
+use compatdb_core::{Argument, D3d9, DllOverride, Dxgi, EnvName};
 
 use super::*;
 
@@ -386,12 +386,10 @@ fn the_log_labels_each_arch() {
 
 #[test]
 fn without_wine_compatdb_the_table_is_the_builtin_one() {
-    // load_table reads the variables a developer's shell may set; the answer
-    // is only predictable without them.
-    if std::env::var_os(ENV_VAR).is_some() || std::env::var_os(FILE_ENV_VAR).is_some() {
-        return;
-    }
-    let (table, lines) = load_table();
+    let (table, lines) = load_table(&rules_file::Variables {
+        inline: None,
+        file: None,
+    });
     assert_eq!(table, Table::builtin());
     assert_eq!(lines, [] as [String; 0]);
 }

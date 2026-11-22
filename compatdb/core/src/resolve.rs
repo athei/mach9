@@ -219,6 +219,15 @@ impl Resolution {
         self.scalars.get(&scalar).unwrap_or(&UNSET)
     }
 
+    /// The matching macOS app name, or `None` when unset or reset.
+    #[must_use]
+    pub fn display_name(&self) -> Option<&str> {
+        match self.scalar(Scalar::DisplayName).value.as_ref() {
+            Some(ScalarValue::DisplayName(name)) => Some(name),
+            _ => None,
+        }
+    }
+
     /// The DXGI-family implementation (see [`Rule::dxgi`]), `None` when no
     /// rule sets it.
     #[must_use]
@@ -424,7 +433,8 @@ impl Resolution {
     /// set it to `true`.
     pub fn fold_capture_env(&mut self, scalar: Scalar, entries: Vec<EnvEntry>) {
         let state = self.scalar(scalar);
-        let (Some(ScalarValue::Bool(true)), Some(origin)) = (state.value, state.set_by.clone())
+        let (Some(ScalarValue::Bool(true)), Some(origin)) =
+            (state.value.as_ref(), state.set_by.clone())
         else {
             return;
         };
@@ -669,9 +679,25 @@ impl Table {
     /// `arguments_override` is ignored (see [`Rule::arguments_override`]).
     #[must_use]
     pub fn resolve(&self, exe: &str, version: &VersionInfo, steam_app: Option<u32>) -> Resolution {
+        self.resolve_with_optional_version(exe, Some(version), steam_app)
+    }
+
+    /// Like [`Self::resolve`], but exclude all fingerprinted rules if the version could not be read.
+    #[must_use]
+    pub fn resolve_with_optional_version(
+        &self,
+        exe: &str,
+        version: Option<&VersionInfo>,
+        steam_app: Option<u32>,
+    ) -> Resolution {
         let mut matching: Vec<(Source, &Rule)> = self
             .entries()
-            .filter(|(_, rule)| rule.matches(exe, version, steam_app))
+            .filter(|(_, rule)| {
+                version.map_or_else(
+                    || !rule.has_fingerprint() && rule.exe().matches(exe, steam_app),
+                    |version| rule.matches(exe, version, steam_app),
+                )
+            })
             .collect();
         matching.sort_by_key(|(source, rule)| {
             let specificity = rule.specificity();

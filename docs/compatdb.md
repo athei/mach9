@@ -23,6 +23,24 @@
   own rules in the variable and point a stable file at the rules that
   change.
 
+## macOS app names
+
+`display_name` sets the name shown in the Dock and Cmd+Tab for a newly
+launched Windows program. It does not change the window title.
+
+```text
+exe=steam.exe;display_name=Steam
+exe=steam:440;display_name=Team Fortress 2
+```
+
+The first rule names Steam itself. The second matches the game's `SteamAppId`
+in its Windows environment, even when Steam is already running. Edit the game
+rule in `WINE_COMPATDB_FILE` and relaunch only the game to change its name.
+
+`display_name=default` clears an earlier choice. If no name matches, or Wine
+cannot use it (for example, it contains `/` or exceeds 240 UTF-8 bytes), the
+program keeps its usual name.
+
 ## Direct3D backends
 
 | Family | APIs | Rule value | Tree |
@@ -99,7 +117,7 @@ The library writes to Wine's stderr, once in every process at load, a
 block that is the whole configuration of the process. Every line starts
 with `compatdb:`.
 
-- Each setting gets a line with its value and its source. Where no rule
+- Each runtime setting gets a line with its value and its source. Where no rule
   set it, the line says `unset (upstream: ...)` with what upstream Wine
   does instead ([`Key::upstream`][upstream]), followed by
   `reset by <source>` when the last rule for it set it to `default`.

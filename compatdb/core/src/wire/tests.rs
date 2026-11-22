@@ -619,6 +619,7 @@ fn every_field_a_record_can_carry_is_a_key_in_the_order_of_key_all() -> TestResu
         company: Some(Fingerprint::literal("c")),
         product: Some(Fingerprint::literal("p")),
         original_filename: Some(Fingerprint::literal("o")),
+        display_name: Setting::Set("Some Game".into()),
         dxgi: Setting::Set(Dxgi::Dxmt),
         d3d9: Setting::Set(D3d9::Mtld3d),
         wined3d: Setting::Set(Wined3d::Gl),

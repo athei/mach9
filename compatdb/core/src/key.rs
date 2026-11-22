@@ -28,6 +28,9 @@ macro_rules! summary {
     (OriginalFilename) => {
         "A text the original file name of the image's version resource must contain."
     };
+    (DisplayName) => {
+        "The macOS app name requested for the process."
+    };
     (Dxgi) => {
         "The implementation of D3D10 to D3D12 the process loads."
     };
@@ -111,6 +114,10 @@ pub enum Key {
     /// [`Rule::original_filename`]). Without it, any original filename
     /// matches.
     OriginalFilename,
+    #[doc = summary!(DisplayName)]
+    ///
+    /// `display_name` (see [`Rule::display_name`]).
+    DisplayName,
     #[doc = summary!(Dxgi)]
     ///
     /// `dxgi`, a [`Dxgi`] (see [`Rule::dxgi`]). Unset: wined3d, as in
@@ -220,6 +227,8 @@ pub enum ValueKind {
     Word,
     /// `true` or `false`.
     Bool,
+    /// Text, not a fixed set of spellings.
+    Text,
 }
 
 impl Key {
@@ -229,6 +238,7 @@ impl Key {
         Self::Company,
         Self::Product,
         Self::OriginalFilename,
+        Self::DisplayName,
         Self::Dxgi,
         Self::D3d9,
         Self::Wined3d,
@@ -255,6 +265,7 @@ impl Key {
             Self::Company => "company",
             Self::Product => "product",
             Self::OriginalFilename => "original_filename",
+            Self::DisplayName => "display_name",
             Self::Dxgi => "dxgi",
             Self::D3d9 => "d3d9",
             Self::Wined3d => "wined3d",
@@ -279,6 +290,7 @@ impl Key {
     #[must_use]
     pub const fn scalar(self) -> Option<Scalar> {
         match self {
+            Self::DisplayName => Some(Scalar::DisplayName),
             Self::Dxgi => Some(Scalar::Dxgi),
             Self::D3d9 => Some(Scalar::D3d9),
             Self::Wined3d => Some(Scalar::Wined3d),
@@ -327,6 +339,7 @@ impl Key {
             Self::Company => "Company",
             Self::Product => "Product",
             Self::OriginalFilename => "Original filename",
+            Self::DisplayName => "Display name",
             Self::Dxgi => "DXGI",
             Self::D3d9 => "D3D9",
             Self::Wined3d => "wined3d renderer",
@@ -391,7 +404,8 @@ impl Key {
             | Self::ArgumentsOverride
             | Self::Arguments
             | Self::DebugChannels
-            | Self::Env => &[],
+            | Self::Env
+            | Self::DisplayName => &[],
         }
     }
 
@@ -405,6 +419,7 @@ impl Key {
             Self::Company => summary!(Company),
             Self::Product => summary!(Product),
             Self::OriginalFilename => summary!(OriginalFilename),
+            Self::DisplayName => summary!(DisplayName),
             Self::Dxgi => summary!(Dxgi),
             Self::D3d9 => summary!(D3d9),
             Self::Wined3d => summary!(Wined3d),
@@ -437,7 +452,7 @@ impl Key {
         match self {
             Self::Exe | Self::OriginalFilename => "Game.exe",
             Self::Company => "Some Vendor",
-            Self::Product => "Some Game",
+            Self::Product | Self::DisplayName => "Some Game",
             Self::Dxgi | Self::D3d9 => "wined3d",
             Self::Wined3d => "vulkan",
             Self::OpenGl => "cgl",
@@ -480,6 +495,8 @@ impl fmt::Display for Key {
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Scalar {
+    /// [`Key::DisplayName`]: the macOS app name requested for the process.
+    DisplayName,
     /// [`Key::Dxgi`]: the implementation of D3D10 to D3D12. Unset:
     /// wined3d.
     Dxgi,
@@ -516,6 +533,7 @@ pub enum Scalar {
 impl Scalar {
     /// Every scalar setting, in the order a record writes them.
     pub const ALL: &'static [Self] = &[
+        Self::DisplayName,
         Self::Dxgi,
         Self::D3d9,
         Self::Wined3d,
@@ -533,6 +551,7 @@ impl Scalar {
     #[must_use]
     pub const fn key(self) -> Key {
         match self {
+            Self::DisplayName => Key::DisplayName,
             Self::Dxgi => Key::Dxgi,
             Self::D3d9 => Key::D3d9,
             Self::Wined3d => Key::Wined3d,
@@ -557,6 +576,7 @@ impl Scalar {
     #[must_use]
     pub const fn value_kind(self) -> ValueKind {
         match self {
+            Self::DisplayName => ValueKind::Text,
             Self::Dxgi | Self::D3d9 | Self::Wined3d | Self::OpenGl => ValueKind::Word,
             Self::DpiAware
             | Self::LargeAddressAware
@@ -573,6 +593,7 @@ impl Scalar {
     #[must_use]
     pub const fn upstream(self) -> &'static str {
         match self {
+            Self::DisplayName => "the normal macOS app name",
             Self::Dxgi | Self::D3d9 => "wined3d",
             Self::Wined3d => {
                 "the OpenGL renderer, unless WINE_D3D_CONFIG or wined3d's registry settings name \
@@ -602,6 +623,10 @@ impl Scalar {
     /// what a field of the key takes.
     pub fn parse_value(self, text: &str) -> Result<ScalarValue, FieldError> {
         let value = match self {
+            Self::DisplayName => (!text.trim().is_empty()
+                && !text.eq_ignore_ascii_case(DEFAULT_VALUE)
+                && !text.chars().any(char::is_control))
+            .then(|| ScalarValue::DisplayName(text.to_owned())),
             Self::Dxgi => text.parse().ok().map(ScalarValue::Dxgi),
             Self::D3d9 => text.parse().ok().map(ScalarValue::D3d9),
             Self::Wined3d => text.parse().ok().map(ScalarValue::Wined3d),
@@ -630,8 +655,10 @@ impl fmt::Display for Scalar {
 
 /// The value of a scalar setting.
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ScalarValue {
+    /// A value of [`Scalar::DisplayName`].
+    DisplayName(String),
     /// A value of [`Scalar::Dxgi`].
     Dxgi(Dxgi),
     /// A value of [`Scalar::D3d9`].
@@ -645,10 +672,11 @@ pub enum ScalarValue {
 }
 
 impl ScalarValue {
-    /// The value as the wire writes it, in lowercase.
+    /// The unescaped value as the wire writes it.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    pub const fn as_str(&self) -> &str {
         match self {
+            Self::DisplayName(value) => value.as_str(),
             Self::Dxgi(value) => value.as_str(),
             Self::D3d9(value) => value.as_str(),
             Self::Wined3d(value) => value.as_str(),

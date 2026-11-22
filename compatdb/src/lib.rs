@@ -1,7 +1,9 @@
 //! `compatdb.so`: the per-process settings library wine's ntdll dlopens from
 //! `<ntdll_dir>/compatdb.so` in every process (the slot `CrossOver` hack 24067
-//! provides), before any PE code runs. Its only entry point is a Mach-O
-//! initializer.
+//! provides). Its Mach-O initializer snapshots rule sources. Older Wine
+//! also applies the current process's rules there; Wine that loads the
+//! resolver early calls `compatdb_apply_current_process` once the image and
+//! process parameters are ready, before any PE code runs.
 //!
 //! It is built for a native arm64 Wine, which runs x86 programs under
 //! emulation and native ARM64 ones.
@@ -31,6 +33,7 @@ mod apply;
 mod capture;
 mod log;
 mod ntdll;
+mod pre_exec;
 mod prof;
 mod rules_file;
 mod version;
@@ -38,6 +41,7 @@ mod version;
 use std::{
     ffi::{CStr, CString},
     fmt::{Display, Write as _},
+    sync::OnceLock,
 };
 
 use compatdb_core::{
@@ -56,28 +60,48 @@ use crate::ntdll::{Ntdll, Peb, Peb32, ProcessParameters, ProcessParameters32, TE
 #[unsafe(link_section = "__DATA,__mod_init_func")]
 static INIT: extern "C" fn() = run;
 
+// Capture only at library initialization, never from a live Wine parent in
+// the child resolver. File contents, unlike the path, are not cached.
+static RULE_SOURCES: OnceLock<rules_file::Variables> = OnceLock::new();
+
 /// The built-in rules followed by the caller's rules, plus the lines for the
 /// log: the file named, if one is, and what could not be read.
-fn load_table() -> (Table, Vec<String>) {
+fn load_table(sources: &rules_file::Variables) -> (Table, Vec<String>) {
     // The built-in rules are compiled in; only the caller's rules travel in
     // the environment and a file it names (absent unless something set
     // them). They come after the built-in ones, so within a tier they fold
     // later, and the file's come after those of the environment.
-    let variables = rules_file::Variables::read_with(read_env);
-    rules_file::gather(variables, rules_file::read).into_table()
+    rules_file::gather(sources.clone(), rules_file::read).into_table()
 }
 
 extern "C" fn run() {
+    RULE_SOURCES.get_or_init(|| rules_file::Variables::read_with(read_env));
+    // SAFETY: a static NUL-terminated name; only test the marker's presence.
+    let marker = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"ntdll_defer_compatdb_apply".as_ptr()) };
+    if marker.is_null() {
+        compatdb_apply_current_process();
+    }
+}
+
+/// Apply runtime settings at Wine's normal compatdb initialization point.
+///
+/// A Wine that exports `ntdll_defer_compatdb_apply` calls this once, after
+/// setting up the process parameters and mapping the main image.
+#[unsafe(no_mangle)]
+pub extern "C" fn compatdb_apply_current_process() {
     // The library always loads, in every wine process, whether or not the env
     // var is set: the default dirs ship no real Direct3D at all, so both
     // implementations are chosen here (per arch, or per the database) and
     // their trees prepended. It always logs one line per process so a miss is
     // as visible as a hit.
+    let Some(sources) = RULE_SOURCES.get() else {
+        return;
+    };
     let Some(nt) = Ntdll::resolve() else {
         log::line("required ntdll symbols missing, doing nothing");
         return;
     };
-    let (table, lines) = load_table();
+    let (table, lines) = load_table(sources);
     let service = prof::service();
     let Some(process) = Process::current(&nt) else {
         log_lines(&lines);
@@ -106,9 +130,8 @@ extern "C" fn run() {
     // the default dirs hold nothing that could conflict, so nothing is ever
     // disabled.
     //
-    // Every key gets a line, with where its value came from or, unset, what
-    // upstream Wine does instead, so the block is the whole configuration of
-    // the process.
+    // Every runtime setting gets a line, with where its value came from or,
+    // unset, what upstream Wine does instead.
     let pe_dir = process.arch.pe_dir();
     let dxgi = effective_dxgi(resolution.dxgi(), process.arch);
     apply::tree(

@@ -465,6 +465,7 @@ fn allowed_on_any_is_what_a_rule_for_every_process_takes() -> TestResult {
     assert_eq!(
         allowed,
         [
+            Key::DisplayName,
             Key::Dxgi,
             Key::D3d9,
             Key::Wined3d,

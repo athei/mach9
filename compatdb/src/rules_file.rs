@@ -15,6 +15,7 @@ use compatdb_core::{ENV_VAR, FILE_ENV_VAR, Table};
 const MAX_BYTES: u64 = 1024 * 1024;
 
 /// The values of the two variables the caller's rules can come from.
+#[derive(Clone)]
 pub struct Variables {
     /// The value of [`FILE_ENV_VAR`].
     pub file: Option<String>,

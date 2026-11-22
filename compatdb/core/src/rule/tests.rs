@@ -212,8 +212,8 @@ fn a_rule_reads_and_writes_each_scalar_by_its_key() {
     ];
     for (scalar, value) in values {
         assert_eq!(rule.scalar(scalar), Setting::Unset, "{scalar}");
-        rule.put_scalar(scalar, Setting::Set(value));
-        assert_eq!(rule.scalar(scalar), Setting::Set(value), "{scalar}");
+        rule.put_scalar(scalar, Setting::Set(value.clone()));
+        assert_eq!(rule.scalar(scalar), Setting::Set(value.clone()), "{scalar}");
         // A value of another setting changes nothing.
         let other = if matches!(value, ScalarValue::Bool(_)) {
             ScalarValue::Dxgi(Dxgi::Dxmt)

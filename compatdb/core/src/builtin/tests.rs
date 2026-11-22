@@ -1035,7 +1035,8 @@ fn default_hands_a_setting_back_to_upstream_wine() {
         assert_eq!(state.set_by, None, "{scalar}");
         let reset = !matches!(
             scalar,
-            Scalar::Wined3d
+            Scalar::DisplayName
+                | Scalar::Wined3d
                 | Scalar::LargeAddressAware
                 | Scalar::MetalHud
                 | Scalar::VulkanCapture

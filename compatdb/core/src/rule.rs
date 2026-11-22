@@ -24,6 +24,8 @@ pub struct Rule {
     pub(crate) product: Option<Fingerprint>,
     /// Substring the image's version `OriginalFilename` must contain.
     pub(crate) original_filename: Option<Fingerprint>,
+    /// See [`Rule::display_name`].
+    pub(crate) display_name: Setting<String>,
     /// See [`Rule::dxgi`].
     pub(crate) dxgi: Setting<Dxgi>,
     /// See [`Rule::d3d9`].
@@ -130,6 +132,7 @@ impl Rule {
             company: None,
             product: None,
             original_filename: None,
+            display_name: Setting::Unset,
             dxgi: Setting::Unset,
             d3d9: Setting::Unset,
             wined3d: Setting::Unset,
@@ -641,10 +644,23 @@ impl Rule {
             && self.env.is_empty()
     }
 
+    /// The macOS app name requested by this rule, if any. `default` restores
+    /// the normal name. Only a Wine loader that queries compatdb before exec
+    /// can act on this setting.
+    #[must_use]
+    pub const fn display_name(&self) -> Setting<&str> {
+        match &self.display_name {
+            Setting::Set(name) => Setting::Set(name.as_str()),
+            Setting::Unset => Setting::Unset,
+            Setting::Reset => Setting::Reset,
+        }
+    }
+
     /// What this rule says about the scalar setting `scalar`.
     #[must_use]
     pub fn scalar(&self, scalar: Scalar) -> Setting<ScalarValue> {
         match scalar {
+            Scalar::DisplayName => self.display_name.clone().map(ScalarValue::DisplayName),
             Scalar::Dxgi => self.dxgi.map(ScalarValue::Dxgi),
             Scalar::D3d9 => self.d3d9.map(ScalarValue::D3d9),
             Scalar::Wined3d => self.wined3d.map(ScalarValue::Wined3d),
@@ -683,6 +699,10 @@ impl Rule {
             _ => None,
         };
         match scalar {
+            Scalar::DisplayName => put(&mut self.display_name, setting, |value| match value {
+                ScalarValue::DisplayName(name) => Some(name),
+                _ => None,
+            }),
             Scalar::Dxgi => put(&mut self.dxgi, setting, |value| match value {
                 ScalarValue::Dxgi(dxgi) => Some(dxgi),
                 _ => None,
@@ -734,14 +754,18 @@ impl Rule {
     /// an executable.
     #[must_use]
     pub const fn specificity(&self) -> Specificity {
-        let fingerprinted =
-            self.company.is_some() || self.product.is_some() || self.original_filename.is_some();
-        match (self.exe.is_any(), fingerprinted) {
+        match (self.exe.is_any(), self.has_fingerprint()) {
             (true, false) => Specificity::Any,
             (true, true) => Specificity::AnyWithFingerprint,
             (false, false) => Specificity::Exe,
             (false, true) => Specificity::ExeWithFingerprint,
         }
+    }
+
+    /// Whether matching the rule requires the executable's version resource.
+    #[must_use]
+    pub const fn has_fingerprint(&self) -> bool {
+        self.company.is_some() || self.product.is_some() || self.original_filename.is_some()
     }
 
     /// Whether this rule matches on its executable's file name alone. Such a
