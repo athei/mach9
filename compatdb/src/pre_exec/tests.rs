@@ -14,7 +14,7 @@ fn version_constraints_and_reset_follow_normal_rule_precedence() -> TestResult {
          exe=game.exe;company=;display_name=Empty pin\n\
          exe=game.exe;company=Acme;display_name=default",
     )?;
-    let env = wide("sTeAmApPiD=440\0\0");
+    let steam = Some(440);
     let version = || {
         Some(VersionInfo {
             company: "ACME Games".into(),
@@ -23,16 +23,16 @@ fn version_constraints_and_reset_follow_normal_rule_precedence() -> TestResult {
     };
     let name =
         |r: Option<compatdb_core::Resolution>| r.and_then(|r| r.display_name().map(str::to_owned));
-    assert_eq!(name(resolve(&table, "game.exe", &env, version)), None);
+    assert_eq!(name(resolve(&table, "game.exe", steam, version)), None);
     assert_eq!(
-        name(resolve(&table, "game.exe", &env, || None)).as_deref(),
+        name(resolve(&table, "game.exe", steam, || None)).as_deref(),
         Some("By exe")
     );
     assert_eq!(
-        name(resolve(&table, "other.exe", &env, || None)).as_deref(),
+        name(resolve(&table, "other.exe", steam, || None)).as_deref(),
         Some("Title")
     );
-    assert!(resolve(&table, "other.exe", &[], || None).is_none());
+    assert!(resolve(&table, "other.exe", None, || None).is_none());
     Ok(())
 }
 
@@ -58,6 +58,41 @@ fn ffi_reads_the_current_file_and_uses_counted_utf8_output() -> TestResult {
         let image = wide(r"C:\Games\Game.exe");
         let env = wide("SteamAppId=440\0\0");
         let mut buf = [0xff; 6];
+        std::fs::write(&path, "exe=steam:440;display_name=Game")?;
+        // No Wine state is initialized here: direct lookup takes Unix inputs only.
+        for image in [c"C:\\Games\\Game.exe", c"/games/Game.exe", c"Game.exe"] {
+            // SAFETY: static C strings and a disjoint output buffer of the specified size.
+            let len = unsafe {
+                compatdb_resolve_initial_display_name(
+                    image.as_ptr(),
+                    c"/prefix".as_ptr(),
+                    c"440".as_ptr(),
+                    buf.as_mut_ptr().cast(),
+                    buf.len(),
+                )
+            };
+            assert_eq!(len, 4);
+            assert_eq!(buf, *b"Game\0\xff");
+        }
+        // An unset Unix AppID is not the child's Windows SteamAppId. Without
+        // accessible PE metadata the direct resolver must skip fingerprinted rules.
+        std::fs::write(
+            &path,
+            "exe=Game.exe;display_name=Plain\nexe=Game.exe;company=Acme;display_name=Pinned",
+        )?;
+        // SAFETY: static input strings, null optional AppID, valid output buffer.
+        let len = unsafe {
+            compatdb_resolve_initial_display_name(
+                c"C:\\Games\\Game.exe".as_ptr(),
+                c"/missing-prefix".as_ptr(),
+                std::ptr::null(),
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+            )
+        };
+        assert_eq!(len, 5);
+        assert_eq!(buf, *b"Plain\0");
+        buf.fill(0xff);
         std::fs::write(&path, "exe=steam:440;display_name=Game")?;
         assert_eq!(query(&image, &env, &mut buf), 4);
         assert_eq!(buf, *b"Game\0\xff");
@@ -93,4 +128,24 @@ fn ffi_reads_the_current_file_and_uses_counted_utf8_output() -> TestResult {
     std::fs::remove_dir_all(dir)?;
     assert!(status?.success());
     Ok(())
+}
+
+#[test]
+fn initial_paths_do_not_need_wine_state() {
+    for (image, expected) in [
+        ("/unix/path", Some("/unix/path")),
+        ("game.exe", Some("game.exe")),
+        (
+            r"C:\games\game.exe",
+            Some("/prefix/dosdevices/c:/games/game.exe"),
+        ),
+        (r"games\game.exe", Some("games/game.exe")),
+        (r"D:game.exe", None),
+        (r"\\host\share\game.exe", None),
+    ] {
+        assert_eq!(
+            initial_image_path(image.as_bytes(), b"/prefix").as_deref(),
+            expected.map(Path::new)
+        );
+    }
 }

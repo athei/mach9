@@ -27,6 +27,7 @@ pub use self::{
     },
     version::version_info,
 };
+pub use crate::part::steam_app_id;
 use crate::{D3d9, Dxgi, OpenGl, Wined3d};
 
 /// The DXGI-family implementation a process loads when no rule names one.

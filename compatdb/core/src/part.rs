@@ -33,6 +33,7 @@ fn after_steam_prefix(text: &str) -> Option<&str> {
 
 /// The Steam app id `digits` spell: ASCII digits only, which make a `u32`
 /// other than 0. 0 is no app.
+#[must_use]
 pub fn steam_app_id(digits: &str) -> Option<u32> {
     if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;

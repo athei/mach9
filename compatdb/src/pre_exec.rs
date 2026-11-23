@@ -1,16 +1,21 @@
 //! Resolve a child's app name without applying any of its runtime settings.
 
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt, path::Path};
+use std::{
+    ffi::{CStr, OsStr},
+    mem::MaybeUninit,
+    os::unix::ffi::OsStrExt,
+    path::{Path, PathBuf},
+};
 
 use compatdb_core::{
     Table, VersionInfo,
-    runtime::{basename_of, steam_app},
+    runtime::{basename_of, steam_app, steam_app_id},
 };
 
 use crate::{RULE_SOURCES, load_table, ntdll::Ntdll, version};
 
-/// Look up a name during initial image selection or before forking a Windows
-/// child. Use the target's environment: a game launched by Steam can have a
+/// Look up a name before forking a Windows child. Use the target's
+/// environment: a game launched by Steam can have a
 /// `SteamAppId` that the Steam client itself does not. This lookup must not
 /// apply the target's settings to the process asking for its name.
 ///
@@ -67,25 +72,116 @@ pub unsafe extern "C" fn compatdb_resolve_display_name(
         return 0;
     }
 
+    // SAFETY: output region and its bound were checked above.
+    let output = unsafe { std::slice::from_raw_parts_mut(out.cast(), out_size) };
+    lookup(&exe, steam_app(env), || image_version(image), output)
+}
+
+/// Look up a direct Unix launch before Wine has a PEB, a Windows environment,
+/// or a server connection. Never call ntdll path conversion from this entry point.
+///
+/// # Safety
+/// `image` (argv[1]) and `prefix` are NUL-terminated Unix strings. `appid` is
+/// either NULL or the NUL-terminated value of `SteamAppId` from the Unix launch
+/// environment. `out` must be writable for `out_size` bytes, disjoint from the
+/// inputs. Returns UTF-8 bytes excluding NUL, or zero without writing.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn compatdb_resolve_initial_display_name(
+    image: *const libc::c_char,
+    prefix: *const libc::c_char,
+    appid: *const libc::c_char,
+    out: *mut libc::c_char,
+    out_size: usize,
+) -> usize {
+    if image.is_null()
+        || prefix.is_null()
+        || out.is_null()
+        || out_size == 0
+        || out_size > isize::MAX as usize
+    {
+        return 0;
+    }
+    // SAFETY: the caller guarantees NUL termination and writable disjoint output.
+    let (image, prefix, appid, output) = unsafe {
+        (
+            CStr::from_ptr(image).to_bytes(),
+            CStr::from_ptr(prefix).to_bytes(),
+            (!appid.is_null()).then(|| CStr::from_ptr(appid)),
+            std::slice::from_raw_parts_mut(out.cast(), out_size),
+        )
+    };
+    let Some(exe) = image
+        .rsplit(|c| matches!(c, b'/' | b'\\'))
+        .next()
+        .filter(|s| !s.is_empty())
+    else {
+        return 0;
+    };
+    let Ok(exe) = std::str::from_utf8(exe) else {
+        return 0;
+    };
+    let appid = appid.and_then(|s| s.to_str().ok()).and_then(steam_app_id);
+    lookup(
+        exe,
+        appid,
+        || version::read_file(&initial_image_path(image, prefix)?),
+        output,
+    )
+}
+
+// Resolve only paths whose host spelling is known without querying Wine.
+// Don't guess fingerprints for drive-relative, device or UNC paths.
+fn initial_image_path(image: &[u8], prefix: &[u8]) -> Option<PathBuf> {
+    if image.starts_with(b"/") {
+        return Some(PathBuf::from(OsStr::from_bytes(image)));
+    }
+    let normalized: Vec<_> = image
+        .iter()
+        .map(|&b| if b == b'\\' { b'/' } else { b })
+        .collect();
+    match normalized.as_slice() {
+        [drive, b':', b'/', rest @ ..]
+            if drive.is_ascii_alphabetic() && !rest.starts_with(b"/") =>
+        {
+            Some(
+                Path::new(OsStr::from_bytes(prefix))
+                    .join("dosdevices")
+                    .join(OsStr::from_bytes(&[drive.to_ascii_lowercase(), b':']))
+                    .join(OsStr::from_bytes(rest)),
+            )
+        }
+        [b'/', ..] | [_, b':', ..] => None,
+        _ => Some(PathBuf::from(OsStr::from_bytes(&normalized))),
+    }
+}
+
+fn lookup(
+    exe: &str,
+    steam: Option<u32>,
+    image_version: impl FnOnce() -> Option<VersionInfo>,
+    output: &mut [MaybeUninit<u8>],
+) -> usize {
     let Some(sources) = RULE_SOURCES.get() else {
         return 0;
     };
     let (table, _) = load_table(sources);
-    let Some(resolution) = resolve(&table, &exe, env, || image_version(image)) else {
+    let Some(resolution) = resolve(&table, exe, steam, image_version) else {
         return 0;
     };
     let Some(name) = resolution
         .display_name()
-        .filter(|name| name.len() < out_size)
+        .filter(|name| name.len() < output.len())
     else {
         return 0;
     };
-    // SAFETY: the caller supplies non-overlapping writable storage. The title
-    // (which cannot contain NUL) plus its terminator fits, as checked above.
-    unsafe {
-        std::ptr::copy_nonoverlapping(name.as_ptr(), out.cast(), name.len());
-        out.add(name.len()).write(0);
-    }
+    let Some((bytes, tail)) = output.split_at_mut_checked(name.len()) else {
+        return 0;
+    };
+    let Some(nul) = tail.first_mut() else {
+        return 0;
+    };
+    bytes.write_copy_of_slice(name.as_bytes());
+    nul.write(0);
     name.len()
 }
 
@@ -104,10 +200,9 @@ fn valid_env(env: &[u16]) -> bool {
 fn resolve(
     table: &Table,
     exe: &str,
-    env: &[u16],
+    steam: Option<u32>,
     image_version: impl FnOnce() -> Option<VersionInfo>,
 ) -> Option<compatdb_core::Resolution> {
-    let steam = steam_app(env);
     let mut naming_rules = table
         .rules()
         .iter()
