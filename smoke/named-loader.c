@@ -32,12 +32,52 @@ static char profile_byte( int lease )
     return byte;
 }
 
+static void check_punctuation( const char *tmp )
+{
+    static const char *titles[] = {"Fallout: New Vegas", "Fallout New Vegas"};
+    static const char *invalid[] = {"::", ": :", ":.hidden", "bad/name", "bad\nname"};
+    char *paths[2];
+    int leases[2], status, lease;
+    size_t i;
+    pid_t pid;
+
+    for (i = 0; i < sizeof(invalid)/sizeof(*invalid); ++i)
+        assert( !prepare_named_loader( tmp, tmp, invalid[i], &lease ) && lease == -1 );
+    for (i = 0; i < 2; ++i)
+    {
+        paths[i] = prepare_named_loader( tmp, tmp, titles[i], &leases[i] );
+        assert( paths[i] && strstr( paths[i], "/Fallout New Vegas.app/Contents/MacOS/wine" ) );
+        pid = fork();
+        assert( pid != -1 );
+        if (!pid)
+        {
+            assert( inherit_named_loader( leases[i], paths[i], tmp ) );
+            execl( paths[i], paths[i], "--title", titles[i], (char *)NULL );
+            _exit( 1 );
+        }
+        assert( waitpid( pid, &status, 0 ) == pid && WIFEXITED(status) && !WEXITSTATUS(status) );
+    }
+    assert( strcmp( paths[0], paths[1] ) );  /* same basename, distinct leases */
+    for (i = 0; i < 2; ++i)
+    {
+        close( leases[i] );
+        free( paths[i] );
+    }
+}
+
 int main( int argc, char **argv )
 {
     char ntdll[PATH_MAX], profile[PATH_MAX], *new_exe, *old_exe, buf[16], byte;
     const char *tmp = argv[1];
     int new_lease, old_lease, pipefd[2], ready[2], status;
     pid_t pid;
+
+    if (argc == 3 && !strcmp( argv[1], "--title" ))
+    {
+        const char *title = adopt_named_loader();
+        assert( title && !strcmp( title, argv[2] ) );
+        return 0;
+    }
 
     /* The bundle smoke checks the live executable, not the process's argv. */
     if (argc == 3 && !strcmp( argv[1], "--image" ))
@@ -65,6 +105,7 @@ int main( int argc, char **argv )
     snprintf( profile, sizeof(profile), "%s/wine.app/Contents/embedded.provisionprofile", tmp );
     put_byte( ntdll, 1 );
     put_byte( profile, 'A' );
+    check_punctuation( tmp );
     old_exe = prepare_named_loader( tmp, tmp, "Game", &old_lease );
     assert( old_exe && profile_byte( old_lease ) == 'A' );
     assert( !pipe( pipefd ) && !pipe( ready ) );
