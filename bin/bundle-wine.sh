@@ -944,6 +944,16 @@ smoke_test() {
         echo "  The wineserver runs msync."
     fi
 
+    # Sources predating named loader support have neither this implementation
+    # nor the optional compatdb hook. Don't require it of older Wine pins.
+    if [ -f "$WINE_SRC/dlls/ntdll/unix/named_loader.c" ]; then
+        time_mark "smoke: named macOS loader"
+        log="$TMP_DIR/named-loader.log"
+        run_limited 120 "$log" "${wine_env[@]}" /bin/bash "$REPO_DIR/smoke/named-loader.sh" \
+            "$WINE_SRC" "$BUILD_DIR" "$WINE_DIR/bin/wine"
+        smoke_check "the signed named loader" 120 "$log"
+    fi
+
     # A program that crashes would otherwise wait in winedbg's crash dialog
     # until the time limit, and look like a hang. Without the dialog winedbg
     # writes the backtrace to the log and the program exits at once.
