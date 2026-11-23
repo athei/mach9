@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -91,6 +92,18 @@ int main( int argc, char **argv )
     assert( read( ready[0], &byte, 1 ) == 1 );
     close( ready[0] );
 
+    /* Launching the same title shares the live entry and executable inode. */
+    {
+        struct stat a, b;
+        char *again;
+        assert( !stat( old_exe, &a ) );
+        again = prepare_named_loader( tmp, tmp, "Game", &new_lease );
+        assert( again && !strcmp( again, old_exe ) );
+        assert( !stat( again, &b ) && a.st_ino == b.st_ino );
+        close( new_lease );
+        free( again );
+    }
+
     /* A profile update with no executable change must still take effect;
      * pruning in a concurrent launch must not remove the running executable. */
     put_byte( profile, 'B' );
@@ -103,20 +116,45 @@ int main( int argc, char **argv )
     assert( !inherit_named_loader( new_lease, new_exe, tmp ) );
     assert( !symlinkat( profile, new_lease, "ntdll.so" ) );
     assert( !inherit_named_loader( new_lease, new_exe, tmp ) );
+    {
+        int lease;
+        assert( !prepare_named_loader( tmp, tmp, "Game", &lease ) && lease == -1 );
+        assert( !access( new_exe, X_OK ) ); /* the damaged entry is still leased */
+    }
     close( new_lease );
     assert( write( pipefd[1], "!", 1 ) == 1 );
     close( pipefd[1] );
     assert( waitpid( pid, &status, 0 ) == pid && WIFEXITED( status ) && !WEXITSTATUS( status ) );
 
-    /* A subsequent preparation reclaims both the dead and damaged entries. */
+    /* Reclaim the dead generation and repair the current one at the same path. */
     {
         char *third = prepare_named_loader( tmp, tmp, "Game", &new_lease );
         assert( third && access( old_exe, F_OK ) && errno == ENOENT );
-        assert( access( new_exe, F_OK ) && errno == ENOENT );
+        assert( !strcmp( third, new_exe ) );
         assert( profile_byte( new_lease ) == 'B' );
         assert( inherit_named_loader( new_lease, third, tmp ) );
         close( new_lease );
         free( third );
+    }
+    /* Even with a valid dependency and executable, a corrupted resource or
+     * extra file is not a cache hit. Rebuild from the trusted source. */
+    {
+        char *again, extra[PATH_MAX], bundle_profile[PATH_MAX], *contents = strstr( new_exe, "/Game.app/" );
+        assert( contents );
+        snprintf( extra, sizeof(extra), "%.*s/Game.app/extra", (int)(contents - new_exe), new_exe );
+        snprintf( bundle_profile, sizeof(bundle_profile), "%.*s/Game.app/Contents/embedded.provisionprofile",
+                  (int)(contents - new_exe), new_exe );
+        put_byte( extra, '!' );
+        put_byte( bundle_profile, 'X' );
+        again = prepare_named_loader( tmp, tmp, "Game", &new_lease );
+        assert( again && !strcmp( again, new_exe ) && profile_byte( new_lease ) == 'B' );
+        assert( access( extra, F_OK ) && errno == ENOENT );
+        close( new_lease );
+        free( again );
+        again = prepare_named_loader( tmp, tmp, "Other title", &new_lease );
+        assert( again && strcmp( again, new_exe ) && !access( new_exe, X_OK ) );
+        close( new_lease );
+        free( again );
     }
     free( new_exe );
     free( old_exe );
