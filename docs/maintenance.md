@@ -844,3 +844,34 @@ upgraded together when the swapchain interface between them changes.
   tree with the [conformance runner](internals.md#conformance-runner).
   Explain every regression before the bundle takes the new build, and
   record the suites again once the differences are understood.
+
+### Rust toolchains
+
+Every workflow in [`.github/workflows`](../.github/workflows) that
+builds, tests, lints or formats with cargo installs the toolchains in
+[`rust.env`](../pins/rust.env) it uses: `RUST_STABLE` for every cargo
+and rustc of the job, through `RUSTUP_TOOLCHAIN`, and `RUST_NIGHTLY` for
+rustfmt alone. A new Rust release on a runner image changes nothing. A
+local build keeps the toolchain rustup or `PATH` selects, except for
+formatting.
+
+Format with [`bin/fmt.sh`](../bin/fmt.sh), which runs the rustfmt of
+`RUST_NIGHTLY`, as the fmt check of each workflow does; `--check` checks
+instead, and its header gives the arguments. It stops with the rustup
+command to run when that toolchain is missing.
+
+To move to newer toolchains:
+
+- Change `RUST_STABLE` to the new stable release, and `RUST_NIGHTLY` to a
+  nightly of a date whose rustfmt is wanted.
+- Run the lints and tests of every workflow with the new stable
+  (`cargo +<stable> clippy --locked --workspace --all-targets -- -D warnings`,
+  `cargo +<stable> test --locked --workspace`, and the
+  `RUSTDOCFLAGS=-D warnings` rustdoc builds of `compatdb.yml` and
+  `conformance.yml`), and `bin/fmt.sh --check` for the new nightly.
+- Fix what they report in the same change: a release adds lints to the
+  pedantic and nursery groups the workspace denies, and a nightly can
+  format differently (`bin/fmt.sh` reformats).
+- A workflow that runs cargo needs `pins/rust.env` in its `paths`
+  filter, so a bump runs it, and one that checks the formatting also
+  needs `bin/fmt.sh`.

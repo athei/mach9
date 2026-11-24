@@ -47,6 +47,7 @@ on:
       - '.cargo/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'pins/rust.env'
       - 'site/**'
       - 'docs/images/mach9.png'
       - 'bin/ci/assemble-site.sh'
@@ -155,10 +156,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # The stable toolchain pins/rust.env pins: RUSTUP_TOOLCHAIN makes
+      # every later cargo use it.
       - name: Install the toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          . pins/rust.env
+          rustup toolchain install "$RUST_STABLE" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$RUST_STABLE" >> "$GITHUB_ENV"
 
       # compatdb.yml checks the rustdoc with warnings as errors, so a
       # warning does not keep a new appcast from being deployed here.

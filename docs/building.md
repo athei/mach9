@@ -43,8 +43,8 @@ scripts also run alone ([commands](internals.md#commands)).
 
 | Path | What it holds |
 |------|---------------|
-| [`bin/`](../bin) | The build and bundle scripts; [`bin/lib/profile.sh`](../bin/lib/profile.sh) holds the settings and helpers they share, [`bin/ci/`](../bin/ci) what the workflows run besides them |
-| [`pins/`](../pins) | The pinned inputs: [`redist.env`](../pins/redist.env), the refs of the sources the build checks out, and the Homebrew formulae a CI build installs |
+| [`bin/`](../bin) | The build and bundle scripts; [`bin/lib/profile.sh`](../bin/lib/profile.sh) holds the settings and helpers they share, [`bin/ci/`](../bin/ci) what the workflows run besides them; [`bin/fmt.sh`](../bin/fmt.sh) formats the Rust code with the rustfmt the workflows check it with ([Rust toolchains](maintenance.md#rust-toolchains)) |
+| [`pins/`](../pins) | The pinned inputs: [`redist.env`](../pins/redist.env), the refs of the sources the build checks out, the Homebrew formulae a CI build installs, and the Rust toolchains of the workflows in [`rust.env`](../pins/rust.env) |
 | [`.github/workflows/`](../.github/workflows) | The CI workflows ([releases](maintenance.md#releases)) |
 | [`compatdb/`](../compatdb) | The crates of `compatdb.so` and `compatdb-core` ([compatdb.md](compatdb.md)); the Cargo workspace is the repository root, so run cargo there |
 | [`conformance/`](../conformance) | The runner of Wine's graphics tests ([conformance runner](internals.md#conformance-runner)) and of the [deqp-vk suite](internals.md#deqp-vk-suite): the tests and units it knows in [`wine-tests.toml`](../conformance/wine-tests.toml), the deqp-vk groups in [`deqp-vk.toml`](../conformance/deqp-vk.toml), and in `baselines/` the baselines and expected results it records and the triage files people keep |
