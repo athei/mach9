@@ -379,9 +379,8 @@ impl Key {
         }
     }
 
-    /// The spellings the value of a scalar setting can have, in lowercase,
-    /// `default` included; empty for any other key, whose values are user
-    /// data.
+    /// The lowercase spellings for a word or boolean setting, including
+    /// `default`. Empty for keys that take user data, including `display_name`.
     #[must_use]
     pub const fn values(self) -> &'static [&'static str] {
         match self {
@@ -612,15 +611,16 @@ impl Scalar {
         }
     }
 
-    /// Read `text` as a value of this setting, ASCII-case-insensitively.
-    /// `default` is not a value: it resets the setting (see
-    /// [`Setting::Reset`]).
+    /// Read `text` as a value of this setting. Words and booleans are
+    /// ASCII-case-insensitive; `display_name` preserves the supplied text.
+    /// `default` in any ASCII case is not a value: it resets the setting
+    /// (see [`Setting::Reset`]).
     ///
     /// # Errors
     ///
     /// [`FieldError::BadValue`] when the setting does not take `text`. Its
-    /// `expected` is [`Key::values`], `default` included, since it lists
-    /// what a field of the key takes.
+    /// `expected` is [`Key::values`]: it includes `default` for word and
+    /// boolean settings and is empty for `display_name`.
     pub fn parse_value(self, text: &str) -> Result<ScalarValue, FieldError> {
         let value = match self {
             Self::DisplayName => (!text.trim().is_empty()
