@@ -3,8 +3,10 @@
 //! across install location and patches.
 //!
 //! For the main image of the running process, a resource RVA is an offset
-//! from the mapped image base. For a pre-exec lookup it is translated to a
-//! file offset through the child's PE section table.
+//! from the mapped image base. Reads are bounds checked against the image's
+//! extent: a malformed or resource-free image yields an empty [`VersionInfo`].
+//! For a pre-exec lookup, the child's PE section table translates a resource
+//! RVA to a file offset; [`read_file`] returns `None` if no fingerprint is available.
 
 use core::ffi::c_void;
 use std::{
