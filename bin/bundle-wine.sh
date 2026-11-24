@@ -903,6 +903,7 @@ smoke_test() {
     # Outside Wine, so before the prefix boots.
     check_egl_host
     check_vkalias_host
+    check_vkinvariance_host
     check_gst_host
 
     # wineboot creates the prefix here, so the limit is generous. Only the
@@ -1659,6 +1660,48 @@ check_vkalias_host() {
         exit 1
     fi
     echo "    KosmicKrisp: $(grep -c '^vkalias: .*: ok$' "$log") aliased memory cases read back"
+}
+
+# check_vkinvariance_host: build smoke/vkinvariance.c for the host and run it
+# on the bundle's lib/external/libvulkan.1.dylib as check_vkalias_host runs
+# smoke/vkalias.c. Exit unless a second pass whose vertex shader computes the
+# same position as the first pass's, with other code around it, passes the
+# EQUAL depth test on every pixel the first pass covered, with and without
+# Invariant on the position, and fails it on every such pixel when its depth
+# range is narrowed on purpose: KosmicKrisp compiled vertex shaders with
+# Metal's fast math and left the position variant, and games that draw a
+# depth prepass lost geometry that way. The limit is a few times a clean run
+# with a cold shader cache, and the probe's watchdog ends a hang before it.
+# Skipped like check_vkalias_host on a Mac without a Metal 4 GPU.
+check_vkinvariance_host() {
+    local log="$TMP_DIR/vkinvariance.log"
+    local headers="$MESA_BUILD_DIR/vulkan-headers-install/include"
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host position invariance check: it needs a KosmicKrisp device."
+        return 0
+    fi
+    if [ ! -f "$headers/vulkan/vulkan_core.h" ]; then
+        echo "Error: no Vulkan headers in $headers for smoke/vkinvariance.c; bin/build-mesa.sh installs them"
+        exit 1
+    fi
+    xcrun clang -std=c11 -O2 -I "$headers" -o "$TMP_DIR/vkinvariance" "$REPO_DIR/smoke/vkinvariance.c"
+    echo "  Running the host position invariance check on lib/external/libvulkan.1.dylib..."
+    run_limited 10 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/vkinvariance" "$EXT_DIR/libvulkan.1.dylib"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/vkinvariance.c did not exit within 10 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -eq 1 ]; then
+        echo "Error: two vertex shaders that compute the same position gave different depth, or the EQUAL test passed another depth, on the bundle's KosmicKrisp"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/vkinvariance.c could not run a case on the bundle's KosmicKrisp, a failed setup, submit or wait, its watchdog or a first pass that covered too little included (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    echo "    KosmicKrisp: two vertex shaders with the same position give the same depth, another depth fails the EQUAL test"
 }
 
 # check_gl_host <program> <what> [validation]: build smoke/<program>.c for the
