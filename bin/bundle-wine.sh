@@ -944,14 +944,17 @@ smoke_test() {
         echo "  The wineserver runs msync."
     fi
 
-    # Sources predating named loader support have neither this implementation
-    # nor the optional compatdb hook. Don't require it of older Wine pins.
-    if [ -f "$WINE_SRC/dlls/ntdll/unix/named_loader.c" ]; then
+    # Earlier Wine pins have named_loader.c but not the title-returning lease
+    # API or nonblocking cache acquisition exercised by this smoke test.
+    local loader_header="$WINE_SRC/dlls/ntdll/unix/named_loader.h"
+    if [ -f "$loader_header" ] && grep -Eq '^#define NAMED_LOADER_API_VERSION [1-9][0-9]*$' "$loader_header"; then
         time_mark "smoke: named macOS loader"
         log="$TMP_DIR/named-loader.log"
         run_limited 120 "$log" "${wine_env[@]}" /bin/bash "$REPO_DIR/smoke/named-loader.sh" \
             "$WINE_SRC" "$BUILD_DIR" "$WINE_DIR/bin/wine"
         smoke_check "the signed named loader" 120 "$log"
+    elif [ -f "$loader_header" ]; then
+        echo "  Named loader smoke skipped: Wine predates the versioned loader API."
     fi
 
     # A program that crashes would otherwise wait in winedbg's crash dialog
