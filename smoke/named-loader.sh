@@ -61,6 +61,15 @@ wait_for_exit() {
     return 1
 }
 
+# Colons are valid display text, but a colon-only title has no usable bundle
+# filename. Exercise the preparation failure before Wine initializes thread data.
+if ! WINEDEBUG=warn+module WINE_COMPATDB='exe=cmd.exe;display_name=::' "$wine" 'C:\windows\system32\cmd.exe' \
+    /d /q /c 'echo fallback-ready' >"$tmp/fallback.log" 2>&1 || ! grep -q '^fallback-ready' "$tmp/fallback.log"; then
+    cat "$tmp/fallback.log" >&2
+    echo 'Direct launch did not survive an unusable loader name' >&2
+    exit 1
+fi
+
 # Run a real Windows program through the installed loader and compatdb. Keep
 # cmd reading until we've verified the running bundle. A silent fallback to
 # wine.app or an intermediate launcher with a different PID fails this check.
