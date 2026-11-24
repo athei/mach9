@@ -77,7 +77,7 @@ script's header says what it builds and stages.
 | [`build-wine.sh`](../bin/build-wine.sh) | Runs `build-mesa.sh`, `build-gstreamer.sh` and `build-gfxreconstruct.sh`, builds Wine and the [Wine SDK](#wine-sdk), then runs `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; passes `--clean` on to each of them |
 | [`build-mesa.sh`](../bin/build-mesa.sh) | The Vulkan loader, KosmicKrisp, and EGL with Zink ([Vulkan](#vulkan), [OpenGL](#opengl)) |
 | [`build-gstreamer.sh`](../bin/build-gstreamer.sh) | GStreamer with glib and FFmpeg ([GStreamer](#gstreamer)) |
-| [`build-gfxreconstruct.sh`](../bin/build-gfxreconstruct.sh) | GFXReconstruct's capture layer and replay ([Vulkan capture](#vulkan-capture)) |
+| [`build-gfxreconstruct.sh`](../bin/build-gfxreconstruct.sh) | GFXReconstruct's capture layer and tools ([Vulkan capture](#vulkan-capture)) |
 | [`build-fex.sh`](../bin/build-fex.sh) | FEX's emulator DLLs and their unix halves ([FEX](#fex)) |
 | [`build-dxmt.sh`](../bin/build-dxmt.sh) | DXMT, after a Wine build ([DXMT](#dxmt)) |
 | [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | vkd3d-proton's D3D12 DLLs, after a Wine build ([vkd3d-proton](#vkd3d-proton)) |
@@ -704,10 +704,16 @@ them natively on KosmicKrisp, without the game, Wine or FEX. The rule's doc
 is the spec of the trigger, the frames a capture holds and the file names.
 
 - [`build-gfxreconstruct.sh`](../bin/build-gfxreconstruct.sh), which
-  `build-wine.sh` runs, builds the capture layer and `gfxrecon-replay`
-  from the pin in [`redist.env`](../pins/redist.env), with
+  `build-wine.sh` runs, builds the capture layer and the tools from the pin
+  in [`redist.env`](../pins/redist.env), with
   [`gfxreconstruct-macos-exports.patch`](../pins/gfxreconstruct-macos-exports.patch);
-  its header says what it stages.
+  its header says what it stages. Besides `gfxrecon-replay` and
+  `gfxrecon-info`, it stages `gfxrecon-convert`, which prints the calls of
+  a capture as text (JSON, or JSON Lines with `--format jsonl`, to a file
+  or with `--output stdout` to standard output), and `gfxrecon-extract`,
+  which writes the SPIR-V of each shader module of a capture into a file
+  of its own, the form `gfxrecon-replay --replace-shaders` reads back. The
+  tools stay out of the bundle.
 - The bundle carries the layer in `lib/external`, its manifest in
   `share/vulkan/explicit_layer.d`, which the Vulkan loader does not search
   by itself, so the layer loads only into a process whose rule asks for it,
@@ -742,9 +748,18 @@ its header has the options. The replay draws into images of its own, so it
 opens no window, and no display paces it. Compare two Mesa builds as for
 `bench/kk.sh`, by alternating invocations.
 
+With `--screenshots <dir>` it replays the capture once and writes its frames
+into `<dir>` as PNG files instead, to compare what two stacks draw. A
+capture recorded on another GPU can fail to replay on this one, for
+example with `VK_ERROR_OUT_OF_DEVICE_MEMORY`: `-m rebind` lets the replay
+choose the memory types and allocations, and `--remove-unsupported` drops
+what the capture enabled that the driver does not have. Both work in
+either mode.
+
 ```bash
 bench/gfxr-replay.sh Game/captures/Game-<pid>_trim_trigger_<time>.gfxr
 bench/gfxr-replay.sh ../build/mesa/dist Game/captures/Game-<pid>_trim_trigger_<time>.gfxr
+bench/gfxr-replay.sh Game/captures/Game-<pid>_trim_trigger_<time>.gfxr --screenshots frames -m rebind
 ```
 
 ### Metal capture

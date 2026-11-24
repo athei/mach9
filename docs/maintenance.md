@@ -692,7 +692,11 @@ Vulkan loader.
   trigger starts one capture per process until upstream PR
   [#3391](https://github.com/LunarG/gfxreconstruct/pull/3391) is in the tag.
 - After a bump, record a capture of a windowed Vulkan program and replay
-  it with [`bench/gfxr-replay.sh`](../bench/gfxr-replay.sh).
+  it with [`bench/gfxr-replay.sh`](../bench/gfxr-replay.sh), once timed and
+  once with `--screenshots`, and check that the images show its frames.
+  Run `gfxrecon-convert` and `gfxrecon-extract` from the dist on the same
+  capture with the options [Vulkan capture](internals.md#vulkan-capture)
+  names, and update that section when one changed.
 
 ### FEX
 
