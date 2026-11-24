@@ -944,18 +944,7 @@ smoke_test() {
         echo "  The wineserver runs msync."
     fi
 
-    # Earlier Wine pins have named_loader.c but not the title-returning lease
-    # API or nonblocking cache acquisition exercised by this smoke test.
-    local loader_header="$WINE_SRC/dlls/ntdll/unix/named_loader.h"
-    if [ -f "$loader_header" ] && grep -Eq '^#define NAMED_LOADER_API_VERSION [1-9][0-9]*$' "$loader_header"; then
-        time_mark "smoke: named macOS loader"
-        log="$TMP_DIR/named-loader.log"
-        run_limited 120 "$log" "${wine_env[@]}" /bin/bash "$REPO_DIR/smoke/named-loader.sh" \
-            "$WINE_SRC" "$BUILD_DIR" "$WINE_DIR/bin/wine"
-        smoke_check "the signed named loader" 120 "$log"
-    elif [ -f "$loader_header" ]; then
-        echo "  Named loader smoke skipped: Wine predates the versioned loader API."
-    fi
+    check_named_loader "${wine_env[@]}"
 
     # A program that crashes would otherwise wait in winedbg's crash dialog
     # until the time limit, and look like a hang. Without the dialog winedbg
@@ -1027,6 +1016,108 @@ smoke_test() {
     check_terminate_runs "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
+}
+
+# check_named_loader <env-command>...: test native bundle leases, then the
+# signed loaders used in the smoke prefix by cmd.exe and a CreateProcessW child.
+check_named_loader() {
+    local src="$WINE_SRC/dlls/ntdll/unix" tmp="$TMP_DIR/named-loader" log="$TMP_DIR/named-loader.log"
+    local probe="$tmp/wine.app/Contents/MacOS/wine"
+    # Earlier Wine pins lack title-returning leases and nonblocking cache acquisition.
+    [ -f "$src/named_loader.h" ] || return 0
+    if ! grep -Eq '^#define NAMED_LOADER_API_VERSION [1-9][0-9]*$' "$src/named_loader.h"; then
+        echo "  Named loader smoke skipped: Wine predates the versioned loader API."
+        return 0
+    fi
+    time_mark "smoke: named macOS loader"
+    mkdir -p "${probe%/*}"
+    xcrun clang -Wall -Wextra -Werror -I"$BUILD_DIR/include" -I"$src" \
+        "$REPO_DIR/smoke/named-loader.c" "$src/named_loader.c" -o "$probe"
+    run_limited 120 "$log" "$probe" "$tmp"
+    smoke_check "native named loader leases" 120 "$log"
+
+    # Colons are valid display text but a colon-only title can't name a bundle.
+    run_limited 120 "$log" "$@" WINEDEBUG=warn+module WINE_COMPATDB='exe=cmd.exe;display_name=::' \
+        "$WINE_DIR/bin/wine" 'C:\windows\system32\cmd.exe' /d /q /c 'echo fallback-ready'
+    smoke_check "cmd.exe with an unusable loader name" 120 "$log"
+    if ! grep -q '^fallback-ready' "$log"; then
+        echo 'Direct launch did not survive an unusable loader name'
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
+
+    "$MINGW_DIR/bin/aarch64-w64-mingw32-clang" -O2 -Wall -Wextra -Werror -municode \
+        -D__WINESRC__ -isystem "$WINE_SRC/include" -o "$tmp/named-loader-child.exe" "$REPO_DIR/smoke/named-loader-child.c"
+    # Keep the PID checks and both live launches under one deadline. The helper
+    # must start Wine itself so $! identifies the direct launch, not a wrapper.
+    export -f check_named_loader_processes
+    run_limited 120 "$log" "$@" /bin/bash -ec 'check_named_loader_processes "$@"' _ "$tmp" "$probe" "$WINE_DIR/bin/wine"
+    smoke_check "the signed named loaders" 120 "$log"
+}
+
+# Run in a separate shell under run_limited. On failure smoke_check stops the
+# throwaway prefix and the bundler's cleanup removes its inputs and hold file.
+check_named_loader_processes() {
+    local tmp=$1 probe=$2 wine=$3 pid created ready child_pid image
+    cd "$tmp"
+    wait_for_marker() {
+        local log=$1 marker=$2 i
+        for ((i=0; i<300; ++i)); do
+            if grep -q "^$marker" "$log"; then return 0; fi
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            sleep 0.1
+        done
+        cat "$log" >&2
+        echo "Named loader test did not reach its ready marker: $marker" >&2
+        return 1
+    }
+    check_signed_image() {
+        local image
+        image=$("$probe" --image "$1")
+        if [[ $image != */"$2.app/Contents/MacOS/wine" ]]; then
+            echo "Expected $2.app for PID $1, got: $image" >&2
+            return 1
+        fi
+        /usr/bin/codesign --verify --strict "${image%/Contents/MacOS/wine}"
+    }
+
+    # Hold cmd.exe on stdin while checking the image at the PID we launched.
+    mkfifo input
+    exec 3<>input
+    WINE_COMPATDB='exe=cmd.exe;display_name=Mach9 Smoke' "$wine" 'C:\windows\system32\cmd.exe' \
+        /d /q /c 'echo named-loader-ready&&set /p reply=' <&3 3>&- >windows.log 2>&1 &
+    pid=$!
+    wait_for_marker windows.log named-loader-ready
+    check_signed_image "$pid" 'Mach9 Smoke'
+    printf 'done\r\n' >&3
+    exec 3>&-
+    wait "$pid" || { cat windows.log >&2; return 1; }
+
+    # No Steam installation: only the child's explicit Windows environment
+    # contains SteamAppId. Parent and child run the same PE executable.
+    : >hold-child
+    env -u SteamAppId WINE_COMPATDB='exe=steam:4294967294;display_name=Mach9 Steam Child' \
+        "$wine" "$PWD/named-loader-child.exe" >child.log 2>&1 &
+    pid=$!
+    wait_for_marker child.log 'named-loader-child-created '
+    wait_for_marker child.log 'named-loader-child-ready '
+    created=$(tr -d '\r' <child.log | sed -n 's/^named-loader-child-created //p')
+    ready=$(tr -d '\r' <child.log | sed -n 's/^named-loader-child-ready //p')
+    if [[ ! $ready =~ ^([1-9][0-9]*)\ ([1-9][0-9]*)$ || ${BASH_REMATCH[1]} != "$created" || ${BASH_REMATCH[2]} == "$pid" ]]; then
+        cat child.log >&2
+        echo 'Could not identify the native PID of the child that CreateProcessW launched' >&2
+        return 1
+    fi
+    child_pid=${BASH_REMATCH[2]}
+    check_signed_image "$child_pid" 'Mach9 Steam Child'
+    image=$("$probe" --image "$pid")
+    if [[ $image != */wine.app/Contents/MacOS/wine || ! $image -ef $wine ]]; then
+        echo "Expected the packaged wine.app for parent PID $pid, got: $image" >&2
+        return 1
+    fi
+    rm hold-child
+    wait "$pid" || { cat child.log >&2; return 1; }
 }
 
 # check_rules_file <env-command>...: run cmd.exe in the booted throwaway prefix
