@@ -110,49 +110,111 @@ pub unsafe extern "C" fn compatdb_resolve_initial_display_name(
             std::slice::from_raw_parts_mut(out.cast(), out_size),
         )
     };
-    let Some(exe) = image
-        .rsplit(|c| matches!(c, b'/' | b'\\'))
-        .next()
-        .filter(|s| !s.is_empty())
-    else {
-        return 0;
-    };
-    let Ok(exe) = std::str::from_utf8(exe) else {
+    let Some((exe, path)) = initial_image(image, prefix) else {
         return 0;
     };
     let appid = appid.and_then(|s| s.to_str().ok()).and_then(steam_app_id);
-    lookup(
-        exe,
-        appid,
-        || version::read_file(&initial_image_path(image, prefix)?),
-        output,
-    )
+    lookup(exe, appid, || version::read_file(path.as_deref()?), output)
 }
 
-// Resolve only paths whose host spelling is known without querying Wine.
-// Don't guess fingerprints for drive-relative, device or UNC paths.
-fn initial_image_path(image: &[u8], prefix: &[u8]) -> Option<PathBuf> {
+const fn dos_separator(byte: u8) -> bool {
+    matches!(byte, b'/' | b'\\')
+}
+
+// Keep the name and the fingerprint path in sync. An unknown host path
+// still allows rules that don't require a fingerprint.
+fn initial_image<'a>(image: &'a [u8], prefix: &[u8]) -> Option<(&'a str, Option<PathBuf>)> {
     if image.starts_with(b"/") {
-        return Some(PathBuf::from(OsStr::from_bytes(image)));
+        // Wine tries an absolute Unix spelling first. Leave POSIX components
+        // (including backslashes, trailing dots and symlink/..) untouched.
+        let exe = std::str::from_utf8(image.rsplit(|b| *b == b'/').next()?).ok()?;
+        return (!matches!(exe, "" | "." | "..")).then(|| {
+            let path = PathBuf::from(OsStr::from_bytes(image));
+            (exe, Some(path))
+        });
     }
-    let normalized: Vec<_> = image
-        .iter()
-        .map(|&b| if b == b'\\' { b'/' } else { b })
-        .collect();
-    match normalized.as_slice() {
-        [drive, b':', b'/', rest @ ..]
-            if drive.is_ascii_alphabetic() && !rest.starts_with(b"/") =>
-        {
-            Some(
-                Path::new(OsStr::from_bytes(prefix))
-                    .join("dosdevices")
-                    .join(OsStr::from_bytes(&[drive.to_ascii_lowercase(), b':']))
-                    .join(OsStr::from_bytes(rest)),
-            )
+
+    let (drive, tail, known) = match image {
+        [drive, b':', sep, tail @ ..] if drive.is_ascii_alphabetic() && dos_separator(*sep) => {
+            (Some(drive.to_ascii_lowercase()), tail, true)
         }
-        [b'/', ..] | [_, b':', ..] => None,
-        _ => Some(PathBuf::from(OsStr::from_bytes(&normalized))),
+        // Drive-relative, rooted without a drive, device and UNC paths.
+        [_, b':', tail @ ..] => (None, tail, false),
+        [b'\\', ..] => (None, image, false),
+        _ => (None, image, true),
+    };
+    let mut parts = tail.rsplit(|&b| dos_separator(b));
+    let basename = parts.next()?;
+    // Wine removes trailing ASCII spaces and dots from the final component.
+    // An empty leaf (including final . and ..) doesn't name an executable.
+    let end = basename.iter().rposition(|b| !matches!(b, b'.' | b' '))? + 1;
+    let exe = std::str::from_utf8(basename.get(..end)?).ok()?;
+    if !known || dos_device_name(exe.as_bytes()) {
+        return Some((exe, None));
     }
+
+    // Match the direct loader's DOS collapse_path before joining to the host
+    // path. A drive mapping is normally a symlink: passing .. to the host
+    // would navigate the target's parents, not the Windows path's parents.
+    let mut dirs = Vec::new();
+    for part in parts.rev() {
+        match part {
+            b"" | b"." => (),
+            b".." => {
+                if dirs.pop().is_none() && drive.is_none() {
+                    // We don't know where the current DOS drive root is.
+                    return Some((exe, None));
+                }
+            }
+            // Wine removes one trailing dot from intermediate components.
+            _ => dirs.push(part.strip_suffix(b".").unwrap_or(part)),
+        }
+    }
+    if !dirs
+        .iter()
+        .copied()
+        .chain([exe.as_bytes()])
+        .all(dos_component)
+    {
+        return Some((exe, None));
+    }
+    let mut path = drive.map_or_else(PathBuf::new, |drive| {
+        Path::new(OsStr::from_bytes(prefix))
+            .join("dosdevices")
+            .join(OsStr::from_bytes(&[drive, b':']))
+    });
+    path.extend(dirs.into_iter().map(OsStr::from_bytes));
+    path.push(exe);
+    Some((exe, Some(path)))
+}
+
+fn dos_component(part: &[u8]) -> bool {
+    !matches!(part, b"" | b"." | b"..")
+        && std::str::from_utf8(part).is_ok()
+        && !part
+            .iter()
+            .any(|&b| b < 32 || matches!(b, b':' | b'"' | b'<' | b'>' | b'|' | b'?' | b'*'))
+}
+
+fn dos_device_name(exe: &[u8]) -> bool {
+    let stem = exe
+        .split(|b| matches!(b, b'.' | b':'))
+        .next()
+        .unwrap_or_default();
+    let end = stem.iter().rposition(|b| *b != b' ').map_or(0, |i| i + 1);
+    let stem = stem.get(..end).unwrap_or_default();
+    [
+        b"AUX".as_slice(),
+        b"CON",
+        b"NUL",
+        b"PRN",
+        b"CONIN$",
+        b"CONOUT$",
+    ]
+    .iter()
+    .any(|name| stem.eq_ignore_ascii_case(name))
+        || matches!(stem, [prefix @ .., b'1'..=b'9']
+            if prefix.eq_ignore_ascii_case(b"COM") || prefix.eq_ignore_ascii_case(b"LPT"))
 }
 
 fn lookup(
