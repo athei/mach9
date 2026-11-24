@@ -32,6 +32,34 @@ static char profile_byte( int lease )
     return byte;
 }
 
+static void check_root_contention( const char *tmp )
+{
+    char root[PATH_MAX], *path;
+    int lock, lease = 0, status;
+    pid_t pid;
+
+    snprintf( root, sizeof(root), "%s/wine-named-loaders-v3", tmp );
+    lock = open( root, O_RDONLY | O_DIRECTORY | O_EXLOCK | O_NONBLOCK | O_CLOEXEC );
+    assert( lock != -1 );
+    pid = fork();
+    assert( pid != -1 );
+    if (!pid)
+    {
+        close( lock );
+        alarm( 5 ); /* Bound the test if prepare regresses to waiting for the lock. */
+        assert( !prepare_named_loader( tmp, tmp, "Contended title", &lease ) && lease == -1 );
+        _exit( 0 );
+    }
+    /* Keep the lock held until the other launcher has fallen back. */
+    assert( waitpid( pid, &status, 0 ) == pid && WIFEXITED(status) && !WEXITSTATUS(status) );
+    close( lock );
+
+    path = prepare_named_loader( tmp, tmp, "Contended title", &lease );
+    assert( path && lease != -1 );
+    close( lease );
+    free( path );
+}
+
 static void check_punctuation( const char *tmp )
 {
     static const char *titles[] = {"Fallout: New Vegas", "Fallout New Vegas"};
@@ -108,6 +136,7 @@ int main( int argc, char **argv )
     check_punctuation( tmp );
     old_exe = prepare_named_loader( tmp, tmp, "Game", &old_lease );
     assert( old_exe && profile_byte( old_lease ) == 'A' );
+    check_root_contention( tmp );
     assert( !pipe( pipefd ) && !pipe( ready ) );
     pid = fork();
     assert( pid != -1 );
