@@ -53,8 +53,7 @@ pub fn apply(nt: &Ntdll, process: &Process, resolution: &mut Resolution) {
             let value = resolution
                 .scalar(scalar)
                 .value
-                .map(|v| format!("{v}, "))
-                .unwrap_or_default();
+                .map_or_else(String::new, |v| format!("{v}, "));
             let note = if scalar == Scalar::VulkanCapture {
                 inherited_note(&[PROCESS_NAME_VAR], inherited_var, "the capture layer")
             } else {
