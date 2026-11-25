@@ -93,6 +93,39 @@ name ([`prof.rs`](../compatdb/src/prof.rs) has the message).
   it in Mach9.app's `[env]`, or a launcher's own equivalent, is the
   deliberate route, and it reaches Wine.
 
+## Linger at exit
+
+A launch from Finder or the Dock execs Wine in the process Launch Services
+started, so the first Windows program runs in the app's main process. When
+that program starts a game and exits, as a game's own launcher does, macOS
+ends the app and terminates its other processes, wineserver and the game
+included.
+
+- The launcher sets `WINE_COMPATDB_APP_PID` to its own pid for such a launch
+  ([`APP_PID_VAR`][app-pid]). The library turns the linger on in the
+  process with that pid ([`runtime::linger_at_exit`][linger]) through
+  ntdll's `set_compat_linger_at_exit`
+  ([Wine-side contract](maintenance.md#wine-side-contract)). Every other
+  process inherits the variable and has another pid.
+- When that process exits while another user process runs, its Windows
+  process ends as usual: its handle is signalled and its exit code set, so
+  a program that waits for it goes on. Its unix process stays until no user
+  process runs other than Wine's system processes and the desktop's
+  `explorer.exe`, then exits with the same status.
+- It closes the fds of its sockets and files before it waits, so a
+  connection or a listening port of the program ends with the Windows
+  process.
+- A launch from a terminal sets no variable, and the process exits as in
+  upstream Wine.
+- Only a process that ends itself lingers. One that another process
+  terminates exits at once, as in upstream Wine.
+- While it stays, it keeps its memory, its Metal objects and its windows: a
+  window the program left open stays on screen, and the app quits only when
+  the game exits.
+- The other user processes are those of the wineserver session, not of the
+  app: a second Mach9 instance started in the same session stays until the
+  first instance's processes have exited too.
+
 ## Logging and verification
 
 The library writes to Wine's stderr, once in every process at load, a
@@ -133,6 +166,7 @@ with `compatdb:`.
 | `arguments_override, <source>: dropped ...` | The arguments it dropped, each with its source |
 | `arguments_override, <source>: ignored, ...` | The rule is for a Steam app id, where the override does not apply ([`Rule::arguments_override`][arguments-override]) |
 | `dpi_aware`, `large_address_aware`, `gcmouse`, `force_nx`, `opengl` | The value; `large_address_aware` and `force_nx` note that they do nothing in a 64-bit process |
+| `linger_at_exit = on, ...`, `linger_at_exit = off, ...` | Whether the process [lingers at exit](#linger-at-exit): `WINE_COMPATDB_APP_PID` unset, or the pid it names and whether that is this process |
 | `env NAME=value, <source>: ...` | Whether the entry was set, removed, left alone because the process had the variable ([`Rule::env`][env]), or replaced by a later entry, with the sources involved |
 | `<setting> = <value>, <source>: ntdll lacks <hook>, ignored` | ntdll lacks the hook; the setting is ignored |
 
@@ -154,3 +188,5 @@ for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
 [env]: https://mach9.app/compatdb_core/struct.Rule.html#method.env
 [arguments-override]: https://mach9.app/compatdb_core/struct.Rule.html#method.arguments_override
 [fold-profiler]: https://mach9.app/compatdb_core/struct.Resolution.html#method.fold_profiler_env
+[app-pid]: https://mach9.app/compatdb_core/constant.APP_PID_VAR.html
+[linger]: https://mach9.app/compatdb_core/runtime/fn.linger_at_exit.html

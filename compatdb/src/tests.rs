@@ -1,4 +1,6 @@
-use compatdb_core::{Argument, D3d9, DllOverride, Dxgi, ENV_VAR, EnvName, FILE_ENV_VAR};
+use compatdb_core::{
+    Argument, D3d9, DllOverride, Dxgi, ENV_VAR, EnvName, FILE_ENV_VAR, runtime::linger_at_exit,
+};
 
 use super::*;
 
@@ -328,6 +330,36 @@ fn the_metal_hud_and_debug_channels_lines_name_value_and_source() -> TestResult 
          was started with), reset by WINE_COMPATDB line 2"
     );
     Ok(())
+}
+
+#[test]
+fn the_linger_line_says_whether_the_app_pid_names_this_process() {
+    let pid = std::process::id();
+    let app = pid.to_string();
+    let line =
+        |app_pid: Option<&str>, hooked| linger_line(app_pid, linger_at_exit(app_pid, pid), hooked);
+    assert_eq!(
+        line(None, true),
+        "  linger_at_exit = off, WINE_COMPATDB_APP_PID unset"
+    );
+    assert_eq!(
+        line(Some(&app), true),
+        format!("  linger_at_exit = on, WINE_COMPATDB_APP_PID={pid} is this process")
+    );
+    let other = pid.wrapping_add(1).to_string();
+    for hooked in [true, false] {
+        assert_eq!(
+            line(Some(&other), hooked),
+            format!("  linger_at_exit = off, WINE_COMPATDB_APP_PID={other} is another process")
+        );
+    }
+    assert_eq!(
+        line(Some(&app), false),
+        format!(
+            "  linger_at_exit = on, WINE_COMPATDB_APP_PID={pid} is this process: ntdll lacks \
+             set_compat_linger_at_exit, ignored"
+        )
+    );
 }
 
 #[test]

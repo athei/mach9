@@ -1,6 +1,6 @@
 use std::{env, ffi::OsString, path::Path};
 
-use compatdb_core::{ENV_VAR as COMPATDB_ENV, Table, inherited_conflicts};
+use compatdb_core::{APP_PID_VAR, ENV_VAR as COMPATDB_ENV, Table, inherited_conflicts};
 
 use crate::config::Config;
 
@@ -29,12 +29,16 @@ const WINEDEBUG_CHANNELS: &str =
 /// relaunch through `open -n` drops them, and a Finder or Dock launch never
 /// has them. A config may still set one of them in `[env]`, which
 /// [`apply_user`] applies, unless a setting of the rules replaced it.
-pub fn apply(prefix: &Path, rules: &Table) {
+///
+/// `app_pid` is this process's pid for a launch from Finder or the Dock,
+/// where wine replaces this process, the app's main process, and `None` for
+/// any other.
+pub fn apply(prefix: &Path, rules: &Table, app_pid: Option<u32>) {
     for name in inherited_conflicts() {
         // SAFETY: launcher is single-threaded at this point.
         unsafe { env::remove_var(name) };
     }
-    for (name, value) in launcher_env(prefix, rules) {
+    for (name, value) in launcher_env(prefix, rules, app_pid) {
         match value {
             // SAFETY: as above.
             Some(value) => unsafe { env::set_var(name, value) },
@@ -53,12 +57,28 @@ pub fn apply(prefix: &Path, rules: &Table) {
 /// from the launcher and applies its built-in rules, as it does for a process
 /// tree the launcher did not start. A `WINE_COMPATDB_FILE` in `[env]` adds the
 /// file's rules to them.
-fn launcher_env(prefix: &Path, rules: &Table) -> [(&'static str, Option<OsString>); 3] {
+///
+/// [`APP_PID_VAR`] names `app_pid`, the process wine replaces when it is the
+/// app's main process: that process stays while the game a game's own
+/// launcher started in it runs, since its exit would end the app and macOS
+/// would end the game with it ([`linger_at_exit`]). Without `app_pid` the
+/// variable is removed.
+///
+/// [`linger_at_exit`]: compatdb_core::runtime::linger_at_exit
+fn launcher_env(
+    prefix: &Path,
+    rules: &Table,
+    app_pid: Option<u32>,
+) -> [(&'static str, Option<OsString>); 4] {
     let compatdb = (!rules.rules().is_empty()).then(|| OsString::from(rules.to_string()));
     [
         ("WINEPREFIX", Some(prefix.as_os_str().to_owned())),
         ("WINEMSYNC", Some(OsString::from("1"))),
         (COMPATDB_ENV, compatdb),
+        (
+            APP_PID_VAR,
+            app_pid.map(|pid| OsString::from(pid.to_string())),
+        ),
     ]
 }
 

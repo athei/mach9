@@ -74,15 +74,15 @@ pub fn exec_direct(
 /// there is no `setsid` here, which fails in a process group leader, as an
 /// app started by Launch Services usually is.
 ///
-/// The child also makes Force Quit work. Launch Services knows the app by
-/// this pid until winemac checks in after the exec; from then on its record
-/// of the app has no pid. Force Quit (Activity Monitor, Command-Option-Escape,
-/// the Dock) kills the pid in that record, so nothing, and sends SIGTERM to
-/// every other process started under the app, but not to this one, which it
-/// still counts as the app. wineserver exits on SIGTERM without killing its
-/// clients, so the game would be left running without a server, hung. The
-/// child is one of the processes that get the SIGTERM, and it answers it by
-/// killing wine with SIGKILL, see [`run_pump`].
+/// The child is also the backstop of Force Quit. Launch Services and
+/// loginwindow keep this pid as the app's main process after the exec: their
+/// logs name it when the app quits and when it is force quit. Force Quit
+/// (Activity Monitor, Command-Option-Escape, the Dock) sends SIGTERM to every
+/// other process started under the app. wineserver exits on SIGTERM without
+/// killing its clients, so a game left running would have no server and
+/// hang. The child is one of the processes that get the SIGTERM, and it
+/// answers it by killing wine with SIGKILL, see [`run_pump`], whether or not
+/// Force Quit stops this process itself.
 ///
 /// The child is a new process image started with `posix_spawn`, not a fork
 /// of this process. By now this process can have other threads (see `launch`
@@ -120,7 +120,10 @@ pub fn exec_via_pty(
     // Wine gets the slave as fds 0, 1 and 2 and nothing else of the pty or
     // the log: the master and the slave's own fd from openpty are not
     // close-on-exec. The child is not waited for: it ends shortly after
-    // wine, its parent from here on, has exited, and launchd reaps it.
+    // wine, its parent from here on, has exited, and launchd reaps it. Wine
+    // here is the app's main process (APP_PID_VAR, set by wine_env), so it
+    // exits only once no other Wine user process runs: a game a game's own
+    // launcher started in it keeps it, and so the app and the pump.
     drop(master);
     dup2_stdin(&slave)?;
     dup2_stdout(&slave)?;
@@ -285,13 +288,16 @@ extern "C" fn on_sigterm(_: libc::c_int) {
 /// ends between the two.
 ///
 /// Runs until `wine`, the pump's parent, has exited, then copies what is
-/// still waiting in the pty, up to [`DRAIN_CHUNKS`] reads, and stops. The
-/// pty is not wine's controlling terminal, so wine's exit does not take the
-/// slave away from the processes that still hold it: wineserver keeps it as
-/// its stderr for a few seconds, and so do processes the game leaves
-/// running. Waiting for all of them would keep this process writing into a
-/// log that the next launch has already truncated. Parenthood is checked
-/// every [`WINE_CHECK_MS`] while the pty is quiet and after every read.
+/// still waiting in the pty, up to [`DRAIN_CHUNKS`] reads, and stops. Wine is
+/// the app's main process, which stays after its own program exits while
+/// other Wine user processes run, so the output of a game that a game's own
+/// launcher started is copied until the game exits too. The pty is not
+/// wine's controlling terminal, so wine's exit does not take the slave away
+/// from the processes that still hold it: wineserver keeps it as its stderr
+/// for a few seconds, and so do Wine's system processes. Waiting for all of
+/// them would keep this process writing into a log that the next launch has
+/// already truncated. Parenthood is checked every [`WINE_CHECK_MS`] while the
+/// pty is quiet and after every read.
 ///
 /// It also stops when the pty reports end of file or an error, which on
 /// macOS is `EIO` once everything has closed the slave side; [`run_pump`]
@@ -554,6 +560,31 @@ mod tests {
             String::from_utf8_lossy(&logged)
         );
         drop(slave);
+    }
+
+    /// Wine, the app's main process, stays after its own program exits while
+    /// a game that program started runs, and the game writes into the same
+    /// pty; here the game is this test. The pump has to go on copying for as
+    /// long as wine stays, also after a quiet spell longer than its wait on
+    /// the pty, and end once wine exits.
+    #[test]
+    fn the_pump_copies_a_game_while_wine_lingers() {
+        let (master, mut game) = io::pipe().unwrap();
+        let (mut log, log_write) = io::pipe().unwrap();
+        game.write_all(b"launcher exits\r\n").unwrap();
+        let mut wine = StandInWine::start(master, log_write);
+        let mut logged = Vec::new();
+        read_log_until(&mut log, &mut logged, b"launcher exits\n");
+
+        let quiet = 2 * u64::try_from(WINE_CHECK_MS).unwrap();
+        thread::sleep(Duration::from_millis(quiet));
+        game.write_all(b"game output\r\n").unwrap();
+        read_log_until(&mut log, &mut logged, b"game output\n");
+
+        wine.child.kill().unwrap();
+        wine.child.wait().unwrap();
+        read_log_to_end(&mut log, &mut logged);
+        drop(game);
     }
 
     /// Whether `fd` has something to read, or its end of file, within `ms`.

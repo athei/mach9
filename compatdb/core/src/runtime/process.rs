@@ -142,6 +142,25 @@ pub fn steam_app(block: &[u16]) -> Option<u32> {
     steam_app_id(&env_value(block, STEAM_APP_VAR)?)
 }
 
+/// Whether the process `pid` keeps its unix process after its Windows
+/// process exits.
+///
+/// It keeps it while any other user process of the wineserver session runs,
+/// other than Wine's system processes and the owner of the desktop window.
+/// `app_pid` is the value of [`APP_PID_VAR`](crate::APP_PID_VAR) in the
+/// unix environment, which a launcher sets to the pid of the process that is
+/// the macOS app. Only that process lingers: its exit would end the app, and
+/// macOS would end the app's other processes with it, the game the process
+/// started included. Every process inherits the variable, and the others
+/// have another pid. A value that is no decimal pid matches no process.
+#[must_use]
+pub fn linger_at_exit(app_pid: Option<&str>, pid: u32) -> bool {
+    app_pid
+        .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|value| value.parse::<u32>().ok())
+        == Some(pid)
+}
+
 /// Merge environment entries into a `NAME=value\0...\0\0` block.
 ///
 /// A name is matched case-insensitively; a value replaces in place or

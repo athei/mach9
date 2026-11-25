@@ -491,10 +491,12 @@ code runs, and exports for it:
 | `set_compat_force_nx` | Stored; ntdll reads it when the process asks for or changes its execute flags ([`Rule::force_nx`][force_nx]) |
 | `set_compat_opengl` | Stored; winemac reads it through `ntdll_get_compat_opengl` when the process first uses OpenGL ([`Rule::opengl`][opengl]) |
 | `set_compat_capture` | Stored; win32u reads it through `ntdll_get_compat_capture` when it loads the Vulkan loader, and samples the capture chord per present while it is set ([`Rule::vulkan_capture`][vulkan_capture], [`Rule::metal_capture`][metal_capture]) |
+| `set_compat_linger_at_exit` | Stored; when the process terminates itself, ntdll asks the wineserver with its `linger_at_exit` request whether to keep the unix process until no other user process runs ([linger at exit](compatdb.md#linger-at-exit)) |
 | `ntdll_get_unix_file_name` | Not a hook: the unix path of the executable, for the `captures` folder |
 
 On an ntdll without one of them, compatdb.so logs that and skips the
-setting; the bundle step checks the `force_nx` and `opengl` hooks
+setting; the bundle step checks the `force_nx`, `opengl`, `capture` and
+`linger_at_exit` hooks
 ([what the bundle step checks](internals.md#what-the-bundle-step-checks)).
 
 - winemac exports `macdrv_functions`, the window, Metal and monitor

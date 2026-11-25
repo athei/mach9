@@ -113,6 +113,7 @@ Variables the bundle reads besides `WINE_COMPATDB`:
 |----------|--------------|
 | `WINE_COMPATDB_FILE` | [format][format], [launcher responsibilities][launcher] |
 | `WINE_PROF_SERVICE` | [profiler check-in](docs/compatdb.md#profiler-check-in) |
+| `WINE_COMPATDB_APP_PID` | [linger at exit](docs/compatdb.md#linger-at-exit), [launcher responsibilities][launcher] |
 | `WINEMSYNC`, `WINENCPU` | [runtime](docs/internals.md#runtime) |
 | `FEX_HARDWARE_TSO`, `FEX_HOSTFEATURES` | [FEX](docs/internals.md#fex) |
 | `VK_DRIVER_FILES`, `VK_ICD_FILENAMES`, `VK_ADD_DRIVER_FILES`, `MESA_KK_EXPERIMENTAL` | [Vulkan](docs/internals.md#vulkan) |

@@ -912,22 +912,24 @@ check_default_trees() {
 # native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
 # hang rather than an error. The caller's WINE_COMPATDB, WINE_COMPATDB_FILE,
-# WINE_D3D_CONFIG and WINEDLLOVERRIDES and every WINEMSYNC*, FEX_*, VK_*,
-# VKD3D_*, DXMT_*, MESA_*, MTL_*, METAL_* and GST_* variable are dropped so
-# that the built-in rules and the defaults of Wine, FEX, the Vulkan loader,
-# vkd3d-proton, DXMT, KosmicKrisp, Metal and GStreamer decide; only
-# vkd3d-proton's pipeline cache is moved into the prefix, check_fex_runs sets
-# FEX_SMCCHECKS=full on one run per arch, FEX_DISKCACHE=1 on another and both on
-# a third, and check_streamout_runs and check_dxmt_runs turn off DXMT's shader
-# cache for their runs and turn on Metal shader validation, check_dxmt_runs for
-# a second run of each case.
+# WINE_COMPATDB_APP_PID, WINE_D3D_CONFIG and WINEDLLOVERRIDES and every
+# WINEMSYNC*, FEX_*, VK_*, VKD3D_*, DXMT_*, MESA_*, MTL_*, METAL_* and GST_*
+# variable are dropped so that the built-in rules and the defaults of Wine,
+# FEX, the Vulkan loader, vkd3d-proton, DXMT, KosmicKrisp, Metal and
+# GStreamer decide; only vkd3d-proton's pipeline cache is moved into the
+# prefix, check_fex_runs sets FEX_SMCCHECKS=full on one run per arch,
+# FEX_DISKCACHE=1 on another and both on a third, check_streamout_runs and
+# check_dxmt_runs turn off DXMT's shader cache for their runs and turn on
+# Metal shader validation, check_dxmt_runs for a second run of each case, and
+# check_linger_runs sets WINE_COMPATDB_APP_PID on one run.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
 # checks.
 smoke_test() {
     local version log arch cc exe marker markers var dlls
-    local wine_env=(env -u WINE_COMPATDB -u WINE_COMPATDB_FILE -u WINE_D3D_CONFIG -u WINEDLLOVERRIDES)
+    local wine_env=(env -u WINE_COMPATDB -u WINE_COMPATDB_FILE -u WINE_COMPATDB_APP_PID
+                    -u WINE_D3D_CONFIG -u WINEDLLOVERRIDES)
     for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|DXMT_|MESA_|MTL_|METAL_|GST_)'); do
         wine_env+=(-u "$var")
     done
@@ -1089,6 +1091,7 @@ smoke_test() {
     check_exceptflags_runs "${wine_env[@]}"
     check_attach_runs "${wine_env[@]}"
     check_terminate_runs "${wine_env[@]}"
+    check_linger_runs "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
 }
@@ -2159,6 +2162,86 @@ check_terminate_runs() {
     done
 }
 
+# check_linger_runs <env-command>...: build smoke/linger.c for x86_64 and run
+# it in the booted throwaway prefix twice. The program starts a child and
+# exits with 42, and the child exits 2 seconds after it saw the parent end
+# (smoke/linger.c says how).
+# - As the process WINE_COMPATDB_APP_PID names, the way a launch from Finder
+#   or the Dock sets it: a shell that exports its own pid and execs wine,
+#   whose process the program then runs in. compatdb.so has to log
+#   linger_at_exit = on, the child has to see the parent end with 42 in under
+#   1000 ms, and wine has to return with 42 only after the child's last line.
+#   The parent exits right after it starts the child, so its end comes while
+#   the child starts up or soon after; 1000 ms leaves room for a slow runner
+#   and stays far below the child's own limit of 5000 ms, which a Windows
+#   exit held back by the linger would reach.
+# - Without the variable: wine has to return with 42 before that line.
+# The run that waits for the child takes about 3 seconds, the other about 1;
+# the limit is 15 for each. The child of the second run is still there when
+# it returns, and smoke_stop ends it.
+check_linger_runs() {
+    local exe="$TMP_DIR/linger-x86_64.exe" log want waited
+    local parent="wine-build smoke test: x86_64 linger child: parent exited with 42"
+    local last="wine-build smoke test: x86_64 linger child exits"
+    "$MINGW_DIR/bin/x86_64-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/linger.c"
+
+    time_mark "smoke: linger.exe as the app"
+    echo "  Running linger.exe as the process WINE_COMPATDB_APP_PID names..."
+    log="$TMP_DIR/linger-app.log"
+    # shellcheck disable=SC2016 # expanded by the shell the command starts
+    run_limited 15 "$log" "$@" sh -c 'export WINE_COMPATDB_APP_PID=$$; exec "$0" "$@"' \
+        "$WINE_DIR/bin/wine" "$exe"
+    linger_status "linger.exe as the app" "$log"
+    for want in "compatdb:   linger_at_exit = on, WINE_COMPATDB_APP_PID=" "$parent" "$last"; do
+        if ! grep -qF "$want" "$log"; then
+            echo "Error: linger.exe as the app did not print '$want' before wine returned"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
+    done
+    waited=$(grep -F "$parent" "$log" | tr -d '\r' | sed -n 's/.*, waited \([0-9][0-9]*\) ms$/\1/p')
+    if [ -z "$waited" ] || [ "$waited" -ge 1000 ]; then
+        echo "Error: the child of linger.exe as the app waited ${waited:-an unknown number of} ms"
+        echo "for its parent's end, not under 1000"
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
+    grep -F "$parent" "$log" | sed 's/^/    /'
+
+    time_mark "smoke: linger.exe without WINE_COMPATDB_APP_PID"
+    echo "  Running linger.exe without WINE_COMPATDB_APP_PID..."
+    log="$TMP_DIR/linger-plain.log"
+    run_limited 15 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
+    linger_status "linger.exe without WINE_COMPATDB_APP_PID" "$log"
+    want="compatdb:   linger_at_exit = off, WINE_COMPATDB_APP_PID unset"
+    if ! grep -qF "$want" "$log" || grep -qF "$last" "$log"; then
+        echo "Error: wine did not return before the child of linger.exe exited, or compatdb.so"
+        echo "did not print '$want'"
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
+    echo "    wine returned with 42 while the child ran."
+}
+
+# linger_status <what> <log>: after a run_limited of linger.exe, exit with the
+# log unless wine returned with the program's 42 and Wine had FreeType.
+linger_status() {
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: $1 did not exit within its limit"
+    elif [ "$RUN_STATUS" -ne 42 ]; then
+        echo "Error: $1 returned $RUN_STATUS, not the program's 42"
+    else
+        check_freetype "$1" "$2"
+        return 0
+    fi
+    cat "$2"
+    smoke_stop
+    exit 1
+}
+
 # check_wgl_runs <env-command>...: build smoke/wgl.c for each arch of
 # SMOKE_PE_ARCHS and run it in the booted throwaway prefix (run_wgl). It
 # opens a window and creates a legacy, a 4.x core and a compatibility
@@ -2749,17 +2832,19 @@ check_capture_layer() {
 # logs that a hook is missing, and every 32-bit program without NX_COMPAT
 # runs with no-execute off and every process gets Apple's OpenGL. The same
 # for set_compat_capture, without which vulkan_capture and metal_capture
-# record nothing.
+# record nothing, and set_compat_linger_at_exit, without which a game that
+# its own launcher started from Finder or the Dock ends with the launcher.
 check_compat_hooks() {
     local hook
-    for hook in set_compat_force_nx set_compat_opengl set_compat_capture; do
+    for hook in set_compat_force_nx set_compat_opengl set_compat_capture set_compat_linger_at_exit; do
         if ! nm -gU "$unixdir/ntdll.so" 2>/dev/null | awk '{print $NF}' | grep -xF "_$hook" >/dev/null; then
             echo "Error: $UNIX_DIR/ntdll.so does not export $hook, the hook through which"
             echo "compatdb.so hands that setting over; the Wine source lacks it"
             exit 1
         fi
     done
-    echo "  ntdll exports set_compat_force_nx, set_compat_opengl and set_compat_capture."
+    echo "  ntdll exports set_compat_force_nx, set_compat_opengl, set_compat_capture and"
+    echo "  set_compat_linger_at_exit."
 }
 
 # check_egl: exit unless OpenGL through Zink hangs together in the bundle:

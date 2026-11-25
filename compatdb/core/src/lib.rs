@@ -484,6 +484,15 @@
 //! - Set [`PROF_SERVICE_VAR`] only on purpose, for a launch a profiler
 //!   started: every process of the launch sends the service it names its
 //!   task control port. An inherited value is one of the variables above.
+//! - Set [`APP_PID_VAR`] to the launcher's own pid when Wine replaces the
+//!   launcher's process and that process is the macOS app, as in a launch
+//!   from Finder or the Dock, and leave it out otherwise. When a program in
+//!   that process starts another and exits, as a game's own launcher does,
+//!   the process stays while any other user process of the wineserver
+//!   session runs, other than Wine's system processes and the owner of the
+//!   desktop window, `explorer.exe` ([`runtime::linger_at_exit`]): its exit
+//!   would end the app, and macOS would end the app's other processes with
+//!   it. An inherited value is one of the variables above.
 //! - Build `WINEDEBUG` itself: Wine reads it before `compatdb.so` loads.
 //!   Its own entries come first, then [`Table::winedebug`], joined with
 //!   `,`.
@@ -620,6 +629,16 @@ pub const FILE_ENV_VAR: &str = "WINE_COMPATDB_FILE";
 /// [Launcher responsibilities](index.html#launcher-responsibilities). It also
 /// gets FEX's debug info: see [`Resolution::fold_profiler_env`].
 pub const PROF_SERVICE_VAR: &str = "WINE_PROF_SERVICE";
+
+/// The environment variable naming the pid of the process that is the macOS
+/// app, which a launcher sets when Wine replaces that process.
+///
+/// The process it names keeps its unix process after its Windows process
+/// exits, while any other user process of the wineserver session runs, other
+/// than Wine's system processes and the owner of the desktop window
+/// ([`runtime::linger_at_exit`]), so the app does not end under them: see
+/// [Launcher responsibilities](index.html#launcher-responsibilities).
+pub const APP_PID_VAR: &str = "WINE_COMPATDB_APP_PID";
 
 /// Where this crate's rustdoc is published. [`Key::docs_url`] and
 /// [`DocSection::url`] link into it.

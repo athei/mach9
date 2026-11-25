@@ -65,6 +65,21 @@ fn a_value_that_is_no_app_id_reads_as_none() {
 }
 
 #[test]
+fn only_the_process_the_app_pid_names_lingers_at_exit() {
+    assert!(linger_at_exit(Some("4242"), 4242));
+    assert!(linger_at_exit(Some("4294967295"), u32::MAX));
+    // Every other process of the session inherits the variable.
+    assert!(!linger_at_exit(Some("4242"), 4243));
+    assert!(!linger_at_exit(None, 4242));
+    // A value that is no decimal pid names no process.
+    for value in ["", " 4242", "4242 ", "+4242", "-4242", "0x1092", "4242a"] {
+        assert!(!linger_at_exit(Some(value), 4242), "{value:?}");
+    }
+    // Too large for a pid, which does not wrap around to 0.
+    assert!(!linger_at_exit(Some("4294967296"), 0));
+}
+
+#[test]
 fn append_cmdline_is_idempotent() -> TestResult {
     let base = u16s("cmd.exe");
     let appends = vec!["--in-process-gpu".to_string()];

@@ -23,7 +23,7 @@ pub use self::{
     },
     process::{
         Arch, IMAGE_FILE_MACHINE_ARM64, STEAM_APP_VAR, append_cmdline, append_cmdline_each,
-        basename_of, env_value, merge_env, steam_app,
+        basename_of, env_value, linger_at_exit, merge_env, steam_app,
     },
     version::version_info,
 };

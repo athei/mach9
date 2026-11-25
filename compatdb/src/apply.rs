@@ -3,7 +3,8 @@
 //! setting the DPI awareness, large address awareness and the
 //! `GameController` mouse setting, rewriting the command line and
 //! environment in both PEB copies, and setting the environment entries in
-//! the process's unix environment.
+//! the process's unix environment. Also whether the process lingers at
+//! exit, which no rule sets.
 
 use std::{
     ffi::{CString, OsStr},
@@ -14,7 +15,7 @@ use std::{
 
 use compatdb_core::{
     DllOverride, EnvEntry, OpenGl,
-    runtime::{merge_env, opengl_hook_value},
+    runtime::{self, merge_env, opengl_hook_value},
 };
 
 use crate::{Process, log, ntdll::Ntdll};
@@ -173,6 +174,19 @@ pub fn opengl(nt: &Ntdll, opengl: OpenGl, source: &str) {
     }
     nt.set_compat_opengl(opengl_hook_value(opengl));
     log::line(&format!("  opengl = {name}, {source}"));
+}
+
+/// Tell ntdll to keep the unix process after the Windows process exits, while
+/// other user processes run, when `app_pid`, the value of
+/// [`APP_PID_VAR`](compatdb_core::APP_PID_VAR), names `pid`, this process
+/// ([`runtime::linger_at_exit`]). Logs whether it lingers.
+pub fn linger_at_exit(nt: &Ntdll, app_pid: Option<&str>, pid: u32) {
+    let on = runtime::linger_at_exit(app_pid, pid);
+    let hooked = nt.has_set_compat_linger_at_exit();
+    if on && hooked {
+        nt.set_compat_linger_at_exit(1);
+    }
+    log::line(&crate::linger_line(app_pid, on, hooked));
 }
 
 /// Rewrite `CommandLine` and `Environment` in the 64-bit params and, for a
