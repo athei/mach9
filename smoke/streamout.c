@@ -75,6 +75,14 @@
  *   geometry-rasterized  a geometry shader with rasterized stream 0 streams
  *                    out and draws, also into a full target; without a
  *                    rasterized stream it does not draw
+ *   geometry-streams-rasterized  a geometry shader with a point in each of
+ *                    four streams, each at its own place and with its own
+ *                    colour in a register no other stream writes, created
+ *                    with rasterized stream 0 to 3 in turn: only the
+ *                    rasterized stream's point is drawn, in its colour, and
+ *                    every stream appends its point to its slot; for
+ *                    streams 1 to 3 it accepts that DXMT leaves the draw
+ *                    out (athei/mach9#197)
  *   geometry-shapes  a triangle strip of 4 vertices without a cut, a line
  *                    strip, and a geometry shader of 4 instances are written
  *                    as lists, the instances in order
@@ -128,7 +136,7 @@
  * test_so_statistics_query and the gs_4_code and gs_5_code of
  * test_layered_rendering in Wine's dlls/d3d11/tests/d3d11.c, the gs_code of
  * test_stream_output_resume in its dlls/d3d10core/tests/d3d10core.c, and
- * geometry shaders assembled here. */
+ * geometry and pixel shaders assembled here. */
 
 #define COBJMACROS
 #include <stdarg.h>
@@ -486,7 +494,46 @@ static const DWORD streams_gs_code[] = {
     0x00000000, 0x00000000, 0x03000075, 0x00110000, 0x00000003, 0x01000015, 0x0100003e,
 };
 
+/* The OSG5 and shader chunks of a geometry shader that emits one point into
+ * each of 4 streams, assembled here as gs_5_0 with the ISGN chunk of
+ * count_gs. Stream s writes SV_Position into o0, the centre of pixel
+ * (8 + 16 * s, 32) of the 64x64 render target, and COLOR into o<1 + s>, a
+ * register no other stream writes: green, blue, white and yellow. */
+static const uint32_t raster_streams_osg5[] = {
+    0x3547534f, 0x000000fc, 0x00000008, 0x00000008,
+#define RASTER_STREAM_OSG5(s) \
+    s, 0x000000e8, 0x00000000, 0x00000001, 0x00000003, 0x00000000, 0x0000000f, /* SV_Position o0 */ \
+    s, 0x000000f4, 0x00000000, 0x00000000, 0x00000003, 1 + s, 0x0000000f       /* COLOR o<1 + s> */
+    RASTER_STREAM_OSG5(0), RASTER_STREAM_OSG5(1), RASTER_STREAM_OSG5(2), RASTER_STREAM_OSG5(3),
+#undef RASTER_STREAM_OSG5
+    0x505f5653, 0x7469736f, 0x006e6f69, 0x4f4c4f43, 0xabab0052, /* "SV_Position", "COLOR" */
+};
+static const uint32_t raster_streams_shdr[] = {
+    0x58454853, 0x00000208, 0x00020050, 0x00000082,
+    0x0400005f, 0x002010f2, 0x00000001, 0x00000000,             /* dcl_input v[1][0].xyzw */
+    0x0100085d,                                                 /* dcl_inputprimitive point */
+#define RASTER_STREAM_DCL(s) \
+    0x0300008f, 0x00110000, s,                                  /* dcl_stream m<s> */ \
+    0x0100085c,                                                 /* dcl_outputtopology pointlist */ \
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */ \
+    0x03000065, 0x001020f2, 1 + s                               /* dcl_output o<1 + s>.xyzw */
+    RASTER_STREAM_DCL(0), RASTER_STREAM_DCL(1), RASTER_STREAM_DCL(2), RASTER_STREAM_DCL(3),
+#undef RASTER_STREAM_DCL
+    0x0200005e, 0x00000004,                                     /* dcl_maxout 4 */
+#define RASTER_STREAM_EMIT(s, x, r, g, b) \
+    0x08000036, 0x001020f2, 0x00000000, 0x00004002, x, 0xbc800000, 0x3f000000, 0x3f800000, /* mov o0, l(x, y, 0.5, 1.0) */ \
+    0x08000036, 0x001020f2, 1 + s, 0x00004002, r, g, b, 0x3f800000, /* mov o<1 + s>, l(r, g, b, 1.0) */ \
+    0x03000075, 0x00110000, s                                   /* emit_stream m<s> */
+    RASTER_STREAM_EMIT(0, 0xbf3c0000, 0x00000000, 0x3f800000, 0x00000000), /* x -0.734375, green */
+    RASTER_STREAM_EMIT(1, 0xbe700000, 0x00000000, 0x00000000, 0x3f800000), /* x -0.234375, blue */
+    RASTER_STREAM_EMIT(2, 0x3e880000, 0x3f800000, 0x3f800000, 0x3f800000), /* x 0.265625, white */
+    RASTER_STREAM_EMIT(3, 0x3f440000, 0x3f800000, 0x3f800000, 0x00000000), /* x 0.765625, yellow */
+#undef RASTER_STREAM_EMIT
+    0x0100003e,                                                 /* ret */
+};
+
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define CONTAINER_WORDS 256
 #define VERTEX_COUNT 64
 #define VERTEX_STRIDE 48
 #define TARGET_SIZE 256
@@ -1258,8 +1305,8 @@ static void rasterized_case(void)
 }
 
 /* The DXBC container of an input signature, an output signature and a shader
- * chunk in <out> of 128 words, with a zero checksum, which DXMT does not
- * check. Returns its size. */
+ * chunk in <out> of CONTAINER_WORDS words, with a zero checksum, which DXMT
+ * does not check. Returns its size. */
 static uint32_t build_container(uint32_t *out, const uint32_t *isgn, uint32_t isgn_words, const uint32_t *osgn,
                                 uint32_t osgn_words, const uint32_t *shdr, uint32_t shdr_words)
 {
@@ -1276,7 +1323,7 @@ static uint32_t build_container(uint32_t *out, const uint32_t *isgn, uint32_t is
     out[7] = ARRAY_SIZE(chunks);
     for (i = 0; i < ARRAY_SIZE(chunks); i++)
     {
-        if (size + 4 * chunks[i].count > 128 * sizeof(*out)) fail(2, "a shader does not fit");
+        if (size + 4 * chunks[i].count > CONTAINER_WORDS * sizeof(*out)) fail(2, "a shader does not fit");
         out[8 + i] = size;
         memcpy((char *)out + size, chunks[i].words, 4 * chunks[i].count);
         size += 4 * chunks[i].count;
@@ -1329,7 +1376,7 @@ static int has_points(const uint32_t *data, unsigned first, const float (*want)[
 static void geometry_case(void)
 {
     static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "custom", 0, 0, 4, 0 } };
-    static uint32_t code[128], data[TARGET_WORDS];
+    static uint32_t code[CONTAINER_WORDS], data[TARGET_WORDS];
     static float want[32][4];
     D3D11_QUERY_DATA_SO_STATISTICS statistics;
     ID3D11GeometryShader *count_gs;
@@ -1527,12 +1574,125 @@ static void geometry_streams_case(void)
              (unsigned)statistics[3].NumPrimitivesWritten, (unsigned)statistics[3].PrimitivesStorageNeeded);
 }
 
+/* A pixel shader that returns the COLOR it reads from register <reg>,
+ * assembled here as ps_4_0 with the OSGN chunk of green_ps_code */
+static uint32_t build_color_ps(uint32_t *out, uint32_t reg)
+{
+    const uint32_t isgn[] = {
+        0x4e475349, 0x00000028, 0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000000, 0x00000003,
+        reg, 0x00000f0f, 0x4f4c4f43, 0xabab0052,
+    };
+    const uint32_t shdr[] = {
+        0x52444853, 0x00000038, 0x00000040, 0x0000000e,
+        0x03001062, 0x001010f2, reg,                                /* dcl_input_ps linear v<reg>.xyzw */
+        0x03000065, 0x001020f2, 0x00000000,                         /* dcl_output o0.xyzw */
+        0x05000036, 0x001020f2, 0x00000000, 0x00101e46, reg,        /* mov o0, v<reg> */
+        0x0100003e,                                                 /* ret */
+    };
+
+    return build_container(out, isgn, ARRAY_SIZE(isgn), (const uint32_t *)green_ps_code + 24, 13, shdr,
+                           ARRAY_SIZE(shdr));
+}
+
+/* The four streams of raster_streams_shdr, one point each, with rasterized
+ * stream 0, 1, 2 and 3 in turn: only the rasterized stream's point is drawn,
+ * in its colour, and each draw appends every stream's point to its slot.
+ * DXMT creates no pipeline for rasterized stream 1 to 3 and leaves those
+ * draws out (athei/mach9#197): the case accepts a draw that draws no pixel
+ * and appends no point there, and the fix of #197 removes that. */
+static void geometry_streams_rasterized_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = {
+        { 0, "COLOR", 0, 0, 4, 0 },
+        { 1, "COLOR", 0, 0, 4, 1 },
+        { 2, "COLOR", 0, 0, 4, 2 },
+        { 3, "COLOR", 0, 0, 4, 3 },
+    };
+    static const float colors[4][4] = {
+        { 0.0f, 1.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 0.0f, 1.0f },
+    };
+    static const uint32_t pixel_colors[4] = { 0xff00ff00u, 0xffff0000u, 0xffffffffu, 0xff00ffffu };
+    static const float clear[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    static uint32_t gs_code[CONTAINER_WORDS], ps_code[CONTAINER_WORDS], data[4][TARGET_WORDS];
+    ID3D11GeometryShader *streams_gs;
+    ID3D11PixelShader *color_ps;
+    ID3D11VertexShader *id_vs;
+    ID3D11Buffer *targets[4];
+    UINT offsets[4];
+    uint32_t pixels[4], gs_size, ps_size;
+    unsigned r, s, correct = 0;
+
+    check_hr(ID3D11Device_CreateVertexShader(device, id_vs_code, sizeof(id_vs_code), NULL, &id_vs),
+             "CreateVertexShader");
+    gs_size = build_container(gs_code, count_gs_isgn, ARRAY_SIZE(count_gs_isgn), raster_streams_osg5,
+                              ARRAY_SIZE(raster_streams_osg5), raster_streams_shdr, ARRAY_SIZE(raster_streams_shdr));
+    targets[0] = target;
+    for (s = 1; s < 4; s++) targets[s] = create_buffer(TARGET_SIZE, TARGET_FILL);
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_IASetInputLayout(context, NULL);
+    ID3D11DeviceContext_VSSetShader(context, id_vs, NULL, 0);
+    for (r = 0; r < 4; r++)
+    {
+        int ok = 1;
+
+        check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, gs_code, gs_size, decl, 4, NULL, 0, r,
+                                                                   NULL, &streams_gs),
+                 "CreateGeometryShaderWithStreamOutput");
+        ps_size = build_color_ps(ps_code, 1 + r);
+        check_hr(ID3D11Device_CreatePixelShader(device, ps_code, ps_size, NULL, &color_ps), "CreatePixelShader");
+        /* The first draw writes at the start of each slot, each later one
+           appends its point */
+        for (s = 0; s < 4; s++) offsets[s] = r ? ~0u : 0;
+        ID3D11DeviceContext_ClearRenderTargetView(context, rtv, clear);
+        ID3D11DeviceContext_GSSetShader(context, streams_gs, NULL, 0);
+        ID3D11DeviceContext_PSSetShader(context, color_ps, NULL, 0);
+        ID3D11DeviceContext_SOSetTargets(context, 4, targets, offsets);
+        ID3D11DeviceContext_Draw(context, 1, 0);
+        for (s = 0; s < 4; s++)
+        {
+            pixels[s] = read_pixel(8 + 16 * s, 32);
+            read_buffer(targets[s], data[s]);
+        }
+        ID3D11PixelShader_Release(color_ps);
+        ID3D11GeometryShader_Release(streams_gs);
+        say("rasterized stream %u: pixels %#x %#x %#x %#x", r, pixels[0], pixels[1], pixels[2], pixels[3]);
+        for (s = 0; s < 4; s++)
+        {
+            const float *point = (const float *)data[s] + 4 * r;
+            unsigned changed = count_changed(data[s], 4 * (r + 1), TARGET_WORDS, TARGET_FILL);
+
+            say("rasterized stream %u: stream %u point %u (%g, %g, %g, %g), words after it changed %u", r, s, r,
+                point[0], point[1], point[2], point[3], changed);
+            ok &= pixels[s] == (s == r ? pixel_colors[r] : 0u);
+            ok &= !memcmp(point, colors[s], sizeof(colors[s])) && !changed;
+        }
+        if (!ok && r && !(pixels[0] | pixels[1] | pixels[2] | pixels[3]))
+        {
+            unsigned untouched = 1;
+
+            for (s = 0; s < 4; s++) untouched &= !count_changed(data[s], 4, TARGET_WORDS, TARGET_FILL);
+            if (untouched)
+            {
+                say("rasterized stream %u: accepted, DXMT leaves the draw out (athei/mach9#197)", r);
+                ok = 1;
+            }
+        }
+        correct += ok;
+    }
+    ID3D11DeviceContext_ClearState(context);
+    for (s = 1; s < 4; s++) ID3D11Buffer_Release(targets[s]);
+    ID3D11VertexShader_Release(id_vs);
+    if (correct != 4)
+        fail(1, "rasterized streams that drew only their point in their colour and appended every stream's point "
+             "%u/4", correct);
+}
+
 /* Bind id_vs_code and count_gs streaming out into <so> at offset 0, and
  * return the shaders in <vs_out> and <gs_out> */
 static void bind_count_gs(ID3D11Buffer *so, ID3D11VertexShader **vs_out, ID3D11GeometryShader **gs_out)
 {
     static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "custom", 0, 0, 4, 0 } };
-    static uint32_t code[128];
+    static uint32_t code[CONTAINER_WORDS];
     uint32_t size = build_count_gs(code);
     UINT stride = 16;
 
@@ -1686,7 +1846,7 @@ static void geometry_shapes_case(void)
     };
     static const unsigned strip[] = { 0, 1, 2, 1, 0, 2 }, lines[] = { 0, 1, 1, 2 };
     static const uint32_t layer_offset[4] = { 0 };
-    static uint32_t code[128], strip_data[LARGE_WORDS], line_data[LARGE_WORDS], instance_data[LARGE_WORDS];
+    static uint32_t code[CONTAINER_WORDS], strip_data[LARGE_WORDS], line_data[LARGE_WORDS], instance_data[LARGE_WORDS];
     unsigned instance, v, c, correct = 0;
     ID3D11Buffer *cb;
     uint32_t size;
@@ -1743,7 +1903,7 @@ static void geometry_cut_case(void)
         { 1.0f, -1.0f, 0.5f, 1.0f }, { 1.0f, 1.0f, 0.5f, 1.0f },
     };
     static const uint16_t indices[] = { 0, 1, 2, 3, 0xffff, 4, 5, 6, 7 };
-    static uint32_t code[128];
+    static uint32_t code[CONTAINER_WORDS];
     ID3D11GeometryShader *shaders[5] = { NULL, NULL, NULL, NULL, NULL };
     ID3D11Buffer *vb, *ib;
     UINT stride = 16, offset = 0;
@@ -1835,7 +1995,7 @@ static void geometry_particles_case(void)
         { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
     static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "SV_Position", 0, 0, 4, 0 } };
-    static uint32_t code[128], data[LARGE_WORDS], copy[LARGE_WORDS];
+    static uint32_t code[CONTAINER_WORDS], data[LARGE_WORDS], copy[LARGE_WORDS];
     static float want[LARGE_WORDS / 4][4], initial[8][4];
     ID3D11GeometryShader *particle_gs, *copy_gs;
     ID3D11Buffer *initial_vb, *ping[2], *copied;
@@ -2396,6 +2556,7 @@ static const struct
     { "rasterized", rasterized_case },
     { "geometry-cut", geometry_cut_case },
     { "geometry-rasterized", geometry_rasterized_case },
+    { "geometry-streams-rasterized", geometry_streams_rasterized_case },
     { "geometry-shapes", geometry_shapes_case },
     { "geometry-strips", geometry_strips_case },
     { "geometry", geometry_case },
