@@ -83,6 +83,10 @@
  *                    every stream appends its point to its slot; for
  *                    streams 1 to 3 it accepts that DXMT leaves the draw
  *                    out (athei/mach9#197)
+ *   geometry-uav     a geometry shader that streams out and adds 1 to a UAV
+ *                    for each of 40 input points: the UAV holds 40, not
+ *                    one count per pass of DXMT's geometry pipeline, and the
+ *                    points are written in order
  *   geometry-shapes  a triangle strip of 4 vertices without a cut, a line
  *                    strip, and a geometry shader of 4 instances are written
  *                    as lists, the instances in order
@@ -109,8 +113,10 @@
  *                    points, one and two blocks of DXMT's counts: every
  *                    stream's points and queries
  *
- * Every case runs on a device of its own, and every buffer but the targets of
- * geometry-large and geometry-streams-blocks starts filled with a pattern.
+ * Every case runs on a device of its own, of feature level 11_0, or 11_1 for
+ * geometry-uav, which gives a geometry shader UAVs. Every buffer but the
+ * targets of geometry-large and geometry-streams-blocks starts filled with a
+ * pattern.
  * The cases up to geometry-strips read their targets back between draws,
  * which waits for the GPU; the ones after it draw without a readback between,
  * so DXMT has to order what two draws of a render pass write.
@@ -494,6 +500,27 @@ static const DWORD streams_gs_code[] = {
     0x00000000, 0x00000000, 0x03000075, 0x00110000, 0x00000003, 0x01000015, 0x0100003e,
 };
 
+/* The shader chunk of a geometry shader that adds 1 to a UAV for each input
+ * point and emits the point, assembled here as gs_5_0 with the ISGN and OSGN
+ * chunks of count_gs:
+ * RWByteAddressBuffer counter : register(u1);
+ * [maxvertexcount(1)]
+ * void main(point vertex input[1], inout PointStream<vertex> output)
+ * { counter.InterlockedAdd(0, 1); output.Append(input[0]); } */
+static const uint32_t uav_gs_shdr[] = {
+    0x58454853, 0x0000007c, 0x00020050, 0x0000001f,
+    0x0300009d, 0x0011e000, 0x00000001,                         /* dcl_uav_raw u1 */
+    0x0400005f, 0x002010f2, 0x00000001, 0x00000000,             /* dcl_input v[1][0].xyzw */
+    0x0100085d,                                                 /* dcl_inputprimitive point */
+    0x0100085c,                                                 /* dcl_outputtopology pointlist */
+    0x03000065, 0x001020f2, 0x00000000,                         /* dcl_output o0.xyzw */
+    0x0200005e, 0x00000001,                                     /* dcl_maxout 1 */
+    0x070000ad, 0x0011e000, 0x00000001, 0x00004001, 0x00000000, 0x00004001, 0x00000001, /* atomic_iadd u1, l(0), l(1) */
+    0x06000036, 0x001020f2, 0x00000000, 0x00201e46, 0x00000000, 0x00000000, /* mov o0, v[0][0] */
+    0x01000013,                                                 /* emit */
+    0x0100003e,                                                 /* ret */
+};
+
 /* The OSG5 and shader chunks of a geometry shader that emits one point into
  * each of 4 streams, assembled here as gs_5_0 with the ISGN chunk of
  * count_gs. Stream s writes SV_Position into o0, the centre of pixel
@@ -762,7 +789,8 @@ static void bind_pipeline(ID3D11Buffer *vb)
     ID3D11DeviceContext_GSSetShader(context, gs, NULL, 0);
 }
 
-static void setup(void)
+/* <level> is the feature level of the device, 11_0 when 0 */
+static void setup(D3D_FEATURE_LEVEL level)
 {
     static const D3D11_INPUT_ELEMENT_DESC layout_desc[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -770,11 +798,11 @@ static void setup(void)
         { "COLOR", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
     static const D3D11_SO_DECLARATION_ENTRY so_decl[] = { { 0, "POSITION", 0, 0, 4, 0 } };
-    static const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
     D3D11_TEXTURE2D_DESC rt_desc = { 64, 64, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, { 1, 0 }, D3D11_USAGE_DEFAULT,
                                      D3D11_BIND_RENDER_TARGET, 0, 0 };
     UINT stride = 16;
 
+    if (!level) level = D3D_FEATURE_LEVEL_11_0;
     check_hr(create_device(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, &level, 1, D3D11_SDK_VERSION, &device, NULL,
                            &context), "D3D11CreateDevice");
     check_hr(ID3D11Device_CreateTexture2D(device, &rt_desc, NULL, &rt), "CreateTexture2D");
@@ -1687,6 +1715,72 @@ static void geometry_streams_rasterized_case(void)
              "%u/4", correct);
 }
 
+#define UAV_POINTS 40
+
+/* A geometry shader that streams out and adds 1 to a UAV for each input
+ * point: after a draw of 40 points, more than an object threadgroup of 32
+ * takes, the UAV holds 40, and the target the 40 points in order */
+static void geometry_uav_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "custom", 0, 0, 4, 0 } };
+    static const uint32_t zero[4] = { 0 };
+    static uint32_t code[CONTAINER_WORDS], data[LARGE_WORDS], counter[4];
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
+    ID3D11UnorderedAccessView *uav;
+    ID3D11GeometryShader *uav_gs;
+    ID3D11VertexShader *id_vs;
+    ID3D11Buffer *buffer, *large;
+    UINT stride = 16;
+    uint32_t size;
+    unsigned i, c, correct = 0;
+
+    size = build_container(code, count_gs_isgn, ARRAY_SIZE(count_gs_isgn), count_gs_osgn, ARRAY_SIZE(count_gs_osgn),
+                           uav_gs_shdr, ARRAY_SIZE(uav_gs_shdr));
+    check_hr(ID3D11Device_CreateVertexShader(device, id_vs_code, sizeof(id_vs_code), NULL, &id_vs),
+             "CreateVertexShader");
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, code, size, decl, 1, &stride, 1,
+                                                               D3D11_SO_NO_RASTERIZED_STREAM, NULL, &uav_gs),
+             "CreateGeometryShaderWithStreamOutput");
+    buffer = create_data_buffer(zero, sizeof(zero), D3D11_BIND_UNORDERED_ACCESS,
+                                D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS);
+    memset(&uav_desc, 0, sizeof(uav_desc));
+    uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    uav_desc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uav_desc.Buffer.NumElements = ARRAY_SIZE(zero);
+    uav_desc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+    check_hr(ID3D11Device_CreateUnorderedAccessView(device, (ID3D11Resource *)buffer, &uav_desc, &uav),
+             "CreateUnorderedAccessView");
+    large = create_buffer(LARGE_SIZE, TARGET_FILL);
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_IASetInputLayout(context, NULL);
+    ID3D11DeviceContext_VSSetShader(context, id_vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, uav_gs, NULL, 0);
+    ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews(context, 1, &rtv, NULL, 1, 1, &uav, NULL);
+    bind_target(large, 0);
+    ID3D11DeviceContext_Draw(context, UAV_POINTS, 0);
+    read_buffer_size(buffer, counter, sizeof(counter));
+    read_buffer_size(large, data, LARGE_SIZE);
+
+    ID3D11DeviceContext_ClearState(context);
+    ID3D11Buffer_Release(large);
+    ID3D11UnorderedAccessView_Release(uav);
+    ID3D11Buffer_Release(buffer);
+    ID3D11GeometryShader_Release(uav_gs);
+    ID3D11VertexShader_Release(id_vs);
+    for (i = 0; i < UAV_POINTS; i++)
+    {
+        int same = 1;
+
+        for (c = 0; c < 4; c++) same &= ((const float *)data)[i * 4 + c] == (float)i;
+        correct += same;
+    }
+    say("UAV %u, points in order %u/%u", counter[0], correct, UAV_POINTS);
+    if (counter[0] != UAV_POINTS || correct != UAV_POINTS
+        || count_changed(data, 4 * UAV_POINTS, LARGE_WORDS, TARGET_FILL))
+        fail(1, "UAV %u (want %u), points in order %u/%u, words after them changed %u (want 0)", counter[0],
+             UAV_POINTS, correct, UAV_POINTS, count_changed(data, 4 * UAV_POINTS, LARGE_WORDS, TARGET_FILL));
+}
+
 /* Bind id_vs_code and count_gs streaming out into <so> at offset 0, and
  * return the shaders in <vs_out> and <gs_out> */
 static void bind_count_gs(ID3D11Buffer *so, ID3D11VertexShader **vs_out, ID3D11GeometryShader **gs_out)
@@ -2542,6 +2636,8 @@ static const struct
 {
     const char *name;
     void (*run)(void);
+    /* the feature level of the case's device, 11_0 when 0 */
+    D3D_FEATURE_LEVEL level;
 } cases[] = {
     { "bounds", bounds_case },
     { "append", append_case },
@@ -2557,6 +2653,7 @@ static const struct
     { "geometry-cut", geometry_cut_case },
     { "geometry-rasterized", geometry_rasterized_case },
     { "geometry-streams-rasterized", geometry_streams_rasterized_case },
+    { "geometry-uav", geometry_uav_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-shapes", geometry_shapes_case },
     { "geometry-strips", geometry_strips_case },
     { "geometry", geometry_case },
@@ -2581,7 +2678,7 @@ static void run_case(unsigned i)
 {
     current = cases[i].name;
     say("case %s", current);
-    setup();
+    setup(cases[i].level);
     cases[i].run();
     teardown();
 }
