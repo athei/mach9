@@ -1,6 +1,6 @@
 # Expected deqp-vk results of the group image-atomic64: every case that does not pass.
 # Written by `cargo run -p conformance -- deqp-vk record --group image-atomic64`: do not edit.
-# component: mesa=51e8d28cd120454ec6d3a5e30bad517e78dee155
+# component: mesa=f81019e4eefeb076353a3cd08ff8221dca3fad5a
 # component: vk-gl-cts=e272471311301a35aae6364def1a3f5ea35215f7
 # component: vulkan-loader=fa218055ff4948b159f31d43f800c808a13d51df
 # cases: 2420
