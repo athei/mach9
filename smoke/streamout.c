@@ -81,6 +81,10 @@
  *                    vertex shader, which also draws it as a line strip: the
  *                    primitives without a cut are written in order, each
  *                    triangle with the winding of its place in its strip
+ *   geometry-pass-through  a D3D11 geometry shader that passes its triangles
+ *                    and the render target array index through, with
+ *                    rasterized stream 0, streams out and draws into the
+ *                    slice it picks, and DrawAuto draws what it wrote
  *   geometry-rasterized  a geometry shader with rasterized stream 0 streams
  *                    out and draws, also into a full target; without a
  *                    rasterized stream it does not draw
@@ -2360,6 +2364,68 @@ static void geometry_cut_blocks_case(void)
         fail(1, "%u of %u draws (want 0) wrote other primitives or counts", failed, 2 * (unsigned)ARRAY_SIZE(names));
 }
 
+/* A D3D11 geometry shader that passes its triangles and the layer of layer_vs
+ * through (layer_pass_gs), created with rasterized stream 0: the strip of two
+ * triangles over the render target is streamed out as a list and drawn into
+ * slice 1 of a render target of two, slice 0 left alone, and DrawAuto from
+ * the target draws the list again */
+static void geometry_pass_through_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "SV_Position", 0, 0, 4, 0 } };
+    static const unsigned list[] = { 0, 1, 2, 1, 3, 2 };
+    static const float red[] = { 1.0f, 0.0f, 0.0f, 1.0f };
+    static uint32_t code[CONTAINER_WORDS], vs_code_layer[CONTAINER_WORDS], data[TARGET_WORDS];
+    ID3D11RenderTargetView *layered_rtv;
+    ID3D11GeometryShader *pass_gs;
+    ID3D11Texture2D *layered_rt;
+    ID3D11VertexShader *layer_vs;
+    ID3D11Buffer *auto_target;
+    UINT stride = 16, offset = 0;
+    uint32_t drawn, drawn_slice0, drawn_auto, size;
+    int ok;
+
+    size = build_layer_vs(vs_code_layer);
+    check_hr(ID3D11Device_CreateVertexShader(device, vs_code_layer, size, NULL, &layer_vs), "CreateVertexShader");
+    size = build_layer_pass_gs(code);
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, code, size, decl, 1, &stride, 1, 0, NULL,
+                                                               &pass_gs),
+             "CreateGeometryShaderWithStreamOutput of a pass-through shader");
+    create_layered_rt(&layered_rt, &layered_rtv);
+    auto_target = create_buffer_bind(TARGET_SIZE, TARGET_FILL, D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_VERTEX_BUFFER);
+    bind_quad();
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &layered_rtv, NULL);
+    ID3D11DeviceContext_ClearRenderTargetView(context, layered_rtv, red);
+    ID3D11DeviceContext_VSSetShader(context, layer_vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, pass_gs, NULL, 0);
+    bind_target(auto_target, 0);
+    ID3D11DeviceContext_Draw(context, 4, 0);
+    drawn = read_slice_pixel(layered_rt, 1, 10, 20);
+    drawn_slice0 = read_slice_pixel(layered_rt, 0, 10, 20);
+    read_buffer(auto_target, data);
+    /* DrawAuto through the vertex shader of the quad into the render target
+       of one slice */
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &rtv, NULL);
+    ID3D11DeviceContext_ClearRenderTargetView(context, rtv, red);
+    ID3D11DeviceContext_VSSetShader(context, quad_vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, NULL, NULL, 0);
+    ID3D11DeviceContext_SOSetTargets(context, 0, NULL, NULL);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &auto_target, &stride, &offset);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11DeviceContext_DrawAuto(context);
+    drawn_auto = read_pixel(10, 20);
+    release_quad();
+    ID3D11Buffer_Release(auto_target);
+    ID3D11RenderTargetView_Release(layered_rtv);
+    ID3D11Texture2D_Release(layered_rt);
+    ID3D11GeometryShader_Release(pass_gs);
+    ID3D11VertexShader_Release(layer_vs);
+    ok = has_quad(data, 0, ARRAY_SIZE(list), list) && !count_changed(data, 24, TARGET_WORDS, TARGET_FILL);
+    say("the two triangles %s, slice 1 %#x, slice 0 %#x, after DrawAuto %#x", ok ? "written" : "not written", drawn,
+        drawn_slice0, drawn_auto);
+    if (!ok || drawn != GREEN || drawn_slice0 != RED || drawn_auto != GREEN)
+        fail(1, "want the two triangles written, slice 1 %#x, slice 0 %#x, after DrawAuto %#x", GREEN, RED, GREEN);
+}
+
 #define PARTICLE_FRAMES 5
 
 /* The particles of particle_gs_shdr after <frames> frames from 8 particles
@@ -2971,6 +3037,7 @@ static const struct
     { "rasterized", rasterized_case },
     { "geometry-cut", geometry_cut_case },
     { "geometry-cut-blocks", geometry_cut_blocks_case },
+    { "geometry-pass-through", geometry_pass_through_case },
     { "geometry-rasterized", geometry_rasterized_case },
     { "geometry-streams-rasterized", geometry_streams_rasterized_case },
     { "geometry-uav", geometry_uav_case, D3D_FEATURE_LEVEL_11_1 },
