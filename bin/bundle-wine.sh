@@ -1956,9 +1956,9 @@ check_wmadec_runs() {
 # FEX_* variables, so each run gets the mode it names and only that run has it.
 # A hang is how these cases usually fail, so the limits are lower than the 120
 # seconds of the other runs. The slowest clean runs of the first four took about
-# 1.9, 4.5, 1.9 and 1.9 seconds on a busy current Mac, and small programs take
-# up to 4 times as long on a hosted runner, so the limits are 2 to 3 times that.
-# The run with both settings has the limit of the FEX_DISKCACHE=1 run.
+# 1.9, 4.5, 1.9 and 1.9 seconds on a busy current Mac and the run with both
+# settings 4.0 seconds on an idle one, and small programs take up to 4 times as
+# long on a hosted runner, so the limits are 2 to 3 times that.
 check_fex_runs() {
     local arch
     for arch in x86_64 i686; do
@@ -1970,7 +1970,7 @@ check_fex_runs() {
         run_fex "$arch" FEX_DISKCACHE=1 15 "$@" FEX_DISKCACHE=1 -- cross_process_protect decommit_race rwx_write_race
         check_fex_disk_cache "$arch"
         rm -rf "$TMP_DIR"/prefix/drive_c/users/*/AppData/Local/fex-emu/DiskCache
-        run_fex "$arch" "FEX_SMCCHECKS=full FEX_DISKCACHE=1" 15 "$@" FEX_SMCCHECKS=full FEX_DISKCACHE=1 \
+        run_fex "$arch" "FEX_SMCCHECKS=full FEX_DISKCACHE=1" 40 "$@" FEX_SMCCHECKS=full FEX_DISKCACHE=1 \
             -- cross_process_protect decommit_race rwx_write_race
         check_fex_disk_cache "$arch"
     done
