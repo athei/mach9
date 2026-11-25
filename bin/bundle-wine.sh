@@ -1559,7 +1559,9 @@ check_streamout_runs() {
 # (depth-bias), and a draw through a geometry shader or tessellation in
 # the render pass of another one with the other index format, or the other
 # of indexed and non-indexed, gets a pipeline of its own (geometry-index,
-# tessellation-index); smoke/dxmt.c says how. Each case is a process of its
+# tessellation-index), and a device released right after a draw, while DXMT
+# still compiles and encodes it, is destroyed without a crash or a hang
+# (release-after-draw); smoke/dxmt.c says how. Each case is a process of its
 # own, so a case that crashes cannot hide the result of another, and each
 # has to get the default dxmt tree from compatdb.so, since Wine's own d3d11
 # passes them too. DXMT's shader cache is off, so that a shader variant an
@@ -1590,7 +1592,8 @@ check_dxmt_runs() {
     for arch in x86_64 i686; do
         exe="$TMP_DIR/dxmt-$arch.exe"
         time_mark "smoke: dxmt.exe $arch"
-        for name in bytecode swap-state deferred depth-bias geometry-index tessellation-index; do
+        for name in bytecode swap-state deferred depth-bias geometry-index tessellation-index \
+                    release-after-draw; do
             log="$TMP_DIR/dxmt-$arch-$name.log"
             echo "  Running dxmt.exe $name for $arch..."
             run_limited 5 "$log" "$@" DXMT_SHADER_CACHE=0 "$WINE_DIR/bin/wine" "$exe" "$name"
