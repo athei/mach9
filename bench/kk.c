@@ -1,6 +1,7 @@
 /* GPU time of KosmicKrisp on the patterns behind the Enshrouded gap (#36):
  * indirect-count draws with a large maxDrawCount (#61), buffer loads under
- * robust buffer access (#62) and chains of compute barriers (#63). It runs
+ * robust buffer access (#62) and chains of compute barriers (#63); and
+ * whether fragment shaders with 64-bit atomics lose the device. It runs
  * natively, outside Wine, on the Vulkan loader it is given, which takes the
  * driver from VK_DRIVER_FILES. Build and run it with kk.sh next to it:
  *
@@ -8,7 +9,24 @@
  *
  * The stack defaults to dist/wine. A MESA_DIST of bin/build-mesa.sh compares
  * two Mesa builds without a bundle step. --case runs only the named cases;
- * the default runs all.
+ * the default runs all timed cases.
+ *
+ * The atomic64 cases are not timed and run only when named. Each draws for
+ * STRESS_SECONDS with 64-bit atomics in the fragment shader, which
+ * KosmicKrisp runs under spin locks from a table of lock words, one submit
+ * per draw, on a device of its own, and prints whether the device was lost
+ * (a lock that times out loses it) and whether the counters hold what the
+ * draws added (#153):
+ *
+ * | Case | Draw | Each fragment |
+ * | --- | --- | --- |
+ * | atomic64-exchange | 248x248 | exchanges its own 64-bit guard in a storage buffer, then its neighbour's, the pattern of #91 |
+ * | atomic64-one-texel | 2560x1440 | adds 1 to texel (0, 0) of an R64_UINT storage image: every fragment on one lock |
+ * | atomic64-own-texel | 2560x1440 | adds 1 to its own texel of an R64_UINT storage image of the draw's size |
+ *
+ * A draw that does not finish within STRESS_FENCE_TIMEOUT_NS ends the
+ * program. A lost device can make other processes' work on the GPU fail too,
+ * so run these cases with nothing else on the GPU.
  *
  * Each case has arms that differ in one setting, such as the robustness
  * features of the device. An arm records a fixed load and then its work
@@ -105,7 +123,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
+#include "shaders/atomic64_exchange.frag.h"
+#include "shaders/atomic64_texel.frag.h"
 #include "shaders/chain.comp.h"
 #include "shaders/count.frag.h"
 #include "shaders/draw.frag.h"
@@ -141,6 +162,14 @@
 #define LOAD_GROUPS 1024
 #define WARMUP_ROUNDS 3
 #define DEFAULT_ROUNDS 20
+/* The atomic64 cases: the draw of #91's 248x248 pattern, the draw of the
+ * image cases, how long each case draws, and how long one draw may take
+ * before it counts as a stall. */
+#define EXCHANGE_SIZE 248
+#define STRESS_WIDTH 2560
+#define STRESS_HEIGHT 1440
+#define STRESS_SECONDS 30
+#define STRESS_FENCE_TIMEOUT_NS 60000000000ull
 
 #define INSTANCE_FUNCS(X)                                                                          \
     X(vkDestroyInstance)                                                                           \
@@ -210,7 +239,10 @@
     X(vkCmdBindVertexBuffers)                                                                      \
     X(vkCmdBindIndexBuffer)                                                                        \
     X(vkCmdDrawIndirectCount)                                                                      \
-    X(vkCmdDrawIndexedIndirectCount)
+    X(vkCmdDrawIndexedIndirectCount)                                                               \
+    X(vkCmdDraw)                                                                                   \
+    X(vkCmdCopyBufferToImage)                                                                      \
+    X(vkCmdCopyImageToBuffer)
 
 #define DECLARE(name) static PFN_##name name;
 INSTANCE_FUNCS(DECLARE)
@@ -240,6 +272,15 @@ enum kind
     KIND_NONINDEXED,
     KIND_LOADS,
     KIND_CHAIN,
+    KIND_ATOMIC64,
+};
+
+/* What a fragment of an atomic64 case does. */
+enum pattern
+{
+    PATTERN_EXCHANGE,
+    PATTERN_ONE_TEXEL,
+    PATTERN_OWN_TEXEL,
 };
 
 struct buffer
@@ -280,6 +321,7 @@ struct arm
     bool barriers;
     /* dispatch-loads-wide: loads_wide.comp instead of loads.comp. */
     bool wide;
+    enum pattern pattern;
 
     bool selected, ready, failed;
     /* A draw arm's check: the occlusion query missed the expected count. */
@@ -293,9 +335,14 @@ struct arm
     VkImage image;
     VkDeviceMemory image_memory;
     VkImageView view;
-    /* result: the fragment counter of a draw arm's check, or what a compute
-     * arm writes. */
-    struct buffer vertices, indices, indirect, count, sources[4], weights[2], result;
+    /* The R64_UINT storage image of the atomic64 image cases. */
+    VkImage counters;
+    VkDeviceMemory counters_memory;
+    VkImageView counters_view;
+    /* result: the fragment counter of a draw arm's check, what a compute
+     * arm writes, or the guards of atomic64-exchange. readback: the
+     * counters of the atomic64 image cases, zero before the first draw. */
+    struct buffer vertices, indices, indirect, count, sources[4], weights[2], result, readback;
     double *samples;
 };
 
@@ -311,6 +358,7 @@ struct arm
 #define LOADS(case_name, robust, is_wide)                                                          \
     { .name = case_name, .kind = KIND_LOADS, .robustness = robust, .wide = is_wide }
 #define CHAIN(on) { .name = "barrier-chain", .kind = KIND_CHAIN, .barriers = on }
+#define ATOMIC64(case_name, what) { .name = case_name, .kind = KIND_ATOMIC64, .pattern = what }
 
 static struct arm arms[] = {
     DRAW("draw-indexed-count", KIND_INDEXED, ROBUST_OFF, MAX_DRAWS, 0),
@@ -343,6 +391,9 @@ static struct arm arms[] = {
     LOADS("dispatch-loads-wide", ROBUST_RBA2, true),
     CHAIN(true),
     CHAIN(false),
+    ATOMIC64("atomic64-exchange", PATTERN_EXCHANGE),
+    ATOMIC64("atomic64-one-texel", PATTERN_ONE_TEXEL),
+    ATOMIC64("atomic64-own-texel", PATTERN_OWN_TEXEL),
 };
 #define ARM_COUNT (sizeof(arms) / sizeof(arms[0]))
 
@@ -363,6 +414,9 @@ static uint32_t queue_family;
 static uint64_t timestamp_mask;
 static double timestamp_period;
 static struct device devices[ROBUST_COUNT];
+/* The device of the atomic64 case that runs, one per case, since a case can
+ * lose it. */
+static struct device atomic64_device;
 
 /* Whether <result> is VK_SUCCESS, after a line naming <what> when it is not. */
 static bool ok(VkResult result, const char *what)
@@ -376,6 +430,17 @@ static bool ok(VkResult result, const char *what)
 static uint32_t draw_count(const struct arm *arm)
 {
     return arm->draws ? arm->draws : COUNT;
+}
+
+/* The size of an atomic64 case's draw. */
+static uint32_t atomic64_width(const struct arm *arm)
+{
+    return arm->pattern == PATTERN_EXCHANGE ? EXCHANGE_SIZE : STRESS_WIDTH;
+}
+
+static uint32_t atomic64_height(const struct arm *arm)
+{
+    return arm->pattern == PATTERN_EXCHANGE ? EXCHANGE_SIZE : STRESS_HEIGHT;
 }
 
 static void settings(const struct arm *arm, char *out, size_t size)
@@ -398,6 +463,10 @@ static void settings(const struct arm *arm, char *out, size_t size)
     case KIND_CHAIN:
         snprintf(out, size, "barriers=%s dispatches=%u", arm->barriers ? "on" : "off",
                  CHAIN_LENGTH);
+        break;
+    case KIND_ATOMIC64:
+        snprintf(out, size, "draw=%ux%u seconds=%u", atomic64_width(arm), atomic64_height(arm),
+                 STRESS_SECONDS);
         break;
     }
 }
@@ -455,10 +524,16 @@ static void destroy_buffer(struct device *dev, struct buffer *buffer)
     memset(buffer, 0, sizeof(*buffer));
 }
 
-/* Creates the device of <robustness> with every feature the cases use. */
-static bool create_device(struct device *dev, enum robustness robustness)
+/* Creates the device of <robustness> with every feature the timed cases use,
+ * or with <atomic64> the device of an atomic64 case, which also has 64-bit
+ * buffer and image atomics. */
+static bool create_device(struct device *dev, enum robustness robustness, bool atomic64)
 {
     static const float priority = 1.0f;
+    VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT image_int64 = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_IMAGE_ATOMIC_INT64_FEATURES_EXT,
+        .shaderImageInt64Atomics = VK_TRUE,
+    };
     VkPhysicalDevicePipelineRobustnessFeaturesEXT pipeline_robustness = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_FEATURES_EXT,
         .pipelineRobustness = VK_TRUE,
@@ -510,15 +585,23 @@ static bool create_device(struct device *dev, enum robustness robustness)
     VkDescriptorPoolSize sizes[] = {
         { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, MAX_BINDINGS * (ARM_COUNT + 1) },
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_BINDINGS * (ARM_COUNT + 1) },
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
     };
     /* The arms and the device's load. */
     VkDescriptorPoolCreateInfo descriptors = { .sType =
                                                    VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                                .maxSets = ARM_COUNT + 1,
-                                               .poolSizeCount = 2,
+                                               .poolSizeCount = atomic64 ? 3 : 2,
                                                .pPoolSizes = sizes };
 
-    if (robustness == ROBUST_RBA2)
+    if (atomic64)
+    {
+        features.features.shaderInt64 = VK_TRUE;
+        features12.shaderBufferInt64Atomics = VK_TRUE;
+        features13.pNext = &image_int64;
+        extension = VK_EXT_SHADER_IMAGE_ATOMIC_INT64_EXTENSION_NAME;
+    }
+    else if (robustness == ROBUST_RBA2)
     {
         features13.pNext = &robustness2;
         extension = VK_EXT_ROBUSTNESS_2_EXTENSION_NAME;
@@ -577,7 +660,8 @@ static VkShaderModule create_module(struct device *dev, const uint32_t *code, si
  * arm's is the fragment counter of its check. */
 static bool create_set(struct arm *arm, const struct buffer *const *buffers, uint32_t count)
 {
-    VkShaderStageFlags stage = arm->kind == KIND_INDEXED || arm->kind == KIND_NONINDEXED
+    VkShaderStageFlags stage = arm->kind == KIND_INDEXED || arm->kind == KIND_NONINDEXED ||
+                                       arm->kind == KIND_ATOMIC64
                                    ? VK_SHADER_STAGE_FRAGMENT_BIT
                                    : VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutBinding bindings[MAX_BINDINGS];
@@ -724,9 +808,16 @@ static bool create_draw_pipeline(struct arm *arm)
         .pColorBlendState = &blend,
         .pDynamicState = &dynamic_state,
     };
+    /* The draw's width, or whether it adds to one texel, for an atomic64
+     * case. */
+    VkPushConstantRange push = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t) };
     VkPipelineLayoutCreateInfo layout = { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                                           .setLayoutCount = 1,
-                                          .pSetLayouts = &arm->set_layout };
+                                          .pSetLayouts = &arm->set_layout,
+                                          .pushConstantRangeCount =
+                                              arm->kind == KIND_ATOMIC64 ? 1 : 0,
+                                          .pPushConstantRanges = &push };
+    const bool exchange = arm->kind == KIND_ATOMIC64 && arm->pattern == PATTERN_EXCHANGE;
     bool created = false;
 
     if (!ok(vkCreatePipelineLayout(arm->dev->device, &layout, NULL, &arm->layout),
@@ -734,12 +825,23 @@ static bool create_draw_pipeline(struct arm *arm)
         return false;
     info.layout = arm->layout;
     stages[0].module = create_module(arm->dev, draw_vert, sizeof(draw_vert));
-    stages[1].module = create_module(arm->dev, draw_frag, sizeof(draw_frag));
+    if (arm->kind != KIND_ATOMIC64)
+        stages[1].module = create_module(arm->dev, draw_frag, sizeof(draw_frag));
+    else if (exchange)
+        stages[1].module =
+            create_module(arm->dev, atomic64_exchange_frag, sizeof(atomic64_exchange_frag));
+    else
+        stages[1].module = create_module(arm->dev, atomic64_texel_frag, sizeof(atomic64_texel_frag));
     if (stages[0].module && stages[1].module)
         created = ok(vkCreateGraphicsPipelines(arm->dev->device, VK_NULL_HANDLE, 1, &info, NULL,
                                                &arm->pipeline),
                      "vkCreateGraphicsPipelines");
     if (stages[1].module) vkDestroyShaderModule(arm->dev->device, stages[1].module, NULL);
+    if (arm->kind == KIND_ATOMIC64)
+    {
+        if (stages[0].module) vkDestroyShaderModule(arm->dev->device, stages[0].module, NULL);
+        return created;
+    }
     stages[1].module = create_module(arm->dev, count_frag, sizeof(count_frag));
     if (created && stages[1].module)
         created = ok(vkCreateGraphicsPipelines(arm->dev->device, VK_NULL_HANDLE, 1, &info, NULL,
@@ -752,29 +854,33 @@ static bool create_draw_pipeline(struct arm *arm)
     return created;
 }
 
-/* The render target of a draw arm, left in VK_IMAGE_LAYOUT_GENERAL. */
-static bool create_target(struct arm *arm)
+/* A <width> x <height> image of <format> for <usage> with its view, left in
+ * VK_IMAGE_LAYOUT_GENERAL: the render target of a draw arm or of an atomic64
+ * case, or the storage image of an atomic64 image case. */
+static bool create_target(struct arm *arm, VkFormat format, VkImageUsageFlags usage,
+                          uint32_t width, uint32_t height, VkImage *out,
+                          VkDeviceMemory *memory, VkImageView *view_out)
 {
     struct device *dev = arm->dev;
     VkImageCreateInfo image = { .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                                 .imageType = VK_IMAGE_TYPE_2D,
-                                .format = VK_FORMAT_R8G8B8A8_UNORM,
-                                .extent = { TARGET_SIZE, TARGET_SIZE, 1 },
+                                .format = format,
+                                .extent = { width, height, 1 },
                                 .mipLevels = 1,
                                 .arrayLayers = 1,
                                 .samples = VK_SAMPLE_COUNT_1_BIT,
                                 .tiling = VK_IMAGE_TILING_OPTIMAL,
-                                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                .usage = usage,
                                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
     VkImageViewCreateInfo view = { .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                    .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                                   .format = VK_FORMAT_R8G8B8A8_UNORM,
+                                   .format = format,
                                    .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 } };
     VkImageMemoryBarrier2 barrier = { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                                      .dstStageMask =
-                                          VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                      .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                      .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                      .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT |
+                                                       VK_ACCESS_2_MEMORY_WRITE_BIT,
                                       .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                                       .newLayout = VK_IMAGE_LAYOUT_GENERAL,
                                       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -793,21 +899,21 @@ static bool create_target(struct arm *arm)
     VkMemoryRequirements req;
     int type;
 
-    if (!ok(vkCreateImage(dev->device, &image, NULL, &arm->image), "vkCreateImage")) return false;
-    vkGetImageMemoryRequirements(dev->device, arm->image, &req);
+    if (!ok(vkCreateImage(dev->device, &image, NULL, out), "vkCreateImage")) return false;
+    vkGetImageMemoryRequirements(dev->device, *out, &req);
     if ((type = find_memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) < 0)
         type = find_memory_type(req.memoryTypeBits, 0);
     alloc.allocationSize = req.size;
     alloc.memoryTypeIndex = (uint32_t)type;
     if (type < 0 ||
-        !ok(vkAllocateMemory(dev->device, &alloc, NULL, &arm->image_memory), "vkAllocateMemory") ||
-        !ok(vkBindImageMemory(dev->device, arm->image, arm->image_memory, 0), "vkBindImageMemory"))
+        !ok(vkAllocateMemory(dev->device, &alloc, NULL, memory), "vkAllocateMemory") ||
+        !ok(vkBindImageMemory(dev->device, *out, *memory, 0), "vkBindImageMemory"))
         return false;
-    view.image = arm->image;
-    if (!ok(vkCreateImageView(dev->device, &view, NULL, &arm->view), "vkCreateImageView"))
+    view.image = *out;
+    if (!ok(vkCreateImageView(dev->device, &view, NULL, view_out), "vkCreateImageView"))
         return false;
 
-    barrier.image = arm->image;
+    barrier.image = *out;
     if (!ok(vkResetFences(dev->device, 1, &dev->fence), "vkResetFences") ||
         !ok(vkResetCommandBuffer(dev->cmd, 0), "vkResetCommandBuffer") ||
         !ok(vkBeginCommandBuffer(dev->cmd, &begin), "vkBeginCommandBuffer"))
@@ -834,11 +940,13 @@ static size_t result_size(const struct arm *arm)
     }
 }
 
+/* A triangle that covers the whole target, so each draw of a draw arm's
+ * check counts TARGET_SIZE * TARGET_SIZE fragments, and each draw of an
+ * atomic64 case one fragment per pixel. */
+static const float vertices[] = { -1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f };
+
 static bool setup_draw(struct arm *arm)
 {
-    /* A triangle that covers the whole target, so each draw of the check
-     * counts TARGET_SIZE * TARGET_SIZE fragments. */
-    static const float vertices[] = { -1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f };
     /* Indices 0, 1, 2 at byte offset 0 and at byte offset 2. A mixed arm
      * reads the first at both offsets: 0, 1, 2 and 1, 2, 0. */
     static const uint16_t aligned[] = { 0, 1, 2, 0 };
@@ -854,7 +962,9 @@ static bool setup_draw(struct arm *arm)
 
     if (!create_buffer(dev, result_size(arm), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, NULL,
                        &arm->result) ||
-        !create_set(arm, buffers, 1) || !create_draw_pipeline(arm) || !create_target(arm) ||
+        !create_set(arm, buffers, 1) || !create_draw_pipeline(arm) ||
+        !create_target(arm, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                       TARGET_SIZE, TARGET_SIZE, &arm->image, &arm->image_memory, &arm->view) ||
         !create_buffer(dev, sizeof(vertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertices,
                        &arm->vertices) ||
         !create_buffer(dev, sizeof(aligned), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
@@ -931,6 +1041,227 @@ static bool setup_chain(struct arm *arm)
                          NULL, &arm->result) &&
            create_set(arm, buffers, 1) &&
            create_compute_pipeline(arm, chain_comp, sizeof(chain_comp), 0);
+}
+
+/* The descriptor set of an atomic64 image case: its storage image at
+ * binding 0. */
+static bool create_image_set(struct arm *arm)
+{
+    VkDescriptorSetLayoutBinding binding = { .binding = 0,
+                                             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                             .descriptorCount = 1,
+                                             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT };
+    VkDescriptorSetLayoutCreateInfo layout = { .sType =
+                                                   VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                                               .bindingCount = 1,
+                                               .pBindings = &binding };
+    VkDescriptorSetAllocateInfo alloc = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                          .descriptorPool = arm->dev->descriptors,
+                                          .descriptorSetCount = 1,
+                                          .pSetLayouts = &arm->set_layout };
+    VkDescriptorImageInfo info = { .imageView = arm->counters_view,
+                                   .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
+    VkWriteDescriptorSet write = { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                   .dstBinding = 0,
+                                   .descriptorCount = 1,
+                                   .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                   .pImageInfo = &info };
+
+    if (!ok(vkCreateDescriptorSetLayout(arm->dev->device, &layout, NULL, &arm->set_layout),
+            "vkCreateDescriptorSetLayout") ||
+        !ok(vkAllocateDescriptorSets(arm->dev->device, &alloc, &arm->set),
+            "vkAllocateDescriptorSets"))
+        return false;
+    write.dstSet = arm->set;
+    vkUpdateDescriptorSets(arm->dev->device, 1, &write, 0, NULL);
+    return true;
+}
+
+/* The guards of atomic64-exchange, or the storage image of the image cases
+ * with a readback buffer as large as it, which also clears it; then the
+ * pipeline and the render target. */
+static bool setup_atomic64(struct arm *arm)
+{
+    const uint32_t width = atomic64_width(arm), height = atomic64_height(arm);
+    const struct buffer *buffers[] = { &arm->result };
+    struct device *dev = arm->dev;
+
+    if (arm->pattern == PATTERN_EXCHANGE)
+    {
+        if (!create_buffer(dev, (VkDeviceSize)width * height * sizeof(uint64_t),
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, NULL, &arm->result) ||
+            !create_set(arm, buffers, 1))
+            return false;
+    }
+    else
+    {
+        /* One texel is enough for atomic64-one-texel. */
+        const uint32_t texels_x = arm->pattern == PATTERN_ONE_TEXEL ? 1 : width;
+        const uint32_t texels_y = arm->pattern == PATTERN_ONE_TEXEL ? 1 : height;
+
+        if (!create_target(arm, VK_FORMAT_R64_UINT,
+                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                               VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                           texels_x, texels_y, &arm->counters, &arm->counters_memory,
+                           &arm->counters_view) ||
+            !create_buffer(dev, (VkDeviceSize)texels_x * texels_y * sizeof(uint64_t),
+                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                           NULL, &arm->readback) ||
+            !create_image_set(arm))
+            return false;
+    }
+    return create_draw_pipeline(arm) &&
+           create_target(arm, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, width,
+                         height, &arm->image, &arm->image_memory, &arm->view) &&
+           create_buffer(dev, sizeof(vertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertices,
+                         &arm->vertices);
+}
+
+/* Copies the storage image of an atomic64 image case to or from its
+ * readback buffer, as the last or the first command of dev->cmd. */
+static void copy_counters(struct arm *arm, bool to_image)
+{
+    const bool one = arm->pattern == PATTERN_ONE_TEXEL;
+    VkBufferImageCopy region = {
+        .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .imageExtent = { one ? 1 : atomic64_width(arm), one ? 1 : atomic64_height(arm), 1 },
+    };
+    VkMemoryBarrier2 memory = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT |
+                                                 VK_ACCESS_2_MEMORY_WRITE_BIT };
+    VkDependencyInfo dependency = { .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                    .memoryBarrierCount = 1,
+                                    .pMemoryBarriers = &memory };
+
+    vkCmdPipelineBarrier2(arm->dev->cmd, &dependency);
+    if (to_image)
+        vkCmdCopyBufferToImage(arm->dev->cmd, arm->readback.buffer, arm->counters,
+                               VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+    else
+        vkCmdCopyImageToBuffer(arm->dev->cmd, arm->counters, VK_IMAGE_LAYOUT_GENERAL,
+                               arm->readback.buffer, 1, &region);
+    vkCmdPipelineBarrier2(arm->dev->cmd, &dependency);
+}
+
+/* Records one draw of an atomic64 case, after the clear of its counters
+ * with <first>, or only the copy of its counters to the readback buffer with
+ * <readback>; submits it and waits for it. Returns what the submit or the
+ * wait returned. */
+static VkResult run_atomic64(struct arm *arm, bool first, bool readback)
+{
+    const uint32_t width = atomic64_width(arm), height = atomic64_height(arm);
+    struct device *dev = arm->dev;
+    VkCommandBufferBeginInfo begin = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                                       .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+    VkSubmitInfo submit = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                            .commandBufferCount = 1,
+                            .pCommandBuffers = &dev->cmd };
+    VkRenderingAttachmentInfo color = { .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                                        .imageView = arm->view,
+                                        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                        .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE };
+    VkRenderingInfo rendering = { .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                                  .renderArea = { { 0, 0 }, { width, height } },
+                                  .layerCount = 1,
+                                  .colorAttachmentCount = 1,
+                                  .pColorAttachments = &color };
+    VkViewport viewport = { 0.0f, 0.0f, (float)width, (float)height, 0.0f, 1.0f };
+    VkRect2D scissor = { { 0, 0 }, { width, height } };
+    /* Makes the atomics of one draw visible to the next one and to the host. */
+    VkMemoryBarrier2 after = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                               .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                               .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                               .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                               VK_PIPELINE_STAGE_2_HOST_BIT,
+                               .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                                VK_ACCESS_2_HOST_READ_BIT };
+    VkDependencyInfo dependency = { .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                    .memoryBarrierCount = 1,
+                                    .pMemoryBarriers = &after };
+    uint32_t push = arm->pattern == PATTERN_EXCHANGE ? width : arm->pattern == PATTERN_ONE_TEXEL;
+    VkDeviceSize zero = 0;
+    VkResult result;
+
+    if ((result = vkResetFences(dev->device, 1, &dev->fence)) ||
+        (result = vkResetCommandBuffer(dev->cmd, 0)) ||
+        (result = vkBeginCommandBuffer(dev->cmd, &begin)))
+        return result;
+    if (readback)
+        copy_counters(arm, false);
+    else
+    {
+        if (first && arm->pattern != PATTERN_EXCHANGE) copy_counters(arm, true);
+        vkCmdBeginRendering(dev->cmd, &rendering);
+        vkCmdBindPipeline(dev->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, arm->pipeline);
+        vkCmdBindDescriptorSets(dev->cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, arm->layout, 0, 1,
+                                &arm->set, 0, NULL);
+        vkCmdPushConstants(dev->cmd, arm->layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
+                           &push);
+        vkCmdSetViewport(dev->cmd, 0, 1, &viewport);
+        vkCmdSetScissor(dev->cmd, 0, 1, &scissor);
+        vkCmdBindVertexBuffers(dev->cmd, 0, 1, &arm->vertices.buffer, &zero);
+        vkCmdDraw(dev->cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(dev->cmd);
+        vkCmdPipelineBarrier2(dev->cmd, &dependency);
+    }
+    if ((result = vkEndCommandBuffer(dev->cmd)) ||
+        (result = vkQueueSubmit(dev->queue, 1, &submit, dev->fence)))
+        return result;
+    return vkWaitForFences(dev->device, 1, &dev->fence, VK_TRUE, STRESS_FENCE_TIMEOUT_NS);
+}
+
+static double seconds_since(const struct timespec *start)
+{
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)(now.tv_sec - start->tv_sec) + (double)(now.tv_nsec - start->tv_nsec) / 1e9;
+}
+
+/* Whether every counter of an atomic64 case holds what <draws> draws add:
+ * every guard set for atomic64-exchange, one per fragment and draw on the
+ * one texel, one per draw on each texel. */
+static bool check_atomic64(const struct arm *arm, uint32_t draws, char *what, size_t size)
+{
+    const uint32_t width = atomic64_width(arm), height = atomic64_height(arm);
+    const uint64_t *values = arm->pattern == PATTERN_EXCHANGE ? arm->result.map : arm->readback.map;
+    uint64_t i;
+
+    switch (arm->pattern)
+    {
+    case PATTERN_EXCHANGE:
+        for (i = 0; i < (uint64_t)width * height; i++)
+            if (values[i] != 1 && values[i] != 2)
+            {
+                snprintf(what, size, "guard %llu is %llu, not 1 or 2", (unsigned long long)i,
+                         (unsigned long long)values[i]);
+                return false;
+            }
+        return true;
+    case PATTERN_ONE_TEXEL:
+        if (values[0] != (uint64_t)draws * width * height)
+        {
+            snprintf(what, size, "the texel is %llu, not %llu", (unsigned long long)values[0],
+                     (unsigned long long)draws * width * height);
+            return false;
+        }
+        return true;
+    case PATTERN_OWN_TEXEL:
+        for (i = 0; i < (uint64_t)width * height; i++)
+            if (values[i] != draws)
+            {
+                snprintf(what, size, "texel %llu is %llu, not %u", (unsigned long long)i,
+                         (unsigned long long)values[i], draws);
+                return false;
+            }
+        return true;
+    }
+    return false;
 }
 
 static void record_draws(struct arm *arm, VkCommandBuffer cmd, bool check)
@@ -1145,7 +1476,7 @@ static bool setup(struct arm *arm)
         struct arm *load = &loads[arm->robustness];
 
         load->dev = dev;
-        if (create_device(dev, arm->robustness) && !setup_loads(load)) dev->failed = true;
+        if (create_device(dev, arm->robustness, false) && !setup_loads(load)) dev->failed = true;
     }
     if (dev->failed) return false;
     arm->dev = dev;
@@ -1161,6 +1492,9 @@ static bool setup(struct arm *arm)
     case KIND_CHAIN:
         if (!setup_chain(arm)) return false;
         break;
+    case KIND_ATOMIC64:
+        /* Not timed: stress() runs them on a device of their own. */
+        return false;
     }
     return run(arm, true, &unused);
 }
@@ -1178,6 +1512,9 @@ static void teardown(struct arm *arm)
     if (arm->view) vkDestroyImageView(dev->device, arm->view, NULL);
     if (arm->image) vkDestroyImage(dev->device, arm->image, NULL);
     if (arm->image_memory) vkFreeMemory(dev->device, arm->image_memory, NULL);
+    if (arm->counters_view) vkDestroyImageView(dev->device, arm->counters_view, NULL);
+    if (arm->counters) vkDestroyImage(dev->device, arm->counters, NULL);
+    if (arm->counters_memory) vkFreeMemory(dev->device, arm->counters_memory, NULL);
     destroy_buffer(dev, &arm->vertices);
     destroy_buffer(dev, &arm->indices);
     destroy_buffer(dev, &arm->indirect);
@@ -1185,6 +1522,7 @@ static void teardown(struct arm *arm)
     for (i = 0; i < 4; i++) destroy_buffer(dev, &arm->sources[i]);
     for (i = 0; i < 2; i++) destroy_buffer(dev, &arm->weights[i]);
     destroy_buffer(dev, &arm->result);
+    destroy_buffer(dev, &arm->readback);
     free(arm->samples);
 }
 
@@ -1198,6 +1536,74 @@ static void destroy_device(struct device *dev)
     if (dev->fence) vkDestroyFence(dev->device, dev->fence, NULL);
     if (dev->pool) vkDestroyCommandPool(dev->device, dev->pool, NULL);
     vkDestroyDevice(dev->device, NULL);
+}
+
+/* Runs an atomic64 case on a device of its own: draws for STRESS_SECONDS,
+ * one draw per submit, then checks the counters. Prints one line and
+ * returns whether the device stayed and the counters are right. A draw that
+ * does not finish within STRESS_FENCE_TIMEOUT_NS ends the program with 1,
+ * since the device cannot be destroyed while it runs. */
+static bool stress(struct arm *arm)
+{
+    struct device *dev = &atomic64_device;
+    struct timespec start;
+    uint32_t draws = 0;
+    VkResult result = VK_SUCCESS;
+    char what[160], wrong[160] = "";
+    bool good = false;
+
+    memset(dev, 0, sizeof(*dev));
+    arm->dev = dev;
+    settings(arm, what, sizeof(what));
+    if (!create_device(dev, ROBUST_OFF, true) || !setup_atomic64(arm))
+    {
+        printf("%s %s: FAIL, could not set up\n", arm->name, what);
+        goto out;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    while (seconds_since(&start) < STRESS_SECONDS)
+    {
+        if ((result = run_atomic64(arm, !draws, false)) != VK_SUCCESS) break;
+        draws++;
+    }
+    if (result == VK_TIMEOUT)
+    {
+        printf("%s %s: FAIL, draw %u did not finish within %llu s\n", arm->name, what, draws + 1,
+               STRESS_FENCE_TIMEOUT_NS / 1000000000ull);
+        exit(1);
+    }
+    if (result == VK_ERROR_DEVICE_LOST)
+    {
+        printf("%s %s: FAIL, device lost in draw %u after %.1f s\n", arm->name, what, draws + 1,
+               seconds_since(&start));
+        goto out;
+    }
+    if (result != VK_SUCCESS)
+    {
+        printf("%s %s: FAIL, draw %u returned %d\n", arm->name, what, draws + 1, (int)result);
+        goto out;
+    }
+    if (arm->pattern != PATTERN_EXCHANGE && (result = run_atomic64(arm, false, true)) != VK_SUCCESS)
+    {
+        printf("%s %s: FAIL, the readback returned %d\n", arm->name, what, (int)result);
+        goto out;
+    }
+    if (!check_atomic64(arm, draws, wrong, sizeof(wrong)))
+    {
+        printf("%s %s: FAIL, %u draws in %.1f s, but %s\n", arm->name, what, draws,
+               seconds_since(&start), wrong);
+        goto out;
+    }
+    printf("%s %s: ok, %u draws in %.1f s without device loss\n", arm->name, what, draws,
+           seconds_since(&start));
+    good = true;
+
+out:
+    teardown(arm);
+    destroy_device(dev);
+    /* So that main's teardown passes over the arm. */
+    arm->dev = NULL;
+    return good;
 }
 
 static int compare(const void *a, const void *b)
@@ -1344,8 +1750,11 @@ int main(int argc, char **argv)
             return 2;
         }
     }
+    /* The atomic64 cases run only when named: they draw for STRESS_SECONDS
+     * each, and a lost device can take other processes' work on the GPU
+     * with it. */
     if (!any_case)
-        for (i = 0; i < ARM_COUNT; i++) arms[i].selected = true;
+        for (i = 0; i < ARM_COUNT; i++) arms[i].selected = arms[i].kind != KIND_ATOMIC64;
 
     if (!(loader = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL)))
     {
@@ -1374,7 +1783,7 @@ int main(int argc, char **argv)
     for (i = 0; i < ARM_COUNT; i++)
     {
         struct arm *arm = &arms[i];
-        if (!arm->selected) continue;
+        if (!arm->selected || arm->kind == KIND_ATOMIC64) continue;
         if (!setup(arm))
         {
             char what[160];
@@ -1412,6 +1821,10 @@ int main(int argc, char **argv)
 
     for (i = 0; i < ARM_COUNT; i++)
         if (arms[i].ready) report(&arms[i], rounds);
+
+    for (i = 0; i < ARM_COUNT; i++)
+        if (arms[i].selected && arms[i].kind == KIND_ATOMIC64 && !stress(&arms[i]))
+            failed = true;
 
     for (i = 0; i < ARM_COUNT; i++) teardown(&arms[i]);
     for (i = 0; i < ROBUST_COUNT; i++)
