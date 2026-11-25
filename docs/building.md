@@ -52,7 +52,7 @@ scripts also run alone ([commands](internals.md#commands)).
 | [`release-notes/`](../release-notes) | The notes the app's update window shows, one file per release ([README](../release-notes/README.md)) |
 | [`smoke/`](../smoke) | The programs the bundle step builds and runs to check the bundle |
 | [`bench/`](../bench) | Benchmarks run by hand: [`kk.sh`](../bench/kk.sh) times KosmicKrisp ([Vulkan](internals.md#vulkan)), [`zink.sh`](../bench/zink.sh) a shadow map pass on Zink ([OpenGL](internals.md#opengl)), [`gfxr-replay.sh`](../bench/gfxr-replay.sh) the frames of a Vulkan capture, or writes them as images ([Vulkan capture](internals.md#vulkan-capture)) |
-| [`licenses/`](../licenses) | The licence texts the bundle step installs |
+| [`licenses/`](../licenses) | The licence texts the bundle step and Mach9.app install that no pinned tree or package carries |
 | [`signing/`](../signing) | The loader's provisioning profile |
 | [`docs/`](.) | The documentation the README links to |
 
@@ -105,7 +105,7 @@ The libraries built here that configure finds are described with them:
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
 | `share/vulkan/explicit_layer.d/` | GFXReconstruct's layer manifest, naming the layer in `lib/external/` the same way; the loader reads it only for a process compatdb.so gives `vulkan_capture` ([Vulkan capture](internals.md#vulkan-capture)) |
 | `share/wine/fonts/` | Wine's fonts and the [icon font](internals.md#icon-font) |
-| `share/licenses/` | The licences of the [icon font](internals.md#icon-font) and of GFXReconstruct's layer ([Vulkan capture](internals.md#vulkan-capture)) |
+| `share/licenses/` | The licence texts of what the bundle ships, most in a directory per component ([licences](internals.md#licences)) |
 
 What the Direct3D trees and the default directories hold, and why, is in
 [Direct3D trees](maintenance.md#direct3d-trees).
@@ -119,8 +119,10 @@ make -C launcher install                       # the launcher's parts into an in
 ```
 
 - `app` assembles the bundle from nothing: the Wine runtime, the launcher,
-  the Dock tile plug-in, Sparkle, the icon and the Info.plist. It refuses a
-  Wine tree with development files.
+  the Dock tile plug-in, Sparkle, the icon, the Info.plist and, in
+  `Contents/Resources/licenses`, the licence texts of the launcher's parts
+  ([licences](internals.md#licences)). It refuses a Wine tree with
+  development files.
 - `install` is for development. It replaces the launcher's parts in an
   existing bundle (`APP=` names another than the one in `/Applications`)
   and signs it with the Developer ID identity in the keychain.

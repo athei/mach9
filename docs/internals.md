@@ -898,6 +898,33 @@ the icons draw as boxes.
 - Its licences are in [`licenses/`](../licenses), installed into
   `share/licenses/`.
 
+## Licences
+
+The bundle and Mach9.app carry the licence texts of what they ship, taken
+from the trees and packages that ship it, so a text follows its pin.
+
+- A component script stages the texts of its component, and of what the
+  component links statically, out of its pinned tree into its dist's
+  `share/licenses/<component>/`, from the list in the script.
+  `stage_licenses` in [`licenses.sh`](../bin/lib/licenses.sh) copies them
+  and stops the build when one is gone; a text that is only in a file
+  header is cut out of it.
+- Step 4c of [`bundle-wine.sh`](../bin/bundle-wine.sh) installs those
+  directories and the texts of what the bundle takes from elsewhere: the
+  Wine source, downloads, llvm-mingw, the kegs of the Homebrew libraries
+  Step 3 copies, and the crates of `compatdb.so`
+  ([`rust-licenses.sh`](../bin/rust-licenses.sh)). Its comment is the list.
+  The preflight refuses a dist without its texts, a text Step 4c cannot
+  find stops it, and Step 5 checks they are in place. Step 4c names each
+  text the build scripts stage (`DIST_LICENSES`) and each crate of
+  `compatdb.so` (`COMPATDB_CRATES`), so one dropped from a list fails
+  Step 5.
+- `make app` and `make install` put the texts of the launcher's parts into
+  `Contents/Resources/licenses` (`APP_LICENSES` in the
+  [`Makefile`](../launcher/Makefile)).
+- [`licenses/`](../licenses) holds only texts no tree or package carries,
+  each naming where it comes from.
+
 ## Loader app
 
 The loader needs `com.apple.developer.cross-architecture-support`, and Wine
@@ -965,11 +992,11 @@ validation layers and the llvm-mingw compilers.
 
 | Checks | Where |
 |--------|-------|
-| macOS SDK, formulae, Wine SDK, each staged component current against its pin or `*_REF` (which needs the network), on a Mac with a Metal 4 GPU the validation layers at their pin, llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
+| macOS SDK, formulae, Wine SDK, each staged component current against its pin or `*_REF` (which needs the network) and with its [licences](#licences), on a Mac with a Metal 4 GPU the validation layers at their pin, llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
 | No function of FEX's DLLs stores into the stack slot where its prologue saved a callee-saved register ([FEX](maintenance.md#fex)) | Step 4d: `check_fex_save_slots`, [`check-save-slots.pl`](../bin/check-save-slots.pl) |
 | Inherited `com.apple.quarantine` removed, nothing else | Step 4f |
 | No reference to `LEAK_PREFIXES`, no `@rpath` dependency outside the bundle, every dylib loads ([`smoke/dlopen.c`](../smoke/dlopen.c)), GStreamer loads only from the bundle | `check_no_leaks`, `check_rpath_deps`, `check_dylibs_load`, `check_gstreamer` |
-| Copied-in components in place, the [icon font](#icon-font)'s aliases in `wine.inf`, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
+| Copied-in components and their [licences](#licences) in place, the [icon font](#icon-font)'s aliases in `wine.inf`, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
 | No PE debug sections or symbol tables (stripped by Step 4e; `--keep-symbols` skips the stripping in Step 4e, and Step 5 reports the count of files with symbols instead of failing), no dangling symlinks | Step 5 |
 | Vulkan driver and manifest, EGL with Zink, ntdll's compatdb hooks | `check_vulkan`, `check_egl`, `check_compat_hooks` |
 | `wine.app` signature, entitlements and `Info.plist` | `check_loader_app` |

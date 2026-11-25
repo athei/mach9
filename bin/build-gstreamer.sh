@@ -19,6 +19,10 @@ set -e
 #                             relative to the file
 #   lib/glib-2.0/include/, include/
 #                             the headers winegstreamer is compiled with
+#   share/licenses/gstreamer/ the licences of GStreamer's modules and of
+#                             glib, FFmpeg and what they link statically,
+#                             out of the clone and its subprojects, which
+#                             the bundle step installs
 #   FFMPEG_COMMIT             the commit of GStreamer's FFmpeg port
 #   KEY                       what the dist was built from
 #                             (dist_key in profile.sh)
@@ -73,6 +77,8 @@ done
 . "$SCRIPT_DIR/lib/profile.sh"
 # shellcheck source=../pins/redist.env
 . "$PINS_DIR/redist.env"
+# shellcheck source=lib/licenses.sh
+. "$SCRIPT_DIR/lib/licenses.sh"
 
 if [ -z "$GSTREAMER_GIT_COMMIT" ] || [ -z "$GSTREAMER_FFMPEG_GIT_COMMIT" ]; then
     echo "Error: redist.env pins no GSTREAMER_GIT_COMMIT or GSTREAMER_FFMPEG_GIT_COMMIT"
@@ -175,7 +181,7 @@ GST_KEY_INPUTS="ffmpeg=$GSTREAMER_FFMPEG_GIT_COMMIT floor=$MACOS_FLOOR"
 GST_KEY_INPUTS+=" meson=$MESON_VERSION python=$MESON_PYTHON ninja=$("$NINJA" --version)"
 GST_KEY_INPUTS+=" cc=$(cc_version /usr/bin/clang) $(sdk_key)"
 gstreamer_key() {
-    dist_key "$SCRIPT_DIR/build-gstreamer.sh" "gstreamer=$1" "$GST_KEY_INPUTS"
+    dist_key --hash "$SCRIPT_DIR/lib/licenses.sh" "$SCRIPT_DIR/build-gstreamer.sh" "gstreamer=$1" "$GST_KEY_INPUTS"
 }
 print_dist_key "$GSTREAMER_GIT_COMMIT" redist.env gstreamer_key
 
@@ -658,6 +664,42 @@ for plugin in "${PLUGINS[@]}"; do
 done
 echo "    ${#LIBS[@]} libraries and ${#PLUGINS[@]} plugins: arm64, minos at most $MACOS_FLOOR,"
 echo "    system libraries and each other by @loader_path only"
+
+# The licence texts of what the libraries and plugins are built from, as
+# <staged name>=<source in the clone> (stage_licenses in licenses.sh): the
+# GStreamer modules the plugins come from, FFmpeg (LGPL, as its config.h
+# says above), glib with the SPDX texts its files name, libffi, and pcre2
+# and proxy-libintl, which are linked statically into glib and GStreamer.
+# The wraps of the last four unpack into a directory their .wrap file names.
+# wrap_dir <wrap>: print that directory, or exit.
+wrap_dir() {
+    local dir
+    dir=$(sed -n 's/^directory *= *//p' "$GST_SRC/subprojects/$1.wrap")
+    if [ -z "$dir" ] || [ ! -d "$GST_SRC/subprojects/$dir" ]; then
+        echo "Error: $GST_SRC/subprojects/$1.wrap names no directory the setup unpacked" >&2
+        exit 1
+    fi
+    echo "$dir"
+}
+GLIB_DIR=$(wrap_dir glib)
+LIBFFI_DIR=$(wrap_dir libffi)
+PCRE2_DIR=$(wrap_dir pcre2)
+INTL_DIR=$(wrap_dir proxy-libintl)
+LICENSES="gstreamer.txt=subprojects/gstreamer/COPYING
+gst-plugins-base.txt=subprojects/gst-plugins-base/COPYING
+gst-plugins-good.txt=subprojects/gst-plugins-good/COPYING
+gst-plugins-ugly.txt=subprojects/gst-plugins-ugly/COPYING
+gst-plugins-bad.txt=subprojects/gst-plugins-bad/COPYING
+gst-libav.txt=subprojects/gst-libav/COPYING
+ffmpeg.md=subprojects/FFmpeg/LICENSE.md
+ffmpeg-COPYING.LGPLv2.1=subprojects/FFmpeg/COPYING.LGPLv2.1
+glib.txt=subprojects/$GLIB_DIR/COPYING
+glib-LICENSES=subprojects/$GLIB_DIR/LICENSES
+libffi.txt=subprojects/$LIBFFI_DIR/LICENSE
+pcre2.md=subprojects/$PCRE2_DIR/LICENCE.md
+proxy-libintl.txt=subprojects/$INTL_DIR/COPYING"
+stage_licenses "$GST_SRC" "$part/share/licenses/gstreamer" "$LICENSES"
+echo "    licences: $(cd "$part/share/licenses/gstreamer" && echo *)"
 
 echo "$GSTREAMER_FFMPEG_GIT_COMMIT" > "$part/FFMPEG_COMMIT"
 gstreamer_key "$GSTREAMER_GIT_COMMIT" > "$part/KEY"

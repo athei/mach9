@@ -9,6 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # The Wine tests a full bundle carries (WINE_TESTS).
 # shellcheck source=lib/wine-tests.sh
 . "$SCRIPT_DIR/lib/wine-tests.sh"
+# stage_licenses, for the licence texts Step 4c installs.
+# shellcheck source=lib/licenses.sh
+. "$SCRIPT_DIR/lib/licenses.sh"
 CACHE_DIR="${CACHE_DIR:-$ROOT/cache}"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
@@ -475,6 +478,82 @@ rpath_dep_source() {
         esac
     done < <(rpath_entries "$src")
     echo "$DEPS_PREFIX/lib/$name"
+}
+
+# install_keg_licenses <library>...: for each library under DEPS_PREFIX, the
+# Homebrew libraries Step 3 copied from where they are installed, copy the
+# licence files at the top of its keg (DEPS_PREFIX/Cellar/<formula>/<version>,
+# where the library's path leads once its symlinks are resolved) into
+# share/licenses/homebrew/<formula>/, once per formula, and add that
+# directory to LICENSE_WANT. A formula KEG_PINNED_LICENSES names also gets
+# the texts from this repository's licenses/ that its keg lacks, with a
+# warning when the keg, without Homebrew's _<n> revision, is at another
+# version than the one a text was pinned from. Other paths are skipped.
+# Exits on a library outside a keg and on a keg without a licence file.
+#
+# KEG_PINNED_LICENSES, as <formula>:<version>:<file in licenses/>: freetype's
+# LICENSE.TXT names docs/FTL.TXT, the licence the bundle uses it under, which
+# its keg does not carry, and the FTL asks the distribution's documentation
+# for a credit line (freetype-credit.txt); gettext's keg has only gettext's
+# GPL-3 COPYING, not the LGPL of its libintl, which the bundle carries for
+# libidn2.
+KEG_PINNED_LICENSES="freetype:2.15.0:freetype-FTL.TXT freetype:2.15.0:freetype-credit.txt
+gettext:1.0:gettext-libintl-COPYING.LIB"
+install_keg_licenses() {
+    local lib real rest formula version upstream keg dest f found entry pinned done_formulae=""
+    for lib in "$@"; do
+        case "$lib" in
+            "$DEPS_PREFIX"/*) ;;
+            *) continue ;;
+        esac
+        real=$(realpath "$lib")
+        rest=${real#"$DEPS_PREFIX/Cellar/"}
+        if [ "$rest" = "$real" ] || [ "${rest#*/*/}" = "$rest" ]; then
+            echo "Error: $lib is not in a keg under $DEPS_PREFIX/Cellar, where its licence would be"
+            exit 1
+        fi
+        formula=${rest%%/*}
+        rest=${rest#*/}
+        version=${rest%%/*}
+        keg="$DEPS_PREFIX/Cellar/$formula/$version"
+        in_list "$formula" "$done_formulae" && continue
+        done_formulae="$done_formulae $formula"
+        dest="$LICENSES_DIR/homebrew/$formula"
+        mkdir -p "$dest"
+        found=""
+        for f in "$keg"/*; do
+            case "$(basename "$f" | tr '[:upper:]' '[:lower:]')" in
+                licen[cs]e*|copying*|copyright*|notice*)
+                    if [ -f "$f" ] && [ -s "$f" ]; then
+                        cp "$f" "$dest/"
+                        found="$found $(basename "$f")"
+                    fi
+                    ;;
+            esac
+        done
+        if [ -z "$found" ]; then
+            echo "Error: the keg $keg of $(basename "$lib") has no licence file"
+            exit 1
+        fi
+        echo "    share/licenses/homebrew/$formula:$found"
+        LICENSE_WANT+=("share/licenses/homebrew/$formula")
+        for entry in $KEG_PINNED_LICENSES; do
+            [ "${entry%%:*}" = "$formula" ] || continue
+            pinned=${entry##*:}
+            stage_licenses "$REPO_DIR/licenses" "$dest" "$pinned=$pinned"
+            LICENSE_WANT+=("share/licenses/homebrew/$formula/$pinned")
+            echo "    share/licenses/homebrew/$formula: $pinned (licenses/)"
+            entry=${entry#*:}
+            upstream=$version
+            if [[ "$version" =~ ^(.+)_[0-9]+$ ]]; then
+                upstream=${BASH_REMATCH[1]}
+            fi
+            if [ "${entry%%:*}" != "$upstream" ]; then
+                echo "  WARNING: licenses/$pinned is from $formula ${entry%%:*}, the keg is $version;"
+                echo "  check it against the new version (docs/maintenance.md, upgrade checklist)"
+            fi
+        done
+    done
 }
 
 # check_rpath_deps <dylib>...: report every @rpath dependency of the dylibs
@@ -2378,6 +2457,20 @@ check_no_d3d12() {
     echo "    $arch, $label: dxgi.dll loads, d3d12.dll does not (error 126)"
 }
 
+# check_dist_licenses <dist> <script> <component>...: exit unless <script>
+# staged the licence texts of each <component> in <dist>/share/licenses/,
+# which Step 4c installs. A dist staged before its script did so has none.
+check_dist_licenses() {
+    local dist="$1" script="$2" c
+    shift 2
+    for c in "$@"; do
+        if [ -z "$(find "$dist/share/licenses/$c" -type f -size +0 2>/dev/null)" ]; then
+            echo "Error: $dist has no licences in share/licenses/$c (run $script)"
+            exit 1
+        fi
+    done
+}
+
 # check_fex_build: exit unless build-fex.sh staged all of FEX in FEX_DIST
 # from the commit FEX_REF (fex-src.ref unless the environment sets it) names
 # now: the COMMIT it wrote last. Needs the network, to resolve a branch or
@@ -2406,6 +2499,7 @@ check_fex_build() {
             exit 1
         fi
     done
+    check_dist_licenses "$FEX_DIST" build-fex.sh fex
     echo "  FEX: $built"
 }
 
@@ -2452,6 +2546,7 @@ check_mesa_build() {
         exit 1
     fi
     MESA_GALLIUM=${gallium[0]}
+    check_dist_licenses "$MESA_DIST" build-mesa.sh mesa vulkan-loader vulkan-headers
     echo "  Mesa: $built, Vulkan loader $VULKAN_LOADER_GIT_TAG, $MESA_GALLIUM"
 }
 
@@ -2498,6 +2593,7 @@ check_gstreamer_build() {
             exit 1
         fi
     done
+    check_dist_licenses "$GSTREAMER_DIST" build-gstreamer.sh gstreamer
     echo "  GStreamer: $GSTREAMER_GIT_TAG ($built), FFmpeg $GSTREAMER_FFMPEG_GIT_COMMIT"
 }
 
@@ -2767,6 +2863,7 @@ check_dxmt_build() {
             exit 1
         fi
     done
+    check_dist_licenses "$DXMT_DIST" build-dxmt.sh dxmt
     echo "  DXMT: $describe ($built)"
 }
 
@@ -2800,6 +2897,7 @@ check_vkd3d_proton_build() {
             exit 1
         fi
     done
+    check_dist_licenses "$VKD3D_PROTON_DIST" build-vkd3d-proton.sh vkd3d-proton
     echo "  vkd3d-proton: $(cat "$VKD3D_PROTON_DIST/DESCRIBE") ($built)"
 }
 
@@ -3324,6 +3422,27 @@ if [ ! -x "$MINGW_DIR/bin/llvm-readobj" ]; then
     echo "Error: no llvm-readobj in $MINGW_DIR/bin (Step 4 needs it to tell ARM64X DLLs for the markers)"
     exit 1
 fi
+# The mingw-w64 texts llvm-mingw installs for each target, the same for
+# every one (its build-mingw-w64.sh): the notices of the CRT parts that a
+# binary links, winpthreads' licence and mingw-w64's own (ZPL), as
+# <staged name>=<file in MINGW_LICENSE_DIR> for stage_licenses.
+MINGW_LICENSE_DIR=aarch64-w64-mingw32/share/mingw32
+MINGW_LICENSES="COPYING.MinGW-w64-runtime.txt=COPYING.MinGW-w64-runtime.txt
+COPYING.winpthreads.txt=COPYING.winpthreads.txt
+COPYING.mingw-w64=COPYING"
+# The licence texts Step 4c takes from outside the staged dists. Those of
+# mtld3d's tarball, the Homebrew kegs and the crates are checked there.
+MINGW_LICENSE_FILES=()
+for f in $MINGW_LICENSES; do
+    MINGW_LICENSE_FILES+=("$MINGW_DIR/$MINGW_LICENSE_DIR/${f#*=}")
+done
+for f in "$WINE_SRC/LICENSE" "$WINE_SRC/COPYING.LIB" "$WINE_SRC/NOTICES.md" \
+         "$MINGW_DIR/LICENSE.TXT" "$REPO_DIR/LICENSE" "${MINGW_LICENSE_FILES[@]}"; do
+    if [ ! -s "$f" ]; then
+        echo "Error: no licence text $f (Step 4c installs it)"
+        exit 1
+    fi
+done
 loader_preflight
 
 time_mark "Step 0: Clean previous bundle"
@@ -3944,18 +4063,100 @@ time_mark "Step 4b: Compat database"
 echo "==> Step 4b: Compat database"
 build_compatdb
 
-# ── Step 4c: Icon font ──────────────────────────────────────────────────
+# ── Step 4c: Icon font and licences ─────────────────────────────────────
 # Windows' icon fonts, which programs name for their window controls and
 # toolbars, have no copy in Wine. This replacement goes into the data
 # directory: win32u loads every font there and lists it in the Fonts key
 # dwrite reads. wine.inf aliases the Windows names to its family.
-time_mark "Step 4c: Icon font"
-echo "==> Step 4c: Icon font"
+time_mark "Step 4c: Icon font and licences"
+echo "==> Step 4c: Icon font and licences"
 ICON_FONT="share/wine/fonts/$(basename "$ICON_FONT_TTF")"
 ICON_FONT_LICENSE="share/licenses/uno-fluent-icons.txt"
-mkdir -p "$WINE_DIR/share/wine/fonts" "$WINE_DIR/share/licenses"
+LICENSES_DIR="$WINE_DIR/share/licenses"
+mkdir -p "$WINE_DIR/share/wine/fonts" "$LICENSES_DIR"
 cp "$ICON_FONT_TTF" "$WINE_DIR/$ICON_FONT"
 cp "$REPO_DIR/licenses/uno-fluent-icons.txt" "$WINE_DIR/$ICON_FONT_LICENSE"
+
+# The licence texts of everything else the bundle ships, one directory per
+# component in share/licenses (GFXReconstruct's are in Step 3c):
+#  - wine/: Wine's licence and NOTICES.md, the notices of the code Wine
+#    imported (its libs/ among them), from WINE_SRC, which the build is of.
+#  - fex/, mesa/, vulkan-loader/, vulkan-headers/, gstreamer/, dxmt/,
+#    vkd3d-proton/: what each build script staged out of its pinned tree,
+#    with those of what the component links statically (the preflight
+#    checked they are there).
+#  - mtld3d/: the LICENSE of its release tarball.
+#  - llvm-mingw/: the licence of the LLVM runtime (libc++, libunwind,
+#    compiler-rt) and the mingw-w64 texts (MINGW_LICENSES) of the CRT and
+#    winpthreads, which llvm-mingw links into the PE files built outside
+#    Wine (vkd3d-proton links winpthreads).
+#  - homebrew/<formula>/: the licence files at the top of the keg of each
+#    Homebrew library Step 3 copied (install_keg_licenses).
+#  - mach9/ and compatdb/: Mach9's own licence, which covers compatdb.so,
+#    and those of Rust's standard library and the crates compatdb.so is
+#    built from (bin/rust-licenses.sh).
+# LICENSE_WANT collects the texts and directories Step 5 checks.
+#
+# DIST_LICENSES names, by its staged name, every text the build scripts'
+# lists stage (and DXMT's llvm.txt), so a text dropped from a list fails
+# Step 5; a new entry in a list goes here too. COMPATDB_CRATES names the
+# crates compatdb.so is built from, whose directories rust-licenses.sh names
+# <crate>-<version>; a change to compatdb's dependencies goes here too.
+DIST_LICENSES="fex/fex.txt fex/cephes.txt fex/fmt.txt fex/range-v3.txt
+fex/rpmalloc.txt fex/softfloat.txt fex/tiny-json.txt fex/unordered_dense.txt
+fex/xxhash.txt
+mesa/license.rst mesa/licenses
+vulkan-loader/LICENSE.txt vulkan-loader/LICENSES
+vulkan-headers/LICENSE.md vulkan-headers/LICENSES
+gstreamer/gstreamer.txt gstreamer/gst-plugins-base.txt
+gstreamer/gst-plugins-good.txt gstreamer/gst-plugins-ugly.txt
+gstreamer/gst-plugins-bad.txt gstreamer/gst-libav.txt gstreamer/ffmpeg.md
+gstreamer/ffmpeg-COPYING.LGPLv2.1 gstreamer/glib.txt gstreamer/glib-LICENSES
+gstreamer/libffi.txt gstreamer/pcre2.md gstreamer/proxy-libintl.txt
+dxmt/LICENSE dxmt/COPYING.LIB dxmt/LICENSE.OLD dxmt/dxvk.LICENSE
+dxmt/dxbcparser.txt dxmt/llvm.txt
+vkd3d-proton/LICENSE vkd3d-proton/COPYING vkd3d-proton/dxil-spirv.txt
+vkd3d-proton/dxbc-spirv.txt vkd3d-proton/glslang-spvbuilder.txt
+vkd3d-proton/bc-decoder.txt vkd3d-proton/spirv-headers.txt
+vkd3d-proton/dxil-spirv-spirv-headers.txt
+vkd3d-proton/dxbc-spirv-spirv-headers.txt vkd3d-proton/vulkan-headers.md
+vkd3d-proton/vulkan-headers-LICENSES"
+COMPATDB_CRATES="libc mach2"
+LICENSE_WANT=()
+stage_licenses "$WINE_SRC" "$LICENSES_DIR/wine" "LICENSE=LICENSE
+COPYING.LIB=COPYING.LIB
+NOTICES.md=NOTICES.md"
+LICENSE_WANT+=("share/licenses/wine/LICENSE" "share/licenses/wine/COPYING.LIB" "share/licenses/wine/NOTICES.md")
+for entry in "$FEX_DIST:fex" "$MESA_DIST:mesa" "$MESA_DIST:vulkan-loader" \
+             "$MESA_DIST:vulkan-headers" "$GSTREAMER_DIST:gstreamer" \
+             "$DXMT_DIST:dxmt" "$VKD3D_PROTON_DIST:vkd3d-proton"; do
+    cp -R "${entry%%:*}/share/licenses/${entry#*:}" "$LICENSES_DIR/"
+done
+for rel in $DIST_LICENSES; do
+    LICENSE_WANT+=("share/licenses/$rel")
+done
+if in_list mtld3d "$D3D9_IMPLS"; then
+    stage_licenses "$TMP_DIR/mtld3d" "$LICENSES_DIR/mtld3d" "LICENSE=LICENSE"
+    LICENSE_WANT+=("share/licenses/mtld3d/LICENSE")
+fi
+stage_licenses "$MINGW_DIR" "$LICENSES_DIR/llvm-mingw" "LICENSE.TXT=LICENSE.TXT"
+stage_licenses "$MINGW_DIR/$MINGW_LICENSE_DIR" "$LICENSES_DIR/llvm-mingw" "$MINGW_LICENSES"
+LICENSE_WANT+=("share/licenses/llvm-mingw/LICENSE.TXT")
+for f in $MINGW_LICENSES; do
+    LICENSE_WANT+=("share/licenses/llvm-mingw/${f%%=*}")
+done
+install_keg_licenses "${WALK[@]}"
+stage_licenses "$REPO_DIR" "$LICENSES_DIR/mach9" "LICENSE=LICENSE"
+LICENSE_WANT+=("share/licenses/mach9/LICENSE")
+"$SCRIPT_DIR/rust-licenses.sh" "$LICENSES_DIR/compatdb" "$RUST_TARGET" compatdb
+LICENSE_WANT+=("share/licenses/compatdb/rust-std/COPYRIGHT-library.html")
+# A crate rust-licenses.sh did not stage leaves the pattern itself in
+# LICENSE_WANT, which Step 5 then reports.
+for crate in $COMPATDB_CRATES; do
+    for d in "$LICENSES_DIR/compatdb/$crate"-[0-9]*; do
+        LICENSE_WANT+=("share/licenses/compatdb/${d##*/}")
+    done
+done
 
 # ── Step 4d: FEX ────────────────────────────────────────────────────────
 # FEX as build-fex.sh staged it in FEX_DIST, as the preflight checked: its
@@ -4109,7 +4310,8 @@ WANT=("lib/wine/$UNIX_DIR/compatdb.so"
       "$ICON_FONT" "$ICON_FONT_LICENSE"
       "lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine"
       "lib/wine/$UNIX_DIR/wine.app/Contents/Info.plist"
-      "lib/wine/$UNIX_DIR/wine.app/Contents/embedded.provisionprofile")
+      "lib/wine/$UNIX_DIR/wine.app/Contents/embedded.provisionprofile"
+      "${LICENSE_WANT[@]}")
 if in_list dxmt "$DXGI_IMPLS"; then
     WANT+=("lib/wine/$UNIX_DIR/winemetal.so"
            "lib/wine/dxgi/dxmt/$PE64_DIR/dxgi.dll"

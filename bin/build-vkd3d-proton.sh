@@ -10,6 +10,9 @@ set -e
 #
 #   aarch64-windows/{d3d12,d3d12core}.dll   ARM64X
 #   i386-windows/{d3d12,d3d12core}.dll      i386
+#   share/licenses/vkd3d-proton/
+#                the licences of vkd3d-proton and of the submodules it
+#                compiles in (LICENSES below), which the bundle step installs
 #   KEY          what the dist was built from (dist_key in profile.sh)
 #   COMMIT       the source commit
 #   DESCRIBE     its `git describe --tags`, the version vkd3d-proton's build
@@ -68,6 +71,26 @@ done
 # whose winebuild marks the DLLs.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
+# shellcheck source=lib/licenses.sh
+. "$SCRIPT_DIR/lib/licenses.sh"
+
+# The licence texts of what the DLLs are built from, as <staged
+# name>=<source in the checkout> (stage_licenses in licenses.sh):
+# vkd3d-proton's own, dxil-spirv and its dxbc-spirv, the two files of
+# third_party that dxil-spirv's meson.build compiles, whose licences are in
+# their headers (glslang's SpvBuilder and the LLVM bitcode decoder), and the
+# Khronos headers the shaders and converters compile in.
+LICENSES="LICENSE=LICENSE
+COPYING=COPYING
+dxil-spirv.txt=subprojects/dxil-spirv/LICENSE.MIT
+dxbc-spirv.txt=subprojects/dxil-spirv/subprojects/dxbc-spirv/LICENSE
+glslang-spvbuilder.txt=notice:subprojects/dxil-spirv/third_party/glslang-spirv/SpvBuilder.cpp
+bc-decoder.txt=notice:subprojects/dxil-spirv/third_party/bc-decoder/llvm_decoder.cpp
+spirv-headers.txt=khronos/SPIRV-Headers/LICENSE
+dxil-spirv-spirv-headers.txt=subprojects/dxil-spirv/third_party/spirv-headers/LICENSE
+dxbc-spirv-spirv-headers.txt=subprojects/dxil-spirv/subprojects/dxbc-spirv/submodules/spirv_headers/LICENSE
+vulkan-headers.md=khronos/Vulkan-Headers/LICENSE.md
+vulkan-headers-LICENSES=khronos/Vulkan-Headers/LICENSES"
 
 if [ -z "$VKD3D_PROTON_REF" ]; then
     echo "Error: $PINS_DIR/vkd3d-proton-src.ref is empty"
@@ -101,7 +124,7 @@ fi
 # As there, the Wine commit is not part of it: the DLLs link nothing of
 # Wine.
 vkd3d_proton_key() {
-    dist_key "$SCRIPT_DIR/build-vkd3d-proton.sh" "vkd3d-proton=$1" \
+    dist_key --hash "$SCRIPT_DIR/lib/licenses.sh" "$SCRIPT_DIR/build-vkd3d-proton.sh" "vkd3d-proton=$1" \
         "$(mingw_key)" "glslang=$(cc_version "$GLSLANG")"
 }
 VKD3D_PROTON_WANT=$(src_ref_commit "$VKD3D_PROTON_REF" "$VKD3D_PROTON_REPO")
@@ -273,6 +296,9 @@ for dll in $PE_DLLS; do
     done
     echo "    $dll.dll: ARM64X and i386, Wine builtins, export $syms"
 done
+
+stage_licenses "$VKD3D_PROTON_SRC" "$part/share/licenses/vkd3d-proton" "$LICENSES"
+echo "    licences: $(cd "$part/share/licenses/vkd3d-proton" && echo *)"
 
 echo "$VKD3D_PROTON_DESCRIBE" > "$part/DESCRIBE"
 wine_src_commit > "$part/WINE_COMMIT"

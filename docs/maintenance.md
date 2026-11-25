@@ -369,7 +369,9 @@ branches read `main`'s caches and write none.
 - The LLVM key does not change with how `build-dxmt.sh` builds LLVM. To
   rebuild it after such a change, delete the `dxmt-llvm15-*` caches
   (`gh cache list --key dxmt-llvm15-`, then `gh cache delete <id>`) or
-  change the pin.
+  change the pin. A cache saved before `build-dxmt.sh` kept LLVM's licence
+  in it makes every run that builds DXMT fetch the licence alone; deleting
+  it saves that.
 - A new download pinned in `redist.env` that `bundle-wine.sh` or
   `bin/ci/llvm-mingw.sh` keeps in `CACHE_DIR` needs its prefix added to the
   `pins-key.sh` call for the downloads cache in `release.yml`. Sparkle is
@@ -524,6 +526,19 @@ setting; the bundle step checks the `force_nx` and `opengl` hooks
 
 ## Upgrade checklist
 
+- A component script stops when a licence text its list names is gone from
+  the new tree, `bundle-wine.sh` when a Homebrew keg has none, and
+  `rust-licenses.sh` when a crate publishes none. A library a component
+  starts to link statically needs its text added to the list and to
+  `DIST_LICENSES` in `bundle-wine.sh`; a change to compatdb's crates
+  changes `COMPATDB_CRATES` there ([licences](internals.md#licences)).
+- Each file in [`licenses/`](../licenses) names its source and version in
+  its header. Refresh a file when its source moves. `KEG_PINNED_LICENSES` in
+  `bundle-wine.sh` lists the files that belong to a Homebrew keg; the bundle
+  step warns when the keg's version differs. The mingw-w64 texts are not
+  pinned: they come from llvm-mingw's install (`MINGW_LICENSES` in
+  `bundle-wine.sh`), so an llvm-mingw bump needs a change only when the
+  preflight no longer finds them.
 - `macdrv_functions` is a private contract with no version field. winemac
   asserts the layout of its function table and window data (in
   [`dlls/winemac.drv/window.c`](https://github.com/athei/wine/blob/arm64-patched/dlls/winemac.drv/window.c));

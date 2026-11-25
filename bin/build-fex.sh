@@ -18,6 +18,9 @@ set -e
 #
 #   aarch64-windows/{libwow64fex,libarm64ecfex}.dll
 #   aarch64-unix/{libwow64fex,libarm64ecfex}.so
+#   share/licenses/fex/
+#            the licences of FEX and of the externals it links (LICENSES
+#            below), out of the checkout, which the bundle step installs
 #   KEY      what the dist was built from (dist_key in profile.sh)
 #   COMMIT   the source commit
 #
@@ -42,6 +45,24 @@ done
 # trees go and pins the floor of the unix half.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
+# shellcheck source=lib/licenses.sh
+. "$SCRIPT_DIR/lib/licenses.sh"
+
+# The licence texts of what the staged files are built from, as
+# <staged name>=<source in the checkout> (stage_licenses in licenses.sh):
+# FEX's own and those of the externals the three trees compile in, which
+# are the External/ directories their build files name. SoftFloat has its
+# licence in its file headers only. Catch2, vixl, zydis, tracy, jemalloc and
+# the headers under External/ are not compiled into the staged files.
+LICENSES="fex.txt=LICENSE
+cephes.txt=External/cephes/LICENSE
+fmt.txt=External/fmt/LICENSE
+range-v3.txt=External/range-v3/LICENSE.txt
+rpmalloc.txt=External/rpmalloc/LICENSE
+softfloat.txt=notice:External/SoftFloat-3e/include/SoftFloat-3e/softfloat.h
+tiny-json.txt=External/tiny-json/LICENSE
+unordered_dense.txt=External/unordered_dense/LICENSE
+xxhash.txt=External/xxhash/LICENSE"
 
 if [ -z "$FEX_REF" ]; then
     echo "Error: $PINS_DIR/fex-src.ref is empty"
@@ -70,7 +91,7 @@ export PATH="$PATH:$MINGW_DIR/bin"
 # llvm-mingw for the PE halves, Apple's clang and the macOS SDK for the unix
 # half, and the floor, which a MACOSX_DEPLOYMENT_TARGET can raise.
 fex_key() {
-    dist_key "$SCRIPT_DIR/build-fex.sh" "fex=$1" "$(mingw_key)" \
+    dist_key --hash "$SCRIPT_DIR/lib/licenses.sh" "$SCRIPT_DIR/build-fex.sh" "fex=$1" "$(mingw_key)" \
         "cc=$(cc_version /usr/bin/clang)" "$(sdk_key)" "floor=$MACOS_FLOOR"
 }
 FEX_WANT=$(src_ref_commit "$FEX_REF" "$FEX_REPO")
@@ -184,6 +205,8 @@ for f in "$PE64_DIR/libwow64fex.dll" "$PE64_DIR/libarm64ecfex.dll" \
     cp "$install/lib/wine/$f" "$part/$f"
 done
 remove_tree "$install"
+stage_licenses "$FEX_SRC" "$part/share/licenses/fex" "$LICENSES"
+echo "    licences: $(cd "$part/share/licenses/fex" && echo *)"
 fex_key "$FEX_COMMIT" > "$part/KEY"
 # Written last, so a staged directory without it is an incomplete one. The
 # bundle step compares it with what FEX_REF names.
