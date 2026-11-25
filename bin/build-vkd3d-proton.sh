@@ -167,6 +167,7 @@ echo "==> vkd3d-proton source: $VKD3D_PROTON_REPO $VKD3D_PROTON_REF"
 if [ ! -e "$VKD3D_PROTON_SRC/.git" ]; then
     GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout "$VKD3D_PROTON_REPO" "$VKD3D_PROTON_SRC"
 fi
+check_own_repo "$VKD3D_PROTON_SRC"
 GIT_TERMINAL_PROMPT=0 git -C "$VKD3D_PROTON_SRC" fetch --quiet --force --tags "$VKD3D_PROTON_REPO"
 GIT_TERMINAL_PROMPT=0 git -C "$VKD3D_PROTON_SRC" fetch --quiet "$VKD3D_PROTON_REPO" "$VKD3D_PROTON_REF"
 git -C "$VKD3D_PROTON_SRC" -c advice.detachedHead=false checkout --quiet --force --detach FETCH_HEAD

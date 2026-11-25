@@ -245,6 +245,7 @@ echo "==> DXMT source: $DXMT_REPO $DXMT_REF"
 if [ ! -e "$DXMT_SRC/.git" ]; then
     GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout "$DXMT_REPO" "$DXMT_SRC"
 fi
+check_own_repo "$DXMT_SRC"
 GIT_TERMINAL_PROMPT=0 git -C "$DXMT_SRC" fetch --quiet --force --tags "$DXMT_REPO"
 GIT_TERMINAL_PROMPT=0 git -C "$DXMT_SRC" fetch --quiet "$DXMT_REPO" "$DXMT_REF"
 git -C "$DXMT_SRC" -c advice.detachedHead=false checkout --quiet --force --detach FETCH_HEAD

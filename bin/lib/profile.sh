@@ -521,6 +521,20 @@ src_ref_commit() {
         END { if (peeled != "") print peeled; else if (tag != "") print tag; else if (head != "") print head }'
 }
 
+# check_own_repo <dir>: exit unless <dir> is the top level of a git work tree.
+# git looks for a repository upward from the directory it runs in, so when
+# <dir>/.git exists but is not a repository (a copy cut short leaves one), a
+# fetch and checkout run in <dir> would change the enclosing repository.
+check_own_repo() {
+    local top
+    top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || top=""
+    if [ -z "$top" ] || [ ! "$top" -ef "$1" ]; then
+        echo "Error: $1/.git is not a git repository; git finds ${top:-no repository} there."
+        echo "Repair or remove $1; a source directory without .git is cloned again."
+        exit 1
+    fi
+}
+
 # The staged dists. build-mesa.sh, build-gstreamer.sh, build-fex.sh,
 # build-dxmt.sh and build-vkd3d-proton.sh each stage what the bundle takes
 # from them in a directory of its own (MESA_DIST, GSTREAMER_DIST, FEX_DIST,

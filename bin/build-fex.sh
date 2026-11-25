@@ -97,6 +97,7 @@ echo "==> FEX source: $FEX_REPO $FEX_REF"
 if [ ! -e "$FEX_SRC/.git" ]; then
     GIT_TERMINAL_PROMPT=0 git clone "$FEX_REPO" "$FEX_SRC"
 fi
+check_own_repo "$FEX_SRC"
 if [ -n "$(git -C "$FEX_SRC" status --porcelain --untracked-files=no --ignore-submodules=all)" ]; then
     echo "Error: $FEX_SRC has local changes; commit or stash them first"
     git -C "$FEX_SRC" status --short --untracked-files=no --ignore-submodules=all

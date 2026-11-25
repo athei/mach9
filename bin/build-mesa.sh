@@ -184,6 +184,7 @@ echo "==> Mesa source: $MESA_REPO $MESA_REF"
 if [ ! -e "$MESA_SRC/.git" ]; then
     GIT_TERMINAL_PROMPT=0 git clone "$MESA_REPO" "$MESA_SRC"
 fi
+check_own_repo "$MESA_SRC"
 if [ -n "$(git -C "$MESA_SRC" status --porcelain --untracked-files=no)" ]; then
     echo "Error: $MESA_SRC has local changes; commit or stash them first"
     git -C "$MESA_SRC" status --short --untracked-files=no
