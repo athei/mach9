@@ -985,6 +985,7 @@ smoke_test() {
     check_egl_host
     check_vkalias_host
     check_vkinvariance_host
+    check_vkr64view_host
     check_gst_host
 
     # wineboot creates the prefix here, so the limit is generous. Only the
@@ -1787,6 +1788,43 @@ check_vkinvariance_host() {
         exit 1
     fi
     echo "    KosmicKrisp: two vertex shaders with the same position give the same depth, another depth fails the EQUAL test"
+}
+
+# check_vkr64view_host: build smoke/vkr64view.c for the host and run it on the
+# bundle's lib/external/libvulkan.1.dylib as check_vkalias_host runs
+# smoke/vkalias.c. Exit unless it bound its views and the output has
+# KosmicKrisp's warning about a 64-bit view of an image without atomic usage
+# exactly once: every 64-bit atomic on such a view takes KosmicKrisp's lock,
+# and a user's log has to say so. Skipped like check_vkalias_host on a Mac
+# without a Metal 4 GPU.
+check_vkr64view_host() {
+    local log="$TMP_DIR/vkr64view.log"
+    local headers="$MESA_BUILD_DIR/vulkan-headers-install/include" count
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host 64-bit view check: it needs a KosmicKrisp device."
+        return 0
+    fi
+    if [ ! -f "$headers/vulkan/vulkan_core.h" ]; then
+        echo "Error: no Vulkan headers in $headers for smoke/vkr64view.c; bin/build-mesa.sh installs them"
+        exit 1
+    fi
+    xcrun clang -std=c11 -O2 -I "$headers" -o "$TMP_DIR/vkr64view" "$REPO_DIR/smoke/vkr64view.c"
+    echo "  Running the host 64-bit view check on lib/external/libvulkan.1.dylib..."
+    run_limited 10 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/vkr64view" "$EXT_DIR/libvulkan.1.dylib"
+    count=$(grep -c "storage view of an image without Metal atomic usage" "$log" || true)
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/vkr64view.c did not exit within 10 seconds"
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/vkr64view.c could not bind its views on the bundle's KosmicKrisp (status $RUN_STATUS)"
+    elif [ "$count" -ne 1 ]; then
+        echo "Error: the bundle's KosmicKrisp warned $count times about 64-bit views of an image without atomic usage, not once"
+    else
+        echo "    KosmicKrisp: a 64-bit view of an image without atomic usage gets one warning"
+        return 0
+    fi
+    cat "$log"
+    exit 1
 }
 
 # check_gl_host <program> <what> [validation]: build smoke/<program>.c for the
