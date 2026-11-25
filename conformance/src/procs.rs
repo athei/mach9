@@ -95,7 +95,8 @@ pub fn output_limited(program: &str, args: &[&str], limit: Duration) -> Result<S
 }
 
 /// The pid and `argv[0]` of each line of a `ps -Ao pid=,comm=` table.
-fn parse_ps(table: &str) -> Vec<(u32, &str)> {
+#[must_use]
+pub fn parse_ps(table: &str) -> Vec<(u32, &str)> {
     table
         .lines()
         .filter_map(|line| {

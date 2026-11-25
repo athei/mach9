@@ -62,6 +62,7 @@ use crate::{
     session::{self, Failure, Session},
     triage::Triage,
     validation::{self, Known, Layers, Occurrence},
+    window_server::{self, PORT_THRESHOLD},
 };
 
 /// macOS's sampler, which a stalled test is sampled with.
@@ -450,6 +451,8 @@ pub struct Prepared<'c> {
     known: Option<Known>,
     /// The state directory, locked until the run ends.
     pub state: State,
+    /// WindowServer's Mach port count before the run.
+    ports: u64,
 }
 
 /// Check the inputs of `options` over `config` and claim the state
@@ -461,8 +464,10 @@ pub struct Prepared<'c> {
 /// ([`check_winedebug`]) or `--validation` ([`check_validation`]), a bundle
 /// without tests, a missing baseline of `run`, a list of known validation
 /// messages that does not parse, a partial `record` on another build, a
-/// state directory that is not the runner's or is in use, and a wineserver
-/// of the bundle that serves another prefix.
+/// state directory that is not the runner's or is in use, a wineserver of
+/// the bundle that serves another prefix, and a WindowServer whose Mach
+/// ports cannot be read or are above [`PORT_THRESHOLD`]
+/// ([`window_server::check`]).
 pub fn prepare<'c>(config: &'c Config, options: &Options) -> Result<Prepared<'c>, Failure> {
     check_winedebug(options.mode, options.winedebug.as_deref()).map_err(Failure::Setup)?;
     check_validation(options.mode, options.validation.is_some()).map_err(Failure::Setup)?;
@@ -509,6 +514,7 @@ pub fn prepare<'c>(config: &'c Config, options: &Options) -> Result<Prepared<'c>
     }
     let state = State::claim(&options.state).map_err(Failure::Setup)?;
     session::check_servers(&bundle, &state.prefix())?;
+    let ports = window_server::check().map_err(Failure::Setup)?;
     Ok(Prepared {
         plans,
         bundle,
@@ -517,6 +523,7 @@ pub fn prepare<'c>(config: &'c Config, options: &Options) -> Result<Prepared<'c>
         olds,
         known,
         state,
+        ports,
     })
 }
 
@@ -528,7 +535,10 @@ impl Prepared<'_> {
     ///
     /// Returns [`Failure::Setup`] for a wineserver of the bundle that runs
     /// by now, a failed session step, an untrustworthy listing, an
-    /// executable on the wrong implementation and an I/O error, and
+    /// executable on the wrong implementation, an I/O error, and a
+    /// WindowServer whose Mach ports are above [`PORT_THRESHOLD`] before a
+    /// unit or a second pass ([`window_server::between_units`]; [`prepare`]
+    /// refuses one whose ports cannot be read at the start), and
     /// [`Failure::Interrupted`] once `stop` is set.
     pub fn run(
         &self,
@@ -540,6 +550,11 @@ impl Prepared<'_> {
         let run_dir = state.runs().join(layout::run_id(SystemTime::now()));
         fs::create_dir_all(&run_dir).map_err(|e| setup_io(&run_dir, &e))?;
         println!("conformance: raw logs in {}", run_dir.display());
+        println!(
+            "conformance: WindowServer holds {} Mach ports; the run stops before a unit when it \
+             holds more than {PORT_THRESHOLD}",
+            self.ports
+        );
         let winedebug = options.winedebug.as_deref();
         if let Some(channels) = winedebug {
             println!(
@@ -610,6 +625,10 @@ impl Prepared<'_> {
         let finished = std::mem::take(&mut runner.finished);
         finalize(state, &runner.run_dir, &runner.pending, finished)?;
         print!("{}", runner.totals());
+        println!(
+            "{}",
+            window_server::summary(self.ports, window_server::ports())
+        );
         match (&self.known, conclusion) {
             (Some(known), Conclusion::Run(verdict)) => {
                 let new = report_validation(
@@ -723,8 +742,12 @@ impl Runner<'_> {
             order,
         } = self.first_pass(plan, &mut legs)?;
         let report = diff::diff(exe, Some(baseline), header, &first, &plan.scope, triage);
+        let again = run_again_in_order(&report, &order);
+        if !again.is_empty() {
+            check_window_server()?;
+        }
         let mut second = BTreeMap::new();
-        for id in run_again_in_order(&report, &order) {
+        for id in again {
             let outcome = self.confirm(plan, &mut legs, &id)?;
             second.insert(id, outcome);
         }
@@ -758,8 +781,12 @@ impl Runner<'_> {
             results: first,
             order,
         } = self.first_pass(plan, &mut legs)?;
+        let again = to_confirm_in_order(old, &first, &order);
+        if !again.is_empty() {
+            check_window_server()?;
+        }
         let mut second = BTreeMap::new();
-        for id in to_confirm_in_order(old, &first, &order) {
+        for id in again {
             let outcome = self.confirm(plan, &mut legs, &id)?;
             second.insert(id, outcome);
         }
@@ -842,6 +869,7 @@ impl Runner<'_> {
                 .iter()
                 .filter(|unit| plan.runs_unit(&unit.name))
             {
+                check_window_server()?;
                 let keys = match &unit.selection {
                     Selection::Whole => vec![Key::Whole],
                     Selection::Wrapped(_) => self.listed_keys(plan, leg, &unit.name)?,
@@ -1200,6 +1228,17 @@ impl Runner<'_> {
         }
         text
     }
+}
+
+/// Stop before the next unit or second pass when WindowServer's Mach ports
+/// are above [`PORT_THRESHOLD`]; warn when they cannot be read.
+fn check_window_server() -> Result<(), Failure> {
+    if let Some(warning) =
+        window_server::between_units(window_server::ports()).map_err(Failure::Setup)?
+    {
+        println!("{warning}");
+    }
+    Ok(())
 }
 
 /// Append one finished test to a leg's resume file.

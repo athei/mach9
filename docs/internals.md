@@ -308,6 +308,18 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   becomes active (`IOConsoleLocked` of `ioreg -n Root -d1`). They check
   the selection, the bundle, the baselines, the triage file, the state
   directory and the running wineservers before they take the activation.
+- WindowServer loses Mach ports with every application that registers
+  with it, and each test process is one, as is the AutoFill helper AppKit
+  starts for it. When its port table is full, the kernel kills it and the
+  session is logged out (mach9 #190). `run` and `record` read its port
+  count with `top` before they start, before each unit and before a
+  second pass, and stop above a threshold with an error that says to log
+  out and in, or restart the Mac, which starts a new WindowServer
+  ([`window_server.rs`](../conformance/src/window_server.rs)). The same
+  command then continues where it stopped. A count that cannot be read
+  stops a run before it starts and only prints a warning later. The run
+  prints the count when it starts, and after the totals the count at the
+  end and how much it changed.
 - Every process gets the caller's environment without the variables that
   change Wine, the libraries it loads, its graphics stack or the test
   framework (`SCRUBBED` in

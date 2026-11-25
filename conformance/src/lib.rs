@@ -16,7 +16,8 @@
 //! the bundle and its state directory ([`layout`]), runs each process tree
 //! under a watchdog ([`exec`]) with the scrubbed environment of
 //! [`environment`] in one Wine session of a fresh prefix ([`session`],
-//! [`procs`]), and stops cleanly on a signal ([`interrupt`]). The command
+//! [`procs`]), stops cleanly on a signal ([`interrupt`]), and stops before
+//! WindowServer runs out of Mach ports ([`window_server`]). The command
 //! line runs it beside [`activation`], which hands the activation to each
 //! test process.
 //!
@@ -52,4 +53,5 @@ mod scratch;
 pub mod session;
 pub mod triage;
 pub mod validation;
+pub mod window_server;
 pub mod wine_src;
