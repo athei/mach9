@@ -315,6 +315,15 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   no `WINEDLLOVERRIDES`: the DLL overrides are those of compatdb's
   built-in rules, as in a game's prefix, which keep the Mono and Gecko
   installers from opening a dialog.
+- Every Wine process of `run` and `record` gets `DEFAULT_WINEDEBUG` (in
+  [`environment.rs`](../conformance/src/environment.rs)) as its
+  `WINEDEBUG`: Wine's `err` class of every channel without `fixme`, and
+  the `seh` and `loaddll` channels. `run --winedebug` appends its channels
+  to it, and `record` refuses the option, so a baseline is recorded under
+  the default. A test that crashes or stalls once and passes when it runs
+  again leaves only its raw log, which then has its `err:` lines, the
+  `trace:seh:dispatch_exception` line of a fault and the load address of
+  each module. Their lines count as output for the stall limit.
 - Before it trusts a result, the runner checks the test process's
   `compatdb:` lines ([logging](compatdb.md#logging-and-verification))
   against the `expect` of its executable in `wine-tests.toml`, and stops on
@@ -399,11 +408,12 @@ After a regression:
 
 - Trace a key with `--winedebug <channels>`, which `run` takes and
   `record` refuses. Every Wine process of the invocation gets the channels
-  as its `WINEDEBUG` instead of `-all`, and the traces go into the raw
-  logs: a test's into its log, the session's into `session.log`. A trace
-  slows a test and counts as output for the stall limit, so its result is
-  that of the traced test, and its state is never continued without the
-  option:
+  after the default in its `WINEDEBUG`. A later option for the same
+  channel wins, and `-all` changes only the channels no option names. The
+  traces go into the raw logs: a test's into its log, the session's into
+  `session.log`. A trace slows a test and counts as output for the stall
+  limit, so its result is that of the traced test, and its state is never
+  continued without the option:
 
   ```bash
   cargo run -p conformance -- run ddraw --leg x86_64 --only ddraw7/test_coop_level_mode_set --winedebug +win,+event

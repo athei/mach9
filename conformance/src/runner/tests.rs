@@ -720,7 +720,8 @@ fn only_run_takes_debug_channels() {
     assert_eq!(
         check_winedebug(Mode::Record, Some("+win,+event")),
         Err(String::from(
-            "record takes no --winedebug: a baseline is the result of the untraced tests"
+            "record takes no --winedebug: a baseline is the result of the tests under the \
+             default WINEDEBUG"
         ))
     );
     assert_eq!(

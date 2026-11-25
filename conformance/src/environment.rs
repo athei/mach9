@@ -20,6 +20,15 @@ pub const SCRUBBED: [&str; 17] = [
     "GALLIUM_", "LIBGL_", "EGL_", "MVK_", "NIR_", "DYLD_",
 ];
 
+/// The `WINEDEBUG` of every Wine process, in `run` and `record` alike.
+///
+/// It keeps the `err` class of every channel, drops the `fixme` class, and
+/// turns on the `seh` and `loaddll` channels. A test that crashes or stalls
+/// once and passes when it runs again leaves only its raw log, which then
+/// has its `err:` lines, the `trace:seh:dispatch_exception` line of a fault
+/// and the address each module loaded at.
+pub const DEFAULT_WINEDEBUG: &str = "fixme-all,+seh,+loaddll";
+
 /// Check the channels of `--winedebug`, a `WINEDEBUG` value such as
 /// `+win,+event`.
 ///
@@ -45,8 +54,10 @@ pub fn check_winedebug(channels: &str) -> Result<(), String> {
 /// The caller's variables without the [`SCRUBBED`] ones, then:
 ///
 /// - `WINEPREFIX` the runner's `prefix`;
-/// - `WINEDEBUG=-all`, or the channels of `winedebug` ([`check_winedebug`]),
-///   whose traces then go where the process's output goes;
+/// - `WINEDEBUG` [`DEFAULT_WINEDEBUG`], followed by the channels of
+///   `winedebug` ([`check_winedebug`]) when given; Wine applies the
+///   options in order, so these add to the default or turn parts of it
+///   off, and the traces go where the process's output goes;
 /// - `WINETEST_NO_MT_D3D=1`, which runs the queued tests of the d3d units
 ///   one after another instead of on several threads at once;
 /// - `WINETEST_TIME=1`, which puts the elapsed time on every check line;
@@ -72,9 +83,13 @@ pub fn wine_env(
         .into_iter()
         .filter(|(name, _)| !is_scrubbed(name))
         .collect();
+    let debug = winedebug.map_or_else(
+        || String::from(DEFAULT_WINEDEBUG),
+        |channels| format!("{DEFAULT_WINEDEBUG},{channels}"),
+    );
     for (name, value) in [
         ("WINEPREFIX", prefix.as_os_str()),
-        ("WINEDEBUG", OsStr::new(winedebug.unwrap_or("-all"))),
+        ("WINEDEBUG", OsStr::new(&debug)),
         ("WINETEST_NO_MT_D3D", OsStr::new("1")),
         ("WINETEST_TIME", OsStr::new("1")),
         ("VKD3D_SHADER_CACHE_PATH", work.as_os_str()),

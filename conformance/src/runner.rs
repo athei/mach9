@@ -84,8 +84,9 @@ pub struct Options {
     /// The directory of the baselines and the triage file.
     pub baselines: PathBuf,
     pub limits: Limits,
-    /// The `--winedebug` text: the `WINEDEBUG` of every Wine process, to
-    /// trace a test. `None` runs them with `-all`.
+    /// The `--winedebug` text: channels that follow
+    /// [`environment::DEFAULT_WINEDEBUG`] in the `WINEDEBUG` of every Wine
+    /// process, to trace a test. `None` runs them with the default alone.
     pub winedebug: Option<String>,
     /// `--validation`: the layers the test processes run under.
     pub validation: Option<Layers>,
@@ -124,15 +125,17 @@ pub fn validated_scope(scope: String, validation: bool) -> String {
 /// # Errors
 ///
 /// Returns a message for `record` with channels, since a trace changes a
-/// test's timing and a baseline is the result of the untraced test, and for
-/// channels [`environment::check_winedebug`] refuses.
+/// test's timing and a baseline is the result of the test under
+/// [`environment::DEFAULT_WINEDEBUG`], which `run` compares it with, and
+/// for channels [`environment::check_winedebug`] refuses.
 pub fn check_winedebug(mode: Mode, winedebug: Option<&str>) -> Result<(), String> {
     let Some(channels) = winedebug else {
         return Ok(());
     };
     if matches!(mode, Mode::Record) {
         return Err(String::from(
-            "record takes no --winedebug: a baseline is the result of the untraced tests",
+            "record takes no --winedebug: a baseline is the result of the tests under the \
+             default WINEDEBUG",
         ));
     }
     environment::check_winedebug(channels)
@@ -539,7 +542,10 @@ impl Prepared<'_> {
         println!("conformance: raw logs in {}", run_dir.display());
         let winedebug = options.winedebug.as_deref();
         if let Some(channels) = winedebug {
-            println!("conformance: WINEDEBUG={channels}: the traces are in the raw logs");
+            println!(
+                "conformance: WINEDEBUG={},{channels}: the traces are in the raw logs",
+                environment::DEFAULT_WINEDEBUG
+            );
         }
         let env = environment::wine_env(caller_env, &state.prefix(), &state.work(), winedebug);
         // The session's own processes run without the layers: they are no

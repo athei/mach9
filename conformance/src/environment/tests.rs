@@ -83,7 +83,7 @@ fn the_runner_s_settings_are_set_once() {
     );
     for (name, expected) in [
         ("WINEPREFIX", "/s/prefix"),
-        ("WINEDEBUG", "-all"),
+        ("WINEDEBUG", "fixme-all,+seh,+loaddll"),
         ("WINETEST_NO_MT_D3D", "1"),
         ("WINETEST_TIME", "1"),
         ("VKD3D_SHADER_CACHE_PATH", "/s/work"),
@@ -98,7 +98,7 @@ fn the_runner_s_settings_are_set_once() {
 }
 
 #[test]
-fn without_channels_the_environment_is_the_untraced_one() {
+fn without_channels_the_environment_is_the_default_one() {
     let env = wine_env(
         caller(&["WINEDEBUG", "PATH", "HOME"]),
         &PathBuf::from("/s/prefix"),
@@ -109,7 +109,7 @@ fn without_channels_the_environment_is_the_untraced_one() {
         ("PATH", "caller"),
         ("HOME", "caller"),
         ("WINEPREFIX", "/s/prefix"),
-        ("WINEDEBUG", "-all"),
+        ("WINEDEBUG", DEFAULT_WINEDEBUG),
         ("WINETEST_NO_MT_D3D", "1"),
         ("WINETEST_TIME", "1"),
         ("VKD3D_SHADER_CACHE_PATH", "/s/work"),
@@ -120,14 +120,30 @@ fn without_channels_the_environment_is_the_untraced_one() {
     assert_eq!(env, expected);
 }
 
+/// Wine's `err` class stays on for every channel, and the `seh` channel
+/// traces each exception, so a test that fails once has its `err:` lines
+/// and the `trace:seh:dispatch_exception` line of a fault.
 #[test]
-fn channels_replace_only_the_value_of_winedebug() {
+fn the_default_keeps_the_err_class_and_traces_exceptions() {
+    let options: Vec<&str> = DEFAULT_WINEDEBUG.split(',').collect();
+    assert!(options.contains(&"+seh"), "{DEFAULT_WINEDEBUG}");
+    for off in ["-all", "err-all"] {
+        assert!(!options.contains(&off), "{DEFAULT_WINEDEBUG} has {off}");
+    }
+    assert_eq!(check_winedebug(DEFAULT_WINEDEBUG), Ok(()));
+}
+
+#[test]
+fn channels_follow_the_default_in_winedebug() {
     let caller_env = caller(&["WINEDEBUG", "PATH"]);
     let prefix = PathBuf::from("/s/prefix");
     let work = PathBuf::from("/s/work");
     let untraced = wine_env(caller_env.clone(), &prefix, &work, None);
     let traced = wine_env(caller_env, &prefix, &work, Some("+win,+event"));
-    assert_eq!(value(&traced, "WINEDEBUG"), Some(OsStr::new("+win,+event")));
+    assert_eq!(
+        value(&traced, "WINEDEBUG"),
+        Some(OsStr::new("fixme-all,+seh,+loaddll,+win,+event"))
+    );
     let rest = |env: &[(OsString, OsString)]| -> Vec<(OsString, OsString)> {
         env.iter()
             .filter(|(name, _)| name != "WINEDEBUG")
