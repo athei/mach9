@@ -485,6 +485,12 @@ fn kill_group(child: &Child) {
 /// Sample `pid`, and the wineserver of the prefix when the sampler names
 /// one, at the same time, within [`SAMPLE_BUDGET`]; a set `stop` ends the
 /// samples at once. The files written.
+///
+/// `sample` writes each report to its file through `-file`: without it,
+/// the tool also keeps a copy of the report in `/tmp`. Its own messages go
+/// to a `.log` file beside the report, which is removed once the report is
+/// there and otherwise takes the report's name, so the file then says why
+/// there is no report.
 fn sample(pid: u32, sampler: &Sampler, stop: &AtomicBool) -> Vec<PathBuf> {
     if !sampler.tool.is_file() || fs::create_dir_all(&sampler.dir).is_err() {
         return Vec::new();
@@ -503,24 +509,31 @@ fn sample(pid: u32, sampler: &Sampler, stop: &AtomicBool) -> Vec<PathBuf> {
     let mut running = Vec::new();
     for (pid, name) in targets {
         let path = sampler.dir.join(name);
-        let Ok(file) = File::create(&path) else {
+        let messages = path.with_extension("log");
+        // A rerun of the key samples into the same names; a report left
+        // from the earlier stall must not pass for this one's.
+        let _ = fs::remove_file(&path);
+        let Ok(file) = File::create(&messages) else {
             continue;
         };
         let Ok(error_file) = file.try_clone() else {
             continue;
         };
         let child = Command::new(&sampler.tool)
-            .args([pid.to_string().as_str(), SAMPLE_SECONDS, "-mayDie"])
+            .args([pid.to_string().as_str(), SAMPLE_SECONDS, "-mayDie", "-file"])
+            .arg(&path)
             .stdin(Stdio::null())
             .stdout(file)
             .stderr(error_file)
             .spawn();
         if let Ok(child) = child {
-            running.push((child, path));
+            running.push((child, path, messages));
+        } else {
+            let _ = fs::remove_file(&messages);
         }
     }
     let mut written = Vec::new();
-    for (mut child, path) in running {
+    for (mut child, path, messages) in running {
         loop {
             let over = stop.load(Ordering::SeqCst) || Instant::now() >= deadline;
             match child.try_wait() {
@@ -532,6 +545,11 @@ fn sample(pid: u32, sampler: &Sampler, stop: &AtomicBool) -> Vec<PathBuf> {
                 }
                 _ => break,
             }
+        }
+        if fs::metadata(&path).is_ok_and(|report| report.len() > 0) {
+            let _ = fs::remove_file(&messages);
+        } else {
+            let _ = fs::rename(&messages, &path);
         }
         written.push(path);
     }

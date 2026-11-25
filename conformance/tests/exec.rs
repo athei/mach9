@@ -5,6 +5,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    slice,
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
@@ -154,9 +155,12 @@ fn silence_past_the_idle_limit_is_a_stall_and_is_sampled() {
     assert_eq!(finished.ending, Ending::Stalled);
     assert_eq!(finished.stall, Some(Stall::Idle));
     assert_eq!(status(&finished, "test_silent"), Status::Stall);
-    let sample = fs::read_to_string(dir.join("test_silent.sample.txt")).unwrap();
+    let report = dir.join("test_silent.sample.txt");
+    let sample = fs::read_to_string(&report).unwrap();
     assert!(sample.starts_with("stub sample of "), "{sample}");
-    assert!(sample.ends_with(" 2 -mayDie\n"), "{sample}");
+    let args = format!(" 2 -mayDie -file {}\n", report.display());
+    assert!(sample.ends_with(&args), "{sample}");
+    assert!(!dir.join("test_silent.sample.log").exists());
     let server = fs::read_to_string(dir.join("test_silent.wineserver-sample.txt")).unwrap();
     assert!(
         server.starts_with("no /nonexistent/wineserver serves"),
@@ -165,6 +169,30 @@ fn silence_past_the_idle_limit_is_a_stall_and_is_sampled() {
     let trailer = finished.trailer(&LIMITS);
     assert!(trailer.contains("stall: no output for 1 s"), "{trailer}");
     assert!(trailer.contains("test_silent.sample.txt"), "{trailer}");
+}
+
+/// When the sampler writes no report, the sample file holds its messages,
+/// and a report of an earlier stall of the key is gone.
+#[test]
+fn a_sample_without_report_keeps_the_tool_s_messages() {
+    let dir = Scratch::new("exec", "unsampled");
+    let report = dir.join("test_silent.sample.txt");
+    fs::write(&report, "report of an earlier stall\n").unwrap();
+    let sampler = Sampler {
+        tool: tests_dir().join("stub-sample-fails.sh"),
+        dir: dir.to_path_buf(),
+        stem: String::from("test_silent"),
+        wineserver: None,
+    };
+    let finished = run_stub("WT_ONLY", "test_silent", Some(&sampler));
+    assert_eq!(finished.stall, Some(Stall::Idle));
+    assert_eq!(finished.samples, slice::from_ref(&report));
+    let sample = fs::read_to_string(&report).unwrap();
+    assert!(
+        sample.starts_with("stub sample cannot examine process "),
+        "{sample}"
+    );
+    assert!(!dir.join("test_silent.sample.log").exists());
 }
 
 /// Output that never stops is a stall at the total limit, and the sampler
