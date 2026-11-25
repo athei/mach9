@@ -986,6 +986,7 @@ smoke_test() {
     check_vkalias_host
     check_vkinvariance_host
     check_vkr64view_host
+    check_vkatomic64_host
     check_gst_host
 
     # wineboot creates the prefix here, so the limit is generous. Only the
@@ -1825,6 +1826,47 @@ check_vkr64view_host() {
     fi
     cat "$log"
     exit 1
+}
+
+# check_vkatomic64_host: build smoke/vkatomic64.c for the host and run it on
+# the bundle's lib/external/libvulkan.1.dylib as check_vkalias_host runs
+# smoke/vkalias.c. Exit unless 64-bit image atomics on one texel add up when
+# they reach it through two views with different base layers, or through a
+# 3D view and a 2D view of a slice: KosmicKrisp emulates them under a lock
+# it picks from the texel's coordinates, and took the view's coordinates
+# before, so the two views took different locks and lost adds. The limit is
+# a few times a clean run with a cold shader cache, and the probe's watchdog
+# ends a hang before it. Skipped like check_vkalias_host on a Mac without a
+# Metal 4 GPU.
+check_vkatomic64_host() {
+    local log="$TMP_DIR/vkatomic64.log"
+    local headers="$MESA_BUILD_DIR/vulkan-headers-install/include"
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host 64-bit image atomics check: it needs a KosmicKrisp device."
+        return 0
+    fi
+    if [ ! -f "$headers/vulkan/vulkan_core.h" ]; then
+        echo "Error: no Vulkan headers in $headers for smoke/vkatomic64.c; bin/build-mesa.sh installs them"
+        exit 1
+    fi
+    xcrun clang -std=c11 -O2 -I "$headers" -o "$TMP_DIR/vkatomic64" "$REPO_DIR/smoke/vkatomic64.c"
+    echo "  Running the host 64-bit image atomics check on lib/external/libvulkan.1.dylib..."
+    run_limited 10 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/vkatomic64" "$EXT_DIR/libvulkan.1.dylib"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/vkatomic64.c did not exit within 10 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -eq 1 ]; then
+        echo "Error: 64-bit image atomics on one texel through two views lost adds on the bundle's KosmicKrisp"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/vkatomic64.c could not run a case on the bundle's KosmicKrisp, a missing feature, a failed setup, submit or wait or its watchdog included (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    echo "    KosmicKrisp: $(grep -c '^vkatomic64: .*: ok' "$log") cases of 64-bit image atomics on one texel add up"
 }
 
 # check_gl_host <program> <what> [validation]: build smoke/<program>.c for the
