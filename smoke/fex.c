@@ -1,11 +1,12 @@
 /* The program bundle-wine.sh builds for each x86 PE architecture and runs under
  * FEX, in its default mode, with FEX_SMCCHECKS=full and with full precision x87,
  * and with FEX_DISKCACHE=1, alone and with FEX_SMCCHECKS=full, for
- * decommit_race, cross_process_protect and rwx_write_race. Its cases run code
- * in reserved memory and on guard pages, writes to compiled pages, instructions
- * FEX cannot decode or fetch whole, pages taken away or changed while code runs
- * from them, also by another process, which starts this program again as its
- * child, a write to a page while it compiles, memory syscalls with their
+ * decommit_race, cross_process_protect, rwx_write_race and
+ * cross_process_write_race. Its cases run code in reserved memory and on guard
+ * pages, writes to compiled pages, instructions FEX cannot decode or fetch
+ * whole, pages taken away or changed while code runs from them, also by another
+ * process, which starts this program again as its child, a write to a page
+ * while it compiles, also from another process, memory syscalls with their
  * out-params on a compiled page, queries of one and writes into one from this
  * process and from a child, code and protections a child changes, other
  * syscalls that write their buffer on a compiled page, x87 code that a fault or
@@ -15,12 +16,12 @@
  *
  * The cases run in order in one process, or just those named on the command
  * line; trapped_write_other, cross_process_smc, cross_process_rx,
- * cross_process_restore, cross_process_restore_twice and cross_process_protect
- * also run the program as a child. Each prints its name first. A failed case
- * prints why and ends the process with 1; the usual failure is a hang, and the
- * last line then names the case. There is no watchdog thread, since a stalled
- * JIT stops that as well, so the caller's time limit ends a hang. The exit code
- * is 0 only when every case passed.
+ * cross_process_restore, cross_process_restore_twice, cross_process_protect and
+ * cross_process_write_race also run the program as a child. Each prints its
+ * name first. A failed case prints why and ends the process with 1; the usual
+ * failure is a hang, and the last line then names the case. There is no
+ * watchdog thread, since a stalled JIT stops that as well, so the caller's time
+ * limit ends a hang. The exit code is 0 only when every case passed.
  *
  * Do not use TerminateThread on a thread that has just started, which can leave
  * the guest's loader lock held. */
@@ -58,9 +59,21 @@
 #define RWX_ROUNDS 3000
 #define RWX_ROUNDS_FULL 200
 #define WRITE_ROUNDS 500
+#define WRITE_RACE_ROUNDS 20
 #define GUARD_THREADS 2
 #define GUARD_ROUNDS 100
 #define CHILD_MS 1000
+
+/* cross_process_write_race: the sleds it compiles first, for how long a
+ * compile takes, the size of each, the offset of its mov and its addps count,
+ * lower under FEX_SMCCHECKS=full, which takes about 80 times as long to
+ * compile each. A compile of either takes 0.5 ms or more on a current Mac, and
+ * the child's write about 0.15 ms. */
+#define WRITE_RACE_SLEDS 3
+#define WRITE_RACE_SIZE (4 * PAGE)
+#define WRITE_RACE_MOV (8 * 15)
+#define WRITE_RACE_ADDS 4800
+#define WRITE_RACE_ADDS_FULL 1200
 
 static const char *current = "startup";
 
@@ -1616,6 +1629,213 @@ static void cross_process_protect(void)
     WaitForSingleObject(waiter, INFINITE);
 }
 
+/* The sled of cross_process_write_race with index i */
+static BYTE *race_sled(BYTE *sleds, int i)
+{
+    return sleds + (SIZE_T)i * WRITE_RACE_SIZE;
+}
+
+/* Eight 15 byte nops, mov eax, value, ten one byte nops, adds addps xmm1, xmm2,
+ * which take a compile longer than nops, and ret. The mov is past the bytes by
+ * which FEX's disk cache looks up anonymous code, about 64, so all sleds have
+ * one disk cache key, and the block stays below FEX's 5000 instructions. */
+static void race_fill(BYTE *p, int value, int adds)
+{
+    static const BYTE nop15[15] = {0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x0f, 0x1f, 0x84,
+                                   0x00, 0x00, 0x00, 0x00, 0x00};
+    static const BYTE addps[3] = {0x0f, 0x58, 0xca};
+    int i;
+
+    memset(p, 0xcc, WRITE_RACE_SIZE);
+    for (i = 0; i < WRITE_RACE_MOV; i += 15) memcpy(p + i, nop15, 15);
+    p[WRITE_RACE_MOV] = 0xb8;
+    memcpy(p + WRITE_RACE_MOV + 1, &value, sizeof(value));
+    memset(p + WRITE_RACE_MOV + 5, 0x90, 10);
+    p += WRITE_RACE_MOV + 15;
+    for (i = 0; i < adds; i++, p += 3) memcpy(p, addps, 3);
+    *p = 0xc3;
+}
+
+static void CALLBACK end_sleep(ULONG_PTR arg)
+{
+}
+
+/* Runs the queries and protects another process makes in this one. The
+ * wineserver gives them, as system APCs, to a thread of this process that
+ * waits in the server, and only without one signals a thread, which can be the
+ * one that compiles. Wine's waits on events stay in this process, an alertable
+ * SleepEx waits in the server. A user APC ends the thread once *arg is set. */
+static DWORD WINAPI apc_sleeper(void *arg)
+{
+    while (!*(volatile LONG *)arg) SleepEx(INFINITE, TRUE);
+    return 0;
+}
+
+/* The child of cross_process_write_race, started as "write_child <pid> <sleds>
+ * <range> <times>": in each round, once that process signals, writes 2 * i + 1
+ * over the mov's immediate in sled i of the round, after a spin below <range>,
+ * stores the QueryPerformanceCounter values from before and after the write
+ * at <times> in that process, 2 per round, and signals back. It makes the page
+ * PAGE_EXECUTE_READWRITE for the write and gives it back PAGE_EXECUTE_READ, as
+ * kernelbase's WriteProcessMemory does for such a page but without its
+ * cross-process notices of the protects, so that only the write itself is
+ * between the two values. Returns the exit code. */
+static int write_child(char **argv)
+{
+    DWORD pid = strtoul(argv[2], NULL, 0);
+    BYTE *sleds = (BYTE *)(ULONG_PTR)strtoull(argv[3], NULL, 0);
+    unsigned int range = strtoul(argv[4], NULL, 0);
+    LONGLONG *times = (LONGLONG *)(ULONG_PTR)strtoull(argv[5], NULL, 0);
+    LARGE_INTEGER before, after;
+    LONGLONG pair[2];
+    HANDLE process, turn, written, waits[2];
+    char name[64];
+    SIZE_T size;
+    DWORD old;
+    BYTE *addr;
+    int i, value;
+
+    process = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION | SYNCHRONIZE,
+                          FALSE, pid);
+    if (!process) return 2;
+    snprintf(name, sizeof(name), "fex-smoke-turn-%lu", pid);
+    if (!(turn = OpenEventA(SYNCHRONIZE, FALSE, name))) return 3;
+    snprintf(name, sizeof(name), "fex-smoke-written-%lu", pid);
+    if (!(written = OpenEventA(EVENT_MODIFY_STATE, FALSE, name))) return 3;
+    waits[0] = turn;
+    waits[1] = process;
+    for (i = WRITE_RACE_SLEDS; i < WRITE_RACE_SLEDS + WRITE_RACE_ROUNDS; i++)
+    {
+        /* Ends with that process, which a failed round ends */
+        if (WaitForMultipleObjects(2, waits, FALSE, 20000) != WAIT_OBJECT_0) return 4;
+        spin_below(range);
+        value = 2 * i + 1;
+        addr = race_sled(sleds, i) + WRITE_RACE_MOV + 1;
+        if (!VirtualProtectEx(process, addr, sizeof(value), PAGE_EXECUTE_READWRITE, &old)) return 7;
+        QueryPerformanceCounter(&before);
+        if (!WriteProcessMemory(process, addr, &value, sizeof(value), &size) || size != sizeof(value)) return 5;
+        QueryPerformanceCounter(&after);
+        if (!VirtualProtectEx(process, addr, sizeof(value), old, &old)) return 8;
+        pair[0] = before.QuadPart;
+        pair[1] = after.QuadPart;
+        if (!WriteProcessMemory(process, times + 2 * (i - WRITE_RACE_SLEDS), pair, sizeof(pair), &size)
+                || size != sizeof(pair))
+            return 6;
+        SetEvent(written);
+    }
+    return 0;
+}
+
+static int compare_times(const void *a, const void *b)
+{
+    LONGLONG x = *(const LONGLONG *)a, y = *(const LONGLONG *)b;
+
+    return x < y ? -1 : x > y;
+}
+
+/* A child changes code on PAGE_EXECUTE_READ pages of this process with
+ * WriteProcessMemory while this process compiles it, and the call after the
+ * write must run what it wrote. The write takes no fault here, and the
+ * instruction cache flush kernelbase queues for it drops the block once its
+ * compile is done. Each round compiles a sled of its own, as the disk cache
+ * would load the block of an earlier round instead. The child spins below what
+ * half the first compiles of a sled took before it writes, and apc_sleeper runs
+ * its protects meanwhile, so a write can land in the compile after it decoded
+ * the mov. The disk cache must then not keep the block under the bytes as they
+ * are after the write: the call after the write would load it and return the
+ * old value. A write counts as landed in the call when it began after the call
+ * began and ended before it returned; the child's protect comes first, so the
+ * write is past the decode of the mov. With FEX_DISKCACHE=1 the case fails
+ * when no write landed, as it then checked nothing. It prints how many did,
+ * the compile time and what the writes took. */
+static void cross_process_write_race(void)
+{
+    static LONGLONG times[2 * WRITE_RACE_ROUNDS], took[WRITE_RACE_ROUNDS];
+    const int count = WRITE_RACE_SLEDS + WRITE_RACE_ROUNDS;
+    BYTE *sleds = new_pages((SIZE_T)count * WRITE_RACE_SIZE, PAGE_READWRITE);
+    const char *disk_cache = getenv("FEX_DISKCACHE"), *smc = getenv("FEX_SMCCHECKS");
+    HANDLE waiter, turn, written, waits[2];
+    STARTUPINFOA si = {sizeof(si)};
+    PROCESS_INFORMATION pi;
+    char path[MAX_PATH], cmd[MAX_PATH + 128], name[64];
+    double compile_time = 1e9, elapsed, ms;
+    LARGE_INTEGER start, call_start, call_end, freq;
+    volatile LONG done_sleeping = 0;
+    unsigned int range;
+    int i, k, r, in_call, landed = 0;
+    DWORD code;
+
+    for (i = 0; i < count; i++)
+        race_fill(race_sled(sleds, i), 2 * i, smc && !strcmp(smc, "full") ? WRITE_RACE_ADDS_FULL : WRITE_RACE_ADDS);
+    protect(sleds, (SIZE_T)count * WRITE_RACE_SIZE, PAGE_EXECUTE_READ);
+    set_code(sleds, (SIZE_T)count * WRITE_RACE_SIZE);
+
+    for (i = 0; i < WRITE_RACE_SLEDS; i++)
+    {
+        int (*fn)(void) = (void *)race_sled(sleds, i);
+
+        QueryPerformanceCounter(&start);
+        r = fn();
+        elapsed = seconds_since(start);
+        if (r != 2 * i) FAIL("sled %d returned %d, wanted %d", i, r, 2 * i);
+        if (elapsed < compile_time) compile_time = elapsed;
+    }
+    QueryPerformanceCounter(&start);
+    spin(1000000);
+    range = (unsigned int)(compile_time / 2 / (seconds_since(start) / 1000000)) + 1;
+
+    snprintf(name, sizeof(name), "fex-smoke-turn-%lu", GetCurrentProcessId());
+    if (!(turn = CreateEventA(NULL, FALSE, FALSE, name))) FAIL("CreateEvent: %lu", GetLastError());
+    snprintf(name, sizeof(name), "fex-smoke-written-%lu", GetCurrentProcessId());
+    if (!(written = CreateEventA(NULL, FALSE, FALSE, name))) FAIL("CreateEvent: %lu", GetLastError());
+    if (!(waiter = CreateThread(NULL, 0, apc_sleeper, (void *)&done_sleeping, 0, NULL)))
+        FAIL("CreateThread: %lu", GetLastError());
+    if (!GetModuleFileNameA(NULL, path, sizeof(path))) FAIL("GetModuleFileName: %lu", GetLastError());
+    snprintf(cmd, sizeof(cmd), "\"%s\" write_child %lu %llu %u %llu", path, GetCurrentProcessId(),
+             (unsigned long long)(ULONG_PTR)sleds, range, (unsigned long long)(ULONG_PTR)times);
+    if (!CreateProcessA(path, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+        FAIL("CreateProcess: %lu", GetLastError());
+    waits[0] = written;
+    waits[1] = pi.hProcess;
+    QueryPerformanceFrequency(&freq);
+    ms = 1000.0 / freq.QuadPart;
+    for (i = WRITE_RACE_SLEDS; i < count; i++)
+    {
+        int (*fn)(void) = (void *)race_sled(sleds, i);
+
+        k = i - WRITE_RACE_SLEDS;
+        QueryPerformanceCounter(&call_start);
+        SetEvent(turn);
+        r = fn();
+        QueryPerformanceCounter(&call_end);
+        if (WaitForMultipleObjects(2, waits, FALSE, 20000) != WAIT_OBJECT_0) FAIL("round %d: the child did not write", i);
+        in_call = times[2 * k] > call_start.QuadPart && times[2 * k + 1] < call_end.QuadPart;
+        landed += in_call;
+        took[k] = times[2 * k + 1] - times[2 * k];
+        compile_new_code();
+        if ((r = fn()) != 2 * i + 1)
+            FAIL("round %d: the call after the child's write returned %d, wanted %d; the write ran %.2f to %.2f ms"
+                 " into a call of %.2f ms, %d of %d writes so far landed in the call", i, r, 2 * i + 1,
+                 (times[2 * k] - call_start.QuadPart) * ms, (times[2 * k + 1] - call_start.QuadPart) * ms,
+                 (call_end.QuadPart - call_start.QuadPart) * ms, landed, k + 1);
+    }
+    if (WaitForSingleObject(pi.hProcess, 20000)) FAIL("the child did not end");
+    if (!GetExitCodeProcess(pi.hProcess, &code) || code) FAIL("the child exited with %lu", code);
+    qsort(took, WRITE_RACE_ROUNDS, sizeof(took[0]), compare_times);
+    printf("wine-build smoke test: %s cross_process_write_race %d of %d writes landed in the call, compile %.2f ms,"
+           " writes took %.2f to %.2f ms, median %.2f\n", ARCH, landed, WRITE_RACE_ROUNDS, compile_time * 1000,
+           took[0] * ms, took[WRITE_RACE_ROUNDS - 1] * ms, took[WRITE_RACE_ROUNDS / 2] * ms);
+    if (!landed && disk_cache && !strcmp(disk_cache, "1")) FAIL("no write of the child landed in a call");
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CloseHandle(turn);
+    CloseHandle(written);
+    done_sleeping = 1;
+    if (!QueueUserAPC(end_sleep, waiter, 0)) FAIL("QueueUserAPC: %lu", GetLastError());
+    WaitForSingleObject(waiter, INFINITE);
+    CloseHandle(waiter);
+}
+
 /* The x87 cases compute 12 as (1 + 3) * 3 on the x87 stack, or load it, then
  * run an instruction that faults on a PAGE_NOACCESS page, which x87_handler
  * skips, and pop the 12. The instructions before the fault are in the same
@@ -2074,6 +2294,7 @@ static const struct
     CASE(cross_process_protect),
     CASE(rwx_to_rw_race),
     CASE(rwx_write_race),
+    CASE(cross_process_write_race),
     CASE(x87_fault),
     CASE(x87_inline_smc),
     CASE(x87_push_smc),
@@ -2101,6 +2322,7 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IONBF, 0);
     srand(GetTickCount());
     if (argc == 5 && !strcmp(argv[1], "child")) return child_protect(argv);
+    if (argc == 6 && !strcmp(argv[1], "write_child")) return write_child(argv);
     AddVectoredExceptionHandler(1, handler);
     for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
     {
