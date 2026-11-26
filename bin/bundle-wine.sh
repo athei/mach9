@@ -1363,6 +1363,7 @@ smoke_test() {
     check_exceptflags_runs "${wine_env[@]}"
     check_attach_runs "${wine_env[@]}"
     check_terminate_runs "${wine_env[@]}"
+    check_ntdll_runs "${wine_env[@]}"
     check_linger_runs "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
@@ -2555,6 +2556,38 @@ check_terminate_runs() {
         want="wine-build smoke test: $arch TerminateThread cases passed"
         if ! grep -q "$want" "$log"; then
             echo "Error: terminate.exe for $arch did not print '$want'"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
+        grep "$want" "$log" | sed 's/^/    /'
+    done
+}
+
+# check_ntdll_runs <env-command>...: build smoke/ntdll.c for each arch of
+# SMOKE_PE_ARCHS and run it in the booted throwaway prefix, and exit with the
+# log unless every case passed: LDT selector queries, and on aarch64 and x86_64
+# WriteProcessMemory(), through the pseudo handle and a real one, and ReadFile()
+# into a page of the process that native code ran on after it was made writable
+# and executable, the reads while another thread runs that code (smoke/ntdll.c
+# says how). A failed
+# case prints why and ends the program. It has no waits and makes a few hundred
+# system calls, so the limit only catches a hang of Wine itself; it is that of
+# check_exceptflags_runs, whose alarm counts whole seconds the same way.
+check_ntdll_runs() {
+    local arch exe log want last
+    for arch in $SMOKE_PE_ARCHS; do
+        exe="$TMP_DIR/ntdll-$arch.exe"
+        log="$TMP_DIR/ntdll-$arch.log"
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/ntdll.c"
+        time_mark "smoke: ntdll.exe $arch"
+        echo "  Running ntdll.exe for $arch..."
+        run_limited 2 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
+        last=$(grep "wine-build smoke test: $arch case " "$log" | tail -n 1 | tr -d '\r' | sed 's/.* case //')
+        smoke_check "ntdll.exe for $arch, in case '$last'," 2 "$log"
+        want="wine-build smoke test: $arch ntdll cases passed"
+        if ! grep -q "$want" "$log"; then
+            echo "Error: ntdll.exe for $arch did not print '$want'"
             cat "$log"
             smoke_stop
             exit 1
