@@ -4,8 +4,9 @@ name: Build
 # Wine branch in pins/wine-src.ref and the pins of this commit, and signs
 # the loader and the app with the identity in the secrets of the job's
 # environment. A tag vX.Y.Z or vX.Y.Z-rc.N also notarizes the app, builds
-# its DMG, appcast and deltas, and attaches them, the bundle and its
-# symbols to a draft release of that tag (docs/maintenance.md, releases).
+# its DMG, appcast and deltas, and attaches them, the bundle, its symbols
+# and the list of its sources to a draft release of that tag
+# (docs/maintenance.md, releases).
 # A push to main that changes a file the build reads, the schedule and a
 # pull request to main build, bundle, assemble and sign the same, pack the
 # app's DMG, check what packaging needs without packing, and publish
@@ -794,7 +795,9 @@ jobs:
       # The body is the release notes the app shows, the file of X.Y.Z for a
       # release candidate of it too, then the sources the bundle was built
       # from (package.sh). Both are one paragraph per line, which GitHub
-      # renders as they are.
+      # renders as they are. sources.txt names the same sources with full
+      # commits, which bin/tag-forks.sh tags the forks at
+      # (docs/maintenance.md, cutting a release).
       - name: Create draft release
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -820,6 +823,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
             "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64.tar.xz" \
             "$RUNNER_TEMP/release/wine-$GITHUB_REF_NAME-macos-arm64-symbols.tar.xz" \
+            "$RUNNER_TEMP/release/sources.txt" \
             "$app/$NAME.dmg" \
             "${deltas[@]}" \
             "$app/appcast.xml"

@@ -150,7 +150,9 @@ built before, which runs under Rosetta.
    ([README](../release-notes/README.md)).
 2. Optionally tag a [release candidate](#release-candidates) first.
 3. Push the tag `vX.Y.Z`.
-4. Check the draft, add to its notes, and publish it with "Set as the
+4. Once the draft exists, tag the forks with `bin/tag-forks.sh vX.Y.Z`
+   ([fork tags](#fork-tags)).
+5. Check the draft, add to its notes, and publish it with "Set as the
    latest release" checked. Publishing runs `pages.yml`, and only then
    do the copies in the field and the download link see it
    ([updates in the field](#updates-in-the-field)).
@@ -178,7 +180,9 @@ into this release ([`make-release.sh`](../launcher/scripts/make-release.sh),
   `releases/latest/download` for;
 - the deltas from earlier releases into this one;
 - `appcast.xml`, which lists this release and the earlier ones, each
-  pointing at `Mach9.dmg` in its own release.
+  pointing at `Mach9.dmg` in its own release;
+- `sources.txt`, the sources of the notes with their full commits
+  ([`package.sh`](../bin/ci/package.sh)).
 
 The appcast is built on the one of the latest published release, so
 drafts have to be published in the order they were made, and a draft
@@ -201,6 +205,49 @@ first.
   to that earlier release. `appcast.sh` stops on them, since it attaches
   files to the new release only.
 
+### Fork tags
+
+A release is built from the tips of the fork branches, and they are
+force-pushed at every rebase. Only a tag keeps such a commit fetchable.
+[`tag-forks.sh`](../bin/tag-forks.sh) tags each fork as `mach9-<tag>` at
+the commit the draft's `sources.txt` names in full; its header has the
+details.
+
+- A fork is a source in a repository of this repository's owner. The
+  sources pinned in [`redist.env`](../pins/redist.env) get no tag.
+- It pushes each tag from the fork's checkout beside this one (`src`,
+  `src-*`), with the owner's credentials. The tag run cannot: its token
+  writes to this repository only. It could run the script after "Create
+  draft release" with a token in the environment `release` that may write
+  the contents of the fork repositories.
+- Run it before the next rebase of a fork: a commit that neither the fork
+  nor a checkout still has cannot be tagged.
+- A second run changes nothing. `bin/tag-forks.sh --check <tag>` checks a
+  release at any time and exits non-zero when a fork has no tag or has it
+  at another commit.
+- The tags are lightweight. `build-vkd3d-proton.sh` keeps them out of its
+  clone, with a negative refspec that needs git 2.29 or later, since
+  vkd3d-proton's version is its `git describe --tags`.
+
+When it fails:
+
+- `sources.txt` cannot be downloaded: download it from the draft's page
+  and pass it with `--sources <file>`.
+- The release tag is not at the record's Mach9 commit: the draft is not
+  of this tag's commit. Delete the draft and run the tag run again.
+- A push is refused: the checkout's origin needs the owner's credentials
+  for the fork.
+- A tag at another commit is never moved. One left from an earlier draft
+  of the same tag, deleted and built again, names a commit no published
+  release names: delete it in the fork
+  (`git -C <checkout> push origin :refs/tags/mach9-<tag>`) and run the
+  script again.
+- A commit no repository has any more: the draft names a source nobody can
+  get. Delete the draft, re-run the tag run, which builds the current tips,
+  and tag the new draft.
+- No checkout of a fork: clone it beside this checkout as `src-<name>`, or
+  pass `--checkout <dir>`.
+
 ### Release candidates
 
 A tag `vX.Y.Z-rc.N` runs the same steps on the commit with the version
@@ -209,6 +256,10 @@ Latest, so `pages.yml` never deploys its appcast and copies in the field
 never see it. Its `CFBundleVersion` sorts above every earlier release and
 below X.Y.Z (`bundle_version` in [`lib.sh`](../launcher/scripts/lib.sh)),
 so a copy updated to it is offered X.Y.Z later.
+
+Its DMG and source notice are published like a release's, so tag its
+forks before publishing its draft too: `bin/tag-forks.sh vX.Y.Z-rc.N`
+gives them the tag `mach9-vX.Y.Z-rc.N` ([fork tags](#fork-tags)).
 
 To check the update path before users see it, update a copy of the latest
 release to the candidate:

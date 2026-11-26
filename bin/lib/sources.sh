@@ -1,8 +1,9 @@
 # shellcheck shell=bash
-# The sources the bundle is built from, for the release notes of
-# bin/ci/package.sh and the source notice Step 4c of bundle-wine.sh writes
-# (write_source_notice). Both source this file after profile.sh and
-# redist.env. No build script reads it, so it is in no dist's KEY.
+# The sources the bundle is built from, for the release notes and
+# sources.txt of bin/ci/package.sh and the source notice Step 4c of
+# bundle-wine.sh writes (write_source_notice). Both source this file after
+# profile.sh and redist.env; bin/tag-forks.sh, which reads sources.txt, for
+# its helpers. No build script reads it, so it is in no dist's KEY.
 
 # GIT_SOURCES: the components besides Wine that the build scripts fetch from
 # a git repository, one per line as
@@ -68,6 +69,15 @@ published_repo() {
     if [ -n "$(git -C "$repo" for-each-ref --count=1 --contains "$commit" refs/remotes/origin 2>/dev/null)" ]; then
         public_url "$url"
     fi
+}
+
+# sources_line_ok <line>: succeed when <line> is a line of the sources.txt
+# bin/ci/package.sh writes and bin/tag-forks.sh reads: "<name> <repository>
+# <commit>" with single spaces, the repository an https URL with a host and
+# a path, the commit a full one.
+sources_line_ok() {
+    local re='^[^[:space:]]+ https://[^/[:space:]]+/[^[:space:]]+ [0-9a-f]{40}$'
+    [[ "$1" =~ $re ]]
 }
 
 # mach9_source: print <repository>|<commit> of this repository, whose scripts

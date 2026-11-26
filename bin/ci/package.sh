@@ -10,6 +10,10 @@ set -e
 #                                          --symbols), without its tree marker
 #   notes.md                               the components section of the
 #                                          release notes (release.yml)
+#   sources.txt                            the same sources with full
+#                                          commits, an asset of the release
+#                                          that tag-forks.sh tags the forks
+#                                          from
 #
 # The bundle is compressed at xz's default preset, since it is what people
 # download. The symbols, more than twice the size, take a faster preset,
@@ -28,6 +32,15 @@ set -e
 # staged from that Wine commit, or the notes would name something the bundle
 # was not built from.
 #
+# sources.txt has one line per source of the notes, as
+# "<name> <repository URL> <commit>" with the full commit, which the notes
+# abbreviate: every git source the source notice names, and FEX and Mesa,
+# which ship under the MIT licence and are not in it. The repository is the
+# public one, as the notice finds it (published_repo), and the script fails
+# on a line bin/tag-forks.sh would refuse (sources_line_ok). The tag run
+# attaches the file to the draft, so the commits a release was built from in
+# CI can still be read after the fork branches were rebased.
+#
 # --notes-only runs every check that comes before packing and writes and
 # prints the notes, but packs only a small part of each tree into a
 # temporary directory, which it lists with macOS's tar and deletes
@@ -44,7 +57,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # GStreamer's tag and repository.
 # shellcheck source=../../pins/redist.env
 . "$PINS_DIR/redist.env"
-# GIT_SOURCES, github_name and mach9_repo.
+# GIT_SOURCES, github_name, published_repo, source_commit, mach9_repo and
+# sources_line_ok.
 # shellcheck source=../lib/sources.sh
 . "$SCRIPT_DIR/lib/sources.sh"
 
@@ -69,6 +83,7 @@ SYMBOLS_DIR="$BUNDLE_DEST/wine-symbols"
 BUNDLE_TAR="$OUT/wine-$TAG-macos-arm64.tar.xz"
 SYMBOLS_TAR="$OUT/wine-$TAG-macos-arm64-symbols.tar.xz"
 NOTES="$OUT/notes.md"
+SOURCES="$OUT/sources.txt"
 
 # short <commit>: the commit abbreviated as the release notes write it.
 short() {
@@ -214,6 +229,28 @@ fi
         echo "- $name: $(github_name "${!repo}")@${!ref} ($(short "$(source_commit "$file")"))"
     done <<< "$GIT_SOURCES"
 } > "$NOTES"
+{
+    echo "Wine $(published_repo "$WINE_SRC" "$wine_commit") $wine_commit"
+    echo "Mach9 $(mach9_repo) $(git -C "$REPO_DIR" rev-parse HEAD)"
+    while IFS=: read -r name repo _ file _; do
+        commit=$(source_commit "$file")
+        echo "$name $(published_repo "${!repo}" "$commit") $commit"
+    done <<< "$GIT_SOURCES"
+} > "$SOURCES"
 
 echo "==> Notes ($NOTES)"
 sed 's/^/    /' "$NOTES"
+echo "==> Sources ($SOURCES)"
+sed 's/^/    /' "$SOURCES"
+# Each line as tag-forks.sh will read it. A source no public repository has
+# (published_repo: a local clone whose commit is on no branch of its origin)
+# has no URL, so its line fails.
+n=0
+while IFS= read -r line; do
+    n=$((n + 1))
+    if ! sources_line_ok "$line"; then
+        echo "Error: line $n of $SOURCES is not \"<name> <https repository URL> <full commit>\";"
+        echo "its source has no public repository or no commit"
+        exit 1
+    fi
+done < "$SOURCES"
