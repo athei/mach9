@@ -103,11 +103,12 @@ done
 # ── Dist ────────────────────────────────────────────────────────────────
 # gfxr_key <commit>: the KEY of a dist built from <commit>. Besides the
 # commit, which fixes the submodules and the precompiled archives, what
-# builds it: Apple's clang and the macOS SDK, and CMake.
+# builds it: Apple's clang and the macOS SDK, CMake, and the floor, which a
+# MACOSX_DEPLOYMENT_TARGET can raise.
 gfxr_key() {
     dist_key --hash "$PATCH" "$SCRIPT_DIR/build-gfxreconstruct.sh" "gfxreconstruct=$1" \
         "cc=$(cc_version /usr/bin/clang)" "$(sdk_key)" \
-        "cmake=$(cmake --version | head -n 1)"
+        "cmake=$(cmake --version | head -n 1)" "floor=$MACOS_FLOOR"
 }
 print_dist_key "$GFXRECONSTRUCT_GIT_COMMIT" redist.env gfxr_key
 
