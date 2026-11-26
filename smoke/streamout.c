@@ -93,9 +93,7 @@
  *                    colour in a register no other stream writes, created
  *                    with rasterized stream 0 to 3 in turn: only the
  *                    rasterized stream's point is drawn, in its colour, and
- *                    every stream appends its point to its slot; for
- *                    streams 1 to 3 it accepts that DXMT leaves the draw
- *                    out (athei/mach9#197)
+ *                    every stream appends its point to its slot
  *   geometry-uav     a geometry shader that streams out and adds 1 to a UAV
  *                    for each of 40 input points: the UAV holds 40, not
  *                    one count per pass of DXMT's geometry pipeline, and the
@@ -1708,10 +1706,7 @@ static uint32_t build_color_ps(uint32_t *out, uint32_t reg)
 
 /* The four streams of raster_streams_shdr, one point each, with rasterized
  * stream 0, 1, 2 and 3 in turn: only the rasterized stream's point is drawn,
- * in its colour, and each draw appends every stream's point to its slot.
- * DXMT creates no pipeline for rasterized stream 1 to 3 and leaves those
- * draws out (athei/mach9#197): the case accepts a draw that draws no pixel
- * and appends no point there, and the fix of #197 removes that. */
+ * in its colour, and each draw appends every stream's point to its slot */
 static void geometry_streams_rasterized_case(void)
 {
     static const D3D11_SO_DECLARATION_ENTRY decl[] = {
@@ -1777,17 +1772,6 @@ static void geometry_streams_rasterized_case(void)
                 point[0], point[1], point[2], point[3], changed);
             ok &= pixels[s] == (s == r ? pixel_colors[r] : 0u);
             ok &= !memcmp(point, colors[s], sizeof(colors[s])) && !changed;
-        }
-        if (!ok && r && !(pixels[0] | pixels[1] | pixels[2] | pixels[3]))
-        {
-            unsigned untouched = 1;
-
-            for (s = 0; s < 4; s++) untouched &= !count_changed(data[s], 4, TARGET_WORDS, TARGET_FILL);
-            if (untouched)
-            {
-                say("rasterized stream %u: accepted, DXMT leaves the draw out (athei/mach9#197)", r);
-                ok = 1;
-            }
         }
         correct += ok;
     }
