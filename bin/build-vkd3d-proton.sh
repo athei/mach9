@@ -183,16 +183,24 @@ fi
 # As in build-dxmt.sh: VKD3D_PROTON_SRC is this script's own scratch clone,
 # forced to the ref fetched from VKD3D_PROTON_REPO by URL on every run that
 # builds, with every tag, since vkd3d-proton's build runs `git describe
-# --tags` for its version. The submodules (dxil-spirv, with its own, and the
-# Khronos headers) are fetched shallow at the commits the ref records;
-# nothing describes them. git is kept from asking for credentials.
+# --tags` for its version. Every tag but the mach9-* ones bin/tag-forks.sh
+# puts on the commit of a release: they are lightweight, so `git describe
+# --tags` would name such a commit by one of them instead of by
+# vkd3d-proton's release tag. The negative refspec keeps them out of the
+# fetch (git 2.29 or later); the clone, or a fetch by an older version of
+# this script, brought them in, so they are deleted after it. The
+# submodules (dxil-spirv, with its own, and the Khronos headers) are
+# fetched shallow at the commits the ref records; nothing describes them.
+# git is kept from asking for credentials.
 echo "==> vkd3d-proton source: $VKD3D_PROTON_REPO $VKD3D_PROTON_REF"
 if [ ! -e "$VKD3D_PROTON_SRC/.git" ]; then
     GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout "$VKD3D_PROTON_REPO" "$VKD3D_PROTON_SRC"
 fi
 check_own_repo "$VKD3D_PROTON_SRC"
-GIT_TERMINAL_PROMPT=0 git -C "$VKD3D_PROTON_SRC" fetch --quiet --force --tags "$VKD3D_PROTON_REPO"
+GIT_TERMINAL_PROMPT=0 git -C "$VKD3D_PROTON_SRC" fetch --quiet --force --tags "$VKD3D_PROTON_REPO" '^refs/tags/mach9-*'
 GIT_TERMINAL_PROMPT=0 git -C "$VKD3D_PROTON_SRC" fetch --quiet "$VKD3D_PROTON_REPO" "$VKD3D_PROTON_REF"
+git -C "$VKD3D_PROTON_SRC" for-each-ref --format='delete %(refname)' 'refs/tags/mach9-*' |
+    git -C "$VKD3D_PROTON_SRC" update-ref --stdin
 git -C "$VKD3D_PROTON_SRC" -c advice.detachedHead=false checkout --quiet --force --detach FETCH_HEAD
 GIT_TERMINAL_PROMPT=0 git -C "$VKD3D_PROTON_SRC" submodule update --quiet --init --recursive --force --depth 1
 # A leading '+', '-' or 'U' marks a submodule that is not at the recorded
