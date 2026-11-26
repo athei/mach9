@@ -8,12 +8,27 @@ name: Compatdb
 # of WINE_COMPATDB, so a rustdoc warning such as a broken link fails the
 # run. compatdb is a macOS cdylib: release.yml tests and lints it on its
 # macOS runner before it builds, on every push to main that changes it and
-# on every pull request. rustfmt checks both compatdb crates here, since
-# formatting does not depend on the target. The launcher crates have their
-# own checks in launcher.yml.
+# on a pull request from this repository. rustfmt checks both compatdb
+# crates here, since formatting does not depend on the target. It runs on a
+# push to main or a pull request that changes them or the workspace files.
+# The launcher crates have their own checks in launcher.yml.
 
 on:
   push:
+    branches: [main]
+    paths:
+      - 'compatdb/**'
+      - '.cargo/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'clippy.toml'
+      - 'rustfmt.toml'
+      - 'pins/rust.env'
+      - 'bin/fmt.sh'
+      - '.github/workflows/compatdb.yml'
+  # The same paths. This check is not a required one, so a pull request it
+  # skips can still merge.
+  pull_request:
     branches: [main]
     paths:
       - 'compatdb/**'
@@ -30,7 +45,8 @@ on:
 permissions:
   contents: read
 
-# A newer push to main cancels the run it makes pointless.
+# A newer push to main or to a pull request cancels the run it makes
+# pointless.
 concurrency:
   group: compatdb-${{ github.ref }}
   cancel-in-progress: true
