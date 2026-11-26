@@ -161,22 +161,24 @@ unset CC CXX OBJC OBJCXX CFLAGS CXXFLAGS OBJCFLAGS CPPFLAGS LDFLAGS \
       PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
 
 # ── Dist ────────────────────────────────────────────────────────────────
+# LOADER_KEY: what the built Vulkan loader is kept for (LOADER_PREFIX/KEY):
+# the pinned loader and headers, the floor, and Apple's clang and the macOS
+# SDK, which compile it and Mesa.
+#
 # mesa_key <commit>: the KEY of a MESA_DIST built from <commit>. Besides the
-# commit, what the loader's key and the setup keys of the two trees below
-# hold, as far as it is known before anything is built: the pinned loader and
-# headers, the floor, the Python modules and Python, the versions of the
-# Homebrew libraries the stage 1 tools link, bison and flex; and Apple's
-# clang and the macOS SDK, which compile all of it. The stage 1 tools are fixed by these
-# inputs, so their hash, which stage 2's key holds, is left out. The
-# versions are read once, here, as the Python environment goes ahead of
-# PATH below.
-MESA_KEY_INPUTS="headers=$VULKAN_HEADERS_GIT_COMMIT loader=$VULKAN_LOADER_GIT_COMMIT floor=$MACOS_FLOOR"
-MESA_KEY_INPUTS+=" requirements=$MESA_PYTHON_REQUIREMENTS"
+# commit, LOADER_KEY and what the setup keys of the two trees below hold, as
+# far as it is known before anything is built: the Python modules and
+# Python, the versions of the Homebrew libraries the stage 1 tools link,
+# bison and flex. The stage 1 tools are fixed by these inputs, so their
+# hash, which stage 2's key holds, is left out. The versions are read once,
+# here, as the Python environment goes ahead of PATH below.
+LOADER_KEY="headers=$VULKAN_HEADERS_GIT_COMMIT loader=$VULKAN_LOADER_GIT_COMMIT floor=$MACOS_FLOOR"
+LOADER_KEY+=" cc=$(cc_version /usr/bin/clang) $(sdk_key)"
+MESA_KEY_INPUTS="$LOADER_KEY requirements=$MESA_PYTHON_REQUIREMENTS"
 MESA_KEY_INPUTS+=" python=$(python3 -c 'import platform; print(platform.python_version())')"
 MESA_KEY_INPUTS+=" llvm=$("$LLVM_CONFIG" --version)"
 MESA_KEY_INPUTS+=" spirv=$(PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig" pkg-config --modversion LLVMSPIRVLib SPIRV-Tools | paste -sd ' ' -)"
-MESA_KEY_INPUTS+=" bison=$(cc_version "$BISON") flex=$(cc_version "$FLEX") cc=$(cc_version /usr/bin/clang)"
-MESA_KEY_INPUTS+=" $(sdk_key)"
+MESA_KEY_INPUTS+=" bison=$(cc_version "$BISON") flex=$(cc_version "$FLEX")"
 mesa_key() {
     dist_key --hash "$SCRIPT_DIR/lib/licenses.sh" "$SCRIPT_DIR/build-mesa.sh" "mesa=$1" "$MESA_KEY_INPUTS"
 }
@@ -215,14 +217,13 @@ MESA_COMMIT=$(git -C "$MESA_SRC" rev-parse HEAD)
 echo "    at $MESA_COMMIT"
 
 # ── Vulkan loader ───────────────────────────────────────────────────────
-# Built once per key: the two pinned commits and the floor. LOADER_PREFIX/KEY
-# records it, and a loader built for another key, or none, is built again
-# from fresh trees. The headers are installed into a prefix of their own,
-# and the loader's configure is pointed at their CMake package, so it can
-# only take these and not Homebrew's. LOADER_PREFIX also keeps the licences
-# of both out of their clones, for the stage below; a loader built before it
-# kept them is built again.
-LOADER_KEY="headers=$VULKAN_HEADERS_GIT_COMMIT loader=$VULKAN_LOADER_GIT_COMMIT floor=$MACOS_FLOOR"
+# Built once per LOADER_KEY (above), which LOADER_PREFIX/KEY records; a
+# loader built for another key, or none, is built again from fresh trees.
+# The headers are installed into a prefix of their own, and the loader's
+# configure is pointed at their CMake package, so it can only take these and
+# not Homebrew's. LOADER_PREFIX also keeps the licences of both out of their
+# clones, for the stage below; a loader built before it kept them is built
+# again.
 if [ "$(cat "$LOADER_PREFIX/KEY" 2>/dev/null)" = "$LOADER_KEY" ] &&
    [ -d "$LOADER_PREFIX/share/licenses/vulkan-loader" ] &&
    [ -d "$LOADER_PREFIX/share/licenses/vulkan-headers" ]; then
