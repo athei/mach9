@@ -11,6 +11,7 @@ const fn outcome(status: Status, failed: u32) -> Outcome {
         sites: failed,
         todo_succeeded: 0,
         skipped: 0,
+        unexplained: 0,
     }
 }
 
@@ -238,6 +239,7 @@ fn the_worse_outcome_takes_the_worse_status_and_each_larger_count() {
         sites: 1,
         todo_succeeded: 0,
         skipped: 0,
+        unexplained: 0,
     };
     let second = Outcome {
         status: Status::Fail,
@@ -245,6 +247,7 @@ fn the_worse_outcome_takes_the_worse_status_and_each_larger_count() {
         sites: 3,
         todo_succeeded: 1,
         skipped: 2,
+        unexplained: 1,
     };
     let written = Outcome {
         status: Status::Fail,
@@ -252,6 +255,7 @@ fn the_worse_outcome_takes_the_worse_status_and_each_larger_count() {
         sites: 3,
         todo_succeeded: 1,
         skipped: 2,
+        unexplained: 1,
     };
     assert_eq!(worse(first, second), written);
     assert_eq!(worse(second, first), written);
@@ -272,6 +276,7 @@ fn either_outcome_of_an_unstable_key_passes_against_its_entry() {
         sites: 1,
         todo_succeeded: 0,
         skipped: 0,
+        unexplained: 2,
     };
     let second = Outcome {
         status: Status::Fail,
@@ -279,6 +284,7 @@ fn either_outcome_of_an_unstable_key_passes_against_its_entry() {
         sites: 3,
         todo_succeeded: 0,
         skipped: 2,
+        unexplained: 0,
     };
     let unstable = unstable(
         &BTreeSet::from([a32.clone()]),

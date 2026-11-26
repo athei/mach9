@@ -16,6 +16,7 @@ const fn outcome(
         sites,
         todo_succeeded,
         skipped,
+        unexplained: 0,
     }
 }
 
@@ -245,6 +246,55 @@ fn failure_and_site_changes() {
                 Delta::Sites { from: 2, to: 3 },
             ],
             Verdict::Regression,
+        ),
+    ]);
+}
+
+/// `outcome` with `unexplained` failures.
+const fn unexplained(outcome: Outcome, unexplained: u32) -> Outcome {
+    Outcome {
+        unexplained,
+        ..outcome
+    }
+}
+
+/// A failure only the summary counts gates as one with its line does, also
+/// between two truncated outcomes.
+#[test]
+fn unexplained_failure_changes() {
+    check(vec![
+        case(
+            Some(FAIL),
+            Some(unexplained(FAIL, 1)),
+            vec![Delta::Unexplained { from: 0, to: 1 }],
+            Verdict::Regression,
+        ),
+        case(
+            Some(unexplained(FAIL, 2)),
+            Some(unexplained(FAIL, 1)),
+            vec![Delta::Unexplained { from: 2, to: 1 }],
+            Verdict::Stale,
+        ),
+        case(
+            Some(unexplained(outcome(Crash, 1, 1, 0, 0), 1)),
+            Some(unexplained(outcome(Crash, 1, 1, 0, 0), 3)),
+            vec![Delta::Unexplained { from: 1, to: 3 }],
+            Verdict::Regression,
+        ),
+        case(
+            Some(unexplained(outcome(Crash, 1, 1, 0, 0), 3)),
+            Some(outcome(Crash, 1, 1, 0, 0)),
+            vec![Delta::Unexplained { from: 3, to: 0 }],
+            Verdict::Match,
+        ),
+        case(
+            Some(unexplained(outcome(Crash, 1, 1, 0, 0), 3)),
+            Some(FAIL),
+            vec![Delta::Status {
+                from: Crash,
+                to: Fail,
+            }],
+            Verdict::Stale,
         ),
     ]);
 }

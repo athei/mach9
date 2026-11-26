@@ -344,6 +344,11 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   by hand; `run` needs one. Its header has the bundle's `VERSION` and
   `COMPONENTS`, whose differences a run reports without failing. The
   format is in [`baseline.rs`](../conformance/src/baseline.rs).
+- A key's line holds its status and the counts of its failure, todo
+  success and skip lines. `unexplained=<n>` follows only on a key whose
+  summary counts failures that no failure line shows: a check message
+  without its own newline hides the next line, and a child's lines can
+  miss the pipe. More of them is a regression, as more failures are.
 - People keep [`triage.txt`](../conformance/baselines/triage.txt) in the
   same directory: per test an issue and whether it is flaky.
 - The state directory, `build/conformance` in the

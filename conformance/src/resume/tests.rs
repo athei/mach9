@@ -31,6 +31,7 @@ fn record(pass: Pass, key: &str, failed: u32) -> Record {
             sites: failed,
             todo_succeeded: 0,
             skipped: 1,
+            unexplained: 0,
         },
     }
 }

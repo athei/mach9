@@ -7,6 +7,7 @@
 //! |---|---|---|
 //! | status | worse [`Status::rank`], or crash and stall swapped | better rank |
 //! | failures, sites | more | fewer |
+//! | unexplained failures, counted by the summary only | more | fewer |
 //! | skipped | more: coverage lost | fewer |
 //! | todo successes | | any change |
 //! | key | in the baseline, not listed by the run; new with a crash or stall | new with another status |
@@ -17,10 +18,10 @@
 //!
 //! A crash or stall counts only what ran before it ([`Status::is_truncated`]),
 //! so counts are not compared between a truncated outcome and a full one.
-//! Between two truncated outcomes, more failures or more sites are a
-//! regression: whatever ran before the crash failed more. Fewer of either,
-//! and any change of the skips or todo successes, are listed as
-//! information that does not change the verdict: they may only mean that
+//! Between two truncated outcomes, more failures, sites or unexplained
+//! failures are a regression: whatever ran before the crash failed more.
+//! Fewer of any, and any change of the skips or todo successes, are listed
+//! as information that does not change the verdict: they may only mean that
 //! the crash moved earlier. A change of status between them (crash and
 //! stall swapped) still gates. A key the triage marks flaky is reported but gates
 //! only on a new crash or stall. The header's differences are reported and
@@ -105,6 +106,10 @@ pub enum Delta {
         from: u32,
         to: u32,
     },
+    Unexplained {
+        from: u32,
+        to: u32,
+    },
     Skipped {
         from: u32,
         to: u32,
@@ -136,7 +141,10 @@ impl Delta {
                     Class::Regression
                 }
             }
-            Self::Failed { from, to } | Self::Sites { from, to } | Self::Skipped { from, to } => {
+            Self::Failed { from, to }
+            | Self::Sites { from, to }
+            | Self::Unexplained { from, to }
+            | Self::Skipped { from, to } => {
                 if to < from {
                     Class::Stale
                 } else {
@@ -159,13 +167,14 @@ impl Delta {
         )
     }
 
-    /// Whether the difference is one of the four counts.
+    /// Whether the difference is one of the five counts.
     #[must_use]
     pub const fn is_count(&self) -> bool {
         matches!(
             self,
             Self::Failed { .. }
                 | Self::Sites { .. }
+                | Self::Unexplained { .. }
                 | Self::Skipped { .. }
                 | Self::TodoSucceeded { .. }
         )
@@ -180,6 +189,7 @@ impl fmt::Display for Delta {
             Self::Status { from, to } => write!(f, "status {from} -> {to}"),
             Self::Failed { from, to } => write!(f, "failed {from} -> {to}"),
             Self::Sites { from, to } => write!(f, "sites {from} -> {to}"),
+            Self::Unexplained { from, to } => write!(f, "unexplained {from} -> {to}"),
             Self::Skipped { from, to } => write!(f, "skipped {from} -> {to}"),
             Self::TodoSucceeded { from, to } => write!(f, "todo_succeeded {from} -> {to}"),
         }
@@ -201,9 +211,10 @@ pub struct Change {
 impl Change {
     /// The class the change gates with: that of its worst delta, or, for a
     /// flaky key, regression on a new crash or stall and `None` otherwise.
-    /// When both outcomes are truncated, only more failures or sites gate
-    /// among the counts; the other count deltas are information and have no
-    /// class, and a change with nothing else gates with `None`.
+    /// When both outcomes are truncated, only more failures, sites or
+    /// unexplained failures gate among the counts; the other count deltas
+    /// are information and have no class, and a change with nothing else
+    /// gates with `None`.
     #[must_use]
     pub fn class(&self) -> Option<Class> {
         let both_truncated = matches!(
@@ -216,7 +227,9 @@ impl Change {
                 || !delta.is_count()
                 || matches!(
                     delta,
-                    Delta::Failed { from, to } | Delta::Sites { from, to } if to > from
+                    Delta::Failed { from, to }
+                        | Delta::Sites { from, to }
+                        | Delta::Unexplained { from, to } if to > from
                 )
         });
         if self.flaky {
@@ -382,6 +395,10 @@ fn deltas(before: &Outcome, after: &Outcome) -> Vec<Delta> {
     let (from, to) = (before.sites, after.sites);
     if from != to {
         deltas.push(Delta::Sites { from, to });
+    }
+    let (from, to) = (before.unexplained, after.unexplained);
+    if from != to {
+        deltas.push(Delta::Unexplained { from, to });
     }
     let (from, to) = (before.skipped, after.skipped);
     if from != to {

@@ -325,6 +325,7 @@ const fn outcome(status: Status, failed: u32) -> Outcome {
         sites: failed,
         todo_succeeded: 0,
         skipped: 0,
+        unexplained: 0,
     }
 }
 

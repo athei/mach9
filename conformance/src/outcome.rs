@@ -142,7 +142,7 @@ impl fmt::Display for TestId {
     }
 }
 
-/// What one run of a test gave: its status and four counts over every
+/// What one run of a test gave: its status and five counts over every
 /// process of its tree.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Outcome {
@@ -156,27 +156,39 @@ pub struct Outcome {
     /// The skips the summary lines count, and those that
     /// `WINETEST_MUTE_THRESHOLD` silenced.
     pub skipped: u32,
+    /// The failures the root's summary counts beyond the `Test failed:`,
+    /// `Test succeeded inside todo block:` and child crash lines: failures
+    /// whose line was lost, glued to a check message without its own
+    /// newline or printed by a child whose output did not reach the pipe.
+    pub unexplained: u32,
 }
 
 impl Outcome {
-    /// The field names of the counts, in the order [`fmt::Display`] writes
-    /// them.
+    /// The field names of the counts every outcome has, in the order
+    /// [`fmt::Display`] writes them.
     const COUNTS: [&str; 4] = ["failed", "sites", "todo_succeeded", "skipped"];
+
+    /// The field name of [`Self::unexplained`], which [`fmt::Display`]
+    /// writes after the counts only when it is not 0, so the line of an
+    /// outcome without such failures is the same as before the field
+    /// existed.
+    const UNEXPLAINED: &str = "unexplained";
 
     /// Read the tokens [`fmt::Display`] writes: the status, then
     /// `failed=<n>`, `sites=<n>`, `todo_succeeded=<n>` and `skipped=<n>` in
-    /// this order.
+    /// this order, and `unexplained=<n>` when there are such failures.
     ///
     /// # Errors
     ///
     /// Returns a message for a missing, unknown or extra token, a count out
-    /// of order, and a count that is not a decimal `u32`.
+    /// of order, a count that is not a decimal `u32`, and `unexplained=0`,
+    /// which is written as no token.
     pub fn parse(tokens: &[&str]) -> Result<Self, String> {
         let Some((&status, counts)) = tokens.split_first() else {
             return Err(String::from("no status"));
         };
         let status = Status::parse(status).ok_or_else(|| format!("unknown status {status:?}"))?;
-        if let Some(extra) = counts.get(Self::COUNTS.len()) {
+        if let Some(extra) = counts.get(Self::COUNTS.len() + 1) {
             return Err(format!("unexpected {extra:?} after the counts"));
         }
         let mut values = [0u32; 4];
@@ -184,13 +196,26 @@ impl Outcome {
             let token = counts
                 .get(index)
                 .ok_or_else(|| format!("missing {name}=<n>"))?;
-            let value = token
-                .strip_prefix(name)
-                .and_then(|rest| rest.strip_prefix('='))
-                .ok_or_else(|| format!("expected {name}=<n>, found {token:?}"))?;
-            values[index] =
-                parse_count(value).ok_or_else(|| format!("{name} {value:?} is not a count"))?;
+            values[index] = parse_field(name, token)?;
         }
+        let unexplained = match counts.get(Self::COUNTS.len()) {
+            None => 0,
+            Some(token)
+                if token.split_once('=').map(|(name, _)| name) == Some(Self::UNEXPLAINED) =>
+            {
+                match parse_field(Self::UNEXPLAINED, token)? {
+                    0 => {
+                        return Err(format!(
+                            "{token:?}: an outcome without unexplained failures has no \
+                             {}=<n>",
+                            Self::UNEXPLAINED
+                        ));
+                    }
+                    count => count,
+                }
+            }
+            Some(token) => return Err(format!("unexpected {token:?} after the counts")),
+        };
         let [failed, sites, todo_succeeded, skipped] = values;
         Ok(Self {
             status,
@@ -198,19 +223,34 @@ impl Outcome {
             sites,
             todo_succeeded,
             skipped,
+            unexplained,
         })
     }
 }
 
 impl fmt::Display for Outcome {
-    /// `<status> failed=<n> sites=<n> todo_succeeded=<n> skipped=<n>`.
+    /// `<status> failed=<n> sites=<n> todo_succeeded=<n> skipped=<n>`, then
+    /// ` unexplained=<n>` when it is not 0.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{} failed={} sites={} todo_succeeded={} skipped={}",
             self.status, self.failed, self.sites, self.todo_succeeded, self.skipped
-        )
+        )?;
+        if self.unexplained > 0 {
+            write!(f, " {}={}", Self::UNEXPLAINED, self.unexplained)?;
+        }
+        Ok(())
     }
+}
+
+/// The count of `token`, `<name>=<n>`.
+fn parse_field(name: &str, token: &str) -> Result<u32, String> {
+    let value = token
+        .strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix('='))
+        .ok_or_else(|| format!("expected {name}=<n>, found {token:?}"))?;
+    parse_count(value).ok_or_else(|| format!("{name} {value:?} is not a count"))
 }
 
 /// A decimal count without sign or leading zeros, as `{}` writes a `u32`.

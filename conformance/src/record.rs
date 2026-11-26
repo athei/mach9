@@ -151,6 +151,7 @@ pub fn worse(a: Outcome, b: Outcome) -> Outcome {
         sites: a.sites.max(b.sites),
         todo_succeeded: a.todo_succeeded.max(b.todo_succeeded),
         skipped: a.skipped.max(b.skipped),
+        unexplained: a.unexplained.max(b.unexplained),
     }
 }
 

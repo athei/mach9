@@ -27,7 +27,8 @@
 //! dropped. A check message without its own newline runs into the next line
 //! and hides it, and a line of another process can split a check line; the
 //! parser counts neither line, but the root's summary still counts such a
-//! failure, which [`parse_run`] turns into [`Status::Fail`].
+//! failure, which [`parse_run`] keeps as [`Outcome::unexplained`] and turns
+//! into [`Status::Fail`].
 
 use std::collections::BTreeSet;
 
@@ -161,7 +162,9 @@ pub struct ListingError {
 /// summary lines of all processes, since a parent does not add its
 /// children's skips, and the skips of their `Silenced` lines, so it does not
 /// depend on `WINETEST_MUTE_THRESHOLD`; a process without a summary adds
-/// none.
+/// none. `unexplained` is what the root's summary counts beyond the failure,
+/// todo success and child crash lines of every process, so a failure whose
+/// line was lost still changes the outcome.
 #[must_use]
 pub fn parse_run(output: &str, unit: &str, key: &Key, ending: Ending) -> Run {
     let lines: Vec<Line<'_>> = output.split('\n').map(Line::parse).collect();
@@ -174,11 +177,12 @@ pub fn parse_run(output: &str, unit: &str, key: &Key, ending: Ending) -> Run {
     };
     let summary = root_summary(&lines, unit, marker);
     let root = marker.or_else(|| summary.map(|summary| summary.pid));
-    let mut failed = 0;
+    let mut failed = 0u32;
     let mut sites = BTreeSet::new();
-    let mut todo_succeeded = 0;
+    let mut todo_succeeded = 0u32;
     let mut skipped = 0;
     let mut child_crash = None;
+    let mut child_crashes = 0u32;
     for line in &lines {
         match line {
             Line::Check {
@@ -200,6 +204,7 @@ pub fn parse_run(output: &str, unit: &str, key: &Key, ending: Ending) -> Run {
                 ..
             } => {
                 child_crash.get_or_insert_with(|| (*text).to_owned());
+                child_crashes += 1;
             }
             Line::Summary(summary) => skipped += summary.skipped,
             Line::Silenced { skips } => skipped += skips,
@@ -222,14 +227,19 @@ pub fn parse_run(output: &str, unit: &str, key: &Key, ending: Ending) -> Run {
                 .or_else(|| unfinished_child(&lines, root).map(Crash::ChildNoSummary)),
         },
     };
-    let unexplained = summary.is_some_and(|summary| summary.failures > failed + todo_succeeded);
+    // `winetest_wait_child_process` adds one failure for a child that died
+    // of an unhandled exception, which its line shows.
+    let explained = failed
+        .saturating_add(todo_succeeded)
+        .saturating_add(child_crashes);
+    let unexplained = summary.map_or(0, |summary| summary.failures.saturating_sub(explained));
     let status = if matches!(ending, Ending::Stalled) {
         Status::Stall
     } else if crash.is_some() {
         Status::Crash
     } else if matches!(key, Key::Function(_)) && marker.is_none() {
         Status::NotReached
-    } else if failed > 0 || unexplained {
+    } else if failed > 0 || unexplained > 0 {
         Status::Fail
     } else {
         Status::Ok
@@ -241,6 +251,7 @@ pub fn parse_run(output: &str, unit: &str, key: &Key, ending: Ending) -> Run {
             sites: u32::try_from(sites.len()).unwrap_or(u32::MAX),
             todo_succeeded,
             skipped,
+            unexplained,
         },
         crash,
         root,

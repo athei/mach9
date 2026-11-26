@@ -17,6 +17,7 @@
 //! [i386-windows device]
 //! test_filter fail failed=2 sites=1 todo_succeeded=0 skipped=0
 //! test_fpu_setup ok failed=0 sites=0 todo_succeeded=0 skipped=1
+//! test_format fail failed=1 sites=1 todo_succeeded=0 skipped=0 unexplained=1
 //!
 //! [i386-windows stateblock]
 //! * ok failed=0 sites=0 todo_succeeded=0 skipped=0
@@ -24,7 +25,8 @@
 //!
 //! A section is a leg and a unit; a unit that runs as a whole has the one
 //! key `*`. Sections and keys are sorted, so an unchanged baseline writes
-//! the same bytes.
+//! the same bytes. `unexplained=<n>` comes only on a key whose summary
+//! counted failures no line showed ([`Outcome::unexplained`]).
 
 use std::{
     collections::BTreeMap,

@@ -31,6 +31,7 @@ const fn outcome(
         sites,
         todo_succeeded,
         skipped,
+        unexplained: 0,
     }
 }
 
@@ -223,7 +224,10 @@ fn the_exit_code_is_the_failure_count_capped_at_255() {
                    flaky, 300 failures), 0 skipped.\n";
     assert_eq!(
         run_once(summary, "test_a", Ending::Exited(255)).outcome,
-        outcome(Status::Fail, 0, 0, 0, 0)
+        Outcome {
+            unexplained: 300,
+            ..outcome(Status::Fail, 0, 0, 0, 0)
+        }
     );
     assert_eq!(
         run_once(summary, "test_a", Ending::Exited(44)).crash,
@@ -235,18 +239,87 @@ fn the_exit_code_is_the_failure_count_capped_at_255() {
 }
 
 /// A failure the summary counts but no line shows, here a message without
-/// its newline that hides the next check, still fails the run.
+/// its newline that hides the next check, still fails the run and is
+/// counted as unexplained.
 #[test]
 fn summary_failures_no_line_explains_fail_the_run() {
     let output = "0024:wt-run:test_a\nd3d11.c:5: Test failed: no newlined3d11.c:6: Test failed: \
                   hidden\nd3d11.c:7: Test succeeded inside todo block: x\n0024:d3d11: 3 tests \
                   executed (0 marked as todo, 0 as flaky, 3 failures), 0 skipped.\n";
     let run = run_once(output, "test_a", Ending::Exited(3));
-    assert_eq!(run.outcome, outcome(Status::Fail, 1, 1, 1, 0));
+    assert_eq!(
+        run.outcome,
+        Outcome {
+            unexplained: 1,
+            ..outcome(Status::Fail, 1, 1, 1, 0)
+        }
+    );
     let todo_only = "0024:wt-run:test_a\nd3d11.c:7: Test succeeded inside todo block: x\n0024:d3d11: \
                      1 tests executed (0 marked as todo, 0 as flaky, 1 failure), 0 skipped.\n";
     let run = run_once(todo_only, "test_a", Ending::Exited(1));
     assert_eq!(run.outcome, outcome(Status::Ok, 0, 0, 1, 0));
+}
+
+/// A check message without its newline hides the next line. The baseline's
+/// run hid a skip there, a later one hides a new failure: the summary and
+/// the exit code count it, no line does, and the key no longer matches.
+#[test]
+fn a_new_failure_glued_to_a_message_without_newline_does_not_match() {
+    use std::collections::BTreeMap;
+
+    use crate::{
+        baseline::Baseline,
+        diff::{self, Scope, Verdict},
+        header::Header,
+        model::PeDir,
+        outcome::TestId,
+        triage::Triage,
+    };
+    let key = key("test_format_support");
+    let recorded = "0020:wt-run:test_format_support\n\
+        d3d11.c:21555:1.000 Test failed: format 0x1: Got unexpected format support 0x1\
+        d3d11.c:21600:1.001 Tests skipped: no video support.\n\
+        0020:d3d11:1.500 100 tests executed (0 marked as todo, 0 as flaky, 1 failure), 1 \
+        skipped.\n";
+    let now = "0020:wt-run:test_format_support\n\
+        d3d11.c:21555:1.000 Test failed: format 0x1: Got unexpected format support 0x1\
+        d3d11.c:21564:1.001 Test failed: format 0x1: Expected format support 0x1, got 0.\n\
+        d3d11.c:21600:1.002 Tests skipped: no video support.\n\
+        0020:d3d11:1.500 100 tests executed (0 marked as todo, 0 as flaky, 2 failures), 1 \
+        skipped.\n";
+    let before = parsed(recorded, "d3d11", &key, Ending::Exited(1));
+    let after = parsed(now, "d3d11", &key, Ending::Exited(2));
+    assert_eq!(before.outcome, outcome(Status::Fail, 1, 1, 0, 1));
+    assert_eq!(
+        after.outcome,
+        Outcome {
+            unexplained: 1,
+            ..outcome(Status::Fail, 1, 1, 0, 1)
+        }
+    );
+    assert_eq!(after.crash, None);
+    let id = TestId {
+        leg: PeDir::X86_64,
+        unit: String::from("d3d11"),
+        key,
+    };
+    let header = Header::parse("wine-11.21\n", "").unwrap();
+    let baseline = Baseline {
+        exe: String::from("d3d11"),
+        header: header.clone(),
+        entries: BTreeMap::from([(id.clone(), before.outcome)]),
+    };
+    let results = BTreeMap::from([(id, after.outcome)]);
+    let triage = Triage::parse("", "triage.txt").unwrap();
+    let report = diff::diff(
+        "d3d11",
+        Some(&baseline),
+        &header,
+        &results,
+        &Scope::All,
+        &triage,
+    );
+    assert_eq!(report.verdict(), Verdict::Regression, "{}", report.text());
 }
 
 #[test]
@@ -259,7 +332,8 @@ fn a_whole_unit_s_root_is_its_last_summary() {
 }
 
 /// A whole unit whose child prints its summary first: the parent waits for
-/// it, so the parent's summary comes last and is the root's.
+/// it, so the parent's summary comes last and is the root's. The child's
+/// failure lines did not reach the output, so its failures are unexplained.
 #[test]
 fn a_whole_unit_s_child_summary_before_the_parent_s_is_not_the_root() {
     let output = "\
@@ -270,7 +344,13 @@ d3d.c:20: 2 failures in child process
     let run = parsed(output, "d3d", &Key::Whole, Ending::Exited(2));
     assert_eq!(run.root, Some(0x70));
     assert_eq!(run.crash, None);
-    assert_eq!(run.outcome, outcome(Status::Fail, 0, 0, 0, 1));
+    assert_eq!(
+        run.outcome,
+        Outcome {
+            unexplained: 2,
+            ..outcome(Status::Fail, 0, 0, 0, 1)
+        }
+    );
 }
 
 /// A child that printed its marker and no summary ended early, which its

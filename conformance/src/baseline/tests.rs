@@ -12,6 +12,7 @@ const TEXT: &str = "\
 [i386-windows device]
 depth_blit_test crash failed=1 sites=1 todo_succeeded=0 skipped=0
 test_filter fail failed=2 sites=1 todo_succeeded=0 skipped=0
+test_format fail failed=1 sites=1 todo_succeeded=0 skipped=0 unexplained=1
 test_fpu_setup ok failed=0 sites=0 todo_succeeded=0 skipped=1
 
 [i386-windows stateblock]
@@ -32,7 +33,7 @@ fn a_baseline_round_trips() {
     assert_eq!(parse(&baseline.to_text()).unwrap(), baseline);
     assert_eq!(baseline.header.wine_version, "wine-11.21-37-g53def89293a");
     assert_eq!(baseline.header.components.len(), 2);
-    assert_eq!(baseline.entries.len(), 5);
+    assert_eq!(baseline.entries.len(), 6);
     let whole = TestId {
         leg: PeDir::I386,
         unit: String::from("stateblock"),
@@ -56,6 +57,7 @@ test_fpu_setup ok failed=0 sites=0 todo_succeeded=0 skipped=1
 
 test_filter fail failed=2 sites=1 todo_succeeded=0 skipped=0
 depth_blit_test crash failed=1 sites=1 todo_succeeded=0 skipped=0
+test_format fail failed=1 sites=1 todo_succeeded=0 skipped=0 unexplained=1
 ";
 
 /// The writer sorts by leg, unit and key and writes its own prose, whatever
@@ -222,7 +224,17 @@ fn load_reads_a_file_or_finds_none() {
     );
 }
 
+/// Each committed baseline parses, and writing it again gives its bytes,
+/// so a record on an unchanged build changes no line.
 #[test]
-fn the_committed_baselines_parse() {
-    load_dir(&dir()).unwrap();
+fn the_committed_baselines_parse_and_write_their_own_text() {
+    for baseline in load_dir(&dir()).unwrap() {
+        let path = dir().join(format!("{}.txt", baseline.exe));
+        assert_eq!(
+            baseline.to_text(),
+            fs::read_to_string(&path).unwrap(),
+            "{}",
+            path.display()
+        );
+    }
 }
