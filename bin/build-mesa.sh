@@ -279,8 +279,11 @@ if [ "$(cat "$VENV/REQUIREMENTS" 2>/dev/null)" != "$MESA_PYTHON_REQUIREMENTS" ] 
     echo "==> Python environment for Mesa's build scripts..."
     remove_tree "$VENV"
     python3 -m venv "$VENV"
+    # PIP_USER=0: a pip config that sets user = true makes pip refuse to
+    # install into a virtual environment. Not --isolated, which would also
+    # drop the index and proxy settings of that config.
     # shellcheck disable=SC2086 # one word per requirement
-    "$VENV/bin/python3" -m pip install --quiet --disable-pip-version-check $MESA_PYTHON_REQUIREMENTS
+    PIP_USER=0 "$VENV/bin/python3" -m pip install --quiet --disable-pip-version-check $MESA_PYTHON_REQUIREMENTS
     echo "$MESA_PYTHON_REQUIREMENTS" > "$VENV/REQUIREMENTS"
 fi
 export PATH="$VENV/bin:$PATH"
