@@ -367,12 +367,10 @@ static const uint32_t layer_vs_shdr[] = {
 };
 
 /* A geometry shader that passes its triangle through, the three vertices
- * emitted one after another, with LAYER as SV_RenderTargetArrayIndex. DXMT's
- * CheckGSBBIsPassThrough accepts no shader today (#199), so DXMT draws it
- * through its geometry pipeline; the render target array index makes it pass
- * DXMT's signature check for a pass-through once that is fixed, which only a
- * shader that passes the render target array or viewport index through
- * does. */
+ * emitted one after another, with LAYER as SV_RenderTargetArrayIndex. DXMT
+ * takes it as a pass-through and draws without a geometry stage, with the
+ * render target array index from layer_vs's LAYER; with stream output it
+ * streams out the vertex shader's outputs. */
 #define LAYER_PASS_VERTEX(v)                                                                                 \
     0x06000036, 0x001020f2, 0x00000000, 0x00201e46, v, 0x00000000, /* mov o0, v[v][0] */                   \
     0x06000036, 0x00102012, 0x00000001, 0x0020100a, v, 0x00000001, /* mov o1.x, v[v][1].x */               \

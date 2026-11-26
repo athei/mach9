@@ -50,6 +50,24 @@
  *   of its command queue, which waits for that pipeline, so the device's
  *   release comes while both are still at work. The device must then be
  *   destroyed, and the process must get past its release.
+ * - pass-through: DXMT takes a geometry shader that passes its triangles
+ *   through as a pass-through, and no shader that differs from one. A quad
+ *   patch the hull and domain shaders tessellate is drawn without a geometry
+ *   shader and through one that passes the triangles through, which DXMT
+ *   draws behind tessellation only as a pass-through: the pixel at the
+ *   centre must be the pixel shader's red both times. The same patch then
+ *   goes through layer_pass_gs of smoke/streamout.c, with a domain shader
+ *   that writes a LAYER of 1, into a target of two slices: slice 1 must be
+ *   red at the centre and slice 0 left as cleared. Then a triangle strip
+ *   over the left half of the target goes through pass_gs_shdr and each
+ *   geometry shader after it, with the default rasterizer state, which culls
+ *   triangles turned away: one that passes its triangles through draws the
+ *   vertex shader's red at the pixel read back, and each of the others
+ *   draws what it computes: nothing there; for the one that moves the
+ *   position to COLOR, the position's color; and for the one whose output
+ *   drops the vertex shader's SV_ClipDistance of -1, the red D3D draws
+ *   without the clip distance. A shader taken as a pass-through by mistake
+ *   would draw the strip in red, or, for the last one, clip it away.
  *
  * The lifetime cases watch destruction through a tracker object attached
  * with SetPrivateDataInterface: the object holds the tracker's only
@@ -223,6 +241,244 @@ static const DWORD quad_ds_code[] = {
     0x08000000, 0x001000f2, 0x00000000, 0x00100e46, 0x00000000, 0x80100e46, 0x00000041, 0x00000001,
     0x08000032, 0x001020f2, 0x00000000, 0x0001c556, 0x00100e46, 0x00000000, 0x00100e46, 0x00000001,
     0x0100003e,
+};
+
+/* The chunks of the shaders of the pass-through case, assembled here as
+   shader model 4.0, and 5.0 for the domain shader; build_shader makes the
+   bytecode. Their shader chunks start with placeholders for their size and
+   length, which build_shader fills in. */
+
+/* SV_POSITION in register 0 and COLOR in register 1 */
+#define COLOR_SIGNATURE(tag, position_mask, color_mask)                                                       \
+    tag, 0x0000004c, 0x00000002, 0x00000008,                                                                  \
+    0x00000038, 0x00000000, 0x00000001, 0x00000003, 0x00000000, position_mask,                               \
+    0x00000044, 0x00000000, 0x00000000, 0x00000003, 0x00000001, color_mask,                                  \
+    0x505f5653, 0x5449534f, 0x004e4f49, 0x4f4c4f43, 0xabab0052 /* "SV_POSITION", "COLOR" */
+static const DWORD color_out_osgn[] = {COLOR_SIGNATURE(0x4e47534f, 0x0000000f, 0x0000000f)};
+static const DWORD color_in_isgn[] = {COLOR_SIGNATURE(0x4e475349, 0x00000f0f, 0x00000f0f)};
+static const DWORD color_ps_isgn[] = {COLOR_SIGNATURE(0x4e475349, 0x0000000f, 0x00000f0f)};
+
+/* SV_POSITION in register 0, the signature of the domain shader's output */
+static const DWORD position_in_isgn[] = {
+    0x4e475349, 0x0000002c, 0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000001, 0x00000003,
+    0x00000000, 0x00000f0f, 0x505f5653, 0x5449534f, 0x004e4f49,
+};
+static const DWORD position_out_osgn[] = {
+    0x4e47534f, 0x0000002c, 0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000001, 0x00000003,
+    0x00000000, 0x0000000f, 0x505f5653, 0x5449534f, 0x004e4f49,
+};
+
+/* POSITION in register 0, the input signature of quad_vs_code */
+static const DWORD position_vs_isgn[] = {
+    0x4e475349, 0x0000002c, 0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000000, 0x00000003,
+    0x00000000, 0x00000f0f, 0x49534f50, 0x4e4f4954, 0xababab00,
+};
+
+/* SV_TARGET in register 0, the output signature of red_ps_code */
+static const DWORD target_ps_osgn[] = {
+    0x4e47534f, 0x0000002c, 0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000000, 0x00000003,
+    0x00000000, 0x0000000f, 0x545f5653, 0x45475241, 0xabab0054,
+};
+
+/* SV_POSITION in register 0, COLOR in register 1 and SV_ClipDistance .x in
+   register 2 */
+#define CLIP_SIGNATURE(tag, position_mask, color_mask, clip_mask)                                             \
+    tag, 0x00000074, 0x00000003, 0x00000008,                                                                  \
+    0x00000050, 0x00000000, 0x00000001, 0x00000003, 0x00000000, position_mask,                               \
+    0x0000005c, 0x00000000, 0x00000000, 0x00000003, 0x00000001, color_mask,                                  \
+    0x00000064, 0x00000000, 0x00000002, 0x00000003, 0x00000002, clip_mask,                                   \
+    0x505f5653, 0x5449534f, 0x004e4f49, 0x4f4c4f43, 0xabab0052,                                              \
+    0x435f5653, 0x4470696c, 0x61747369, 0x0065636e /* "SV_POSITION", "COLOR", "SV_ClipDistance" */
+static const DWORD clip_out_osgn[] = {CLIP_SIGNATURE(0x4e47534f, 0x0000000f, 0x0000000f, 0x00000e01)};
+static const DWORD clip_in_isgn[] = {CLIP_SIGNATURE(0x4e475349, 0x00000f0f, 0x00000f0f, 0x00000101)};
+
+/* SV_POSITION in register 0 and a uint LAYER .x in register 1, as in
+   smoke/streamout.c: the output signature of layer_ds_shex and the input
+   signature of layer_pass_gs_shdr */
+#define LAYER_SIGNATURE(tag, position_mask, layer_mask)                                                       \
+    tag, 0x0000004c, 0x00000002, 0x00000008,                                                                  \
+    0x00000038, 0x00000000, 0x00000001, 0x00000003, 0x00000000, position_mask,                               \
+    0x00000044, 0x00000000, 0x00000000, 0x00000001, 0x00000001, layer_mask,                                  \
+    0x505f5653, 0x5449534f, 0x004e4f49, 0x4559414c, 0xabab0052 /* "SV_POSITION", "LAYER" */
+static const DWORD layer_out_osgn[] = {LAYER_SIGNATURE(0x4e47534f, 0x0000000f, 0x00000e01)};
+static const DWORD layer_gs_isgn[] = {LAYER_SIGNATURE(0x4e475349, 0x00000f0f, 0x00000101)};
+
+/* SV_POSITION in register 0 and SV_RenderTargetArrayIndex .x in register 1 */
+static const DWORD layer_gs_osgn[] = {
+    0x4e47534f, 0x00000060, 0x00000002, 0x00000008,
+    0x00000038, 0x00000000, 0x00000001, 0x00000003, 0x00000000, 0x0000000f,
+    0x00000044, 0x00000000, 0x00000004, 0x00000001, 0x00000001, 0x00000e01,
+    0x505f5653, 0x5449534f, 0x004e4f49,                         /* "SV_POSITION" */
+    0x525f5653, 0x65646e65, 0x72615472, 0x41746567, 0x79617272, 0x65646e49, 0xabab0078, /* "SV_RenderTargetArrayIndex" */
+};
+
+/* layer_pass_gs of smoke/streamout.c, the same chunks, which build_shader
+   makes the same bytecode of: the triangle passed through, LAYER as
+   SV_RenderTargetArrayIndex */
+#define LAYER_PASS_VERTEX(v)                                                                                 \
+    0x06000036, 0x001020f2, 0x00000000, 0x00201e46, v, 0x00000000, /* mov o0, v[v][0] */                   \
+    0x06000036, 0x00102012, 0x00000001, 0x0020100a, v, 0x00000001, /* mov o1.x, v[v][1].x */               \
+    0x01000013                                                     /* emit */
+static const DWORD layer_pass_gs_shdr[] = {
+    0x52444853, 0x000000fc, 0x00020040, 0x0000003f,
+    0x05000061, 0x002010f2, 0x00000003, 0x00000000, 0x00000001, /* dcl_input_siv v[3][0].xyzw, position */
+    0x0400005f, 0x00201012, 0x00000003, 0x00000001,             /* dcl_input v[3][1].x */
+    0x0100185d,                                                 /* dcl_inputprimitive triangle */
+    0x0100285c,                                                 /* dcl_outputtopology trianglestrip */
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */
+    0x04000067, 0x00102012, 0x00000001, 0x00000004,             /* dcl_output_siv o1.x, rendertarget_array_index */
+    0x0200005e, 0x00000003,                                     /* dcl_maxout 3 */
+    LAYER_PASS_VERTEX(0), LAYER_PASS_VERTEX(1), LAYER_PASS_VERTEX(2),
+    0x0100003e,                                                 /* ret */
+};
+
+/* The shader chunk of quad_ds_code with a LAYER of 1 in o1.x */
+static const DWORD layer_ds_shex[] = {
+    0x58454853, 0, 0x00040050, 0,
+    0x01002093, 0x01001895, 0x0100086a, 0x0200005f, 0x0001c032, 0x0400005f, 0x002190f2, 0x00000004,
+    0x00000000, 0x04000067, 0x001020f2, 0x00000000, 0x00000001,
+    0x03000065, 0x00102012, 0x00000001,                         /* dcl_output o1.x */
+    0x02000068, 0x00000002, 0x0a000000, 0x001000f2, 0x00000000, 0x80219e46, 0x00000041, 0x00000002,
+    0x00000000, 0x00219e46, 0x00000003, 0x00000000, 0x09000032, 0x001000f2, 0x00000000, 0x0001c006,
+    0x00100e46, 0x00000000, 0x00219e46, 0x00000002, 0x00000000, 0x0a000000, 0x001000f2, 0x00000001,
+    0x80219e46, 0x00000041, 0x00000000, 0x00000000, 0x00219e46, 0x00000001, 0x00000000, 0x09000032,
+    0x001000f2, 0x00000001, 0x0001c006, 0x00100e46, 0x00000001, 0x00219e46, 0x00000000, 0x00000000,
+    0x08000000, 0x001000f2, 0x00000000, 0x00100e46, 0x00000000, 0x80100e46, 0x00000041, 0x00000001,
+    0x08000032, 0x001020f2, 0x00000000, 0x0001c556, 0x00100e46, 0x00000000, 0x00100e46, 0x00000001,
+    0x05000036, 0x00102012, 0x00000001, 0x00004001, 0x00000001, /* mov o1.x, l(1) */
+    0x0100003e,                                                 /* ret */
+};
+/* The input and patch constant signature chunks of quad_ds_code */
+#define QUAD_DS_ISGN ((const DWORD *)quad_ds_code + 12)
+#define QUAD_DS_ISGN_WORDS 13
+#define QUAD_DS_PCSG ((const DWORD *)quad_ds_code + 25)
+#define QUAD_DS_PCSG_WORDS 49
+
+/* The position passed through, COLOR red and SV_ClipDistance -1, which clips
+   every vertex */
+static const DWORD clip_vs_shdr[] = {
+    0x52444853, 0, 0x00010040, 0,
+    0x0300005f, 0x001010f2, 0x00000000,                         /* dcl_input v0.xyzw */
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */
+    0x03000065, 0x001020f2, 0x00000001,                         /* dcl_output o1.xyzw */
+    0x04000067, 0x00102012, 0x00000002, 0x00000002,             /* dcl_output_siv o2.x, clip_distance */
+    0x05000036, 0x001020f2, 0x00000000, 0x00101e46, 0x00000000, /* mov o0, v0 */
+    0x08000036, 0x001020f2, 0x00000001, 0x00004002, 0x3f800000, 0x00000000, 0x00000000, 0x3f800000,
+                                                                /* mov o1, l(1.0, 0.0, 0.0, 1.0) */
+    0x05000036, 0x00102012, 0x00000002, 0x00004001, 0xbf800000, /* mov o2.x, l(-1.0) */
+    0x0100003e,                                                 /* ret */
+};
+
+/* The position passed through and COLOR red */
+static const DWORD color_vs_shdr[] = {
+    0x52444853, 0, 0x00010040, 0,
+    0x0300005f, 0x001010f2, 0x00000000,                         /* dcl_input v0.xyzw */
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */
+    0x03000065, 0x001020f2, 0x00000001,                         /* dcl_output o1.xyzw */
+    0x05000036, 0x001020f2, 0x00000000, 0x00101e46, 0x00000000, /* mov o0, v0 */
+    0x08000036, 0x001020f2, 0x00000001, 0x00004002, 0x3f800000, 0x00000000, 0x00000000, 0x3f800000,
+                                                                /* mov o1, l(1.0, 0.0, 0.0, 1.0) */
+    0x0100003e,                                                 /* ret */
+};
+
+/* COLOR as the target's color */
+static const DWORD color_ps_shdr[] = {
+    0x52444853, 0, 0x00000040, 0,
+    0x03001062, 0x001010f2, 0x00000001,                         /* dcl_input_ps linear v1.xyzw */
+    0x03000065, 0x001020f2, 0x00000000,                         /* dcl_output o0.xyzw */
+    0x05000036, 0x001020f2, 0x00000000, 0x00101e46, 0x00000001, /* mov o0, v1 */
+    0x0100003e,                                                 /* ret */
+};
+
+/* The geometry shaders of a triangle with SV_POSITION and COLOR in and out:
+   one that passes its triangle through, the vertices emitted in order, and
+   shaders that differ from it in one point each, which DXMT must not take
+   as a pass-through. Each draws the vertex shader's red at the pixel the
+   case reads back only if it is taken as one. */
+#define COLOR_GS_HEAD(topology)                                                                                \
+    0x52444853, 0, 0x00020040, 0,                                                                             \
+    0x05000061, 0x002010f2, 0x00000003, 0x00000000, 0x00000001, /* dcl_input_siv v[3][0].xyzw, position */   \
+    0x0400005f, 0x002010f2, 0x00000003, 0x00000001,             /* dcl_input v[3][1].xyzw */                 \
+    0x0100185d,                                                 /* dcl_inputprimitive triangle */            \
+    topology,                                                   /* dcl_outputtopology */                     \
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */       \
+    0x03000065, 0x001020f2, 0x00000001,                         /* dcl_output o1.xyzw */                     \
+    0x0200005e, 0x00000003                                      /* dcl_maxout 3 */
+#define SM4_TRIANGLESTRIP 0x0100285c /* dcl_outputtopology trianglestrip */
+#define SM4_POINTLIST 0x0100085c     /* dcl_outputtopology pointlist */
+#define SM4_EMIT 0x01000013          /* emit */
+#define SM4_RET 0x0100003e           /* ret */
+#define MOV_POSITION(v) 0x06000036, 0x001020f2, 0x00000000, 0x00201e46, v, 0x00000000 /* mov o0, v[v][0] */
+#define MOV_COLOR(v) 0x06000036, 0x001020f2, 0x00000001, 0x00201e46, v, 0x00000001    /* mov o1, v[v][1] */
+#define PASS_VERTEX(v) MOV_POSITION(v), MOV_COLOR(v), SM4_EMIT
+
+static const DWORD pass_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_TRIANGLESTRIP), PASS_VERTEX(0), PASS_VERTEX(1), PASS_VERTEX(2), SM4_RET,
+};
+/* The vertices in the other order, which turns the triangles away */
+static const DWORD order_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_TRIANGLESTRIP), PASS_VERTEX(0), PASS_VERTEX(2), PASS_VERTEX(1), SM4_RET,
+};
+/* The outputs written for the first vertex only and emitted three times:
+   they are undefined after the first emit */
+static const DWORD first_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_TRIANGLESTRIP), PASS_VERTEX(0), SM4_EMIT, SM4_EMIT, SM4_RET,
+};
+/* Two vertices, no triangle */
+static const DWORD part_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_TRIANGLESTRIP), PASS_VERTEX(0), PASS_VERTEX(1), SM4_RET,
+};
+/* The vertices as points */
+static const DWORD points_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_POINTLIST), PASS_VERTEX(0), PASS_VERTEX(1), PASS_VERTEX(2), SM4_RET,
+};
+/* A constant position off the target */
+#define CONSTANT_VERTEX(v)                                                                                     \
+    0x08000036, 0x001020f2, 0x00000000, 0x00004002, 0x40000000, 0x40000000, 0x3f000000, 0x3f800000,          \
+                                                                /* mov o0, l(2.0, 2.0, 0.5, 1.0) */          \
+    MOV_COLOR(v), SM4_EMIT
+static const DWORD constant_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_TRIANGLESTRIP), CONSTANT_VERTEX(0), CONSTANT_VERTEX(1), CONSTANT_VERTEX(2), SM4_RET,
+};
+/* x and y of the position swapped */
+#define SWIZZLE_VERTEX(v)                                                                                      \
+    0x06000036, 0x001020f2, 0x00000000, 0x00201e16, v, 0x00000000, /* mov o0, v[v][0].yxzw */                \
+    MOV_COLOR(v), SM4_EMIT
+static const DWORD swizzle_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_TRIANGLESTRIP), SWIZZLE_VERTEX(0), SWIZZLE_VERTEX(1), SWIZZLE_VERTEX(2), SM4_RET,
+};
+/* x of the position negated */
+#define NEGATE_VERTEX(v)                                                                                       \
+    0x07000036, 0x00102012, 0x00000000, 0x8020100a, 0x00000041, v, 0x00000000, /* mov o0.x, -v[v][0].x */   \
+    0x06000036, 0x001020e2, 0x00000000, 0x00201e56, v, 0x00000000,             /* mov o0.yzw, v[v][0].yyzw */ \
+    MOV_COLOR(v), SM4_EMIT
+static const DWORD negate_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_TRIANGLESTRIP), NEGATE_VERTEX(0), NEGATE_VERTEX(1), NEGATE_VERTEX(2), SM4_RET,
+};
+/* The position saturated, which puts every vertex of the half quad at x 0 */
+#define SATURATE_VERTEX(v)                                                                                     \
+    0x06002036, 0x001020f2, 0x00000000, 0x00201e46, v, 0x00000000, /* mov_sat o0, v[v][0] */                 \
+    MOV_COLOR(v), SM4_EMIT
+static const DWORD saturate_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_TRIANGLESTRIP), SATURATE_VERTEX(0), SATURATE_VERTEX(1), SATURATE_VERTEX(2), SM4_RET,
+};
+/* COLOR from the position's register: the pixel's color is the position */
+#define REGISTER_VERTEX(v)                                                                                     \
+    MOV_POSITION(v), 0x06000036, 0x001020f2, 0x00000001, 0x00201e46, v, 0x00000000, /* mov o1, v[v][0] */   \
+    SM4_EMIT
+static const DWORD register_gs_shdr[] = {
+    COLOR_GS_HEAD(SM4_TRIANGLESTRIP), REGISTER_VERTEX(0), REGISTER_VERTEX(1), REGISTER_VERTEX(2), SM4_RET,
+};
+
+/* A geometry shader that passes the domain shader's triangles through */
+static const DWORD position_pass_gs_shdr[] = {
+    0x52444853, 0, 0x00020040, 0,
+    0x05000061, 0x002010f2, 0x00000003, 0x00000000, 0x00000001, /* dcl_input_siv v[3][0].xyzw, position */
+    0x0100185d,                                                 /* dcl_inputprimitive triangle */
+    SM4_TRIANGLESTRIP,
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */
+    0x0200005e, 0x00000003,                                     /* dcl_maxout 3 */
+    MOV_POSITION(0), SM4_EMIT, MOV_POSITION(1), SM4_EMIT, MOV_POSITION(2), SM4_EMIT, SM4_RET,
 };
 
 /* The private data key the trackers are attached under. */
@@ -1131,6 +1387,385 @@ failed:
     return 3;
 }
 
+#define SHADER_WORDS 256
+
+struct chunk
+{
+    const DWORD *words;
+    UINT count;
+};
+
+#define CHUNK(a) {a, ARRAYSIZE(a)}
+
+/* build_container: the DXBC container of the count chunks in out, of
+   SHADER_WORDS words, with a zero checksum, which DXMT does not check. The
+   last chunk is the shader chunk, whose size and length are set from its
+   word count. Returns the container's size, 0 when it does not fit. */
+static UINT build_container(DWORD *out, const struct chunk *chunks, UINT count)
+{
+    UINT size = 32 + 4 * count, i;
+    DWORD *shader;
+
+    if (count > 4)
+        return 0;
+    memset(out, 0, 32);
+    memcpy(out, "DXBC", 4);
+    out[5] = 1;
+    out[7] = count;
+    for (i = 0; i < count; i++)
+    {
+        if (size + 4 * chunks[i].count > SHADER_WORDS * sizeof(*out))
+            return 0;
+        out[8 + i] = size;
+        memcpy((BYTE *)out + size, chunks[i].words, 4 * chunks[i].count);
+        size += 4 * chunks[i].count;
+    }
+    shader = (DWORD *)((BYTE *)out + out[8 + count - 1]);
+    shader[1] = 4 * (chunks[count - 1].count - 2);
+    shader[3] = chunks[count - 1].count - 2;
+    out[6] = size;
+    return size;
+}
+
+/* build_shader: build_container of an input signature, an output signature
+   and a shader chunk */
+static UINT build_shader(DWORD *out, struct chunk isgn, struct chunk osgn, struct chunk shdr)
+{
+    const struct chunk chunks[] = {isgn, osgn, shdr};
+
+    return build_container(out, chunks, ARRAYSIZE(chunks));
+}
+
+static HRESULT create_gs(ID3D11Device *device, struct chunk isgn, struct chunk osgn, struct chunk shdr,
+                         ID3D11GeometryShader **gs)
+{
+    DWORD code[SHADER_WORDS];
+    UINT size = build_shader(code, isgn, osgn, shdr);
+
+    return size ? ID3D11Device_CreateGeometryShader(device, code, size, NULL, gs) : E_INVALIDARG;
+}
+
+/* draw_pixel: clear the target to 0, draw count vertices and return the
+   pixel at x, y in *pixel, or FALSE when the readback fails */
+static BOOL draw_pixel(ID3D11DeviceContext *context, ID3D11RenderTargetView *rtv, ID3D11Texture2D *color,
+                       ID3D11Texture2D *staging, UINT count, UINT x, UINT y, UINT *pixel)
+{
+    static const float zero[4];
+    D3D11_MAPPED_SUBRESOURCE map;
+
+    ID3D11DeviceContext_ClearRenderTargetView(context, rtv, zero);
+    ID3D11DeviceContext_Draw(context, count, 0);
+    ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)staging, (ID3D11Resource *)color);
+    if (FAILED(ID3D11DeviceContext_Map(context, (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &map)))
+        return FALSE;
+    *pixel = ((const UINT *)((const BYTE *)map.pData + y * map.RowPitch))[x];
+    ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)staging, 0);
+    return TRUE;
+}
+
+/* draw_slices: clear both slices of the target to 0, draw count vertices
+   and return the pixel at x, y of slice 0 and of slice 1, or FALSE when the
+   readback fails */
+static BOOL draw_slices(ID3D11DeviceContext *context, ID3D11RenderTargetView *rtv, ID3D11Texture2D *color,
+                        ID3D11Texture2D *staging, UINT count, UINT x, UINT y, UINT *pixels)
+{
+    static const float zero[4];
+    D3D11_MAPPED_SUBRESOURCE map;
+    UINT slice;
+
+    ID3D11DeviceContext_ClearRenderTargetView(context, rtv, zero);
+    ID3D11DeviceContext_Draw(context, count, 0);
+    ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)staging, (ID3D11Resource *)color);
+    for (slice = 0; slice < 2; slice++)
+    {
+        if (FAILED(ID3D11DeviceContext_Map(context, (ID3D11Resource *)staging, slice, D3D11_MAP_READ, 0, &map)))
+            return FALSE;
+        pixels[slice] = ((const UINT *)((const BYTE *)map.pData + y * map.RowPitch))[x];
+        ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)staging, slice);
+    }
+    return TRUE;
+}
+
+static HRESULT create_slices(ID3D11Device *device, ID3D11Texture2D **color, ID3D11Texture2D **staging,
+                             ID3D11RenderTargetView **rtv)
+{
+    D3D11_TEXTURE2D_DESC desc = {0};
+    HRESULT hr;
+
+    desc.Width = BIAS_SIZE;
+    desc.Height = BIAS_SIZE;
+    desc.MipLevels = 1;
+    desc.ArraySize = 2;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    if (FAILED(hr = ID3D11Device_CreateTexture2D(device, &desc, NULL, color)))
+        return hr;
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    if (FAILED(hr = ID3D11Device_CreateTexture2D(device, &desc, NULL, staging)))
+        return hr;
+    return ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)*color, NULL, rtv);
+}
+
+/* Red with any alpha, as red_ps_code and color_vs_shdr give it */
+#define IS_RED(pixel) (((pixel) & 0x00ffffff) == 0x0000ff)
+
+enum pass_through_result
+{
+    /* the vertex shader's red, as a pass-through draws it */
+    DRAWS_RED,
+    /* nothing at the pixel read back */
+    DRAWS_NOTHING,
+    /* the position's color: no red, about 0.5 green */
+    DRAWS_POSITION,
+};
+
+static int check_pass_through(ID3D11Device *device, ID3D11DeviceContext *context)
+{
+    static const struct
+    {
+        const char *what;
+        struct chunk isgn, shdr;
+        /* through clip_vs_shdr instead of color_vs_shdr */
+        BOOL clip;
+        enum pass_through_result result;
+    } variants[] = {
+        {"passes its triangle through", CHUNK(color_in_isgn), CHUNK(pass_gs_shdr), FALSE, DRAWS_RED},
+        {"emits the vertices in another order", CHUNK(color_in_isgn), CHUNK(order_gs_shdr), FALSE, DRAWS_NOTHING},
+        {"writes the outputs for its first vertex only", CHUNK(color_in_isgn), CHUNK(first_gs_shdr), FALSE,
+         DRAWS_NOTHING},
+        {"emits two vertices", CHUNK(color_in_isgn), CHUNK(part_gs_shdr), FALSE, DRAWS_NOTHING},
+        {"emits points", CHUNK(color_in_isgn), CHUNK(points_gs_shdr), FALSE, DRAWS_NOTHING},
+        {"moves a constant to the position", CHUNK(color_in_isgn), CHUNK(constant_gs_shdr), FALSE, DRAWS_NOTHING},
+        {"swaps x and y", CHUNK(color_in_isgn), CHUNK(swizzle_gs_shdr), FALSE, DRAWS_NOTHING},
+        {"negates x", CHUNK(color_in_isgn), CHUNK(negate_gs_shdr), FALSE, DRAWS_NOTHING},
+        {"saturates the position", CHUNK(color_in_isgn), CHUNK(saturate_gs_shdr), FALSE, DRAWS_NOTHING},
+        {"moves the position to COLOR", CHUNK(color_in_isgn), CHUNK(register_gs_shdr), FALSE, DRAWS_POSITION},
+        /* The vertex shader's clip distance of -1 clips everything; D3D clips
+           by the geometry shader's output, which has none */
+        {"drops the vertex shader's SV_ClipDistance", CHUNK(clip_in_isgn), CHUNK(pass_gs_shdr), TRUE, DRAWS_RED},
+    };
+    /* Tessellation factors of 1: the patch becomes the two triangles of its
+       quad. */
+    static const float factors[8] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    /* A triangle strip over the left half of the target; the patch of four
+       control points of a quad around the centre, 0 and 1 along the
+       bottom, 2 and 3 along the top. */
+    static const float half_quad[] = {
+        -1.0f, -1.0f, 0.5f, -1.0f, 1.0f, 0.5f, 0.0f, -1.0f, 0.5f, 0.0f, 1.0f, 0.5f,
+    };
+    static const float patch[] = {
+        -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f,
+    };
+    D3D11_VIEWPORT vp = {0.0f, 0.0f, BIAS_SIZE, BIAS_SIZE, 0.0f, 1.0f};
+    D3D11_BUFFER_DESC buffer_desc = {0};
+    D3D11_SUBRESOURCE_DATA data = {0};
+    D3D11_RASTERIZER_DESC rs_desc = {0};
+    ID3D11GeometryShader *gs[ARRAYSIZE(variants)] = {0}, *tess_gs = NULL, *layer_gs = NULL;
+    ID3D11Buffer *quad_vb = NULL, *patch_vb = NULL, *cb = NULL;
+    ID3D11Texture2D *color = NULL, *staging = NULL, *slices = NULL, *slices_staging = NULL;
+    ID3D11VertexShader *color_vs = NULL, *clip_vs = NULL, *vs = NULL;
+    ID3D11PixelShader *color_ps = NULL, *ps = NULL;
+    ID3D11RasterizerState *no_cull = NULL;
+    ID3D11InputLayout *layout = NULL;
+    ID3D11RenderTargetView *rtv = NULL, *slices_rtv = NULL;
+    ID3D11HullShader *hs = NULL;
+    ID3D11DomainShader *ds = NULL, *layer_ds = NULL;
+    UINT stride = 3 * sizeof(float), offset = 0, pixel, pixels[2], size, i;
+    const struct chunk layer_ds_chunks[] = {
+        {QUAD_DS_ISGN, QUAD_DS_ISGN_WORDS}, {QUAD_DS_PCSG, QUAD_DS_PCSG_WORDS}, CHUNK(layer_out_osgn),
+        CHUNK(layer_ds_shex),
+    };
+    DWORD code[SHADER_WORDS];
+    int ok = 1, ret = 3;
+    HRESULT hr;
+
+    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    buffer_desc.ByteWidth = sizeof(half_quad);
+    data.pSysMem = half_quad;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &quad_vb)))
+        goto done;
+    buffer_desc.ByteWidth = sizeof(patch);
+    data.pSysMem = patch;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &patch_vb)))
+        goto done;
+    buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    buffer_desc.ByteWidth = sizeof(factors);
+    data.pSysMem = factors;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &cb)))
+        goto done;
+    hr = E_INVALIDARG;
+    if (!(size = build_shader(code, (struct chunk)CHUNK(position_vs_isgn), (struct chunk)CHUNK(color_out_osgn),
+                              (struct chunk)CHUNK(color_vs_shdr)))
+        || FAILED(hr = ID3D11Device_CreateVertexShader(device, code, size, NULL, &color_vs)))
+        goto done;
+    hr = E_INVALIDARG;
+    if (!(size = build_shader(code, (struct chunk)CHUNK(position_vs_isgn), (struct chunk)CHUNK(clip_out_osgn),
+                              (struct chunk)CHUNK(clip_vs_shdr)))
+        || FAILED(hr = ID3D11Device_CreateVertexShader(device, code, size, NULL, &clip_vs)))
+        goto done;
+    hr = E_INVALIDARG;
+    if (!(size = build_container(code, layer_ds_chunks, ARRAYSIZE(layer_ds_chunks)))
+        || FAILED(hr = ID3D11Device_CreateDomainShader(device, code, size, NULL, &layer_ds)))
+        goto done;
+    hr = E_INVALIDARG;
+    if (!(size = build_shader(code, (struct chunk)CHUNK(color_ps_isgn), (struct chunk)CHUNK(target_ps_osgn),
+                              (struct chunk)CHUNK(color_ps_shdr)))
+        || FAILED(hr = ID3D11Device_CreatePixelShader(device, code, size, NULL, &color_ps)))
+        goto done;
+    for (i = 0; i < ARRAYSIZE(variants); i++)
+        if (FAILED(hr = create_gs(device, variants[i].isgn, (struct chunk)CHUNK(color_out_osgn), variants[i].shdr,
+                                  &gs[i])))
+            goto done;
+    rs_desc.FillMode = D3D11_FILL_SOLID;
+    rs_desc.CullMode = D3D11_CULL_NONE;
+    rs_desc.DepthClipEnable = TRUE;
+    if (FAILED(hr = create_gs(device, (struct chunk)CHUNK(position_in_isgn), (struct chunk)CHUNK(position_out_osgn),
+                              (struct chunk)CHUNK(position_pass_gs_shdr), &tess_gs))
+        || FAILED(hr = create_gs(device, (struct chunk)CHUNK(layer_gs_isgn), (struct chunk)CHUNK(layer_gs_osgn),
+                                 (struct chunk)CHUNK(layer_pass_gs_shdr), &layer_gs))
+        || FAILED(hr = create_slices(device, &slices, &slices_staging, &slices_rtv))
+        || FAILED(hr = ID3D11Device_CreateVertexShader(device, quad_vs_code, sizeof(quad_vs_code), NULL, &vs))
+        || FAILED(hr = ID3D11Device_CreateHullShader(device, quad_hs_code, sizeof(quad_hs_code), NULL, &hs))
+        || FAILED(hr = ID3D11Device_CreateDomainShader(device, quad_ds_code, sizeof(quad_ds_code), NULL, &ds))
+        || FAILED(hr = ID3D11Device_CreatePixelShader(device, red_ps_code, sizeof(red_ps_code), NULL, &ps))
+        || FAILED(hr = ID3D11Device_CreateInputLayout(device, quad_layout_desc, 1, quad_vs_code,
+                                                      sizeof(quad_vs_code), &layout))
+        || FAILED(hr = ID3D11Device_CreateRasterizerState(device, &rs_desc, &no_cull))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET, FALSE,
+                                           &color))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_R8G8B8A8_UNORM, 0, TRUE, &staging))
+        || FAILED(hr = ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)color, NULL, &rtv)))
+        goto done;
+
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &rtv, NULL);
+    ID3D11DeviceContext_RSSetViewports(context, 1, &vp);
+    ID3D11DeviceContext_IASetInputLayout(context, layout);
+    hr = E_FAIL;
+
+    /* Tessellation with and without the pass-through geometry shader, which
+       DXMT draws only when it takes the shader as a pass-through. */
+    ID3D11DeviceContext_RSSetState(context, no_cull);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &patch_vb, &stride, &offset);
+    ID3D11DeviceContext_VSSetShader(context, vs, NULL, 0);
+    ID3D11DeviceContext_HSSetShader(context, hs, NULL, 0);
+    ID3D11DeviceContext_HSSetConstantBuffers(context, 0, 1, &cb);
+    ID3D11DeviceContext_DSSetShader(context, ds, NULL, 0);
+    ID3D11DeviceContext_PSSetShader(context, ps, NULL, 0);
+    if (!draw_pixel(context, rtv, color, staging, 4, BIAS_SIZE / 2, BIAS_SIZE / 2, &pixel))
+        goto done;
+    printf(PREFIX "pass-through: tessellation without a geometry shader: pixel %#x %s\n", pixel,
+           IS_RED(pixel) ? "ok" : "FAILED");
+    ok &= IS_RED(pixel);
+    ID3D11DeviceContext_GSSetShader(context, tess_gs, NULL, 0);
+    if (!draw_pixel(context, rtv, color, staging, 4, BIAS_SIZE / 2, BIAS_SIZE / 2, &pixel))
+        goto done;
+    printf(PREFIX "pass-through: tessellation through a geometry shader that passes its triangles through: "
+                  "pixel %#x %s\n", pixel, IS_RED(pixel) ? "ok" : "FAILED");
+    ok &= IS_RED(pixel);
+    /* The same through layer_pass_gs, with the domain shader that writes a
+       LAYER of 1, into a target of two slices: only slice 1 is drawn. */
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &slices_rtv, NULL);
+    ID3D11DeviceContext_DSSetShader(context, layer_ds, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, layer_gs, NULL, 0);
+    if (!draw_slices(context, slices_rtv, slices, slices_staging, 4, BIAS_SIZE / 2, BIAS_SIZE / 2, pixels))
+        goto done;
+    printf(PREFIX "pass-through: tessellation through layer_pass_gs, LAYER 1: slice 0 %#x, slice 1 %#x %s\n",
+           pixels[0], pixels[1], !pixels[0] && IS_RED(pixels[1]) ? "ok" : "FAILED");
+    ok &= !pixels[0] && IS_RED(pixels[1]);
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &rtv, NULL);
+    ID3D11DeviceContext_HSSetShader(context, NULL, NULL, 0);
+    ID3D11DeviceContext_DSSetShader(context, NULL, NULL, 0);
+    ID3D11DeviceContext_RSSetState(context, NULL);
+
+    /* The half quad through each geometry shader with the default rasterizer
+       state, which culls the triangles turned away, read back at the centre
+       of the left half's top half. */
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &quad_vb, &stride, &offset);
+    ID3D11DeviceContext_PSSetShader(context, color_ps, NULL, 0);
+    for (i = 0; i < ARRAYSIZE(variants); i++)
+    {
+        int right;
+
+        ID3D11DeviceContext_VSSetShader(context, variants[i].clip ? clip_vs : color_vs, NULL, 0);
+        ID3D11DeviceContext_GSSetShader(context, gs[i], NULL, 0);
+        if (!draw_pixel(context, rtv, color, staging, 4, BIAS_SIZE / 4, BIAS_SIZE / 4, &pixel))
+            goto done;
+        if (variants[i].result == DRAWS_RED)
+            right = IS_RED(pixel);
+        else if (variants[i].result == DRAWS_POSITION)
+            right = !(pixel & 0xff) && ((pixel >> 8) & 0xff) >= 0x40;
+        else
+            right = !(pixel & 0x00ffffff);
+        printf(PREFIX "pass-through: a geometry shader that %s: pixel %#x %s\n", variants[i].what, pixel,
+               right ? "ok" : "FAILED");
+        ok &= right;
+    }
+    ID3D11DeviceContext_GSSetShader(context, NULL, NULL, 0);
+
+    printf(PREFIX "pass-through check %s\n", ok ? "ok" : "FAILED");
+    ret = ok ? 0 : 1;
+
+done:
+    if (ret == 3)
+        printf(PREFIX "pass-through: setup or readback failed, %#lx\n", (unsigned long)hr);
+    ID3D11DeviceContext_ClearState(context);
+    if (slices_rtv)
+        ID3D11RenderTargetView_Release(slices_rtv);
+    if (slices_staging)
+        ID3D11Texture2D_Release(slices_staging);
+    if (slices)
+        ID3D11Texture2D_Release(slices);
+    if (rtv)
+        ID3D11RenderTargetView_Release(rtv);
+    if (staging)
+        ID3D11Texture2D_Release(staging);
+    if (color)
+        ID3D11Texture2D_Release(color);
+    if (no_cull)
+        ID3D11RasterizerState_Release(no_cull);
+    if (layout)
+        ID3D11InputLayout_Release(layout);
+    if (ps)
+        ID3D11PixelShader_Release(ps);
+    if (layer_ds)
+        ID3D11DomainShader_Release(layer_ds);
+    if (ds)
+        ID3D11DomainShader_Release(ds);
+    if (hs)
+        ID3D11HullShader_Release(hs);
+    if (vs)
+        ID3D11VertexShader_Release(vs);
+    if (layer_gs)
+        ID3D11GeometryShader_Release(layer_gs);
+    if (tess_gs)
+        ID3D11GeometryShader_Release(tess_gs);
+    for (i = 0; i < ARRAYSIZE(gs); i++)
+        if (gs[i])
+            ID3D11GeometryShader_Release(gs[i]);
+    if (color_ps)
+        ID3D11PixelShader_Release(color_ps);
+    if (clip_vs)
+        ID3D11VertexShader_Release(clip_vs);
+    if (color_vs)
+        ID3D11VertexShader_Release(color_vs);
+    if (cb)
+        ID3D11Buffer_Release(cb);
+    if (patch_vb)
+        ID3D11Buffer_Release(patch_vb);
+    if (quad_vb)
+        ID3D11Buffer_Release(quad_vb);
+    ID3D11DeviceContext_Release(context);
+    ID3D11Device_Release(device);
+    return ret;
+}
+
 static const struct
 {
     const char *name;
@@ -1143,6 +1778,7 @@ static const struct
     {"geometry-index", check_geometry_index},
     {"tessellation-index", check_tessellation_index},
     {"release-after-draw", check_release_after_draw},
+    {"pass-through", check_pass_through},
 };
 
 int main(int argc, char **argv)
@@ -1159,7 +1795,7 @@ int main(int argc, char **argv)
     if (i == ARRAYSIZE(cases))
     {
         printf(PREFIX "usage: dxmt.exe bytecode|swap-state|deferred|depth-bias|geometry-index|tessellation-index"
-                      "|release-after-draw\n");
+                      "|release-after-draw|pass-through\n");
         return 4;
     }
 
