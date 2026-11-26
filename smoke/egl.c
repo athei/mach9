@@ -25,8 +25,13 @@
  * units per pixel at z 0.75 with factors 4 and 16, where the shader's slope
  * from float derivatives is off by up to the factor; the sloped quad drawn as
  * lines with GL_POLYGON_OFFSET_LINE, which keeps the device's bias; shaders
- * that read gl_FragCoord.z or only gl_FragCoord.xy; and a quad at the far
- * plane, which a 24-bit buffer saturates to 1.0. Then, with 4 samples, the
+ * that read gl_FragCoord.z or only gl_FragCoord.xy; a quad at the far
+ * plane, which a 24-bit buffer saturates to 1.0; and quads drawn over
+ * themselves that pass the depth test only with the offset (draw_over): a
+ * negative constant under GL_LESS, a positive one under GL_GREATER, each
+ * alone and with a factor of the other sign, flat and on the slope of 256
+ * units per pixel, where the factor decides the sign; one as GL_QUADS; and
+ * with GL_DEPTH_CLAMP a quad beyond the far plane. Then, with 4 samples, the
  * difference at each sample of the centre pixel, which a shader reads from
  * the multisampled depth texture: a flat quad at several depths, and the
  * quad with the slope of 256 units per pixel, whose samples differ in depth,
@@ -90,8 +95,11 @@ enum
 #define GL_COLOR_BUFFER_BIT 0x4000
 #define GL_TRIANGLE_STRIP 0x0005
 #define GL_QUADS 0x0007
+#define GL_LESS 0x0201
 #define GL_LEQUAL 0x0203
+#define GL_GREATER 0x0204
 #define GL_ALWAYS 0x0207
+#define GL_DEPTH_CLAMP 0x864F
 #define GL_DEPTH_TEST 0x0B71
 #define GL_POLYGON_OFFSET_FILL 0x8037
 #define GL_POLYGON_OFFSET_LINE 0x2A02
@@ -259,6 +267,33 @@ static void draw_twice(double left, double right, float factor, float units, uns
     }
 }
 
+/* a black quad from window depth left to right, then a red one at the same
+ * depth with the offset and the depth test func, which passes only on the
+ * offset depth; returns the centre pixel's red, 1 when the red quad was
+ * drawn. Zink declares the shader's depth greater or less than the
+ * interpolated one when the bias has one sign, and the device may then test
+ * the interpolated depth before the shader; a declaration in the wrong
+ * direction rejects the red quad there. */
+static float draw_over(double left, double right, float factor, float units, unsigned int func)
+{
+    float red;
+
+    gl.ClearDepth(1.0);
+    gl.ClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    gl.Clear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+    gl.DepthFunc(GL_ALWAYS);
+    gl.Color4f(0.0f, 0.0f, 0.0f, 1.0f);
+    draw_quad(left, right);
+    gl.DepthFunc(func);
+    gl.Color4f(1.0f, 0.0f, 0.0f, 1.0f);
+    gl.Enable(GL_POLYGON_OFFSET_FILL);
+    gl.PolygonOffset(factor, units);
+    draw_quad(left, right);
+    gl.Disable(GL_POLYGON_OFFSET_FILL);
+    gl.ReadPixels(SIZE / 2, SIZE / 2, 1, 1, GL_RED, GL_FLOAT, &red);
+    return red;
+}
+
 static int report(const char *format, const char *what, double got, double want, double tolerance)
 {
     int ok = fabs(got - want) <= tolerance;
@@ -382,6 +417,32 @@ static int check_depth_format(const char *name, unsigned int format, unsigned in
      * against the cleared 1.0 and writes its colour */
     draw_twice(1.0, 1.0, 0.0f, 100.0f, GL_LEQUAL, depth, red);
     ok &= report(name, "z 1.0, units 100, GL_LEQUAL, red", red[1], 1.0, 0.0);
+
+    ok &= report(name, "over itself, units -100, GL_LESS, red",
+                 draw_over(0.5, 0.5, 0.0f, -100.0f, GL_LESS), 1.0, 0.0);
+    ok &= report(name, "over itself, units 100, GL_GREATER, red",
+                 draw_over(0.5, 0.5, 0.0f, 100.0f, GL_GREATER), 1.0, 0.0);
+    ok &= report(name, "over itself, factor -1, units 100, GL_GREATER, red",
+                 draw_over(0.5, 0.5, -1.0f, 100.0f, GL_GREATER), 1.0, 0.0);
+    ok &= report(name, "over itself, factor 1, units -100, GL_LESS, red",
+                 draw_over(0.5, 0.5, 1.0f, -100.0f, GL_LESS), 1.0, 0.0);
+    /* on the slope of 256 units per pixel the factor outweighs the constant:
+     * -4 * 256 + 200 and 4 * 256 - 200 units */
+    ok &= report(name, "over itself, slope 256, factor -4, units 100, GL_LESS, red",
+                 draw_over(left, right, -4.0f, 100.0f, GL_LESS), 1.0, 0.0);
+    ok &= report(name, "over itself, slope 256, factor 4, units -100, GL_GREATER, red",
+                 draw_over(left, right, 4.0f, -100.0f, GL_GREATER), 1.0, 0.0);
+    /* through Zink's geometry shader, whose program takes the full keys */
+    quad_mode = GL_QUADS;
+    ok &= report(name, "GL_QUADS, over itself, units -100, GL_LESS, red",
+                 draw_over(0.5, 0.5, 0.0f, -100.0f, GL_LESS), 1.0, 0.0);
+    quad_mode = GL_TRIANGLE_STRIP;
+    /* with GL_DEPTH_CLAMP the quad's interpolated depth is above 1.0 and its
+     * saturated one 1.0 */
+    gl.Enable(GL_DEPTH_CLAMP);
+    ok &= report(name, "GL_DEPTH_CLAMP, z 1.25 over itself, units 100, GL_LEQUAL, red",
+                 draw_over(1.25, 1.25, 0.0f, 100.0f, GL_LEQUAL), 1.0, 0.0);
+    gl.Disable(GL_DEPTH_CLAMP);
 
     gl.UseProgram(program_z);
     draw_twice(0.25, 0.25, 0.0f, 100.0f, GL_ALWAYS, depth, red);
