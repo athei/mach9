@@ -70,9 +70,10 @@
  *   would draw the strip in red, or, for the last one, clip it away.
  * - swap-chain-detach: a swap chain released during DLL detach at process
  *   exit is destroyed and the process ends. The case creates a swap chain,
- *   presents once and hands it to smoke/dxmthold.c's DLL, which holds the
- *   last reference and releases it in its DLL_PROCESS_DETACH, and prints
- *   the case's result from there.
+ *   presents once, waits until it can map a staging texture copied into
+ *   after the present, and hands the swap chain to smoke/dxmthold.c's DLL,
+ *   which holds the last reference and releases it in its
+ *   DLL_PROCESS_DETACH, and prints the case's result from there.
  *
  * The lifetime cases watch destruction through a tracker object attached
  * with SetPrivateDataInterface: the object holds the tracker's only
@@ -1771,10 +1772,17 @@ done:
     return ret;
 }
 
+/* How long swap-chain-detach waits for the copy after its present, within
+   the time limits of bundle-wine.sh's runs */
+#define PRESENT_WAIT_MS 2000
+
 static int check_swap_chain_detach(ID3D11Device *device, ID3D11DeviceContext *context)
 {
+    ID3D11Texture2D *texture = NULL, *staging = NULL;
     DXGI_SWAP_CHAIN_DESC desc = {0};
     IDXGISwapChain *swap_chain = NULL;
+    D3D11_MAPPED_SUBRESOURCE map;
+    DWORD start;
     IDXGIDevice *dxgi_device = NULL;
     IDXGIAdapter *adapter = NULL;
     IDXGIFactory *factory = NULL;
@@ -1807,11 +1815,43 @@ static int check_swap_chain_detach(ID3D11Device *device, ID3D11DeviceContext *co
         || FAILED(hr = IDXGIDevice_GetAdapter(dxgi_device, &adapter))
         || FAILED(hr = IDXGIAdapter_GetParent(adapter, &IID_IDXGIFactory, (void **)&factory))
         || FAILED(hr = IDXGIFactory_CreateSwapChain(factory, (IUnknown *)device, &desc, &swap_chain))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE, FALSE,
+                                           &texture))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_R8G8B8A8_UNORM, 0, TRUE, &staging))
         || FAILED(hr = IDXGISwapChain_Present(swap_chain, 0, 0)))
     {
         printf(PREFIX "swap-chain-detach: setup failed, %#lx\n", (unsigned long)hr);
         goto done;
     }
+    /* A process that exits while one of its threads is inside a Metal or
+       Objective-C call can be killed at exit (athei/mach9#234), before the
+       DLL detach this case checks. So wait until DXMT's queue is done with
+       the present: copy a texture into a staging texture after it and map
+       that for reading. The map succeeds once DXMT's finish thread has
+       finished the copy's command buffer, after its calls for that command
+       buffer and for every one before it, the present's among them. */
+    ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)staging, (ID3D11Resource *)texture);
+    ID3D11DeviceContext_Flush(context);
+    start = GetTickCount();
+    while ((hr = ID3D11DeviceContext_Map(context, (ID3D11Resource *)staging, 0, D3D11_MAP_READ,
+                                         D3D11_MAP_FLAG_DO_NOT_WAIT, &map))
+           == DXGI_ERROR_WAS_STILL_DRAWING)
+    {
+        if (GetTickCount() - start > PRESENT_WAIT_MS)
+        {
+            printf(PREFIX "swap-chain-detach: the copy after the present did not finish within %u ms\n",
+                   PRESENT_WAIT_MS);
+            ret = 1;
+            goto done;
+        }
+        Sleep(1);
+    }
+    if (FAILED(hr))
+    {
+        printf(PREFIX "swap-chain-detach: Map of the staging texture failed, %#lx\n", (unsigned long)hr);
+        goto done;
+    }
+    ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)staging, 0);
     /* The DLL's reference is then the swap chain's only one, and the DLL
        releases it in its DLL_PROCESS_DETACH at process exit. */
     hold((IUnknown *)swap_chain);
@@ -1820,6 +1860,10 @@ static int check_swap_chain_detach(ID3D11Device *device, ID3D11DeviceContext *co
     ret = 0;
 
 done:
+    if (staging)
+        ID3D11Texture2D_Release(staging);
+    if (texture)
+        ID3D11Texture2D_Release(texture);
     if (swap_chain)
         IDXGISwapChain_Release(swap_chain);
     if (factory)
