@@ -94,6 +94,8 @@
  *                    with rasterized stream 0 to 3 in turn: only the
  *                    rasterized stream's point is drawn, in its colour, and
  *                    every stream appends its point to its slot
+ *   geometry-streams-no-output  that shader created without stream output:
+ *                    only stream 0's point is drawn
  *   geometry-uav     a geometry shader that streams out and adds 1 to a UAV
  *                    for each of 40 input points: the UAV holds 40, not
  *                    one count per pass of DXMT's geometry pipeline, and the
@@ -1803,6 +1805,48 @@ static void geometry_streams_rasterized_case(void)
              "%u/4", correct);
 }
 
+/* The four streams of raster_streams_shdr, created without stream output:
+ * only stream 0's point is drawn, in its colour */
+static void geometry_streams_no_output_case(void)
+{
+    static const float clear[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    static uint32_t gs_code[CONTAINER_WORDS], ps_code[CONTAINER_WORDS];
+    ID3D11GeometryShader *streams_gs;
+    ID3D11PixelShader *color_ps;
+    ID3D11VertexShader *id_vs;
+    uint32_t pixels[4], gs_size, ps_size;
+    unsigned s;
+    int ok = 1;
+
+    check_hr(ID3D11Device_CreateVertexShader(device, id_vs_code, sizeof(id_vs_code), NULL, &id_vs),
+             "CreateVertexShader");
+    gs_size = build_container(gs_code, count_gs_isgn, ARRAY_SIZE(count_gs_isgn), raster_streams_osg5,
+                              ARRAY_SIZE(raster_streams_osg5), raster_streams_shdr, ARRAY_SIZE(raster_streams_shdr));
+    check_hr(ID3D11Device_CreateGeometryShader(device, gs_code, gs_size, NULL, &streams_gs), "CreateGeometryShader");
+    ps_size = build_color_ps(ps_code, 1);
+    check_hr(ID3D11Device_CreatePixelShader(device, ps_code, ps_size, NULL, &color_ps), "CreatePixelShader");
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_IASetInputLayout(context, NULL);
+    ID3D11DeviceContext_VSSetShader(context, id_vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, streams_gs, NULL, 0);
+    ID3D11DeviceContext_PSSetShader(context, color_ps, NULL, 0);
+    ID3D11DeviceContext_ClearRenderTargetView(context, rtv, clear);
+    ID3D11DeviceContext_Draw(context, 1, 0);
+    for (s = 0; s < 4; s++)
+    {
+        pixels[s] = read_pixel(8 + 16 * s, 32);
+        ok &= pixels[s] == (s ? 0u : GREEN);
+    }
+    ID3D11DeviceContext_ClearState(context);
+    ID3D11PixelShader_Release(color_ps);
+    ID3D11GeometryShader_Release(streams_gs);
+    ID3D11VertexShader_Release(id_vs);
+    say("pixels of streams 0 to 3: %#x %#x %#x %#x", pixels[0], pixels[1], pixels[2], pixels[3]);
+    if (!ok)
+        fail(1, "pixels of streams 0 to 3 %#x %#x %#x %#x (want %#x 0 0 0)", pixels[0], pixels[1], pixels[2],
+             pixels[3], GREEN);
+}
+
 #define UAV_POINTS 40
 
 /* Draws UAV_POINTS points, more than an object threadgroup of 32 takes,
@@ -3089,6 +3133,7 @@ static const struct
     { "geometry-pass-through", geometry_pass_through_case },
     { "geometry-rasterized", geometry_rasterized_case },
     { "geometry-streams-rasterized", geometry_streams_rasterized_case },
+    { "geometry-streams-no-output", geometry_streams_no_output_case },
     { "geometry-uav", geometry_uav_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-vs-uav", geometry_vs_uav_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-shapes", geometry_shapes_case },
