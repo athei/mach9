@@ -98,6 +98,11 @@
  *                    for each of 40 input points: the UAV holds 40, not
  *                    one count per pass of DXMT's geometry pipeline, and the
  *                    points are written in order
+ *   geometry-vs-uav  a vertex shader that adds 1 to a UAV for each of 40
+ *                    points, through a geometry shader that streams out: the
+ *                    UAV holds 40, not one count per pass of DXMT's geometry
+ *                    pipeline, and what the geometry shader emits is written
+ *                    in order
  *   geometry-shapes  a triangle strip of 4 vertices without a cut, a line
  *                    strip, and a geometry shader of 4 instances are written
  *                    as lists, the instances in order
@@ -125,9 +130,9 @@
  *                    stream's points and queries
  *
  * Every case runs on a device of its own, of feature level 11_0, or 11_1 for
- * geometry-uav, which gives a geometry shader UAVs. Every buffer but the
- * targets of geometry-large and geometry-streams-blocks starts filled with a
- * pattern.
+ * geometry-uav and geometry-vs-uav, which gives geometry and vertex shaders
+ * UAVs. Every buffer but the targets of geometry-large and
+ * geometry-streams-blocks starts filled with a pattern.
  * The cases up to geometry-strips read their targets back between draws,
  * which waits for the GPU; the ones after it draw without a readback between,
  * so DXMT has to order what two draws of a render pass write.
@@ -565,6 +570,21 @@ static const uint32_t uav_gs_shdr[] = {
     0x070000ad, 0x0011e000, 0x00000001, 0x00004001, 0x00000000, 0x00004001, 0x00000001, /* atomic_iadd u1, l(0), l(1) */
     0x06000036, 0x001020f2, 0x00000000, 0x00201e46, 0x00000000, 0x00000000, /* mov o0, v[0][0] */
     0x01000013,                                                 /* emit */
+    0x0100003e,                                                 /* ret */
+};
+
+/* The shader chunk of a vertex shader that adds 1 to a UAV for each vertex,
+ * assembled here as vs_5_0 with the ISGN and OSGN chunks of id_vs_code:
+ * RWByteAddressBuffer counter : register(u1);
+ * float4 main(uint id : SV_VertexID) : custom
+ * { counter.InterlockedAdd(0, 1); return (float4)id; } */
+static const uint32_t uav_vs_shdr[] = {
+    0x58454853, 0x00000064, 0x00010050, 0x00000019,
+    0x0300009d, 0x0011e000, 0x00000001,                         /* dcl_uav_raw u1 */
+    0x04000060, 0x00101012, 0x00000000, 0x00000006,             /* dcl_input_sgv v0.x, vertex_id */
+    0x03000065, 0x001020f2, 0x00000000,                         /* dcl_output o0.xyzw */
+    0x070000ad, 0x0011e000, 0x00000001, 0x00004001, 0x00000000, 0x00004001, 0x00000001, /* atomic_iadd u1, l(0), l(1) */
+    0x05000056, 0x001020f2, 0x00000000, 0x00101006, 0x00000000, /* utof o0.xyzw, v0.xxxx */
     0x0100003e,                                                 /* ret */
 };
 
@@ -1785,30 +1805,19 @@ static void geometry_streams_rasterized_case(void)
 
 #define UAV_POINTS 40
 
-/* A geometry shader that streams out and adds 1 to a UAV for each input
- * point: after a draw of 40 points, more than an object threadgroup of 32
- * takes, the UAV holds 40, and the target the 40 points in order */
-static void geometry_uav_case(void)
+/* Draws UAV_POINTS points, more than an object threadgroup of 32 takes,
+ * through <vertex> and <geometry>, which streams out into a target of
+ * LARGE_SIZE bytes, with a raw UAV of 4 zeroed words at u1 of the output
+ * merger. Returns the UAV's first word after the draw, and the target in
+ * <data>. */
+static uint32_t draw_uav_points(ID3D11VertexShader *vertex, ID3D11GeometryShader *geometry, uint32_t *data)
 {
-    static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "custom", 0, 0, 4, 0 } };
     static const uint32_t zero[4] = { 0 };
-    static uint32_t code[CONTAINER_WORDS], data[LARGE_WORDS], counter[4];
     D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
     ID3D11UnorderedAccessView *uav;
-    ID3D11GeometryShader *uav_gs;
-    ID3D11VertexShader *id_vs;
     ID3D11Buffer *buffer, *large;
-    UINT stride = 16;
-    uint32_t size;
-    unsigned i, c, correct = 0;
+    uint32_t counter[4];
 
-    size = build_container(code, count_gs_isgn, ARRAY_SIZE(count_gs_isgn), count_gs_osgn, ARRAY_SIZE(count_gs_osgn),
-                           uav_gs_shdr, ARRAY_SIZE(uav_gs_shdr));
-    check_hr(ID3D11Device_CreateVertexShader(device, id_vs_code, sizeof(id_vs_code), NULL, &id_vs),
-             "CreateVertexShader");
-    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, code, size, decl, 1, &stride, 1,
-                                                               D3D11_SO_NO_RASTERIZED_STREAM, NULL, &uav_gs),
-             "CreateGeometryShaderWithStreamOutput");
     buffer = create_data_buffer(zero, sizeof(zero), D3D11_BIND_UNORDERED_ACCESS,
                                 D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS);
     memset(&uav_desc, 0, sizeof(uav_desc));
@@ -1821,8 +1830,8 @@ static void geometry_uav_case(void)
     large = create_buffer(LARGE_SIZE, TARGET_FILL);
     bind_pipeline(vb0);
     ID3D11DeviceContext_IASetInputLayout(context, NULL);
-    ID3D11DeviceContext_VSSetShader(context, id_vs, NULL, 0);
-    ID3D11DeviceContext_GSSetShader(context, uav_gs, NULL, 0);
+    ID3D11DeviceContext_VSSetShader(context, vertex, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, geometry, NULL, 0);
     ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews(context, 1, &rtv, NULL, 1, 1, &uav, NULL);
     bind_target(large, 0);
     ID3D11DeviceContext_Draw(context, UAV_POINTS, 0);
@@ -1833,6 +1842,30 @@ static void geometry_uav_case(void)
     ID3D11Buffer_Release(large);
     ID3D11UnorderedAccessView_Release(uav);
     ID3D11Buffer_Release(buffer);
+    return counter[0];
+}
+
+/* A geometry shader that streams out and adds 1 to a UAV for each input
+ * point: after a draw of 40 points the UAV holds 40, and the target the 40
+ * points in order */
+static void geometry_uav_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "custom", 0, 0, 4, 0 } };
+    static uint32_t code[CONTAINER_WORDS], data[LARGE_WORDS];
+    ID3D11GeometryShader *uav_gs;
+    ID3D11VertexShader *id_vs;
+    UINT stride = 16;
+    uint32_t size, counter;
+    unsigned i, c, correct = 0;
+
+    size = build_container(code, count_gs_isgn, ARRAY_SIZE(count_gs_isgn), count_gs_osgn, ARRAY_SIZE(count_gs_osgn),
+                           uav_gs_shdr, ARRAY_SIZE(uav_gs_shdr));
+    check_hr(ID3D11Device_CreateVertexShader(device, id_vs_code, sizeof(id_vs_code), NULL, &id_vs),
+             "CreateVertexShader");
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, code, size, decl, 1, &stride, 1,
+                                                               D3D11_SO_NO_RASTERIZED_STREAM, NULL, &uav_gs),
+             "CreateGeometryShaderWithStreamOutput");
+    counter = draw_uav_points(id_vs, uav_gs, data);
     ID3D11GeometryShader_Release(uav_gs);
     ID3D11VertexShader_Release(id_vs);
     for (i = 0; i < UAV_POINTS; i++)
@@ -1842,11 +1875,43 @@ static void geometry_uav_case(void)
         for (c = 0; c < 4; c++) same &= ((const float *)data)[i * 4 + c] == (float)i;
         correct += same;
     }
-    say("UAV %u, points in order %u/%u", counter[0], correct, UAV_POINTS);
-    if (counter[0] != UAV_POINTS || correct != UAV_POINTS
-        || count_changed(data, 4 * UAV_POINTS, LARGE_WORDS, TARGET_FILL))
-        fail(1, "UAV %u (want %u), points in order %u/%u, words after them changed %u (want 0)", counter[0],
-             UAV_POINTS, correct, UAV_POINTS, count_changed(data, 4 * UAV_POINTS, LARGE_WORDS, TARGET_FILL));
+    say("UAV %u, points in order %u/%u", counter, correct, UAV_POINTS);
+    if (counter != UAV_POINTS || correct != UAV_POINTS || count_changed(data, 4 * UAV_POINTS, LARGE_WORDS, TARGET_FILL))
+        fail(1, "UAV %u (want %u), points in order %u/%u, words after them changed %u (want 0)", counter, UAV_POINTS,
+             correct, UAV_POINTS, count_changed(data, 4 * UAV_POINTS, LARGE_WORDS, TARGET_FILL));
+}
+
+/* A vertex shader that adds 1 to a UAV for each vertex, through count_gs
+ * streaming out: after a draw of 40 points the UAV holds 40, and the target
+ * the points count_gs emits in order */
+static void geometry_vs_uav_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "custom", 0, 0, 4, 0 } };
+    static uint32_t code[CONTAINER_WORDS], data[LARGE_WORDS];
+    static float want[128][4];
+    ID3D11GeometryShader *count_gs;
+    ID3D11VertexShader *uav_vs;
+    UINT stride = 16;
+    uint32_t size, counter;
+    unsigned n;
+    int ok;
+
+    size = build_container(code, (const uint32_t *)id_vs_code + 11, 13, (const uint32_t *)id_vs_code + 24, 12,
+                           uav_vs_shdr, ARRAY_SIZE(uav_vs_shdr));
+    check_hr(ID3D11Device_CreateVertexShader(device, code, size, NULL, &uav_vs), "CreateVertexShader");
+    size = build_count_gs(code);
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, code, size, decl, 1, &stride, 1,
+                                                               D3D11_SO_NO_RASTERIZED_STREAM, NULL, &count_gs),
+             "CreateGeometryShaderWithStreamOutput");
+    counter = draw_uav_points(uav_vs, count_gs, data);
+    ID3D11GeometryShader_Release(count_gs);
+    ID3D11VertexShader_Release(uav_vs);
+    n = count_points(want, 0, UAV_POINTS);
+    ok = has_points(data, 0, (const float (*)[4])want, n) && !count_changed(data, 4 * n, LARGE_WORDS, TARGET_FILL);
+    say("UAV %u, the %u points %s", counter, n, ok ? "in order" : "not in order");
+    if (counter != UAV_POINTS || !ok)
+        fail(1, "UAV %u (want %u), the %u points %s", counter, UAV_POINTS, n,
+             ok ? "in order" : "not in order or words after them changed");
 }
 
 /* Bind id_vs_code and count_gs streaming out into <so> at offset 0, and
@@ -3025,6 +3090,7 @@ static const struct
     { "geometry-rasterized", geometry_rasterized_case },
     { "geometry-streams-rasterized", geometry_streams_rasterized_case },
     { "geometry-uav", geometry_uav_case, D3D_FEATURE_LEVEL_11_1 },
+    { "geometry-vs-uav", geometry_vs_uav_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-shapes", geometry_shapes_case },
     { "geometry-strips", geometry_strips_case },
     { "geometry", geometry_case },
