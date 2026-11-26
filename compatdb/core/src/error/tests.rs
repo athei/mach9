@@ -43,6 +43,15 @@ fn a_diagnostic_says_what_lenient_parsing_did() {
         ),
         (
             Diagnostic {
+                text: RulesText::Variable,
+                line: 3,
+                field: None,
+                error: FieldError::UnreadableMatcher(Key::Company),
+            },
+            "WINE_COMPATDB line 3: ignoring the line, its company cannot be read",
+        ),
+        (
+            Diagnostic {
                 text: RulesText::File,
                 ..at("bogus=1", FieldError::UnknownKey("bogus".into()))
             },
@@ -120,5 +129,9 @@ fn a_parse_error_lists_every_diagnostic() {
     assert_eq!(
         FieldError::Duplicate(Key::Exe).to_string(),
         "exe given more than once"
+    );
+    assert_eq!(
+        FieldError::UnreadableMatcher(Key::Product).to_string(),
+        "a product that cannot be read"
     );
 }

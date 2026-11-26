@@ -1177,8 +1177,9 @@ run_limited() {
 
 # check_rules_read <label> <log>: exit unless compatdb.so read every rule of
 # the run <label> logged in <log> without a warning.
-# It ignores a field it cannot read and applies the rest of the record, so a
-# smoke rule with a key or value it does not know would otherwise still run.
+# It ignores a field it cannot read and applies the rest of the record, but
+# drops the whole record when that field is a matcher, so a smoke rule with a
+# key or value it does not know would otherwise still run, or not apply.
 check_rules_read() {
     if grep -q "compatdb: .*warning:" "$2"; then
         echo "Error: compatdb.so could not read every rule of $1"

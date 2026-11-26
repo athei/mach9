@@ -150,7 +150,7 @@ with `compatdb:`.
 | `SteamAppId = <id>` | The Steam app id rules can match ([matching][matching]); only when the process has one |
 | `WINE_COMPATDB_FILE = <path>` | The file that adds rules; only when the variable is set |
 | `warning: WINE_COMPATDB_FILE not read: <reason>; ...` | The file cannot be used and adds no rules; `WINE_COMPATDB` and the built-in rules still apply |
-| `warning: WINE_COMPATDB line <n>: ...`, `warning: WINE_COMPATDB_FILE line <n>: ...` | A field or line of the rules it ignored, in the variable or the file ([parsing][parsing]) |
+| `warning: WINE_COMPATDB line <n>: ...`, `warning: WINE_COMPATDB_FILE line <n>: ...` | A field or line of the rules it ignored, in the variable or the file; a matcher field it cannot read drops the whole line ([parsing][parsing]) |
 | `WINE_PROF_SERVICE = <name>: ...` | Whether the process [checked in](#profiler-check-in), or why it did not; only when the variable is set |
 | `dxgi = <impl> (from <path>), <source>`, `d3d9 = ...` | The trees it prepended; a family no rule chose gets `wined3d` |
 | `wined3d = ...` | The wined3d renderer a rule set, or the one a `WINE_D3D_CONFIG` from a rule's `env` or inherited asks for; unset, wined3d's registry settings or its default decide |

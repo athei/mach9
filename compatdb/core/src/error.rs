@@ -37,6 +37,11 @@ pub enum FieldError {
     /// An `exe` that is empty, or a rule without one, which matches no
     /// process.
     MissingExe,
+    /// A line of [`ENV_VAR`] or of the file [`FILE_ENV_VAR`] names with a
+    /// field for this matcher that cannot be read, which
+    /// [`Table::parse_lenient`] leaves out as a whole: without the field the
+    /// rule would match more processes than it names.
+    UnreadableMatcher(Key),
     /// An `exe` that starts with `steam:` and has no app id after it, as it
     /// was written (see [`Exe::new`](crate::Exe::new)).
     BadSteamApp(String),
@@ -144,6 +149,7 @@ impl fmt::Display for FieldError {
             Self::BadValue { key, value, .. } => write!(f, "unknown {key} value {value:?}"),
             Self::Nul => f.write_str("a NUL in its value"),
             Self::MissingExe => f.write_str("no exe"),
+            Self::UnreadableMatcher(key) => write!(f, "a {key} that cannot be read"),
             Self::BadSteamApp(text) => write!(f, "invalid Steam app id {text:?}"),
             Self::EmptyArgument => f.write_str("an empty argument"),
             Self::EmptyDebugChannel => f.write_str("an empty debug channel"),
@@ -218,6 +224,9 @@ impl fmt::Display for Diagnostic {
         write!(f, "{} line {}: ", self.text.name(), self.line)?;
         match &self.error {
             FieldError::MissingExe => f.write_str("ignoring the line, it has no exe"),
+            FieldError::UnreadableMatcher(key) => {
+                write!(f, "ignoring the line, its {key} cannot be read")
+            }
             FieldError::MissingEquals => write!(f, "ignoring field {field:?} without '='"),
             FieldError::Duplicate(key) => {
                 write!(f, "{key} given more than once, the last one applies")

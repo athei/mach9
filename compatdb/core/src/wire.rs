@@ -50,6 +50,10 @@ impl Table {
     /// - A field with an unknown key, a value its key does not take, no
     ///   `=`, escapes that are not UTF-8 or a NUL is left out, and the rest
     ///   of its line still applies.
+    /// - A line with a matcher field (`exe`, `company`, `product`,
+    ///   `original_filename`) whose value cannot be read, or that has no
+    ///   `=`, is left out as a whole, since without that field the rule
+    ///   would match more processes than it names.
     /// - A line without an `exe` is left out as a whole, since it matches no
     ///   process.
     /// - A second field for a matcher or a scalar setting replaces the first
@@ -89,12 +93,12 @@ impl Table {
             }
             let n = i.saturating_add(1);
             match read_record(line, text, n, &mut diagnostics) {
-                Some(rule) => table.push_from(rule, text.source(n)),
-                None => diagnostics.push(Diagnostic {
+                Ok(rule) => table.push_from(rule, text.source(n)),
+                Err(error) => diagnostics.push(Diagnostic {
                     text,
                     line: n,
                     field: None,
-                    error: FieldError::MissingExe,
+                    error,
                 }),
             }
         }
@@ -211,27 +215,34 @@ fn rule_to_record(rule: &Rule) -> String {
     fields.join(";")
 }
 
-/// Read one record into a rule, or `None` for a record without an `exe`,
+/// Read one record into a rule, or say why the whole record is left out:
+/// [`FieldError::UnreadableMatcher`] for a matcher field that cannot be
+/// read, and else [`FieldError::MissingExe`] for a record without an `exe`,
 /// which matches no process. Every problem with a field goes to
-/// `diagnostics`; a field that cannot be read is left out, and the other
+/// `diagnostics`; a setting that cannot be read is left out, and the other
 /// fields still apply. `text` and `line` say where the record is, for the
 /// diagnostics.
 ///
-/// The matcher keys are a closed set (see [`rule_to_record`]), so an unknown
-/// key is a setting this library does not know, or a typo. A misspelt
-/// matcher is ignored like any other unknown key, with the warning, and the
-/// rule then matches more processes than it meant to. The `name` and
-/// `enabled` keys of the old format, where an override merged into or
-/// dropped a rule by name, are unknown keys too.
+/// A matcher that cannot be read drops the record, since the rule would
+/// match more processes than it names without it; so does a matcher key
+/// without `=`, which can be no setting added later. The matcher keys are a
+/// closed set (see [`rule_to_record`]), so an unknown key is a setting this
+/// library does not know, or a typo. A misspelt matcher is ignored like any
+/// other unknown key, with the warning, and the rule then matches more
+/// processes than it meant to. The `name` and `enabled` keys of the old
+/// format, where an override merged into or dropped a rule by name, are
+/// unknown keys too.
 fn read_record(
     record: &str,
     text: RulesText,
     line: usize,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Rule> {
+) -> Result<Rule, FieldError> {
     let mut rule = Rule::new(Exe::Any);
     // The rule's `exe`, which every rule needs; an empty one is none.
     let mut exe = None;
+    // The first matcher whose field could not be read.
+    let mut unreadable = None;
     // The keys that hold one value and a field of the record has set.
     let mut seen: Vec<Key> = Vec::new();
     for raw in record.split(';') {
@@ -248,6 +259,11 @@ fn read_record(
         };
         let Some((key, value)) = raw.split_once('=') else {
             report(FieldError::MissingEquals);
+            if let Ok(key) = raw.parse::<Key>()
+                && matches!(key.kind(), KeyKind::Matcher)
+            {
+                unreadable.get_or_insert(key);
+            }
             continue;
         };
         let key: Key = match key.parse() {
@@ -262,6 +278,9 @@ fn read_record(
         let mut decoder = Decoder::default();
         if let Err(error) = read_field(&mut rule, &mut exe, key, value, &mut decoder) {
             report(error);
+            if matches!(key.kind(), KeyKind::Matcher) {
+                unreadable.get_or_insert(key);
+            }
             continue;
         }
         let holds_one = matches!(key.kind(), KeyKind::Matcher | KeyKind::Scalar(_));
@@ -274,10 +293,11 @@ fn read_record(
             seen.push(key);
         }
     }
-    exe.map(|exe| {
-        rule.exe = exe;
-        rule
-    })
+    if let Some(key) = unreadable {
+        return Err(FieldError::UnreadableMatcher(key));
+    }
+    rule.exe = exe.ok_or(FieldError::MissingExe)?;
+    Ok(rule)
 }
 
 /// Set the field `key` of `rule`, or of `exe`, from its wire `value`, or

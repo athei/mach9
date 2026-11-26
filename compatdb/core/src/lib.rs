@@ -141,8 +141,9 @@
 //! non-ASCII included, is written as it is, in UTF-8. Reading decodes every
 //! `%XX`, in either case, to its byte, and the bytes of a value must be
 //! UTF-8 without a NUL: `%C3%A9` is `é`, and `%FF` or `%00` drops the
-//! field. A `%` that two hex digits do not follow is kept as it is, with a
-//! diagnostic.
+//! field, or the line in a matcher ([Strict and lenient
+//! parsing](#strict-and-lenient-parsing)). A `%` that two hex digits do not
+//! follow is kept as it is, with a diagnostic.
 //!
 //! The case rule. Every word the format defines is read
 //! ASCII-case-insensitively and written in lowercase: the keys, the words
@@ -156,18 +157,20 @@
 //! There is no format version. A first line of `v=` and ASCII digits, the
 //! header launchers wrote for an older format, is skipped without a
 //! diagnostic; it still counts as a line. Compatibility is per field
-//! instead: `compatdb.so` ignores a field whose key it does not know or
-//! whose value its key does not take, with a warning, and applies the rest
-//! of the record. A key added later is therefore only ever a setting: the
-//! matcher keys are a closed set, since a library that ignored an unknown
-//! matcher would apply the rule to more processes than it names. So a Steam
-//! app is a value of `exe`, `steam:<appid>`, and no key of its own: a library
-//! from before it reads the value as a basename, which no process has, and
-//! the rule matches nothing, where `exe=*;steam_app=440` would apply to every
-//! process. The `name` and `enabled` keys of the older format, where a line
-//! changed or dropped a built-in rule by its name, are unknown keys like any
-//! other, and a `compatdb.so` from before that change drops every line
-//! without `name`, so a table in this format does nothing on an older bundle.
+//! instead: `compatdb.so` ignores a field whose key it does not know or a
+//! setting whose value its key does not take, with a warning, and applies
+//! the rest of the record. A key added later is therefore only ever a
+//! setting: the matcher keys are a closed set, since a library that ignored
+//! an unknown matcher would apply the rule to more processes than it names
+//! (a matcher value it cannot read drops the record for the same reason).
+//! So a Steam app is a value of `exe`, `steam:<appid>`, and no key of its
+//! own: a library from before it reads the value as a basename, which no
+//! process has, and the rule matches nothing, where `exe=*;steam_app=440`
+//! would apply to every process. The `name` and `enabled` keys of the older
+//! format, where a line changed or dropped a built-in rule by its name, are
+//! unknown keys like any other, and a `compatdb.so` from before that change
+//! drops every line without `name`, so a table in this format does nothing
+//! on an older bundle.
 //!
 //! `Display` writes the canonical text: one line per rule and no line
 //! break after the last, the fields in the order of [`Key::ALL`], every
@@ -205,6 +208,11 @@
 //! - A field with an unknown key, a value its key or its part does not
 //!   take, no `=`, escapes that are not UTF-8, or a NUL is left out, and
 //!   the rest of its line still applies.
+//! - A line with such a value in a matcher, `exe`, `company`, `product` or
+//!   `original_filename`, or with a matcher key without `=`, is left out as
+//!   a whole, since without that field the rule would match more processes
+//!   than it names. That holds for a second field of the matcher too: the
+//!   first one does not apply instead. `Display` never writes such a field.
 //! - A line without an `exe` is left out as a whole, since it matches no
 //!   process.
 //! - A second field for a matcher or a scalar setting replaces the first.

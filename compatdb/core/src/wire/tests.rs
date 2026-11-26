@@ -367,16 +367,15 @@ fn a_field_that_cannot_be_read_is_ignored_and_the_rest_applies() -> TestResult {
         ("wined3d=opengl", "unknown wined3d value \"opengl\""),
         ("dpi_aware=yes", "unknown dpi_aware value \"yes\""),
         ("bogus", "field \"bogus\" without '='"),
-        // A list entry or a fingerprint value its type does not take.
+        // A list entry its type does not take.
         ("arguments=", "field \"arguments=\": an empty argument"),
         (
             "arguments_override=%00",
             "field \"arguments_override=%00\": a NUL in its value",
         ),
-        ("company=a%00", "field \"company=a%00\": a NUL in its value"),
         (
-            "product=%C3%28",
-            "field \"product=%C3%28\": escapes that are not UTF-8",
+            "debug_channels=%C3%28",
+            "field \"debug_channels=%C3%28\": escapes that are not UTF-8",
         ),
         (
             "dll_overrides=mscoree",
@@ -407,6 +406,62 @@ fn a_field_that_cannot_be_read_is_ignored_and_the_rest_applies() -> TestResult {
         );
     }
     Ok(())
+}
+
+#[test]
+fn a_matcher_that_cannot_be_read_drops_its_line() {
+    // Without the field the rule would match more programs than it names,
+    // so the whole line is left out: the field says why, the line that it
+    // went. A second `exe` that cannot be read does not fall back to the
+    // first, and the line after it still applies.
+    for (field, key, said) in [
+        (
+            "company=Ac%FFme",
+            Key::Company,
+            "field \"company=Ac%FFme\": escapes that are not UTF-8",
+        ),
+        (
+            "company=a%00",
+            Key::Company,
+            "field \"company=a%00\": a NUL in its value",
+        ),
+        (
+            "product=%C3%28",
+            Key::Product,
+            "field \"product=%C3%28\": escapes that are not UTF-8",
+        ),
+        (
+            "original_filename=x%00",
+            Key::OriginalFilename,
+            "field \"original_filename=x%00\": a NUL in its value",
+        ),
+        (
+            "exe=%FF",
+            Key::Exe,
+            "field \"exe=%FF\": escapes that are not UTF-8",
+        ),
+        ("exe=steam:0", Key::Exe, "invalid Steam app id \"steam:0\""),
+        // A matcher key without `=` is no setting a later library added.
+        ("company", Key::Company, "field \"company\" without '='"),
+        ("Product", Key::Product, "field \"Product\" without '='"),
+    ] {
+        let want = [
+            format!("WINE_COMPATDB line 1: ignoring {said}"),
+            format!("WINE_COMPATDB line 1: ignoring the line, its {key} cannot be read"),
+        ];
+        for line in [
+            format!("exe=setup.exe;{field};dll_overrides=mscoree=n"),
+            format!("{field};exe=setup.exe;dll_overrides=mscoree=n"),
+        ] {
+            let (table, diagnostics) = parse(&format!("{line}\nexe=ok.exe"));
+            let exes: Vec<&str> = table.rules().iter().map(|r| r.exe().as_str()).collect();
+            assert_eq!(exes, ["ok.exe"], "{line}");
+            assert_eq!(table.sources(), [Source::Line(2)], "{line}");
+            assert_eq!(diagnostics, want, "{line}");
+            let (_, lenient) = Table::parse_lenient(&line);
+            assert_eq!(Table::parse_strict(&line), Err(ParseError(lenient)));
+        }
+    }
 }
 
 #[test]
@@ -833,7 +888,7 @@ fn a_steam_exe_reads_as_a_word_and_writes_in_lowercase() -> TestResult {
 }
 
 #[test]
-fn a_bad_steam_app_id_drops_the_field_and_so_the_line() {
+fn a_bad_steam_app_id_drops_the_line() {
     for bad in [
         "steam:",
         "steam:0",
@@ -847,7 +902,7 @@ fn a_bad_steam_app_id_drops_the_field_and_so_the_line() {
             warnings,
             [
                 format!("WINE_COMPATDB line 1: ignoring invalid Steam app id {bad:?}"),
-                String::from("WINE_COMPATDB line 1: ignoring the line, it has no exe"),
+                String::from("WINE_COMPATDB line 1: ignoring the line, its exe cannot be read"),
             ]
         );
         assert!(Table::parse_strict(&format!("exe={bad}")).is_err(), "{bad}");
@@ -1015,7 +1070,7 @@ fn strict_parsing_refuses_what_lenient_parsing_reports() -> TestResult {
         "exe=",
         "exe=x.exe;arguments=",
         "exe=x.exe;arguments=50%",
-        "exe=x.exe;company=%FF",
+        "exe=x.exe;arguments=%FF",
         "exe=x.exe;env=A=%00",
         "exe=x.exe;dll_overrides=mscoree",
         "exe=x.exe;exe=y.exe",
