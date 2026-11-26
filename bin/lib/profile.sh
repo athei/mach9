@@ -300,10 +300,11 @@ INSTALL_PREFIX=/usr/local
 TREE_MARKER=.wine-build-tree
 
 # canonical_path <dir>: <dir> with symlinks, . and .. resolved, or as given
-# when it does not exist.
+# when it does not exist. cd -P takes a .. after a symlink as the kernel
+# does, from the symlink's target.
 canonical_path() {
     if [ -d "$1" ]; then
-        (cd "$1" && pwd -P)
+        (cd -P "$1" && pwd -P)
     else
         echo "$1"
     fi
@@ -312,18 +313,36 @@ canonical_path() {
 # absolute_path <path>: <path> as an absolute path without trailing slashes,
 # its longest existing directory prefix with symlinks, . and .. resolved and
 # the rest, which does not exist yet, appended one component at a time. A
-# path relative to the working directory is taken from there.
+# path relative to the working directory is taken from there. In the rest, a
+# . is dropped and a .. removes the component before it, or the last one of
+# the resolved prefix: that is the directory the path names once mkdir -p
+# has made the missing ones, which are directories then, not symlinks.
 absolute_path() {
-    local path="$1" rest="" top
+    local path="$1" rest="" up=0 name top
     case "$path" in
         /*) ;;
         *) path="$PWD/$path" ;;
     esac
     while [ ! -d "$path" ]; do
-        rest="/$(basename "$path")$rest"
+        name=$(basename "$path")
         path=$(dirname "$path")
+        case "$name" in
+            .) ;;
+            ..) up=$((up + 1)) ;;
+            *)
+                if [ "$up" -gt 0 ]; then
+                    up=$((up - 1))
+                else
+                    rest="/$name$rest"
+                fi
+                ;;
+        esac
     done
-    top=$(cd "$path" && pwd -P)
+    top=$(cd -P "$path" && pwd -P)
+    while [ "$up" -gt 0 ]; do
+        top=$(dirname "$top")
+        up=$((up - 1))
+    done
     path="${top%/}$rest"
     echo "${path:-/}"
 }
