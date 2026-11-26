@@ -165,6 +165,35 @@ fn duplicate_matchers_finds_rules_that_cannot_be_told_apart() {
 }
 
 #[test]
+fn duplicate_matchers_finds_fingerprints_that_differ_only_in_case() -> TestResult {
+    let mut table = Table::new();
+    for (exe, company, product, file) in [
+        ("Game.exe", "Valve", "Half-Life", "hl2.exe"),
+        ("game.EXE", "VALVE", "half-life", "HL2.EXE"),
+        ("Game.exe", "Valve Corp", "Half-Life", "hl2.exe"),
+    ] {
+        table.push(
+            Rule::new(Exe::new(exe)?)
+                .with_company(Fingerprint::new(company)?)
+                .with_product(Fingerprint::new(product)?)
+                .with_original_filename(Fingerprint::new(file)?),
+        );
+    }
+    // The first two match the same processes, as matching ignores ASCII
+    // case; the third pins a longer company.
+    let version = VersionInfo {
+        company: "Valve Corporation".into(),
+        product: "Half-Life 2".into(),
+        original_filename: "hl2.exe".into(),
+    };
+    for rule in table.rules() {
+        assert!(rule.matches("GAME.exe", &version, None));
+    }
+    assert_eq!(table.duplicate_matchers(), vec![(0, 1)]);
+    Ok(())
+}
+
+#[test]
 fn wildcard_rules_are_not_duplicates_of_each_other() {
     // Several `*` rules are defaults that stack. A wildcard that pins a
     // fingerprint is an ordinary matcher and is still reported.

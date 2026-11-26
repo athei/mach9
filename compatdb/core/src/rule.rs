@@ -764,13 +764,22 @@ impl Rule {
     }
 
     /// Whether two rules would match exactly the same processes, which can only
-    /// be a mistake in a hand-written table.
+    /// be a mistake in a hand-written table. The `exe` and the fingerprint
+    /// values compare ASCII-case-insensitively, as they match.
     #[must_use]
     pub fn matches_the_same_as(&self, other: &Self) -> bool {
+        let same = |a: Option<&Fingerprint>, b: Option<&Fingerprint>| match (a, b) {
+            (Some(a), Some(b)) => a.as_str().eq_ignore_ascii_case(b.as_str()),
+            (None, None) => true,
+            _ => false,
+        };
         self.exe.as_str().eq_ignore_ascii_case(other.exe.as_str())
-            && self.company == other.company
-            && self.product == other.product
-            && self.original_filename == other.original_filename
+            && same(self.company.as_ref(), other.company.as_ref())
+            && same(self.product.as_ref(), other.product.as_ref())
+            && same(
+                self.original_filename.as_ref(),
+                other.original_filename.as_ref(),
+            )
     }
 
     /// The matchers of this rule as the log prints them: the `exe`, then the
