@@ -105,6 +105,13 @@
  *                    UAV holds 40, not one count per pass of DXMT's geometry
  *                    pipeline, and what the geometry shader emits is written
  *                    in order
+ *   geometry-vs-uav-strips  that vertex shader for 64 vertices of each strip
+ *                    topology, through a geometry shader without stream
+ *                    output, and as a triangle strip also through one that
+ *                    streams out: the UAV holds 64, not one count more for
+ *                    each vertex two of DXMT's object threadgroups share; an
+ *                    indexed triangle strip of 64 indices with a cut, of two
+ *                    instances: the UAV holds 126
  *   geometry-shapes  a triangle strip of 4 vertices without a cut, a line
  *                    strip, and a geometry shader of 4 instances are written
  *                    as lists, the instances in order
@@ -132,9 +139,9 @@
  *                    stream's points and queries
  *
  * Every case runs on a device of its own, of feature level 11_0, or 11_1 for
- * geometry-uav and geometry-vs-uav, which gives geometry and vertex shaders
- * UAVs. Every buffer but the targets of geometry-large and
- * geometry-streams-blocks starts filled with a pattern.
+ * geometry-uav, geometry-vs-uav and geometry-vs-uav-strips, which gives
+ * geometry and vertex shaders UAVs. Every buffer but the targets of
+ * geometry-large and geometry-streams-blocks starts filled with a pattern.
  * The cases up to geometry-strips read their targets back between draws,
  * which waits for the GPU; the ones after it draw without a readback between,
  * so DXMT has to order what two draws of a render pass write.
@@ -1958,6 +1965,170 @@ static void geometry_vs_uav_case(void)
              ok ? "in order" : "not in order or words after them changed");
 }
 
+/* The input signature of a geometry shader that reads "custom" from register
+ * 0, the output of uav_vs_shdr */
+static const uint32_t custom_isgn[] = {
+    0x4e475349, 0x00000028, 0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000000, 0x00000003,
+    0x00000000, 0x00000f0f, 0x74737563, 0xab006d6f,
+};
+
+/* The shader chunk of a geometry shader for the strip topology of input
+ * primitive <primitive> with <vertices> vertices, assembled here as gs_4_0
+ * with custom_isgn and the OSGN chunk of triangle_gs_code: one point per
+ * primitive, outside the viewport
+ * [maxvertexcount(1)]
+ * void main(<primitive> float4 input[<vertices>] : custom, inout PointStream<float4 : SV_POSITION> output)
+ * { output.Append(input[0] + float4(4.0, 0.0, 0.0, 1.0)); } */
+#define STRIP_UAV_GS_SHDR(primitive, vertices)                                                               \
+    0x52444853, 0x0000006c, 0x00020040, 0x0000001b,                                                        \
+    0x0400005f, 0x002010f2, vertices, 0x00000000,               /* dcl_input v[<vertices>][0].xyzw */      \
+    primitive,                                                  /* dcl_inputprimitive */                   \
+    0x0100085c,                                                 /* dcl_outputtopology pointlist */         \
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */     \
+    0x0200005e, 0x00000001,                                     /* dcl_maxout 1 */                         \
+    0x0b000000, 0x001020f2, 0x00000000, 0x00201e46, 0x00000000, 0x00000000, 0x00004002, 0x40800000,      \
+    0x00000000, 0x00000000, 0x3f800000,                         /* add o0, v[0][0], l(4.0, 0, 0, 1.0) */   \
+    0x01000013,                                                 /* emit */                                 \
+    0x0100003e                                                  /* ret */
+
+#define STRIP_UAV_VERTICES 64
+/* The position of the cut index of the indexed draw, past the first object
+   threadgroup of a triangle strip, which ends at 31 */
+#define STRIP_UAV_CUT 40
+
+/* Draws <count> vertices, or the <count> indices of <indices> (R16) when it
+ * is not NULL, in <instances> instances of <topology> through <vertex> and
+ * <geometry>, with a raw UAV of 4 zeroed words at u1 of the output merger
+ * and <so> as the target of slot 0, or none. Returns the UAV's first word
+ * after the draw. */
+static uint32_t draw_uav_vertices(ID3D11VertexShader *vertex, ID3D11GeometryShader *geometry,
+                                  D3D11_PRIMITIVE_TOPOLOGY topology, UINT count, ID3D11Buffer *indices,
+                                  UINT instances, ID3D11Buffer *so)
+{
+    static const uint32_t zero[4] = { 0 };
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
+    ID3D11UnorderedAccessView *uav;
+    ID3D11Buffer *buffer;
+    uint32_t counter[4];
+
+    buffer = create_data_buffer(zero, sizeof(zero), D3D11_BIND_UNORDERED_ACCESS,
+                                D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS);
+    memset(&uav_desc, 0, sizeof(uav_desc));
+    uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    uav_desc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uav_desc.Buffer.NumElements = ARRAY_SIZE(zero);
+    uav_desc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+    check_hr(ID3D11Device_CreateUnorderedAccessView(device, (ID3D11Resource *)buffer, &uav_desc, &uav),
+             "CreateUnorderedAccessView");
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_IASetInputLayout(context, NULL);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, topology);
+    ID3D11DeviceContext_VSSetShader(context, vertex, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, geometry, NULL, 0);
+    ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews(context, 1, &rtv, NULL, 1, 1, &uav, NULL);
+    if (so) bind_target(so, 0);
+    if (indices)
+    {
+        ID3D11DeviceContext_IASetIndexBuffer(context, indices, DXGI_FORMAT_R16_UINT, 0);
+        ID3D11DeviceContext_DrawIndexedInstanced(context, count, instances, 0, 0, 0);
+    }
+    else
+    {
+        ID3D11DeviceContext_DrawInstanced(context, count, instances, 0, 0);
+    }
+    read_buffer_size(buffer, counter, sizeof(counter));
+    ID3D11DeviceContext_ClearState(context);
+    ID3D11UnorderedAccessView_Release(uav);
+    ID3D11Buffer_Release(buffer);
+    return counter[0];
+}
+
+/* A vertex shader that adds 1 to a UAV for each vertex, through a geometry
+ * shader without stream output, 64 vertices drawn as each strip topology,
+ * and as a triangle strip also through that shader streaming out: the UAV
+ * holds 64 each time. DXMT's object threadgroups of 32 vertices share the
+ * last vertices of one with the first of the next for a strip, 1 to 3 of
+ * them and with adjacency more (get_gs_vertex_count), whose vertex shader
+ * must still run once. Then 2 instances of an indexed triangle strip of 64
+ * indices with a cut index past the first threadgroup, which DXMT scans for
+ * cuts before it shades: the UAV holds 2 * 63. */
+static void geometry_vs_uav_strips_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "SV_POSITION", 0, 0, 4, 0 } };
+    static const uint32_t line_shdr[] = { STRIP_UAV_GS_SHDR(0x0100105d, 2) };     /* line */
+    static const uint32_t triangle_shdr[] = { STRIP_UAV_GS_SHDR(0x0100185d, 3) }; /* triangle */
+    static const uint32_t lineadj_shdr[] = { STRIP_UAV_GS_SHDR(0x0100305d, 4) };  /* lineadj */
+    static const uint32_t triadj_shdr[] = { STRIP_UAV_GS_SHDR(0x0100385d, 6) };   /* triangleadj */
+    static const struct
+    {
+        const char *name;
+        D3D11_PRIMITIVE_TOPOLOGY topology;
+        const uint32_t *shdr;
+        uint32_t words;
+        BOOL stream_output;
+    } strips[] = {
+        { "line strip", D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP, line_shdr, ARRAY_SIZE(line_shdr) },
+        { "triangle strip", D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, triangle_shdr, ARRAY_SIZE(triangle_shdr) },
+        { "line strip with adjacency", D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ, lineadj_shdr,
+          ARRAY_SIZE(lineadj_shdr) },
+        { "triangle strip with adjacency", D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ, triadj_shdr,
+          ARRAY_SIZE(triadj_shdr) },
+        { "triangle strip streamed out", D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, triangle_shdr,
+          ARRAY_SIZE(triangle_shdr), TRUE },
+    };
+    static uint32_t code[CONTAINER_WORDS];
+    static uint16_t index_data[STRIP_UAV_VERTICES];
+    ID3D11GeometryShader *strip_gs;
+    ID3D11VertexShader *uav_vs;
+    ID3D11Buffer *indices, *large;
+    uint32_t size, counter;
+    UINT stride = 16;
+    unsigned i, correct = 0;
+
+    size = build_container(code, (const uint32_t *)id_vs_code + 11, 13, (const uint32_t *)id_vs_code + 24, 12,
+                           uav_vs_shdr, ARRAY_SIZE(uav_vs_shdr));
+    check_hr(ID3D11Device_CreateVertexShader(device, code, size, NULL, &uav_vs), "CreateVertexShader");
+    for (i = 0; i < ARRAY_SIZE(strips); i++)
+    {
+        size = build_container(code, custom_isgn, ARRAY_SIZE(custom_isgn), TRIANGLE_GS_OSGN,
+                               TRIANGLE_GS_SIGNATURE_WORDS, strips[i].shdr, strips[i].words);
+        large = NULL;
+        if (strips[i].stream_output)
+        {
+            /* 62 points, one per triangle, into room for 128 */
+            check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, code, size, decl, 1, &stride, 1,
+                                                                       D3D11_SO_NO_RASTERIZED_STREAM, NULL,
+                                                                       &strip_gs),
+                     "CreateGeometryShaderWithStreamOutput");
+            large = create_buffer(LARGE_SIZE, TARGET_FILL);
+        }
+        else
+        {
+            check_hr(ID3D11Device_CreateGeometryShader(device, code, size, NULL, &strip_gs), "CreateGeometryShader");
+        }
+        counter = draw_uav_vertices(uav_vs, strip_gs, strips[i].topology, STRIP_UAV_VERTICES, NULL, 1, large);
+        if (large) ID3D11Buffer_Release(large);
+        ID3D11GeometryShader_Release(strip_gs);
+        say("%s: UAV %u", strips[i].name, counter);
+        correct += counter == STRIP_UAV_VERTICES;
+    }
+
+    for (i = 0; i < STRIP_UAV_VERTICES; i++) index_data[i] = i == STRIP_UAV_CUT ? 0xffff : i;
+    indices = create_data_buffer(index_data, sizeof(index_data), D3D11_BIND_INDEX_BUFFER, 0);
+    size = build_container(code, custom_isgn, ARRAY_SIZE(custom_isgn), TRIANGLE_GS_OSGN, TRIANGLE_GS_SIGNATURE_WORDS,
+                           triangle_shdr, ARRAY_SIZE(triangle_shdr));
+    check_hr(ID3D11Device_CreateGeometryShader(device, code, size, NULL, &strip_gs), "CreateGeometryShader");
+    counter = draw_uav_vertices(uav_vs, strip_gs, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, STRIP_UAV_VERTICES, indices,
+                                2, NULL);
+    ID3D11GeometryShader_Release(strip_gs);
+    ID3D11Buffer_Release(indices);
+    ID3D11VertexShader_Release(uav_vs);
+    say("indexed triangle strip with a cut, 2 instances: UAV %u", counter);
+    if (correct != ARRAY_SIZE(strips) || counter != 2 * (STRIP_UAV_VERTICES - 1))
+        fail(1, "strip draws whose UAV holds %u %u/%u, indexed triangle strip with a cut UAV %u (want %u)",
+             STRIP_UAV_VERTICES, correct, (unsigned)ARRAY_SIZE(strips), counter, 2 * (STRIP_UAV_VERTICES - 1));
+}
+
 /* Bind id_vs_code and count_gs streaming out into <so> at offset 0, and
  * return the shaders in <vs_out> and <gs_out> */
 static void bind_count_gs(ID3D11Buffer *so, ID3D11VertexShader **vs_out, ID3D11GeometryShader **gs_out)
@@ -3136,6 +3307,7 @@ static const struct
     { "geometry-streams-no-output", geometry_streams_no_output_case },
     { "geometry-uav", geometry_uav_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-vs-uav", geometry_vs_uav_case, D3D_FEATURE_LEVEL_11_1 },
+    { "geometry-vs-uav-strips", geometry_vs_uav_strips_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-shapes", geometry_shapes_case },
     { "geometry-strips", geometry_strips_case },
     { "geometry", geometry_case },
