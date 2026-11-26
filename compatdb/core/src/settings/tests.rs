@@ -392,7 +392,7 @@ fn a_steam_rule_refuses_what_a_star_rule_refuses_and_debug_channels() -> TestRes
     assert_eq!(
         error.to_string(),
         "debug_channels needs an exe that names a program: WINEDEBUG scopes an entry by the \
-         image name, which a Steam app id does not give"
+         name a program is started by, which a Steam app id does not give"
     );
     assert_eq!(
         FieldError::RefusedOnSteamApp(Key::ArgumentsOverride).to_string(),

@@ -559,9 +559,9 @@ impl Rule {
     /// `WINEDEBUG` entries for the processes the rule names. Wine reads
     /// `WINEDEBUG` before `compatdb.so` loads, so the library only logs
     /// them; a launcher puts them into the variable it starts Wine with
-    /// (see [`Table::winedebug`]). Those of a rule for a Steam app id are
-    /// only logged: `WINEDEBUG` has no scope for an app id, so they reach no
-    /// process.
+    /// (see [`Table::winedebug`], which says which processes Wine gives
+    /// them). Those of a rule for a Steam app id are only logged:
+    /// `WINEDEBUG` has no scope for an app id, so they reach no process.
     #[must_use]
     pub fn debug_channels(&self) -> &[DebugChannel] {
         &self.debug_channels

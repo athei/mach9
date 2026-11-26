@@ -286,10 +286,11 @@
 //!   so a rule for an app id can match more than one program. [`Rule::set`]
 //!   therefore refuses in such a rule what it refuses in a `*` rule
 //!   ([`Key::allowed_on_any`]), and `debug_channels`, since `WINEDEBUG` scopes
-//!   an entry by the image name ([`Table::winedebug`] leaves one out). Reading
-//!   text refuses neither, [`Table::parse_strict`] included: both stay in the
-//!   rule and its text, and the rule's `arguments_override` is ignored and its
-//!   `debug_channels` are only logged.
+//!   an entry by the name a program is started by ([`Table::winedebug`]
+//!   leaves one out). Reading text refuses neither, [`Table::parse_strict`]
+//!   included: both stay in the rule and its text, and the rule's
+//!   `arguments_override` is ignored and its `debug_channels` are only
+//!   logged.
 //!
 //! # Folding
 //!

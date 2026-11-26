@@ -81,8 +81,8 @@ fn winedebug_scopes_the_channels_of_a_rule_for_an_exe_and_not_those_of_a_star_ru
     );
     table.push(Rule::new(Exe::new("Other.exe")?));
     table.push(Rule::new(Exe::Any).with_debug_channel(channel("+loaddll")?));
-    // A `*` rule with a fingerprint is unscoped too: Wine's prefix is an
-    // image name.
+    // A `*` rule with a fingerprint is unscoped too: Wine's prefix is a
+    // program name.
     table.push(
         Rule::new(Exe::Any)
             .with_company(Fingerprint::new("Acme")?)

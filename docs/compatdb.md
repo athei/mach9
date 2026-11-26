@@ -161,7 +161,7 @@ with `compatdb:`.
 | `vulkan_capture, <source>: ignored, ...` | A rule for `*` or a Steam app id set it, which only a rule that names one program may |
 | `metal_capture = ...` | The same lines for the Metal capture ([Metal capture](internals.md#metal-capture)); its inherited note names `MTL_CAPTURE_ENABLED` and `MESA_KK_GPU_CAPTURE` |
 | `dll_overrides`, `arguments` | Each entry with its source; for an argument, whether it was appended or already present |
-| `debug_channels` | Each entry with its source; only logged |
+| `debug_channels` | Each entry with its source; only logged. Wine gives an entry of a rule for `game.exe` to a process whose command line starts with a path that ends in the component `game.exe`, in any case, whatever its image name, so a program started as `wine game` misses it ([`Table::winedebug`][winedebug]) |
 | `dll_overrides <module>=default, <source>: ...` | The overrides an entry with the order `default` removed, or that there was none |
 | `arguments_override, <source>: dropped ...` | The arguments it dropped, each with its source |
 | `arguments_override, <source>: ignored, ...` | The rule is for a Steam app id, where the override does not apply ([`Rule::arguments_override`][arguments-override]) |
@@ -190,3 +190,4 @@ for example `lsof -p <pid> | grep -i dxgi.dll`. A path under
 [fold-profiler]: https://mach9.app/compatdb_core/struct.Resolution.html#method.fold_profiler_env
 [app-pid]: https://mach9.app/compatdb_core/constant.APP_PID_VAR.html
 [linger]: https://mach9.app/compatdb_core/runtime/fn.linger_at_exit.html
+[winedebug]: https://mach9.app/compatdb_core/struct.Table.html#method.winedebug

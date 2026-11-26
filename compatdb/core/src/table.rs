@@ -182,11 +182,17 @@ impl Table {
     /// variable before `compatdb.so` loads.
     ///
     /// An entry of a rule for an executable is scoped to it as
-    /// `<exe>:<entry>`, which is Wine's own syntax: Wine compares the prefix
-    /// with the image file name ASCII-case-insensitively and knows nothing
-    /// of fingerprints, so the entry reaches every program of that name. An
-    /// entry of a rule with `exe` `*` is unscoped. Wine lets a later entry
-    /// win for the same channel.
+    /// `<exe>:<entry>`, which is Wine's own syntax. Wine compares the prefix
+    /// ASCII-case-insensitively with the last path component of the first
+    /// token of the process's command line, not with its image name: that
+    /// is the program argument of `wine` for the first process, and the
+    /// first token of the command line another process started it with for
+    /// the others. A program started as `wine game`, or with a command line
+    /// whose first token is not its image name, misses the entries of a
+    /// rule for `game.exe`. Wine knows nothing of fingerprints, so the entry
+    /// reaches every program started by that name. An entry of a rule with
+    /// `exe` `*` is unscoped. Wine lets a later entry win for the same
+    /// channel.
     ///
     /// An entry of a rule for a Steam app id is left out: Wine has no scope
     /// for an app id, and without one the entry would reach every process.

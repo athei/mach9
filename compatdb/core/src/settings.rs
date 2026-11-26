@@ -287,7 +287,8 @@ const fn refused_on_any(key: Key) -> bool {
 
 /// Why a rule for `exe` refuses the field `key`, if it does. A Steam app id
 /// refuses what a `*` rule refuses, since it can match more than one program,
-/// and `debug_channels`, since `WINEDEBUG` scopes an entry by the image name.
+/// and `debug_channels`, since `WINEDEBUG` scopes an entry by the name a
+/// program is started by.
 const fn refusal(exe: &Exe, key: Key) -> Option<FieldError> {
     match exe {
         Exe::Any | Exe::Steam(_) if key.needs_program() => Some(FieldError::NeedsProgram(key)),

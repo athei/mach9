@@ -177,7 +177,7 @@ impl fmt::Display for FieldError {
             ),
             Self::RefusedOnSteamApp(Key::DebugChannels) => f.write_str(
                 "debug_channels needs an exe that names a program: WINEDEBUG scopes an entry by \
-                 the image name, which a Steam app id does not give",
+                 the name a program is started by, which a Steam app id does not give",
             ),
             Self::RefusedOnSteamApp(key) => write!(
                 f,
