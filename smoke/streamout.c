@@ -112,6 +112,10 @@
  *                    each vertex two of DXMT's object threadgroups share; an
  *                    indexed triangle strip of 64 indices with a cut, of two
  *                    instances: the UAV holds 126
+ *   geometry-adjacency-strip-end  a geometry shader that adds 1 to a UAV,
+ *                    for a triangle strip with adjacency of 6 and of 64
+ *                    vertices: it runs for 1 and 30 triangles, none past the
+ *                    end of the strip
  *   geometry-shapes  a triangle strip of 4 vertices without a cut, a line
  *                    strip, and a geometry shader of 4 instances are written
  *                    as lists, the instances in order
@@ -139,9 +143,10 @@
  *                    stream's points and queries
  *
  * Every case runs on a device of its own, of feature level 11_0, or 11_1 for
- * geometry-uav, geometry-vs-uav and geometry-vs-uav-strips, which gives
- * geometry and vertex shaders UAVs. Every buffer but the targets of
- * geometry-large and geometry-streams-blocks starts filled with a pattern.
+ * geometry-uav, geometry-vs-uav, geometry-vs-uav-strips and
+ * geometry-adjacency-strip-end, which gives geometry and vertex shaders UAVs.
+ * Every buffer but the targets of geometry-large and geometry-streams-blocks
+ * starts filled with a pattern.
  * The cases up to geometry-strips read their targets back between draws,
  * which waits for the GPU; the ones after it draw without a readback between,
  * so DXMT has to order what two draws of a render pass write.
@@ -2129,6 +2134,58 @@ static void geometry_vs_uav_strips_case(void)
              STRIP_UAV_VERTICES, correct, (unsigned)ARRAY_SIZE(strips), counter, 2 * (STRIP_UAV_VERTICES - 1));
 }
 
+/* The shader chunk of a geometry shader that adds 1 to a UAV for each input
+ * triangle with adjacency and emits nothing, assembled here as gs_5_0 with
+ * custom_isgn and the OSGN chunk of triangle_gs_code:
+ * RWByteAddressBuffer counter : register(u1);
+ * [maxvertexcount(1)]
+ * void main(triangleadj float4 input[6] : custom, inout PointStream<float4 : SV_POSITION> output)
+ * { counter.InterlockedAdd(0, 1); } */
+static const uint32_t triadj_uav_gs_shdr[] = {
+    0x58454853, 0x00000064, 0x00020050, 0x00000019,
+    0x0300009d, 0x0011e000, 0x00000001,                         /* dcl_uav_raw u1 */
+    0x0400005f, 0x002010f2, 0x00000006, 0x00000000,             /* dcl_input v[6][0].xyzw */
+    0x0100385d,                                                 /* dcl_inputprimitive triangleadj */
+    0x0100085c,                                                 /* dcl_outputtopology pointlist */
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */
+    0x0200005e, 0x00000001,                                     /* dcl_maxout 1 */
+    0x070000ad, 0x0011e000, 0x00000001, 0x00004001, 0x00000000, 0x00004001, 0x00000001, /* atomic_iadd u1, l(0), l(1) */
+    0x0100003e,                                                 /* ret */
+};
+
+/* A triangle strip with adjacency of n vertices has n / 2 - 2 triangles:
+ * through a geometry shader that adds 1 to a UAV per triangle, 6 and 64
+ * vertices give 1 and 30. DXMT clamps the vertices of the threads past the
+ * end of such a strip to its last vertex, which must not give the geometry
+ * shader triangles past the end. */
+static void geometry_adjacency_strip_end_case(void)
+{
+    static const UINT counts[] = { 6, STRIP_UAV_VERTICES };
+    static uint32_t code[CONTAINER_WORDS];
+    ID3D11GeometryShader *triadj_gs;
+    ID3D11VertexShader *id_vs;
+    uint32_t size, counter[ARRAY_SIZE(counts)];
+    unsigned i, correct = 0;
+
+    check_hr(ID3D11Device_CreateVertexShader(device, id_vs_code, sizeof(id_vs_code), NULL, &id_vs),
+             "CreateVertexShader");
+    size = build_container(code, custom_isgn, ARRAY_SIZE(custom_isgn), TRIANGLE_GS_OSGN, TRIANGLE_GS_SIGNATURE_WORDS,
+                           triadj_uav_gs_shdr, ARRAY_SIZE(triadj_uav_gs_shdr));
+    check_hr(ID3D11Device_CreateGeometryShader(device, code, size, NULL, &triadj_gs), "CreateGeometryShader");
+    for (i = 0; i < ARRAY_SIZE(counts); i++)
+    {
+        counter[i] = draw_uav_vertices(id_vs, triadj_gs, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ, counts[i], NULL,
+                                       1, NULL);
+        say("%u vertices: UAV %u (want %u)", counts[i], counter[i], counts[i] / 2 - 2);
+        correct += counter[i] == counts[i] / 2 - 2;
+    }
+    ID3D11GeometryShader_Release(triadj_gs);
+    ID3D11VertexShader_Release(id_vs);
+    if (correct != ARRAY_SIZE(counts))
+        fail(1, "geometry shader runs for %u and %u vertices %u and %u (want %u and %u)", counts[0], counts[1],
+             counter[0], counter[1], counts[0] / 2 - 2, counts[1] / 2 - 2);
+}
+
 /* Bind id_vs_code and count_gs streaming out into <so> at offset 0, and
  * return the shaders in <vs_out> and <gs_out> */
 static void bind_count_gs(ID3D11Buffer *so, ID3D11VertexShader **vs_out, ID3D11GeometryShader **gs_out)
@@ -3308,6 +3365,7 @@ static const struct
     { "geometry-uav", geometry_uav_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-vs-uav", geometry_vs_uav_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-vs-uav-strips", geometry_vs_uav_strips_case, D3D_FEATURE_LEVEL_11_1 },
+    { "geometry-adjacency-strip-end", geometry_adjacency_strip_end_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-shapes", geometry_shapes_case },
     { "geometry-strips", geometry_strips_case },
     { "geometry", geometry_case },
