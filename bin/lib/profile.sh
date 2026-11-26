@@ -553,14 +553,21 @@ wine_src_commit() {
 # else the tag (peeled, for an annotated one) or branch of that name,
 # preferring a tag as git does. Prints nothing when the ref cannot be
 # resolved, also when <repo> wants credentials: git is not allowed to ask
-# for them.
+# for them. ls-remote prints the peeled line of an annotated tag only for a
+# pattern that matches its name with the ^{}.
 src_ref_commit() {
     local ref="$1"
     if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
         echo "$ref"
         return 0
     fi
-    GIT_TERMINAL_PROMPT=0 git ls-remote "$2" "$ref" 2>/dev/null | awk -v ref="$ref" '
+    # Nothing either for a name git fetch refuses (check-ref-format's rules
+    # for a refspec, and a leading "-" it takes for an option): ls-remote's
+    # wildmatch and awk's -v escapes would turn one with a backslash into
+    # another ref's name.
+    case "$ref" in -*) return 0 ;; esac
+    git check-ref-format --allow-onelevel "$ref" || return 0
+    GIT_TERMINAL_PROMPT=0 git ls-remote "$2" "refs/tags/$ref" "refs/tags/$ref^{}" "refs/heads/$ref" 2>/dev/null | awk -v ref="$ref" '
         $2 == "refs/tags/" ref "^{}" { peeled = $1 }
         $2 == "refs/tags/" ref { tag = $1 }
         $2 == "refs/heads/" ref { head = $1 }

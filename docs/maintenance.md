@@ -94,6 +94,17 @@ What is pinned, and where, is in [internals.md](internals.md#pinned-inputs).
   `redist.env`.
 - The script that builds a source pinned by tag and commit fails when the
   tag is not at the commit.
+- A `*-src.ref` or `*_REF` that names an annotated tag stands for the
+  commit the tag points to, not for the tag object (`src_ref_commit` in
+  [`profile.sh`](../bin/lib/profile.sh)). After a change to that function,
+  check it on an annotated tag of upstream FEX from the repository root:
+
+  ```bash
+  SCRIPT_DIR=bin bash -c '. bin/lib/profile.sh; src_ref_commit FEX-2511 https://github.com/FEX-Emu/FEX'
+  git ls-remote https://github.com/FEX-Emu/FEX 'refs/tags/FEX-2511^{}'
+  ```
+
+  The first command prints the commit of the second one's line.
 
 ## Releases
 
