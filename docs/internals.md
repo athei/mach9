@@ -979,7 +979,15 @@ from the trees and packages that ship it, so a text follows its pin.
 - A commit no public repository has, a local commit or a tree with
   uncommitted changes, is marked in the notice as not published, with a
   warning; `--strict-floor`, which a CI or release build passes, refuses it
-  in the preflight.
+  in the preflight. Public is an https repository that serves the commit
+  by its hash, which is how the notice tells a recipient to fetch it, so a
+  commit no branch has any more counts while the host still serves it. A
+  URL is asked for it, which needs the network; a local clone needs it on a
+  branch of its origin (`published_repo` in
+  [`sources.sh`](../bin/lib/sources.sh)). A repository that cannot be
+  reached is marked as not checked. `--strict-floor` refuses both in the
+  preflight, and Step 4c, which asks the repositories again, stops the
+  bundle on either.
 - proxy-libintl is linked statically into glib and GStreamer, which are
   LGPL themselves and built from public sources by these scripts, so a
   recipient can modify it and relink them; the notice says so.

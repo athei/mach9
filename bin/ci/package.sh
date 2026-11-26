@@ -229,12 +229,23 @@ fi
         echo "- $name: $(github_name "${!repo}")@${!ref} ($(short "$(source_commit "$file")"))"
     done <<< "$GIT_SOURCES"
 } > "$NOTES"
+# source_line <name> <repository> <commit>: print the line of sources.txt for
+# a source. When published_repo finds no public repository, the line has no
+# URL and UNPUBLISHED gets the reason (unpublished_reason).
+UNPUBLISHED=""
+source_line() {
+    local url rc=0
+    url=$(published_repo "$2" "$3") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        UNPUBLISHED+="    $1 at $3: $(unpublished_reason "$2" "$3" "$rc")"$'\n'
+    fi
+    echo "$1 $url $3"
+}
 {
-    echo "Wine $(published_repo "$WINE_SRC" "$wine_commit") $wine_commit"
+    source_line Wine "$WINE_SRC" "$wine_commit"
     echo "Mach9 $(mach9_repo) $(git -C "$REPO_DIR" rev-parse HEAD)"
     while IFS=: read -r name repo _ file _; do
-        commit=$(source_commit "$file")
-        echo "$name $(published_repo "${!repo}" "$commit") $commit"
+        source_line "$name" "${!repo}" "$(source_commit "$file")"
     done <<< "$GIT_SOURCES"
 } > "$SOURCES"
 
@@ -242,9 +253,13 @@ echo "==> Notes ($NOTES)"
 sed 's/^/    /' "$NOTES"
 echo "==> Sources ($SOURCES)"
 sed 's/^/    /' "$SOURCES"
-# Each line as tag-forks.sh will read it. A source no public repository has
-# (published_repo: a local clone whose commit is on no branch of its origin)
-# has no URL, so its line fails.
+if [ -n "$UNPUBLISHED" ]; then
+    echo "Error: these sources of $SOURCES are not published:"
+    printf '%s' "$UNPUBLISHED"
+    exit 1
+fi
+# Each line as tag-forks.sh will read it; an unpublished source stopped the
+# script above already.
 n=0
 while IFS= read -r line; do
     n=$((n + 1))

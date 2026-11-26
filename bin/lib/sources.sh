@@ -48,26 +48,97 @@ source_commit() {
     cat "${!var}/${1#*/}" 2>/dev/null
 }
 
+# repo_has_commit <url> <commit>: succeed when <commit> can be fetched by
+# its hash from the repository at <url>, the way the source notice tells a
+# recipient to fetch it: one shallow fetch of the commit object alone,
+# without trees and blobs, into an empty repository that is removed again.
+# GitHub and GitLab serve a commit they have that way, also one no branch
+# has any more, and refuse one they do not have. Exits 1 when the
+# repository refuses the commit or is not a public one, 2 when it cannot be
+# reached. git asks for
+# no credentials, uses no credential helper, and gives up on a connection
+# that moves less than 1000 bytes a second for 30 seconds.
+repo_has_commit() {
+    local probe err rc=0
+    probe=$(mktemp -d) || return 2
+    if ! git init -q "$probe" ||
+       ! err=$(GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c http.lowSpeedLimit=1000 \
+                -c http.lowSpeedTime=30 -C "$probe" fetch --quiet --no-tags --depth=1 \
+                --filter=tree:0 "$1" "$2" 2>&1); then
+        # A repository that does not exist or is not public answers as one
+        # that wants credentials, which git must not ask for.
+        case "$err" in
+            *"not our ref"*|*"unadvertised object"*|*"couldn't find remote ref"*) rc=1 ;;
+            *"could not read Username"*|*"not found"*|*"Authentication failed"*) rc=1 ;;
+            *) rc=2 ;;
+        esac
+    fi
+    rm -rf "$probe"
+    return "$rc"
+}
+
+# source_url <repository>: the URL published_repo judges <repository> by:
+# the public_url of a URL, or of a local clone's origin. Nothing for a clone
+# without an origin.
+source_url() {
+    local url="$1"
+    if [ -d "$1" ]; then
+        url=$(git -C "$1" remote get-url origin 2>/dev/null) || return 0
+    fi
+    public_url "$url"
+}
+
 # published_repo <repository> <commit>: print the public URL of the
-# repository <commit> can be fetched from, or nothing when there is none.
-# <repository> is a build script's *_REPO or WINE_SRC. A URL names the
-# repository the build fetched <commit> from, so it has it. A local clone,
-# such as a fork checkout a candidate is built from, has it public only when
-# a branch of its origin contains it, as of the clone's last fetch: a commit
-# only on a local branch, or with uncommitted changes (a "-dirty" commit of
-# wine_src_commit), is not.
+# repository <commit> can be fetched from, and exit 0; exit 1 when there is
+# none, 2 when the repository cannot be reached to tell (unpublished_reason
+# says which). Only an https URL counts: a file://, ssh or git URL names no
+# repository a recipient can fetch from. <repository> is a build script's
+# *_REPO or WINE_SRC.
+#  - A URL has the commit public when it serves it (repo_has_commit). The
+#    dist may have been built from another repository than the *_REPO the
+#    bundle step runs with, such as a local clone holding a full-hash
+#    *_REF, which the bundle step's checks take as it is.
+#  - A local clone, such as a fork checkout a candidate is built from, has
+#    it public only when a branch of its origin contains it, as of the
+#    clone's last fetch: a commit only on a local branch, or with
+#    uncommitted changes (a "-dirty" commit of wine_src_commit), is not.
 published_repo() {
     local repo="$1" commit="$2" url
     case "$commit" in
-        *-dirty) return 0 ;;
+        *-dirty) return 1 ;;
     esac
-    if [ ! -d "$repo" ]; then
-        public_url "$repo"
-        return 0
+    url=$(source_url "$repo")
+    case "$url" in
+        https://*) ;;
+        *) return 1 ;;
+    esac
+    if [ -d "$repo" ]; then
+        [ -n "$(git -C "$repo" for-each-ref --count=1 --contains "$commit" refs/remotes/origin 2>/dev/null)" ] || return 1
+    else
+        repo_has_commit "$url" "$commit" || return
     fi
-    url=$(git -C "$repo" remote get-url origin 2>/dev/null) || return 0
-    if [ -n "$(git -C "$repo" for-each-ref --count=1 --contains "$commit" refs/remotes/origin 2>/dev/null)" ]; then
-        public_url "$url"
+    echo "$url"
+}
+
+# unpublished_reason <repository> <commit> <status>: print why
+# published_repo exited with <status> for <repository> and <commit>.
+unpublished_reason() {
+    local url
+    case "$2" in
+        *-dirty) echo "the tree has uncommitted changes"; return 0 ;;
+    esac
+    url=$(source_url "$1")
+    case "$url" in
+        https://*) ;;
+        "") echo "$1 has no origin"; return 0 ;;
+        *) echo "$url is not an https repository"; return 0 ;;
+    esac
+    if [ "$3" -eq 2 ]; then
+        echo "cannot reach $url"
+    elif [ -d "$1" ]; then
+        echo "no branch of $url has it, as $1 last fetched"
+    else
+        echo "$url does not have it, or is no public repository"
     fi
 }
 

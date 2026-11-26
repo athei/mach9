@@ -600,22 +600,31 @@ notice_git_sources() {
 # check_sources_published: with --strict-floor, for a bundle that is
 # distributed, exit unless every source notice_git_sources names is public
 # (published_repo): the notice would otherwise name a commit nobody can
-# fetch. Runs in the preflight, before anything is deleted.
+# fetch. Runs in the preflight, before anything is deleted, and needs the
+# network for a source whose repository is a URL.
 check_sources_published() {
-    local name repo commit bad=0
+    local name repo commit rc start=$SECONDS bad=0
     [ "$STRICT_FLOOR" -eq 1 ] || return 0
     while IFS='|' read -r name repo commit _; do
-        if [ -z "$commit" ] || [ -z "$(published_repo "$repo" "$commit")" ]; then
-            echo "  ERROR: $name is at ${commit:-no commit}, which no public repository has"
+        if [ -z "$commit" ]; then
+            echo "  ERROR: $name has no commit"
+            bad=1
+            continue
+        fi
+        rc=0
+        published_repo "$repo" "$commit" >/dev/null || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            echo "  ERROR: $name at $commit is not published: $(unpublished_reason "$repo" "$commit" "$rc")"
             bad=1
         fi
     done < <(notice_git_sources)
     if [ "$bad" -ne 0 ]; then
         echo "Error: --strict-floor bundles only from published sources, which the source notice names"
-        echo "(push the commits, or commit the changes, and build again)"
+        echo "(push the commits or commit the changes and build again, or run where the"
+        echo "repositories can be reached; checked in $((SECONDS - start)) s)"
         exit 1
     fi
-    echo "  Sources: every source the notice names is published."
+    echo "  Sources: every source the notice names is published (checked in $((SECONDS - start)) s)."
 }
 
 # wrap_value <wrap file> <key>: print the value of <key> in a meson wrap.
@@ -716,8 +725,10 @@ notice_texts() {
 #  - This repository's scripts, Wine and the LGPL components of GIT_SOURCES
 #    (notice_git_sources): the public repository and the commit. A commit no
 #    public repository has (published_repo), from a local commit or a tree
-#    with uncommitted changes, is written as not published, with a warning;
-#    the preflight refused it already under --strict-floor.
+#    with uncommitted changes, is written as not published, and one whose
+#    repository cannot be reached as not checked, each with a warning.
+#    Under --strict-floor the preflight refused both already, and one found
+#    here stops the bundle.
 #  - glib and proxy-libintl (NOTICE_WRAPS): the tarball, its SHA-256 and the
 #    patches the wrap GStreamer was built with names.
 #  - Each Homebrew keg Step 3 copied from (NOTICE_KEGS) whose source the
@@ -726,7 +737,7 @@ notice_texts() {
 #    the patches and the formula that built it (keg_source).
 # Exits when the data of a section or one of its licence texts is missing.
 write_source_notice() {
-    local name repo commit texts url hash entry wrap file patches p formula keg
+    local name repo commit texts url hash entry wrap file patches p formula keg rc
     local unpublished=()
     NOTICE=""
     notice_line "# Sources of the components under a GNU licence"
@@ -738,9 +749,12 @@ write_source_notice() {
     notice_line "share/licenses. The first section names the scripts that built the"
     notice_line "others and control how each is compiled and linked."
     notice_line ""
-    notice_line "- A repository and a commit: \`git clone <repository> src\`, then"
-    notice_line "  \`git -C src checkout <commit>\` and"
-    notice_line "  \`git -C src submodule update --init --recursive\`."
+    notice_line "- A repository and a commit: \`git init src\`,"
+    notice_line "  \`git -C src fetch <repository> <commit>\`,"
+    notice_line "  \`git -C src checkout FETCH_HEAD\` and"
+    notice_line "  \`git -C src submodule update --init --recursive\`. The commit is"
+    notice_line "  fetched by its hash, since no branch of the repository may have it any"
+    notice_line "  more."
     notice_line "- A tarball and a SHA-256: download the tarball and compare its SHA-256."
     notice_line ""
     notice_line "proxy-libintl is linked statically into glib and GStreamer. Both are LGPL"
@@ -751,17 +765,33 @@ write_source_notice() {
             echo "Error: the source notice has no commit for $name"
             exit 1
         fi
-        url=$(published_repo "$repo" "$commit")
+        rc=0
+        url=$(published_repo "$repo" "$commit") || rc=$?
+        # The preflight checked the same sources, but asks the repositories
+        # again here; under --strict-floor an answer that changed in between,
+        # such as a host that cannot be reached now, stops the bundle instead
+        # of shipping a notice without the source.
+        if [ "$rc" -ne 0 ] && [ "$STRICT_FLOOR" -eq 1 ]; then
+            echo "Error: $name at $commit is not published: $(unpublished_reason "$repo" "$commit" "$rc");"
+            echo "--strict-floor writes no source notice without it"
+            exit 1
+        fi
         notice_line ""
         notice_line "## $name"
         notice_line ""
-        if [ -n "$url" ]; then
+        if [ "$rc" -eq 0 ]; then
             notice_line "- Repository: $url"
             notice_line "- Commit: \`$commit\`"
         else
             case "$commit" in
                 *-dirty) notice_line "- Source: not published: commit \`${commit%-dirty}\` with uncommitted changes (a local build)" ;;
-                *) notice_line "- Source: not published: commit \`$commit\`, which no public repository has (a local build)" ;;
+                *)
+                    if [ "$rc" -eq 2 ]; then
+                        notice_line "- Source: not checked: commit \`$commit\` of $(source_url "$repo"), which could not be reached (a local build)"
+                    else
+                        notice_line "- Source: not published: commit \`$commit\`, which no public repository has (a local build)"
+                    fi
+                    ;;
             esac
             unpublished+=("$name")
         fi
