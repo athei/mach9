@@ -6,9 +6,12 @@
 //! batches, one `deqp-vk` process per batch, several at a time. A batch
 //! whose process dies or stalls during a case gives that case
 //! [`Status::Crash`] or [`Status::Stall`] and goes on with its remaining
-//! cases in a new process. The cases known to crash or stall, and those
-//! that crashed or stalled next to other processes, run alone afterwards,
-//! since a lost device can take other processes' devices with it.
+//! cases in a new process; one that dies or stalls after a case's result,
+//! as in the teardown after its last case, gives the case it finished last
+//! the crash or stall (`next_step`). The cases known to crash or stall, and
+//! those that crashed or stalled next to other processes, run alone
+//! afterwards, since a lost device can take other processes' devices with
+//! it.
 //!
 //! - `run` compares each group with its expected results
 //!   ([`expected::diff`]). The cases whose change gates run a second time;
@@ -1144,6 +1147,14 @@ impl Runner<'_> {
                 },
             )
             .map_err(|e| Failure::Setup(format!("{e}; its output is in {}", log.display())))?;
+            if let Some((case, status)) = &step.after_last {
+                println!(
+                    "deqp-vk: the process of {what} ended ({}) after the result of {case}, which \
+                     counts as {status}; its output is in {}",
+                    ending_text(finished.ending),
+                    log.display()
+                );
+            }
             if !keeps_log(rerun, &step.results, self.expected) {
                 remove_log(&qpa)?;
             }
@@ -1309,10 +1320,21 @@ fn summary(results: &[(String, Status)]) -> String {
 struct Step<'c> {
     results: Vec<(String, Status)>,
     remaining: Vec<&'c String>,
+    /// The case that carries a crash or stall of the process after its last
+    /// result, with that status, when there was one.
+    after_last: Option<(String, Status)>,
 }
 
 /// Settle the cases of `remaining` an `attempt` reported, give the case it
 /// ended in a crash or stall, and keep the rest for the next process.
+///
+/// A process that dies by a signal or stalls with no case in progress, after
+/// the result of a case and before the next case starts, gives the last case
+/// it settled the crash or stall in place of its printed result. deqp prints
+/// a case's result after the case's own cleanup, so what comes later is the
+/// start of the next case or the teardown of the process and of the device
+/// its cases share; no output names the case that caused it, and the last
+/// one is the nearest.
 ///
 /// A result for a case outside `remaining` is ignored. A process that ends
 /// without a case in progress and without reporting anything while cases
@@ -1329,19 +1351,29 @@ fn next_step<'c>(remaining: &[&'c String], attempt: &Attempt) -> Result<Step<'c>
         .unfinished
         .as_deref()
         .filter(|case| remaining.iter().any(|known| known.as_str() == *case));
+    let died = match attempt.ending {
+        Ending::Stalled => Some(Status::Stall),
+        Ending::Signaled(_) => Some(Status::Crash),
+        Ending::Exited(_) => None,
+    };
+    let mut after_last = None;
     if let Some(case) = ended_in {
-        let status = if attempt.ending == Ending::Stalled {
-            Status::Stall
-        } else {
-            Status::Crash
-        };
-        settled.insert(case, status);
+        settled.insert(case, died.unwrap_or(Status::Crash));
     } else if settled.is_empty() {
         return Err(format!(
             "deqp-vk ended ({}) without running any of its {} cases",
             ending_text(attempt.ending),
             remaining.len()
         ));
+    } else if let Some(status) = died
+        && let Some((case, _)) = attempt
+            .results
+            .iter()
+            .rev()
+            .find(|(case, _)| settled.contains_key(case.as_str()))
+    {
+        settled.insert(case.as_str(), status);
+        after_last = Some((case.clone(), status));
     }
     let results = remaining
         .iter()
@@ -1359,6 +1391,7 @@ fn next_step<'c>(remaining: &[&'c String], attempt: &Attempt) -> Result<Step<'c>
     Ok(Step {
         results,
         remaining: left,
+        after_last,
     })
 }
 

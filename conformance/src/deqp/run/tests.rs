@@ -192,16 +192,64 @@ fn a_process_that_ran_nothing_is_an_error() {
 }
 
 #[test]
-fn a_process_that_stopped_between_cases_leaves_the_rest_for_the_next() {
-    let cases = names(&["dEQP-VK.a", "dEQP-VK.b"]);
+fn a_process_that_died_between_cases_crashes_the_last_and_leaves_the_rest() {
+    let cases = names(&["dEQP-VK.a", "dEQP-VK.b", "dEQP-VK.c"]);
     let remaining: Vec<&String> = cases.iter().collect();
     let step = next_step(
         &remaining,
-        &attempt(&[("dEQP-VK.a", Status::Pass)], None, Ending::Signaled(6)),
+        &attempt(
+            &[("dEQP-VK.a", Status::Pass), ("dEQP-VK.b", Status::Fail)],
+            None,
+            Ending::Signaled(6),
+        ),
     )
     .unwrap();
-    assert_eq!(step.results.len(), 1);
-    assert_eq!(step.remaining, [&cases[1]]);
+    assert_eq!(
+        step.results,
+        [
+            (String::from("dEQP-VK.a"), Status::Pass),
+            (String::from("dEQP-VK.b"), Status::Crash),
+        ]
+    );
+    assert_eq!(
+        step.after_last,
+        Some((String::from("dEQP-VK.b"), Status::Crash))
+    );
+    assert_eq!(step.remaining, [&cases[2]]);
+}
+
+#[test]
+fn a_process_that_died_or_stalled_after_its_last_case_gives_that_case_the_ending() {
+    let cases = names(&["dEQP-VK.a", "dEQP-VK.b"]);
+    let remaining: Vec<&String> = cases.iter().collect();
+    // A result of a case outside the batch does not take it.
+    let ran = [
+        ("dEQP-VK.a", Status::Pass),
+        ("dEQP-VK.b", Status::NotSupported),
+        ("dEQP-VK.x", Status::Pass),
+    ];
+    for (ending, status) in [
+        (Ending::Signaled(11), Status::Crash),
+        (Ending::Stalled, Status::Stall),
+    ] {
+        let step = next_step(&remaining, &attempt(&ran, None, ending)).unwrap();
+        assert_eq!(
+            step.results,
+            [
+                (String::from("dEQP-VK.a"), Status::Pass),
+                (String::from("dEQP-VK.b"), status),
+            ]
+        );
+        assert_eq!(step.after_last, Some((String::from("dEQP-VK.b"), status)));
+        assert_eq!(step.remaining.len(), 0);
+    }
+    // An exit code is no crash: deqp exits with 1 after a failed case.
+    let step = next_step(&remaining, &attempt(&ran, None, Ending::Exited(1))).unwrap();
+    assert_eq!(
+        step.results[1],
+        (String::from("dEQP-VK.b"), Status::NotSupported)
+    );
+    assert_eq!(step.after_last, None);
 }
 
 /// Groups `f` and `g`, both over every case.

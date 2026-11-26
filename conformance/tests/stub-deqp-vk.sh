@@ -26,6 +26,11 @@
 # The probe's case prints the loader's driver messages for $VK_DRIVER_FILES
 # and $STUB_DRIVER, and writes a test log with a driverVersion.
 #
+# $STUB_EXIT makes every process but the probe's end badly after its last
+# case, as in the teardown of its device: `crash` dies by SIGSEGV, `once`
+# does so in the first such process only, `hang` prints nothing more for 30
+# seconds.
+#
 # With $VK_LOADER_DEBUG naming `layer`, the process first logs an instance
 # as the loader does, with the layer of $VK_INSTANCE_LAYERS inserted unless
 # $STUB_NO_LAYER is set, or $VK_LOADER_LAYERS_DISABLE is ~all~ and
@@ -87,6 +92,7 @@ while read -r case; do
     printf "\nTest case '%s'..\n" "$case"
     case "$case" in
         dEQP-VK.info.device_properties)
+            probe=1
             echo "[Vulkan Loader] DRIVER:         Found ICD manifest file $VK_DRIVER_FILES/stub_icd.json, version 1.0.1"
             echo "[Vulkan Loader] DRIVER:                Using \"Stub GPU\" with driver: \"$STUB_DRIVER\""
             printf '\tdriverVersion = 109457507\n' > "$qpa"
@@ -162,3 +168,10 @@ while read -r case; do
     esac
 done < "$caselist"
 echo "DONE!"
+if [ -z "$probe" ]; then
+    case "$STUB_EXIT" in
+        crash) kill -SEGV $$ ;;
+        once) [ "$(count exit)" -eq 1 ] && kill -SEGV $$ ;;
+        hang) sleep 30 ;;
+    esac
+fi

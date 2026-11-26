@@ -477,6 +477,17 @@ cargo run -p conformance -- deqp-vk record --group draw    # write its expected 
   (`--jobs`, `--batch`). A process that dies or stalls in a case gives
   that case `crash` or `stall` and the batch goes on in a new process.
   `deqp-vk run --help` lists the options.
+- A process that dies by a signal or stalls after the result of a case,
+  before the next one starts or after its last case, gives the case it
+  finished last `crash` or `stall` in place of its printed result, and
+  the output names that case. deqp prints a case's result after the
+  case's cleanup, so this is the start of the next case or the teardown
+  of the process and the device its cases share; no output names the case
+  that caused it. The case then runs alone as any crashed case does: a
+  crash or stall alone too counts, and one that does not come back alone
+  is unstable, since the alone run cannot tell which of the batch's other
+  cases it needed. An exit code is no crash: `deqp-vk` exits with 1 once
+  a case failed.
 - A case that loses the device on KosmicKrisp can make the cases other
   processes run at the same time fail or lose their device too. So the
   cases the expected results give `crash` or `stall` run after the

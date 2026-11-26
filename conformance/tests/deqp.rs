@@ -49,6 +49,13 @@ enum Setup {
     Validation,
     /// Under the validation layers, which the loader does not insert.
     NoLayer,
+    /// Each process dies by SIGSEGV after its last case.
+    ExitCrash,
+    /// The first process dies by SIGSEGV after its last case.
+    ExitCrashOnce,
+    /// Each process prints nothing after its last case, with a 1 s idle
+    /// limit.
+    ExitHang,
 }
 
 const PLAIN: Setup = Setup::Plain;
@@ -148,7 +155,11 @@ fn try_execute_groups(
         jobs: 3,
         batch: 1,
         limits: Limits {
-            idle: Duration::from_secs(if setup == Setup::ShortIdle { 1 } else { 10 }),
+            idle: Duration::from_secs(if matches!(setup, Setup::ShortIdle | Setup::ExitHang) {
+                1
+            } else {
+                10
+            }),
             total: Duration::from_secs(60),
         },
         validation: matches!(setup, Setup::Validation | Setup::NoLayer).then(|| layers(root)),
@@ -171,6 +182,15 @@ fn try_execute_groups(
     }
     if setup == Setup::NoLayer {
         env.push((OsString::from("STUB_NO_LAYER"), OsString::from("1")));
+    }
+    let exit = match setup {
+        Setup::ExitCrash => Some("crash"),
+        Setup::ExitCrashOnce => Some("once"),
+        Setup::ExitHang => Some("hang"),
+        _ => None,
+    };
+    if let Some(exit) = exit {
+        env.push((OsString::from("STUB_EXIT"), OsString::from(exit)));
     }
     let groups = Groups::parse(groups).unwrap();
     let stop = AtomicBool::new(setup == Setup::Stopped);
@@ -343,6 +363,67 @@ fn a_case_that_prints_nothing_for_its_limit_is_a_stall() {
         "{recorded:?}"
     );
     assert_eq!(statuses(&root, &cases), [Status::Stall, Status::Pass]);
+}
+
+/// The text of the first pass's log of batch 0.
+fn first_batch_log(root: &Path) -> String {
+    let runs = fs::read_dir(root.join("deqp-state/runs")).unwrap();
+    let log = runs
+        .map(|run| run.unwrap().path().join("first/batch-0.log"))
+        .find(|log| log.is_file())
+        .unwrap();
+    fs::read_to_string(log).unwrap()
+}
+
+#[test]
+fn a_process_that_crashes_after_its_last_case_crashes_that_case() {
+    let root = scratch("exit-crash");
+    let cases = ["dEQP-VK.g.a.pass", "dEQP-VK.g.b.pass"];
+    expect_all_pass(&root, &cases);
+    let run = try_execute(&root, Mode::Run, &cases, Setup::ExitCrash).unwrap();
+    let text = first_batch_log(&root);
+    assert!(text.contains("  Pass (Pass)"), "{text}");
+    assert!(text.contains("killed by signal 11"), "{text}");
+    assert!(
+        matches!(run, Conclusion::Run(Verdict::Regression)),
+        "{run:?}"
+    );
+    let recorded = try_execute(&root, Mode::Record, &cases, Setup::ExitCrash).unwrap();
+    assert!(
+        matches!(recorded, Conclusion::Record { unstable: 0 }),
+        "{recorded:?}"
+    );
+    assert_eq!(statuses(&root, &cases), [Status::Crash, Status::Crash]);
+}
+
+#[test]
+fn a_crash_after_the_last_case_that_does_not_come_back_alone_is_unstable() {
+    let root = scratch("exit-crash-once");
+    let cases = ["dEQP-VK.g.a.pass"];
+    expect_all_pass(&root, &cases);
+    let run = try_execute(&root, Mode::Run, &cases, Setup::ExitCrashOnce).unwrap();
+    assert!(matches!(run, Conclusion::Run(Verdict::Unstable)), "{run:?}");
+    fs::remove_file(root.join("state/exit.count")).unwrap();
+    let recorded = try_execute(&root, Mode::Record, &cases, Setup::ExitCrashOnce).unwrap();
+    assert!(
+        matches!(recorded, Conclusion::Record { unstable: 1 }),
+        "{recorded:?}"
+    );
+    assert_eq!(statuses(&root, &cases), [Status::Crash]);
+}
+
+#[test]
+fn a_process_that_stalls_after_its_last_case_stalls_that_case() {
+    let root = scratch("exit-hang");
+    let cases = ["dEQP-VK.g.a.pass"];
+    expect_all_pass(&root, &cases);
+    let run = try_execute(&root, Mode::Run, &cases, Setup::ExitHang).unwrap();
+    let text = first_batch_log(&root);
+    assert!(text.contains("stall: no output for 1 s"), "{text}");
+    assert!(
+        matches!(run, Conclusion::Run(Verdict::Regression)),
+        "{run:?}"
+    );
 }
 
 #[test]
