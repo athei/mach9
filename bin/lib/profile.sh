@@ -22,20 +22,46 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PINS_DIR="$REPO_DIR/pins"
 
 # path_setting <name> <default>: set the path variable <name> to the value
-# the environment gives it, without trailing slashes, or to <default> when
-# the environment gives none or an empty one. Every path override goes
-# through here, so each spelling of a directory names it the same way: a
-# script that stages <dist>.part and then deletes <dist> would otherwise,
-# for a <dist> with a trailing slash, stage into the dist it deletes.
+# the environment gives it, without trailing slashes and, when it is
+# relative, with the directory the script was started in in front, or to
+# <default>, which is absolute already, when the environment gives none or
+# an empty one. Every path override goes through here, so a script names the
+# same directory with it wherever it reads it: a relative override would name
+# another one after a script changes into a build tree (Step 1 of
+# bundle-wine.sh, build-wine.sh before it runs the FEX, DXMT and
+# vkd3d-proton builds), and a script that stages <dist>.part and then
+# deletes <dist> would, for a <dist> with a trailing slash, stage into the
+# dist it deletes. The spelling is kept otherwise, symlinks included, since
+# some checks compare a path as text (pe_cc_configured); a check that needs
+# one form of a directory compares canonical_path.
 path_setting() {
     local value="${!1:-}"
     if [ -z "$value" ]; then
         printf -v "$1" '%s' "$2"
         return 0
     fi
+    case "$value" in
+        /*) ;;
+        *) value="$PWD/$value" ;;
+    esac
     while [ "$value" != / ] && [ "${value%/}" != "$value" ]; do
         value="${value%/}"
     done
+    printf -v "$1" '%s' "$value"
+}
+
+# repo_setting <name>: make the repository variable <name> (a *_REPO, set
+# from the environment or its default) absolute when it is a relative path
+# that names a directory, a local clone, with the directory the script was
+# started in in front, for the reasons path_setting gives and because
+# git -C <clone> fetch reads a relative one from the clone. A URL and any
+# other value stay as they are.
+repo_setting() {
+    local value="${!1}"
+    case "$value" in
+        /*) ;;
+        *) [ ! -d "$value" ] || value="$PWD/$value" ;;
+    esac
     printf -v "$1" '%s' "$value"
 }
 
@@ -102,6 +128,7 @@ MESA_FORMULAE="llvm spirv-llvm-translator spirv-tools"
 # stages them for the bundle. Set ahead of the configure flags, which name
 # MESA_DIST.
 MESA_REPO="${MESA_REPO:-https://github.com/athei/mesa}"
+repo_setting MESA_REPO
 MESA_REF="${MESA_REF:-$(pin_ref mesa-src.ref)}"
 path_setting MESA_SRC "$ROOT/src-mesa"
 path_setting MESA_BUILD_DIR "$BUILD_TOP/mesa"
@@ -289,6 +316,7 @@ TEST_PE_DIRS="i386-windows x86_64-windows"
 # LLVM libraries it links, and DXMT as build-dxmt.sh stages it for the
 # bundle.
 DXMT_REPO="${DXMT_REPO:-https://github.com/athei/dxmt}"
+repo_setting DXMT_REPO
 DXMT_REF="${DXMT_REF:-$(pin_ref dxmt-src.ref)}"
 path_setting DXMT_BUILD_DIR "$BUILD_TOP/dxmt"
 path_setting DXMT_LLVM "$DXMT_BUILD_DIR/llvm15"
@@ -298,12 +326,14 @@ path_setting DXMT_DIST "$DXMT_BUILD_DIR/dist"
 # checks out, its trees, and its D3D12 DLLs as build-vkd3d-proton.sh stages
 # them for the bundle.
 VKD3D_PROTON_REPO="${VKD3D_PROTON_REPO:-https://github.com/athei/vkd3d-proton}"
+repo_setting VKD3D_PROTON_REPO
 VKD3D_PROTON_REF="${VKD3D_PROTON_REF:-$(pin_ref vkd3d-proton-src.ref)}"
 path_setting VKD3D_PROTON_BUILD_DIR "$BUILD_TOP/vkd3d-proton"
 path_setting VKD3D_PROTON_DIST "$VKD3D_PROTON_BUILD_DIR/dist"
 # FEX's repository and its ref, the local clone build-fex.sh checks out that
 # ref in, its build trees, and FEX as build-fex.sh stages it for the bundle.
 FEX_REPO="${FEX_REPO:-https://github.com/athei/FEX}"
+repo_setting FEX_REPO
 FEX_REF="${FEX_REF:-$(pin_ref fex-src.ref)}"
 path_setting FEX_SRC "$ROOT/src-fex"
 path_setting FEX_BUILD_DIR "$BUILD_TOP/fex"

@@ -114,8 +114,10 @@ the same name, set in [`profile.sh`](../bin/lib/profile.sh) or, for
 `MINGW_DIR`, `CACHE_DIR` and the `VK_GL_CTS_*`,
 `VULKAN_VALIDATION_LAYERS_*` and `GFXRECONSTRUCT_*` ones, at the top of the
 scripts that use them. Each override is read through `path_setting` in
-`profile.sh`, which drops a trailing slash. A `MACOSX_DEPLOYMENT_TARGET` may
-raise the floor but not lower it.
+`profile.sh`, which makes a relative one absolute, from the directory the
+script was started in, and drops a trailing slash; a `*_REPO` that names a
+directory relative to it is made absolute the same way. A
+`MACOSX_DEPLOYMENT_TARGET` may raise the floor but not lower it.
 
 | Variable | What it is |
 |----------|------------|
