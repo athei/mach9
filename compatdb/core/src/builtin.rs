@@ -178,7 +178,9 @@ pub fn gcmouse() -> Rule {
 /// those, so the variable does nothing there, but a child they start inherits
 /// it, and that child may be x86. A rule for one game with
 /// `env=FEX_X87REDUCEDPRECISION=` removes it again, and the variable exported
-/// where the process starts wins over it.
+/// where the process starts wins over it. A child that a program starts with
+/// an environment block of its own gets the program's value in its block too
+/// ([`Rule::env`]).
 #[must_use]
 pub fn fex_reduced_x87_precision() -> Rule {
     Rule {

@@ -47,7 +47,7 @@ use compatdb_core::{
     Scalar, Table, VersionInfo, Wined3d,
     runtime::{
         Arch, STEAM_APP_VAR, append_cmdline_each, basename_of, effective_d3d9, effective_dxgi,
-        env_value, steam_app, wined3d_renderer_in,
+        env_to_apply, env_value, steam_app, wined3d_renderer_in,
     },
 };
 
@@ -180,20 +180,20 @@ extern "C" fn run() {
     log::line(&debug_channels_line(&resolution));
     // A default env entry leaves a variable the process already has alone,
     // whether it is in the environment block or only in the unix
-    // environment.
-    let has = |name: &str| env_value(&process.env, name).or_else(|| std::env::var(name).ok());
+    // environment, which a unix-side reader reads. A value only the unix
+    // environment has goes into the block as well (env_to_apply).
+    let unix = |name: &str| std::env::var(name).ok();
+    let has = |name: &str| env_value(&process.env, name).or_else(|| unix(name));
     let steps = resolution.env_steps(|name| has(name).is_some());
     if steps.is_empty() {
         log::line(&unset_line(Key::Env));
     }
     for step in &steps {
-        log::line(&env_line(step, has(step.entry.name().as_str()).as_deref()));
+        let name = step.entry.name().as_str();
+        let in_block = env_value(&process.env, name).is_some();
+        log::line(&env_line(step, has(name).as_deref(), in_block));
     }
-    let env: Vec<EnvEntry> = steps
-        .iter()
-        .filter(|step| step.applied)
-        .map(|step| step.entry.clone())
-        .collect();
+    let env: Vec<EnvEntry> = env_to_apply(&steps, &process.env, unix);
     // The env goes into both the environment block, for the PE side and
     // what reads it at process init (FEX, wined3d), and the unix
     // environment, for unix-side readers (winemetal, mtld3d, Metal,
@@ -374,13 +374,20 @@ fn debug_channels_line(resolution: &Resolution) -> String {
 }
 
 /// The log line of an env entry: its value, where it came from and what it
-/// did. `has` is the value the process had for the variable, if any.
-fn env_line(step: &EnvStep, has: Option<&str>) -> String {
+/// did. `has` is the value the process had for the variable, if any, and
+/// `in_block` whether its environment block had it; a value that only its
+/// unix environment had goes into the block (see [`env_to_apply`]).
+fn env_line(step: &EnvStep, has: Option<&str>, in_block: bool) -> String {
+    let name = step.entry.name();
     let what = match (&step.replaced_by, step.applied, step.entry.value()) {
         (Some(later), _, _) => format!("replaced by a later entry from {}", later.label()),
+        (None, false, _) if !in_block && has.is_some_and(|value| !value.is_empty()) => format!(
+            "left alone, the unix environment has {name}={}, which goes into the environment \
+             block",
+            has.unwrap_or_default()
+        ),
         (None, false, _) => format!(
-            "left alone, the process has {}={}",
-            step.entry.name(),
+            "left alone, the process has {name}={}",
             has.unwrap_or_default()
         ),
         (None, true, None) => match (&step.removes, has) {

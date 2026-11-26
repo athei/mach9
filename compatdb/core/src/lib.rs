@@ -338,7 +338,9 @@
 //! - The `env` entries of a built-in `*` rule without a fingerprint are
 //!   defaults: one sets its variable only where the process does not have
 //!   it, so a value whoever started the process exported wins, an empty
-//!   one included.
+//!   one included. A value the process has only in its unix environment
+//!   goes into its environment block as well
+//!   ([`runtime::env_to_apply`]).
 //!   Every other entry, a `*` rule's of [`ENV_VAR`] or the file included,
 //!   replaces the variable, and an entry without a value removes it.
 //!   [`Resolution::env_steps`] says what each entry does in a process.

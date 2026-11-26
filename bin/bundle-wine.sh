@@ -1188,8 +1188,9 @@ check_default_trees() {
 # prefix, check_fex_runs sets FEX_SMCCHECKS=full on one run per arch,
 # FEX_DISKCACHE=1 on another and both on a third, check_streamout_runs and
 # check_dxmt_runs turn off DXMT's shader cache for their runs and turn on
-# Metal shader validation, check_dxmt_runs for a second run of each case, and
-# check_linger_runs sets WINE_COMPATDB_APP_PID on one run.
+# Metal shader validation, check_dxmt_runs for a second run of each case,
+# check_child_env_runs exports FEX_X87REDUCEDPRECISION=0 on one run per arch,
+# and check_linger_runs sets WINE_COMPATDB_APP_PID on one run.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
@@ -1350,6 +1351,7 @@ smoke_test() {
     check_tree_loads i686 "${wine_env[@]}"
     check_tree_loads aarch64 "${wine_env[@]}"
     check_rules_file "${wine_env[@]}"
+    check_child_env_runs "${wine_env[@]}"
     check_wgl_runs "${wine_env[@]}"
     check_vulkan_runs "${wine_env[@]}"
     check_d3d12_runs "${wine_env[@]}"
@@ -1423,6 +1425,47 @@ check_rules_file() {
             smoke_stop
             exit 1
         fi
+    done
+}
+
+# check_child_env_runs <env-command>...: build smoke/childenv.c for x86_64 and
+# i686 and run it in the booted throwaway prefix, once as it is and once with
+# FEX_X87REDUCEDPRECISION=0 exported. Exit with the log unless the child it
+# starts with an environment block without that variable gets the value and the
+# x87 precision of the program: compatdb's built-in default, reduced, and the
+# exported value, full. Only the child's unix environment, which Wine starts it
+# with, still has the value, and compatdb.so has to put it into the block, where
+# FEX reads it, and log that. Clean runs took 0.1 to 0.3 seconds on a current
+# Mac with the wineserver already running, as here, and small programs take up
+# to 4 times as long on a hosted runner, so the limit is 3 seconds.
+check_child_env_runs() {
+    local arch log value precision want cmd
+    for arch in x86_64 i686; do
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/childenv-$arch.exe" "$REPO_DIR/smoke/childenv.c"
+        for value in 1 0; do
+            precision=reduced
+            log="$TMP_DIR/childenv-$arch.log"
+            cmd=("$@")
+            if [ "$value" = 0 ]; then
+                precision=full
+                cmd+=(FEX_X87REDUCEDPRECISION=0)
+            fi
+            time_mark "smoke: childenv.exe $arch (FEX_X87REDUCEDPRECISION=$value)"
+            echo "  Running childenv.exe for $arch (FEX_X87REDUCEDPRECISION=$value)..."
+            run_limited 3 "$log" "${cmd[@]}" "$WINE_DIR/bin/wine" "$TMP_DIR/childenv-$arch.exe"
+            smoke_check "childenv.exe for $arch (FEX_X87REDUCEDPRECISION=$value)" 3 "$log"
+            for want in "wine-build smoke test: $arch childenv parent: FEX_X87REDUCEDPRECISION=$value x87 $precision" \
+                "wine-build smoke test: $arch childenv child: FEX_X87REDUCEDPRECISION=$value x87 $precision" \
+                "compatdb:   env FEX_X87REDUCEDPRECISION=1, built-in: left alone, the unix environment has FEX_X87REDUCEDPRECISION=$value, which goes into the environment block"; do
+                if ! grep -qF "$want" "$log"; then
+                    echo "Error: childenv.exe for $arch (FEX_X87REDUCEDPRECISION=$value) did not log '$want'"
+                    cat "$log"
+                    smoke_stop
+                    exit 1
+                fi
+            done
+            grep "wine-build smoke test: $arch childenv" "$log" | sed 's/^/    /'
+        done
     done
 }
 

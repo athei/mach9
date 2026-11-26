@@ -46,7 +46,7 @@ fn the_env_line_of_a_profiled_process_says_what_fex_gets() {
         steps
             .iter()
             .find(|step| step.entry.name().as_str() == name)
-            .map(|step| env_line(step, value))
+            .map(|step| env_line(step, value, env_value(&block, name).is_some()))
     };
     let set = Some("  env FEX_EXTENDEDDEBUGINFO=1, WINE_PROF_SERVICE: set");
     assert_eq!(line("OTHER=x\0\0", None).as_deref(), set);
@@ -203,15 +203,15 @@ fn the_list_and_env_lines_name_the_source_of_each_entry_and_what_happened() -> T
         removes: None,
     };
     assert_eq!(
-        env_line(&step("1", true, None), None),
+        env_line(&step("1", true, None), None, false),
         "  env FEX_X87REDUCEDPRECISION=1, built-in: set"
     );
     assert_eq!(
-        env_line(&step("", true, None), Some("0")),
+        env_line(&step("", true, None), Some("0"), true),
         "  env FEX_X87REDUCEDPRECISION=, built-in: removed"
     );
     assert_eq!(
-        env_line(&step("", true, None), None),
+        env_line(&step("", true, None), None, false),
         "  env FEX_X87REDUCEDPRECISION=, built-in: not set, nothing to remove"
     );
     // A removal after an earlier entry set the variable undoes that one,
@@ -222,22 +222,35 @@ fn the_list_and_env_lines_name_the_source_of_each_entry_and_what_happened() -> T
         ..step("", true, None)
     };
     assert_eq!(
-        env_line(&undo, None),
+        env_line(&undo, None, false),
         "  env FEX_X87REDUCEDPRECISION=, WINE_COMPATDB line 3: removes the value from \
          built-in"
     );
     assert_eq!(
-        env_line(&step("1", false, None), Some("0")),
+        env_line(&step("1", false, None), Some("0"), true),
         "  env FEX_X87REDUCEDPRECISION=1, built-in: left alone, the process has \
          FEX_X87REDUCEDPRECISION=0"
     );
+    // A value only the unix environment has, as a child started with a
+    // block of its own inherits it, goes into the block; an empty one does
+    // not.
     assert_eq!(
-        env_line(&step("1", true, Some(Origin::Line(2))), None),
+        env_line(&step("1", false, None), Some("0"), false),
+        "  env FEX_X87REDUCEDPRECISION=1, built-in: left alone, the unix environment has \
+         FEX_X87REDUCEDPRECISION=0, which goes into the environment block"
+    );
+    assert_eq!(
+        env_line(&step("1", false, None), Some(""), false),
+        "  env FEX_X87REDUCEDPRECISION=1, built-in: left alone, the process has \
+         FEX_X87REDUCEDPRECISION="
+    );
+    assert_eq!(
+        env_line(&step("1", true, Some(Origin::Line(2))), None, false),
         "  env FEX_X87REDUCEDPRECISION=1, built-in: replaced by a later entry from \
          WINE_COMPATDB line 2"
     );
     assert_eq!(
-        env_line(&step("1", true, Some(wow())), None),
+        env_line(&step("1", true, Some(wow())), None, false),
         "  env FEX_X87REDUCEDPRECISION=1, built-in: replaced by a later entry from \
          built-in for WoW.exe (Blizzard Entertainment, World of Warcraft, WoW.exe)"
     );

@@ -628,8 +628,17 @@ impl Rule {
     /// (`exe` `*`, no fingerprint) are defaults: such an entry sets its
     /// variable only where the process does not have it, so a value the
     /// caller exported wins, an empty one included (see
-    /// [`Origin::env_is_default`]). Every other entry replaces the
-    /// variable, or removes it when it has no value.
+    /// [`Origin::env_is_default`]). A value the process has only in its unix
+    /// environment, as a child that a program started with an environment
+    /// block of its own has it, goes into the block too, where FEX reads its
+    /// options, unless it is empty
+    /// ([`runtime::env_to_apply`](crate::runtime::env_to_apply)). So a
+    /// default must not name a variable that Wine keeps out of the block it
+    /// builds from the unix environment, or renames to `WINE_HOST_<name>`
+    /// there (`is_ignored_env_var` and `is_special_env_var` in Wine's
+    /// `dlls/ntdll/unix/env.c`): a value exported for the unix side would
+    /// then go into the block of every process. Every other entry replaces
+    /// the variable, or removes it when it has no value.
     #[must_use]
     pub fn env(&self) -> &[EnvEntry] {
         &self.env

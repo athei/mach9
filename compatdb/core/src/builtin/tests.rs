@@ -252,6 +252,44 @@ fn the_table_asks_fex_for_reduced_x87_precision() {
 }
 
 #[test]
+fn no_env_default_names_a_variable_wine_keeps_out_of_the_block() {
+    // The prefixes of `is_ignored_env_var` and `is_special_env_var` in
+    // Wine's dlls/ntdll/unix/env.c, compared case-sensitively as there. A
+    // value only the unix environment has goes into the block for a default
+    // (runtime::env_to_apply), which these variables must not reach.
+    let kept_out = [
+        "NIXPKGS_",
+        "QT_",
+        "SDL_AUDIODRIVER=",
+        "SDL_AUDIO_DRIVER=",
+        "SDL_VIDEODRIVER=",
+        "SDL_VIDEO_DRIVER=",
+        "WAYLAND_DISPLAY=",
+        "VK_",
+        "PATH=",
+        "PWD=",
+        "HOME=",
+        "TEMP=",
+        "TMP=",
+        "TMPDIR=",
+        "XDG_",
+    ];
+    for rule in defaults() {
+        for entry in &rule.env {
+            // Wine imports `WINE<name>` as `<name>` for these too.
+            let named = format!("{}=", entry.name());
+            let imported = named.strip_prefix("WINE").unwrap_or(&named);
+            assert!(
+                !kept_out
+                    .iter()
+                    .any(|prefix| named.starts_with(prefix) || imported.starts_with(prefix)),
+                "{named}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_rule_turns_reduced_x87_precision_off_for_one_game_or_every_process() -> TestResult {
     // For one game: an empty value, which removes the variable, folds
     // after the default.

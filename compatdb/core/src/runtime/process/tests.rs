@@ -217,6 +217,53 @@ fn merge_env_replaces_appends_and_removes() -> TestResult {
     Ok(())
 }
 
+/// The value of `FEX_X87REDUCEDPRECISION` in the block of a child whose
+/// block is `block` and whose unix environment gives `unix` for it, after
+/// the built-in rules and `rules` are applied, as `compatdb.so` applies them.
+fn x87_in_child_block(block: &[&str], unix: Option<&str>, rules: &str) -> Option<String> {
+    let name = "FEX_X87REDUCEDPRECISION";
+    let block = env_block(block);
+    let unix = |variable: &str| unix.filter(|_| variable == name).map(str::to_owned);
+    let (table, _) = crate::Table::parse_lenient(rules);
+    let resolution = table.preview("child.exe", &crate::VersionInfo::default());
+    let has = |variable: &str| env_value(&block, variable).or_else(|| unix(variable));
+    let steps = resolution.env_steps(|variable| has(variable).is_some());
+    let entries = env_to_apply(&steps, &block, unix);
+    let merged = merge_env(&block, &entries).unwrap_or(block);
+    env_value(&merged, name)
+}
+
+#[test]
+fn a_default_left_alone_for_a_unix_value_puts_that_value_into_the_block() {
+    // A child that a program started with a block of its own, without the
+    // variable, has the program's unix environment: the value compatdb.so
+    // set there, or one exported where Wine started.
+    let block = ["OTHER=x"];
+    for unix in ["1", "0"] {
+        assert_eq!(
+            x87_in_child_block(&block, Some(unix), "").as_deref(),
+            Some(unix)
+        );
+    }
+    // A value in the block stays as it is.
+    assert_eq!(
+        x87_in_child_block(&["FEX_X87REDUCEDPRECISION=0"], Some("1"), "").as_deref(),
+        Some("0")
+    );
+    // Nowhere, the default applies.
+    assert_eq!(x87_in_child_block(&block, None, "").as_deref(), Some("1"));
+    // An empty unix value stays out of the block.
+    assert_eq!(x87_in_child_block(&block, Some(""), ""), None);
+    // A later entry for the variable still wins.
+    let game = "exe=child.exe;env=FEX_X87REDUCEDPRECISION=";
+    assert_eq!(x87_in_child_block(&block, Some("1"), game), None);
+    let game = "exe=child.exe;env=FEX_X87REDUCEDPRECISION=2";
+    assert_eq!(
+        x87_in_child_block(&block, Some("1"), game).as_deref(),
+        Some("2")
+    );
+}
+
 #[test]
 fn merge_env_reports_no_change() {
     let block = env_block(&["FOO=bar"]);

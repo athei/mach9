@@ -564,7 +564,8 @@ impl Resolution {
     /// caller exported wins over a built-in `*` rule; every other entry
     /// applies, replacing the value or, when empty, removing the variable.
     /// An entry that a later applied entry for the same variable replaces
-    /// says where that entry came from.
+    /// says where that entry came from. [`runtime::env_to_apply`] gives the
+    /// entries a process applies for the steps.
     ///
     /// [`Resolution::env_from`] has one entry per env entry, as
     /// [`Table::resolve`] and [`Resolution::fold_derived_env`] keep it.

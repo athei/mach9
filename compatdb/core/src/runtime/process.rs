@@ -3,7 +3,7 @@
 
 use std::iter::{Peekable, repeat_n};
 
-use crate::{EnvEntry, part::steam_app_id};
+use crate::{EnvEntry, EnvStep, part::steam_app_id};
 
 /// The variable of the environment block that holds a process's Steam app id,
 /// which [`steam_app`] reads.
@@ -159,6 +159,44 @@ pub fn linger_at_exit(app_pid: Option<&str>, pid: u32) -> bool {
         .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|value| value.parse::<u32>().ok())
         == Some(pid)
+}
+
+/// The env entries a process applies, in order, to its environment block and
+/// its unix environment.
+///
+/// For the `steps` of
+/// [`Resolution::env_steps`](crate::Resolution::env_steps), that is each
+/// entry that applies, and for each default left alone because only the unix
+/// environment has its variable, the value `unix` gives for it there.
+/// `block` is the process's environment block.
+///
+/// A program can start a child with an environment block of its own; Wine
+/// starts that child with the program's unix environment and the block it
+/// was given. FEX reads its options from the block, so a default left alone
+/// for a value the child has only in its unix environment, one that
+/// `compatdb.so` set in the program or one exported where Wine started,
+/// would leave FEX without the value the log names. An empty value stays out
+/// of the block.
+#[must_use]
+pub fn env_to_apply(
+    steps: &[EnvStep],
+    block: &[u16],
+    unix: impl Fn(&str) -> Option<String>,
+) -> Vec<EnvEntry> {
+    steps
+        .iter()
+        .filter_map(|step| {
+            if step.applied {
+                return Some(step.entry.clone());
+            }
+            let name = step.entry.name();
+            if env_value(block, name.as_str()).is_some() {
+                return None;
+            }
+            let value = unix(name.as_str()).filter(|value| !value.is_empty())?;
+            EnvEntry::new(name.clone(), value).ok()
+        })
+        .collect()
 }
 
 /// Merge environment entries into a `NAME=value\0...\0\0` block.

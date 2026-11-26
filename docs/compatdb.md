@@ -167,7 +167,7 @@ with `compatdb:`.
 | `arguments_override, <source>: ignored, ...` | The rule is for a Steam app id, where the override does not apply ([`Rule::arguments_override`][arguments-override]) |
 | `dpi_aware`, `large_address_aware`, `gcmouse`, `force_nx`, `opengl` | The value; `large_address_aware` and `force_nx` note that they do nothing in a 64-bit process |
 | `linger_at_exit = on, ...`, `linger_at_exit = off, ...` | Whether the process [lingers at exit](#linger-at-exit): `WINE_COMPATDB_APP_PID` unset, or the pid it names and whether that is this process |
-| `env NAME=value, <source>: ...` | Whether the entry was set, removed, left alone because the process had the variable ([`Rule::env`][env]), or replaced by a later entry, with the sources involved |
+| `env NAME=value, <source>: ...` | Whether the entry was set, removed, left alone because the process had the variable ([`Rule::env`][env]), and then whether the value of its unix environment went into its environment block, or replaced by a later entry, with the sources involved |
 | `<setting> = <value>, <source>: ntdll lacks <hook>, ignored` | ntdll lacks the hook; the setting is ignored |
 
 To confirm a tree took effect, look at the running process's mapped files,
