@@ -129,6 +129,9 @@ built before, which runs under Rosetta.
   from the branch [`wine-src.ref`](../pins/wine-src.ref) names, with
   `--strict-floor` and `--symbols`. The header and step comments of
   `release.yml` have the details.
+- A run builds and bundles the commit each fork branch named at its step
+  "Resolve the fork refs" ([pinned inputs](internals.md#pinned-inputs));
+  a push to a fork after that step is built by the next run.
 - A pull request from a fork gets no secrets and fails at its first step;
   push the branch to this repository instead.
 - A release's notes are its `release-notes/X.Y.Z.md`, then one bullet per

@@ -287,6 +287,29 @@ jobs:
             "refs/tags/wine-$version:refs/tags/wine-$version"
           git -C src describe HEAD
 
+      # The commit each fork's *-src.ref names now (src_ref_commit in
+      # profile.sh), resolved once. The dist cache keys, the build and the
+      # bundle step take it as the fork's *_REF, so they all build and check
+      # one commit. Were the branch resolved in each of them, a push to a
+      # fork during the run would make the bundle step refuse the dist the
+      # build staged. The Package step keeps the refs the pins name, which
+      # the notes print beside each commit.
+      - name: Resolve the fork refs
+        id: forks
+        run: |
+          SCRIPT_DIR=scripts/bin . scripts/bin/lib/profile.sh
+          for f in fex:FEX mesa:MESA dxmt:DXMT vkd3d:VKD3D_PROTON; do
+            ref=${f#*:}_REF
+            repo=${f#*:}_REPO
+            commit=$(src_ref_commit "${!ref}" "${!repo}") || commit=""
+            if [ -z "$commit" ]; then
+              echo "Cannot resolve ${!ref} in ${!repo}."
+              exit 1
+            fi
+            echo "$ref: ${!ref} in ${!repo} is $commit"
+            echo "${f%%:*}=$commit" >> "$GITHUB_OUTPUT"
+          done
+
       # The Xcode host.sh chose on an earlier run on the same runner image,
       # so it need not ask every Xcode for its SDK again (host.sh, header).
       # The key changes with the image and with host.sh and profile.sh,
@@ -397,18 +420,23 @@ jobs:
       # One cache per staged dist (docs/internals.md, commands): Mesa with the
       # Vulkan loader, GStreamer, GFXReconstruct, FEX, DXMT and vkd3d-proton.
       # Its key is the hash of the KEY line the dist's build script would
-      # write into it now (--print-key): the commit its ref names
-      # (GStreamer's pin), the hash of the script and profile.sh, and the
-      # versions of the compilers, SDK and tools the script records. The
-      # script builds nothing when the dist restored under that key is
-      # complete with that KEY, and builds it otherwise; the bundle step
-      # checks every COMMIT against its ref again. Restored before the build
-      # step and saved right after it, even when that fails later, when the
-      # dist was built here and the run is on main: under the hash of the KEY
-      # the build wrote, so a ref that moved in between cannot file a dist
-      # under another commit's key.
+      # write into it now (--print-key): the fork commit "Resolve the fork
+      # refs" found, or the pinned commit of GStreamer and GFXReconstruct,
+      # the hash of the script and profile.sh, and the versions of the
+      # compilers, SDK and tools the script records. The script builds
+      # nothing when the dist restored under that key is complete with that
+      # KEY, and builds it otherwise; the bundle step checks every COMMIT
+      # against that commit again. Restored before
+      # the build step and saved right after it, even when that fails later,
+      # when the dist was built here and the run is on main: under the hash
+      # of the KEY the build wrote.
       - name: Compute the dist cache keys
         id: dists
+        env:
+          FEX_REF: ${{ steps.forks.outputs.fex }}
+          MESA_REF: ${{ steps.forks.outputs.mesa }}
+          DXMT_REF: ${{ steps.forks.outputs.dxmt }}
+          VKD3D_PROTON_REF: ${{ steps.forks.outputs.vkd3d }}
         run: |
           for c in mesa gstreamer gfxreconstruct fex dxmt vkd3d-proton; do
             key=$(scripts/bin/build-$c.sh --print-key)
@@ -485,6 +513,11 @@ jobs:
       # against their KEY themselves.
       - name: Build
         id: build
+        env:
+          FEX_REF: ${{ steps.forks.outputs.fex }}
+          MESA_REF: ${{ steps.forks.outputs.mesa }}
+          DXMT_REF: ${{ steps.forks.outputs.dxmt }}
+          VKD3D_PROTON_REF: ${{ steps.forks.outputs.vkd3d }}
         run: scripts/bin/build-wine.sh
 
       - name: Report the ccache statistics
@@ -573,8 +606,15 @@ jobs:
         run: scripts/bin/ci/keychain.sh setup
 
       # Also writes the runtime-only bundle the app ships to runtime/wine in
-      # RUNNER_TEMP, copied from the full one after its smoke test.
+      # RUNNER_TEMP, copied from the full one after its smoke test. With the
+      # fork commits the build was given, which its checks compare each
+      # staged COMMIT with.
       - name: Bundle
+        env:
+          FEX_REF: ${{ steps.forks.outputs.fex }}
+          MESA_REF: ${{ steps.forks.outputs.mesa }}
+          DXMT_REF: ${{ steps.forks.outputs.dxmt }}
+          VKD3D_PROTON_REF: ${{ steps.forks.outputs.vkd3d }}
         run: scripts/bin/bundle-wine.sh --strict-floor --symbols --yes --runtime-dest "$RUNNER_TEMP/runtime"
 
       # Only a release packs the trees, naming the tarballs after its tag.

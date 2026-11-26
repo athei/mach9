@@ -1151,7 +1151,13 @@ Static linking:
 ## Pinned inputs
 
 A `*-src.ref` file names a branch, tag or commit of the component's
-`*_REPO`; its `*_REF` overrides it ([paths](#paths)).
+`*_REPO`; its `*_REF` overrides it ([paths](#paths)). Each script
+resolves the ref itself when it runs (`src_ref_commit`). A run of
+[`release.yml`](../.github/workflows/release.yml) resolves each fork's ref
+once, in its step "Resolve the fork refs", and passes the commit as the
+`*_REF` of the steps that key, build and bundle the dists, so a push to a
+fork branch during the run changes nothing it builds or checks. Its
+release notes still name the branch, with that commit.
 
 | Input | Pinned in |
 |-------|-----------|
