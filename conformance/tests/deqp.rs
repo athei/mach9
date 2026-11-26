@@ -39,6 +39,12 @@ enum Setup {
     Bundle,
     /// The probe names a driver outside the stack.
     ForeignDriver,
+    /// The probe names a driver in a sibling of the stack whose name starts
+    /// with the stack's.
+    SiblingDriver,
+    /// The probe names a manifest in a sibling of the manifest directory
+    /// whose name starts with its name.
+    SiblingManifest,
     /// The canary fails.
     CanaryFails,
     /// A 1 s idle limit.
@@ -164,10 +170,14 @@ fn try_execute_groups(
         },
         validation: matches!(setup, Setup::Validation | Setup::NoLayer).then(|| layers(root)),
     };
-    let driver = if setup == Setup::ForeignDriver {
-        PathBuf::from("/opt/homebrew/lib/libMoltenVK.dylib")
-    } else {
-        driver
+    let driver = match setup {
+        Setup::ForeignDriver => PathBuf::from("/opt/homebrew/lib/libMoltenVK.dylib"),
+        Setup::SiblingDriver => {
+            let stack = std::path::absolute(&options.vulkan).unwrap();
+            let stack = stack.display();
+            PathBuf::from(format!("{stack}.new/lib/libvulkan_kosmickrisp.dylib"))
+        }
+        _ => driver,
     };
     let mut env = vec![
         (OsString::from("PATH"), OsString::from("/bin:/usr/bin")),
@@ -182,6 +192,13 @@ fn try_execute_groups(
     }
     if setup == Setup::NoLayer {
         env.push((OsString::from("STUB_NO_LAYER"), OsString::from("1")));
+    }
+    if setup == Setup::SiblingManifest {
+        let icd = std::path::absolute(options.vulkan.join("share/vulkan/icd.d")).unwrap();
+        env.push((
+            OsString::from("STUB_ICD_DIR"),
+            OsString::from(format!("{}.old", icd.display())),
+        ));
     }
     let exit = match setup {
         Setup::ExitCrash => Some("crash"),
@@ -454,6 +471,28 @@ fn the_probe_refuses_a_driver_outside_the_stack() {
         setup,
     ));
     assert!(e.contains("did not all run on the driver of"), "{e}");
+}
+
+#[test]
+fn the_probe_refuses_a_driver_or_manifest_in_a_sibling_with_the_same_prefix() {
+    let root = scratch("sibling-driver");
+    let e = setup_error(try_execute(
+        &root,
+        Mode::Record,
+        &["dEQP-VK.g.a.pass"],
+        Setup::SiblingDriver,
+    ));
+    assert!(e.contains("did not all run on the driver of"), "{e}");
+    assert!(e.contains("mesa.new/lib"), "{e}");
+    let root = scratch("sibling-manifest");
+    let e = setup_error(try_execute(
+        &root,
+        Mode::Record,
+        &["dEQP-VK.g.a.pass"],
+        Setup::SiblingManifest,
+    ));
+    assert!(e.contains("did not take its drivers from"), "{e}");
+    assert!(e.contains("icd.d.old"), "{e}");
 }
 
 #[test]

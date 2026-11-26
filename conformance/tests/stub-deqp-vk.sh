@@ -23,8 +23,9 @@
 #   *.silent   ends the process at once, with nothing printed
 #   *.vuid     passes and prints a message of the validation layers
 #
-# The probe's case prints the loader's driver messages for $VK_DRIVER_FILES
-# and $STUB_DRIVER, and writes a test log with a driverVersion.
+# The probe's case prints the loader's driver messages for $VK_DRIVER_FILES,
+# or $STUB_ICD_DIR when set, and $STUB_DRIVER, and writes a test log with a
+# driverVersion.
 #
 # $STUB_EXIT makes every process but the probe's end badly after its last
 # case, as in the teardown of its device: `crash` dies by SIGSEGV, `once`
@@ -93,7 +94,7 @@ while read -r case; do
     case "$case" in
         dEQP-VK.info.device_properties)
             probe=1
-            echo "[Vulkan Loader] DRIVER:         Found ICD manifest file $VK_DRIVER_FILES/stub_icd.json, version 1.0.1"
+            echo "[Vulkan Loader] DRIVER:         Found ICD manifest file ${STUB_ICD_DIR:-$VK_DRIVER_FILES}/stub_icd.json, version 1.0.1"
             echo "[Vulkan Loader] DRIVER:                Using \"Stub GPU\" with driver: \"$STUB_DRIVER\""
             printf '\tdriverVersion = 109457507\n' > "$qpa"
             echo "  Pass (Pass)"

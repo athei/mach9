@@ -879,15 +879,16 @@ impl Runner<'_> {
             )));
         }
         let manifests = probe::manifests(&text);
-        let icd_dir = self.vulkan.icd_dir.display().to_string();
-        if manifests.is_empty() || manifests.iter().any(|path| !path.starts_with(&icd_dir)) {
+        let icd_dir = &self.vulkan.icd_dir;
+        if manifests.is_empty() || manifests.iter().any(|path| !inside(path, icd_dir)) {
             return Err(Failure::Setup(format!(
-                "deqp-vk probe: the loader did not take its drivers from {icd_dir} alone (it \
-                 found {manifests:?}); {see}"
+                "deqp-vk probe: the loader did not take its drivers from {} alone (it found \
+                 {manifests:?}); {see}",
+                icd_dir.display()
             )));
         }
         let drivers = probe::drivers(&text);
-        let dir = self.vulkan.dir.display().to_string();
+        let dir = &self.vulkan.dir;
         let Some((device, driver)) = drivers.first() else {
             return Err(Failure::Setup(format!(
                 "deqp-vk probe: the loader names no driver of a device; {see}"
@@ -895,11 +896,12 @@ impl Runner<'_> {
         };
         if drivers
             .iter()
-            .any(|(_, path)| !path.starts_with(&dir) || path != driver)
+            .any(|(_, path)| !inside(path, dir) || path != driver)
         {
             return Err(Failure::Setup(format!(
-                "deqp-vk probe: the devices did not all run on the driver of {dir} (the loader \
-                 used {drivers:?}); {see}"
+                "deqp-vk probe: the devices did not all run on the driver of {} (the loader \
+                 used {drivers:?}); {see}",
+                dir.display()
             )));
         }
         let qpa_text = fs::read_to_string(&qpa).map_err(|e| setup_io(&qpa, &e))?;
@@ -1301,6 +1303,14 @@ impl Runner<'_> {
             .extend(found);
         Ok(())
     }
+}
+
+/// Whether the loader's `path` lies inside `dir`, by whole components, so a
+/// sibling that shares the name's start (`wine.new` for `wine`) does not.
+/// Neither side is canonicalized: `dir` is the absolute path of the
+/// `--vulkan` argument, `path` the one the loader prints.
+fn inside(path: &str, dir: &Path) -> bool {
+    Path::new(path).starts_with(dir)
 }
 
 /// The non-pass counts of a batch's results, as `, <n> <status>` each.

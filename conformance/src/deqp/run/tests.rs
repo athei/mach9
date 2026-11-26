@@ -390,6 +390,33 @@ fn a_canary_keeps_its_log_only_when_it_does_not_pass() {
 }
 
 #[test]
+fn a_path_is_inside_a_directory_only_by_whole_components() {
+    let dir = Path::new("/r/dist/wine");
+    assert!(inside(
+        "/r/dist/wine/lib/external/libvulkan_kosmickrisp.dylib",
+        dir
+    ));
+    assert!(inside("/r/dist/wine", dir));
+    assert!(!inside(
+        "/r/dist/wine.new/lib/external/libvulkan_kosmickrisp.dylib",
+        dir
+    ));
+    assert!(!inside(
+        "/r/dist/wine-old/lib/libvulkan_kosmickrisp.dylib",
+        dir
+    ));
+    let icd = Path::new("/r/dist/wine/share/vulkan/icd.d");
+    assert!(inside(
+        "/r/dist/wine/share/vulkan/icd.d/kosmickrisp.json",
+        icd
+    ));
+    assert!(!inside(
+        "/r/dist/wine/share/vulkan/icd.d.old/kosmickrisp.json",
+        icd
+    ));
+}
+
+#[test]
 fn removing_a_test_log_the_process_did_not_write_succeeds() {
     let dir = Scratch::new("deqp-logs", "remove");
     let qpa = dir.join("batch-0.1.qpa");
