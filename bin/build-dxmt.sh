@@ -9,6 +9,10 @@ set -e
 #   aarch64-windows/{dxgi,d3d10core,d3d11,winemetal}.dll   ARM64X
 #   i386-windows/{dxgi,d3d10core,d3d11,winemetal}.dll      i386
 #   aarch64-unix/winemetal.so
+#   share/licenses/dxmt/
+#                the licences of DXMT, of the code it carries from elsewhere
+#                and of the LLVM winemetal.so links (LICENSES below), which
+#                the bundle step installs
 #   KEY          what the dist was built from (dist_key in profile.sh)
 #   COMMIT       the source commit
 #   DESCRIBE     its `git describe`, the version string DXMT builds into d3d11.dll
@@ -83,6 +87,20 @@ done
 . "$SCRIPT_DIR/lib/profile.sh"
 # shellcheck source=../pins/redist.env
 . "$PINS_DIR/redist.env"
+# shellcheck source=lib/licenses.sh
+. "$SCRIPT_DIR/lib/licenses.sh"
+
+# The licence texts of what the staged files are built from, as
+# <staged name>=<source in the checkout> (stage_licenses in licenses.sh):
+# DXMT's own (LGPL, with the MIT licence of its releases up to v0.80), the
+# zlib licence of the code it took from DXVK, and the header of Microsoft's
+# DXBC parser in libs/DXBCParser, which names the MIT licence whose text
+# LICENSE.OLD holds. LLVM's licence comes from DXMT_LLVM (LLVM 15 below).
+LICENSES="LICENSE=LICENSE
+COPYING.LIB=COPYING.LIB
+LICENSE.OLD=LICENSE.OLD
+dxvk.LICENSE=src/util/dxvk.LICENSE
+dxbcparser.txt=notice:libs/DXBCParser/ShaderBinary.cpp"
 
 if [ -z "$DXMT_REF" ]; then
     echo "Error: $PINS_DIR/dxmt-src.ref is empty"
@@ -114,7 +132,8 @@ fi
 # the macOS SDK, the Metal compiler and the floor.
 WINE_COMMIT=$(wine_src_commit)
 dxmt_key() {
-    dist_key --hash "$SCRIPT_DIR/build-wine.sh" "$SCRIPT_DIR/build-dxmt.sh" "dxmt=$1" \
+    dist_key --hash "$SCRIPT_DIR/build-wine.sh" --hash "$SCRIPT_DIR/lib/licenses.sh" \
+        "$SCRIPT_DIR/build-dxmt.sh" "dxmt=$1" \
         "wine=$WINE_COMMIT" "llvm=$LLVM15_GIT_COMMIT" "$(mingw_key)" \
         "cc=$(cc_version /usr/bin/clang)" "$(sdk_key)" \
         "metal=$(xcrun -sdk macosx metal --version 2>/dev/null | head -n 1)" "floor=$MACOS_FLOOR"
@@ -225,10 +244,30 @@ if [ "$(cat "$DXMT_LLVM/COMMIT" 2>/dev/null)" != "$LLVM15_GIT_COMMIT" ]; then
     # install never leaves a DXMT_LLVM behind.
     claim_tree "$DXMT_LLVM.part" dxmt-llvm 1
     cmake --install "$DXMT_BUILD_DIR/llvm-build" --prefix "$DXMT_LLVM.part" >/dev/null
+    stage_licenses "$DXMT_BUILD_DIR/llvm-project" "$DXMT_LLVM.part" "LICENSE.TXT=llvm/LICENSE.TXT"
     echo "$LLVM15_GIT_COMMIT" > "$DXMT_LLVM.part/COMMIT"
     mv "$DXMT_LLVM.part" "$DXMT_LLVM"
     # The source and build trees are large and no longer needed.
     remove_tree "$DXMT_BUILD_DIR/llvm-build" "$DXMT_BUILD_DIR/llvm-project"
+fi
+# LLVM's licence, which the build above keeps in DXMT_LLVM. Libraries built
+# before this script kept it have none; for them the pinned commit's
+# llvm/LICENSE.TXT is fetched alone, from a clone that holds only the commit
+# and fetches the trees and the file it reads on demand, so they need no
+# rebuild.
+if [ ! -s "$DXMT_LLVM/LICENSE.TXT" ]; then
+    echo "==> LLVM 15's licence into $DXMT_LLVM..."
+    remove_tree "$DXMT_BUILD_DIR/llvm-license"
+    GIT_TERMINAL_PROMPT=0 git -c advice.detachedHead=false clone --quiet --depth 1 --filter=tree:0 \
+        --no-checkout --branch "$LLVM15_GIT_TAG" "$LLVM15_GIT_URL" "$DXMT_BUILD_DIR/llvm-license"
+    if [ "$(git -C "$DXMT_BUILD_DIR/llvm-license" rev-parse HEAD)" != "$LLVM15_GIT_COMMIT" ]; then
+        echo "Error: $LLVM15_GIT_URL $LLVM15_GIT_TAG is not at $LLVM15_GIT_COMMIT, which redist.env pins"
+        exit 1
+    fi
+    GIT_TERMINAL_PROMPT=0 git -C "$DXMT_BUILD_DIR/llvm-license" show "$LLVM15_GIT_COMMIT:llvm/LICENSE.TXT" \
+        > "$DXMT_LLVM/LICENSE.TXT.part"
+    mv "$DXMT_LLVM/LICENSE.TXT.part" "$DXMT_LLVM/LICENSE.TXT"
+    remove_tree "$DXMT_BUILD_DIR/llvm-license"
 fi
 
 # ── DXMT source ─────────────────────────────────────────────────────────
@@ -245,6 +284,7 @@ echo "==> DXMT source: $DXMT_REPO $DXMT_REF"
 if [ ! -e "$DXMT_SRC/.git" ]; then
     GIT_TERMINAL_PROMPT=0 git clone --quiet --no-checkout "$DXMT_REPO" "$DXMT_SRC"
 fi
+check_own_repo "$DXMT_SRC"
 GIT_TERMINAL_PROMPT=0 git -C "$DXMT_SRC" fetch --quiet --force --tags "$DXMT_REPO"
 GIT_TERMINAL_PROMPT=0 git -C "$DXMT_SRC" fetch --quiet "$DXMT_REPO" "$DXMT_REF"
 git -C "$DXMT_SRC" -c advice.detachedHead=false checkout --quiet --force --detach FETCH_HEAD
@@ -340,6 +380,9 @@ if ! strings -a "$DXMT_DIST/$PE64_DIR/d3d11.dll" | grep -xF "$DXMT_DESCRIBE" >/d
     echo "Error: d3d11.dll does not carry the version $DXMT_DESCRIBE"
     exit 1
 fi
+stage_licenses "$DXMT_SRC" "$DXMT_DIST/share/licenses/dxmt" "$LICENSES"
+stage_licenses "$DXMT_LLVM" "$DXMT_DIST/share/licenses/dxmt" "llvm.txt=LICENSE.TXT"
+echo "    licences: $(cd "$DXMT_DIST/share/licenses/dxmt" && echo *)"
 echo "$DXMT_DESCRIBE" > "$DXMT_DIST/DESCRIBE"
 echo "$WINE_COMMIT" > "$DXMT_DIST/WINE_COMMIT"
 dxmt_key "$DXMT_COMMIT" > "$DXMT_DIST/KEY"

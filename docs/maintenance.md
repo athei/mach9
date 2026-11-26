@@ -369,7 +369,9 @@ branches read `main`'s caches and write none.
 - The LLVM key does not change with how `build-dxmt.sh` builds LLVM. To
   rebuild it after such a change, delete the `dxmt-llvm15-*` caches
   (`gh cache list --key dxmt-llvm15-`, then `gh cache delete <id>`) or
-  change the pin.
+  change the pin. A cache saved before `build-dxmt.sh` kept LLVM's licence
+  in it makes every run that builds DXMT fetch the licence alone; deleting
+  it saves that.
 - A new download pinned in `redist.env` that `bundle-wine.sh` or
   `bin/ci/llvm-mingw.sh` keeps in `CACHE_DIR` needs its prefix added to the
   `pins-key.sh` call for the downloads cache in `release.yml`. Sparkle is
@@ -489,10 +491,12 @@ code runs, and exports for it:
 | `set_compat_force_nx` | Stored; ntdll reads it when the process asks for or changes its execute flags ([`Rule::force_nx`][force_nx]) |
 | `set_compat_opengl` | Stored; winemac reads it through `ntdll_get_compat_opengl` when the process first uses OpenGL ([`Rule::opengl`][opengl]) |
 | `set_compat_capture` | Stored; win32u reads it through `ntdll_get_compat_capture` when it loads the Vulkan loader, and samples the capture chord per present while it is set ([`Rule::vulkan_capture`][vulkan_capture], [`Rule::metal_capture`][metal_capture]) |
+| `set_compat_linger_at_exit` | Stored; when the process terminates itself, ntdll asks the wineserver with its `linger_at_exit` request whether to keep the unix process until no other user process runs ([linger at exit](compatdb.md#linger-at-exit)) |
 | `ntdll_get_unix_file_name` | Not a hook: the unix path of the executable, for the `captures` folder |
 
 On an ntdll without one of them, compatdb.so logs that and skips the
-setting; the bundle step checks the `force_nx` and `opengl` hooks
+setting; the bundle step checks the `force_nx`, `opengl`, `capture` and
+`linger_at_exit` hooks
 ([what the bundle step checks](internals.md#what-the-bundle-step-checks)).
 
 - winemac exports `macdrv_functions`, the window, Metal and monitor
@@ -524,6 +528,19 @@ setting; the bundle step checks the `force_nx` and `opengl` hooks
 
 ## Upgrade checklist
 
+- A component script stops when a licence text its list names is gone from
+  the new tree, `bundle-wine.sh` when a Homebrew keg has none, and
+  `rust-licenses.sh` when a crate publishes none. A library a component
+  starts to link statically needs its text added to the list and to
+  `DIST_LICENSES` in `bundle-wine.sh`; a change to compatdb's crates
+  changes `COMPATDB_CRATES` there ([licences](internals.md#licences)).
+- Each file in [`licenses/`](../licenses) names its source and version in
+  its header. Refresh a file when its source moves. `KEG_PINNED_LICENSES` in
+  `bundle-wine.sh` lists the files that belong to a Homebrew keg; the bundle
+  step warns when the keg's version differs. The mingw-w64 texts are not
+  pinned: they come from llvm-mingw's install (`MINGW_LICENSES` in
+  `bundle-wine.sh`), so an llvm-mingw bump needs a change only when the
+  preflight no longer finds them.
 - `macdrv_functions` is a private contract with no version field. winemac
   asserts the layout of its function table and window data (in
   [`dlls/winemac.drv/window.c`](https://github.com/athei/wine/blob/arm64-patched/dlls/winemac.drv/window.c));
@@ -692,7 +709,11 @@ Vulkan loader.
   trigger starts one capture per process until upstream PR
   [#3391](https://github.com/LunarG/gfxreconstruct/pull/3391) is in the tag.
 - After a bump, record a capture of a windowed Vulkan program and replay
-  it with [`bench/gfxr-replay.sh`](../bench/gfxr-replay.sh).
+  it with [`bench/gfxr-replay.sh`](../bench/gfxr-replay.sh), once timed and
+  once with `--screenshots`, and check that the images show its frames.
+  Run `gfxrecon-convert` and `gfxrecon-extract` from the dist on the same
+  capture with the options [Vulkan capture](internals.md#vulkan-capture)
+  names, and update that section when one changed.
 
 ### FEX
 
@@ -840,3 +861,34 @@ upgraded together when the swapchain interface between them changes.
   tree with the [conformance runner](internals.md#conformance-runner).
   Explain every regression before the bundle takes the new build, and
   record the suites again once the differences are understood.
+
+### Rust toolchains
+
+Every workflow in [`.github/workflows`](../.github/workflows) that
+builds, tests, lints or formats with cargo installs the toolchains in
+[`rust.env`](../pins/rust.env) it uses: `RUST_STABLE` for every cargo
+and rustc of the job, through `RUSTUP_TOOLCHAIN`, and `RUST_NIGHTLY` for
+rustfmt alone. A new Rust release on a runner image changes nothing. A
+local build keeps the toolchain rustup or `PATH` selects, except for
+formatting.
+
+Format with [`bin/fmt.sh`](../bin/fmt.sh), which runs the rustfmt of
+`RUST_NIGHTLY`, as the fmt check of each workflow does; `--check` checks
+instead, and its header gives the arguments. It stops with the rustup
+command to run when that toolchain is missing.
+
+To move to newer toolchains:
+
+- Change `RUST_STABLE` to the new stable release, and `RUST_NIGHTLY` to a
+  nightly of a date whose rustfmt is wanted.
+- Run the lints and tests of every workflow with the new stable
+  (`cargo +<stable> clippy --locked --workspace --all-targets -- -D warnings`,
+  `cargo +<stable> test --locked --workspace`, and the
+  `RUSTDOCFLAGS=-D warnings` rustdoc builds of `compatdb.yml` and
+  `conformance.yml`), and `bin/fmt.sh --check` for the new nightly.
+- Fix what they report in the same change: a release adds lints to the
+  pedantic and nursery groups the workspace denies, and a nightly can
+  format differently (`bin/fmt.sh` reformats).
+- A workflow that runs cargo needs `pins/rust.env` in its `paths`
+  filter, so a bump runs it, and one that checks the formatting also
+  needs `bin/fmt.sh`.

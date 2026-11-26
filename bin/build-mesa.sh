@@ -17,6 +17,11 @@ set -e
 #   share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json
 #                                    the driver's manifest, which names the
 #                                    driver by a path relative to itself
+#   share/licenses/mesa/, vulkan-loader/, vulkan-headers/
+#                                    the licences of Mesa, the loader and
+#                                    the headers it is built with, out of
+#                                    their trees, which the bundle step
+#                                    installs
 #   LOADER_COMMIT                    the loader's source commit
 #   KEY                              what the dist was built from
 #                                    (dist_key in profile.sh)
@@ -68,6 +73,20 @@ done
 . "$SCRIPT_DIR/lib/profile.sh"
 # shellcheck source=../pins/redist.env
 . "$PINS_DIR/redist.env"
+# shellcheck source=lib/licenses.sh
+. "$SCRIPT_DIR/lib/licenses.sh"
+
+# The licence texts, as <staged name>=<source in the tree>
+# (stage_licenses in licenses.sh). Mesa's license.rst says the files carry
+# their licences as SPDX identifiers, whose texts are in licenses/. The
+# loader's and the headers' LICENSES/ hold the texts their REUSE.toml and
+# SPDX identifiers name.
+MESA_LICENSES="license.rst=docs/license.rst
+licenses=licenses"
+LOADER_LICENSES="LICENSE.txt=LICENSE.txt
+LICENSES=LICENSES"
+HEADERS_LICENSES="LICENSE.md=LICENSE.md
+LICENSES=LICENSES"
 
 if [ -z "$MESA_REF" ]; then
     echo "Error: $PINS_DIR/mesa-src.ref is empty"
@@ -159,7 +178,7 @@ MESA_KEY_INPUTS+=" spirv=$(PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig" pkg-conf
 MESA_KEY_INPUTS+=" bison=$(cc_version "$BISON") flex=$(cc_version "$FLEX") cc=$(cc_version /usr/bin/clang)"
 MESA_KEY_INPUTS+=" $(sdk_key)"
 mesa_key() {
-    dist_key "$SCRIPT_DIR/build-mesa.sh" "mesa=$1" "$MESA_KEY_INPUTS"
+    dist_key --hash "$SCRIPT_DIR/lib/licenses.sh" "$SCRIPT_DIR/build-mesa.sh" "mesa=$1" "$MESA_KEY_INPUTS"
 }
 MESA_WANT=$(src_ref_commit "$MESA_REF" "$MESA_REPO")
 print_dist_key "$MESA_WANT" "$(ref_source MESA_REF mesa-src.ref) ($MESA_REF) in $MESA_REPO" mesa_key
@@ -184,6 +203,7 @@ echo "==> Mesa source: $MESA_REPO $MESA_REF"
 if [ ! -e "$MESA_SRC/.git" ]; then
     GIT_TERMINAL_PROMPT=0 git clone "$MESA_REPO" "$MESA_SRC"
 fi
+check_own_repo "$MESA_SRC"
 if [ -n "$(git -C "$MESA_SRC" status --porcelain --untracked-files=no)" ]; then
     echo "Error: $MESA_SRC has local changes; commit or stash them first"
     git -C "$MESA_SRC" status --short --untracked-files=no
@@ -199,9 +219,13 @@ echo "    at $MESA_COMMIT"
 # records it, and a loader built for another key, or none, is built again
 # from fresh trees. The headers are installed into a prefix of their own,
 # and the loader's configure is pointed at their CMake package, so it can
-# only take these and not Homebrew's.
+# only take these and not Homebrew's. LOADER_PREFIX also keeps the licences
+# of both out of their clones, for the stage below; a loader built before it
+# kept them is built again.
 LOADER_KEY="headers=$VULKAN_HEADERS_GIT_COMMIT loader=$VULKAN_LOADER_GIT_COMMIT floor=$MACOS_FLOOR"
-if [ "$(cat "$LOADER_PREFIX/KEY" 2>/dev/null)" = "$LOADER_KEY" ]; then
+if [ "$(cat "$LOADER_PREFIX/KEY" 2>/dev/null)" = "$LOADER_KEY" ] &&
+   [ -d "$LOADER_PREFIX/share/licenses/vulkan-loader" ] &&
+   [ -d "$LOADER_PREFIX/share/licenses/vulkan-headers" ]; then
     echo "==> Vulkan loader $VULKAN_LOADER_GIT_TAG: built already"
 else
     echo "==> Vulkan headers: $VULKAN_HEADERS_GIT_URL $VULKAN_HEADERS_GIT_TAG"
@@ -239,6 +263,8 @@ else
     # interrupted install never leaves a LOADER_PREFIX with a KEY behind.
     remove_tree "$LOADER_PREFIX.part"
     cmake --install "$LOADER_BUILD" --prefix "$LOADER_PREFIX.part" >/dev/null
+    stage_licenses "$LOADER_SRC" "$LOADER_PREFIX.part/share/licenses/vulkan-loader" "$LOADER_LICENSES"
+    stage_licenses "$HEADERS_SRC" "$LOADER_PREFIX.part/share/licenses/vulkan-headers" "$HEADERS_LICENSES"
     echo "$LOADER_KEY" > "$LOADER_PREFIX.part/KEY"
     remove_tree "$LOADER_PREFIX"
     mv "$LOADER_PREFIX.part" "$LOADER_PREFIX"
@@ -253,8 +279,11 @@ if [ "$(cat "$VENV/REQUIREMENTS" 2>/dev/null)" != "$MESA_PYTHON_REQUIREMENTS" ] 
     echo "==> Python environment for Mesa's build scripts..."
     remove_tree "$VENV"
     python3 -m venv "$VENV"
+    # PIP_USER=0: a pip config that sets user = true makes pip refuse to
+    # install into a virtual environment. Not --isolated, which would also
+    # drop the index and proxy settings of that config.
     # shellcheck disable=SC2086 # one word per requirement
-    "$VENV/bin/python3" -m pip install --quiet --disable-pip-version-check $MESA_PYTHON_REQUIREMENTS
+    PIP_USER=0 "$VENV/bin/python3" -m pip install --quiet --disable-pip-version-check $MESA_PYTHON_REQUIREMENTS
     echo "$MESA_PYTHON_REQUIREMENTS" > "$VENV/REQUIREMENTS"
 fi
 export PATH="$VENV/bin:$PATH"
@@ -560,6 +589,11 @@ if ! grep -aF "@rpath/libvulkan.1.dylib" "$part/lib/$GALLIUM" >/dev/null \
     exit 1
 fi
 echo "    $GALLIUM opens the Vulkan loader next to it (@rpath, LC_RPATH @loader_path)"
+
+stage_licenses "$MESA_SRC" "$part/share/licenses/mesa" "$MESA_LICENSES"
+cp -R "$LOADER_PREFIX/share/licenses/vulkan-loader" "$LOADER_PREFIX/share/licenses/vulkan-headers" \
+    "$part/share/licenses/"
+echo "    licences: mesa, vulkan-loader, vulkan-headers"
 
 echo "$VULKAN_LOADER_GIT_COMMIT" > "$part/LOADER_COMMIT"
 mesa_key "$MESA_COMMIT" > "$part/KEY"

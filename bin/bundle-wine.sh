@@ -9,6 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # The Wine tests a full bundle carries (WINE_TESTS).
 # shellcheck source=lib/wine-tests.sh
 . "$SCRIPT_DIR/lib/wine-tests.sh"
+# stage_licenses, for the licence texts Step 4c installs.
+# shellcheck source=lib/licenses.sh
+. "$SCRIPT_DIR/lib/licenses.sh"
 CACHE_DIR="${CACHE_DIR:-$ROOT/cache}"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
@@ -480,6 +483,82 @@ rpath_dep_source() {
     echo "$DEPS_PREFIX/lib/$name"
 }
 
+# install_keg_licenses <library>...: for each library under DEPS_PREFIX, the
+# Homebrew libraries Step 3 copied from where they are installed, copy the
+# licence files at the top of its keg (DEPS_PREFIX/Cellar/<formula>/<version>,
+# where the library's path leads once its symlinks are resolved) into
+# share/licenses/homebrew/<formula>/, once per formula, and add that
+# directory to LICENSE_WANT. A formula KEG_PINNED_LICENSES names also gets
+# the texts from this repository's licenses/ that its keg lacks, with a
+# warning when the keg, without Homebrew's _<n> revision, is at another
+# version than the one a text was pinned from. Other paths are skipped.
+# Exits on a library outside a keg and on a keg without a licence file.
+#
+# KEG_PINNED_LICENSES, as <formula>:<version>:<file in licenses/>: freetype's
+# LICENSE.TXT names docs/FTL.TXT, the licence the bundle uses it under, which
+# its keg does not carry, and the FTL asks the distribution's documentation
+# for a credit line (freetype-credit.txt); gettext's keg has only gettext's
+# GPL-3 COPYING, not the LGPL of its libintl, which the bundle carries for
+# libidn2.
+KEG_PINNED_LICENSES="freetype:2.15.0:freetype-FTL.TXT freetype:2.15.0:freetype-credit.txt
+gettext:1.0:gettext-libintl-COPYING.LIB"
+install_keg_licenses() {
+    local lib real rest formula version upstream keg dest f found entry pinned done_formulae=""
+    for lib in "$@"; do
+        case "$lib" in
+            "$DEPS_PREFIX"/*) ;;
+            *) continue ;;
+        esac
+        real=$(realpath "$lib")
+        rest=${real#"$DEPS_PREFIX/Cellar/"}
+        if [ "$rest" = "$real" ] || [ "${rest#*/*/}" = "$rest" ]; then
+            echo "Error: $lib is not in a keg under $DEPS_PREFIX/Cellar, where its licence would be"
+            exit 1
+        fi
+        formula=${rest%%/*}
+        rest=${rest#*/}
+        version=${rest%%/*}
+        keg="$DEPS_PREFIX/Cellar/$formula/$version"
+        in_list "$formula" "$done_formulae" && continue
+        done_formulae="$done_formulae $formula"
+        dest="$LICENSES_DIR/homebrew/$formula"
+        mkdir -p "$dest"
+        found=""
+        for f in "$keg"/*; do
+            case "$(basename "$f" | tr '[:upper:]' '[:lower:]')" in
+                licen[cs]e*|copying*|copyright*|notice*)
+                    if [ -f "$f" ] && [ -s "$f" ]; then
+                        cp "$f" "$dest/"
+                        found="$found $(basename "$f")"
+                    fi
+                    ;;
+            esac
+        done
+        if [ -z "$found" ]; then
+            echo "Error: the keg $keg of $(basename "$lib") has no licence file"
+            exit 1
+        fi
+        echo "    share/licenses/homebrew/$formula:$found"
+        LICENSE_WANT+=("share/licenses/homebrew/$formula")
+        for entry in $KEG_PINNED_LICENSES; do
+            [ "${entry%%:*}" = "$formula" ] || continue
+            pinned=${entry##*:}
+            stage_licenses "$REPO_DIR/licenses" "$dest" "$pinned=$pinned"
+            LICENSE_WANT+=("share/licenses/homebrew/$formula/$pinned")
+            echo "    share/licenses/homebrew/$formula: $pinned (licenses/)"
+            entry=${entry#*:}
+            upstream=$version
+            if [[ "$version" =~ ^(.+)_[0-9]+$ ]]; then
+                upstream=${BASH_REMATCH[1]}
+            fi
+            if [ "${entry%%:*}" != "$upstream" ]; then
+                echo "  WARNING: licenses/$pinned is from $formula ${entry%%:*}, the keg is $version;"
+                echo "  check it against the new version (docs/maintenance.md, upgrade checklist)"
+            fi
+        done
+    done
+}
+
 # check_rpath_deps <dylib>...: report every @rpath dependency of the dylibs
 # in lib/external that does not resolve inside the bundle through one of the
 # dylib's own LC_RPATH entries, and set LEAKED=1. Step 3 rewrites each one
@@ -836,22 +915,24 @@ check_default_trees() {
 # native, x86_64 and i386 programs run, the last two under FEX.
 # Every run has a time limit, since an emulator problem tends to show as a
 # hang rather than an error. The caller's WINE_COMPATDB, WINE_COMPATDB_FILE,
-# WINE_D3D_CONFIG and WINEDLLOVERRIDES and every WINEMSYNC*, FEX_*, VK_*,
-# VKD3D_*, DXMT_*, MESA_*, MTL_*, METAL_* and GST_* variable are dropped so
-# that the built-in rules and the defaults of Wine, FEX, the Vulkan loader,
-# vkd3d-proton, DXMT, KosmicKrisp, Metal and GStreamer decide; only
-# vkd3d-proton's pipeline cache is moved into the prefix, check_fex_runs sets
-# FEX_SMCCHECKS=full on one run per arch and FEX_DISKCACHE=1 on another, and
-# check_streamout_runs and check_dxmt_runs turn off DXMT's shader cache for
-# their runs and turn on Metal shader validation, check_dxmt_runs for a second
-# run of each case.
+# WINE_COMPATDB_APP_PID, WINE_D3D_CONFIG and WINEDLLOVERRIDES and every
+# WINEMSYNC*, FEX_*, VK_*, VKD3D_*, DXMT_*, MESA_*, MTL_*, METAL_* and GST_*
+# variable are dropped so that the built-in rules and the defaults of Wine,
+# FEX, the Vulkan loader, vkd3d-proton, DXMT, KosmicKrisp, Metal and
+# GStreamer decide; only vkd3d-proton's pipeline cache is moved into the
+# prefix, check_fex_runs sets FEX_SMCCHECKS=full on one run per arch,
+# FEX_DISKCACHE=1 on another and both on a third, check_streamout_runs and
+# check_dxmt_runs turn off DXMT's shader cache for their runs and turn on
+# Metal shader validation, check_dxmt_runs for a second run of each case, and
+# check_linger_runs sets WINE_COMPATDB_APP_PID on one run.
 # The checks that need a Vulkan device change on a Mac without a Metal 4 GPU
 # (metal4_probe), and the ones that need an OpenGL context on a Mac without
 # an accelerated OpenGL renderer (gl_probe). Each probe decides only its own
 # checks.
 smoke_test() {
     local version log arch cc exe marker markers var dlls
-    local wine_env=(env -u WINE_COMPATDB -u WINE_COMPATDB_FILE -u WINE_D3D_CONFIG -u WINEDLLOVERRIDES)
+    local wine_env=(env -u WINE_COMPATDB -u WINE_COMPATDB_FILE -u WINE_COMPATDB_APP_PID
+                    -u WINE_D3D_CONFIG -u WINEDLLOVERRIDES)
     for var in $(compgen -e | grep -E '^(WINEMSYNC|FEX_|VK_|VKD3D_|DXMT_|MESA_|MTL_|METAL_|GST_)'); do
         wine_env+=(-u "$var")
     done
@@ -906,6 +987,9 @@ smoke_test() {
     # Outside Wine, so before the prefix boots.
     check_egl_host
     check_vkalias_host
+    check_vkinvariance_host
+    check_vkr64view_host
+    check_vkatomic64_host
     check_gst_host
 
     # wineboot creates the prefix here, so the limit is generous. Only the
@@ -1014,6 +1098,7 @@ smoke_test() {
     check_exceptflags_runs "${wine_env[@]}"
     check_attach_runs "${wine_env[@]}"
     check_terminate_runs "${wine_env[@]}"
+    check_linger_runs "${wine_env[@]}"
     smoke_stop
     echo "  Programs for $SMOKE_PE_ARCHS run and load their Direct3D trees."
 }
@@ -1577,7 +1662,9 @@ check_streamout_runs() {
 # (depth-bias), and a draw through a geometry shader or tessellation in
 # the render pass of another one with the other index format, or the other
 # of indexed and non-indexed, gets a pipeline of its own (geometry-index,
-# tessellation-index); smoke/dxmt.c says how. Each case is a process of its
+# tessellation-index), and a device released right after a draw, while DXMT
+# still compiles and encodes it, is destroyed without a crash or a hang
+# (release-after-draw); smoke/dxmt.c says how. Each case is a process of its
 # own, so a case that crashes cannot hide the result of another, and each
 # has to get the default dxmt tree from compatdb.so, since Wine's own d3d11
 # passes them too. DXMT's shader cache is off, so that a shader variant an
@@ -1608,7 +1695,8 @@ check_dxmt_runs() {
     for arch in x86_64 i686; do
         exe="$TMP_DIR/dxmt-$arch.exe"
         time_mark "smoke: dxmt.exe $arch"
-        for name in bytecode swap-state deferred depth-bias geometry-index tessellation-index; do
+        for name in bytecode swap-state deferred depth-bias geometry-index tessellation-index \
+                    release-after-draw; do
             log="$TMP_DIR/dxmt-$arch-$name.log"
             echo "  Running dxmt.exe $name for $arch..."
             run_limited 5 "$log" "$@" DXMT_SHADER_CACHE=0 "$WINE_DIR/bin/wine" "$exe" "$name"
@@ -1716,8 +1804,8 @@ check_egl_host() {
     fi
     grep "^egl: depth-bias check" "$log" | sed 's/^egl: /    /'
     check_gl_host glpbo "texels copied unchanged through pixel buffer objects"
-    check_gl_host glstats "pipeline statistics queries counted at once"
-    check_gl_host glstats "pipeline statistics queries counted at once, under the validation layers" validation
+    check_gl_host glstats "pipeline statistics queries counted at once, occlusion queries over many frames, in many live query objects and past the last slot"
+    check_gl_host glstats "pipeline statistics queries counted at once, occlusion queries over many frames, in many live query objects and past the last slot, under the validation layers" validation
 }
 
 # check_vkalias_host: build smoke/vkalias.c for the host and run it on the
@@ -1762,18 +1850,145 @@ check_vkalias_host() {
     echo "    KosmicKrisp: $(grep -c '^vkalias: .*: ok$' "$log") aliased memory cases read back"
 }
 
+# check_vkinvariance_host: build smoke/vkinvariance.c for the host and run it
+# on the bundle's lib/external/libvulkan.1.dylib as check_vkalias_host runs
+# smoke/vkalias.c. Exit unless a second pass whose vertex shader computes the
+# same position as the first pass's, with other code around it, passes the
+# EQUAL depth test on every pixel the first pass covered, with and without
+# Invariant on the position, and fails it on every such pixel when its depth
+# range is narrowed on purpose: KosmicKrisp compiled vertex shaders with
+# Metal's fast math and left the position variant, and games that draw a
+# depth prepass lost geometry that way. The limit is a few times a clean run
+# with a cold shader cache, and the probe's watchdog ends a hang before it.
+# Skipped like check_vkalias_host on a Mac without a Metal 4 GPU.
+check_vkinvariance_host() {
+    local log="$TMP_DIR/vkinvariance.log"
+    local headers="$MESA_BUILD_DIR/vulkan-headers-install/include"
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host position invariance check: it needs a KosmicKrisp device."
+        return 0
+    fi
+    if [ ! -f "$headers/vulkan/vulkan_core.h" ]; then
+        echo "Error: no Vulkan headers in $headers for smoke/vkinvariance.c; bin/build-mesa.sh installs them"
+        exit 1
+    fi
+    xcrun clang -std=c11 -O2 -I "$headers" -o "$TMP_DIR/vkinvariance" "$REPO_DIR/smoke/vkinvariance.c"
+    echo "  Running the host position invariance check on lib/external/libvulkan.1.dylib..."
+    run_limited 10 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/vkinvariance" "$EXT_DIR/libvulkan.1.dylib"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/vkinvariance.c did not exit within 10 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -eq 1 ]; then
+        echo "Error: two vertex shaders that compute the same position gave different depth, or the EQUAL test passed another depth, on the bundle's KosmicKrisp"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/vkinvariance.c could not run a case on the bundle's KosmicKrisp, a failed setup, submit or wait, its watchdog or a first pass that covered too little included (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    echo "    KosmicKrisp: two vertex shaders with the same position give the same depth, another depth fails the EQUAL test"
+}
+
+# check_vkr64view_host: build smoke/vkr64view.c for the host and run it on the
+# bundle's lib/external/libvulkan.1.dylib as check_vkalias_host runs
+# smoke/vkalias.c. Exit unless it bound its views and the output has
+# KosmicKrisp's warning about a 64-bit view of an image without atomic usage
+# exactly once: every 64-bit atomic on such a view takes KosmicKrisp's lock,
+# and a user's log has to say so. Skipped like check_vkalias_host on a Mac
+# without a Metal 4 GPU.
+check_vkr64view_host() {
+    local log="$TMP_DIR/vkr64view.log"
+    local headers="$MESA_BUILD_DIR/vulkan-headers-install/include" count
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host 64-bit view check: it needs a KosmicKrisp device."
+        return 0
+    fi
+    if [ ! -f "$headers/vulkan/vulkan_core.h" ]; then
+        echo "Error: no Vulkan headers in $headers for smoke/vkr64view.c; bin/build-mesa.sh installs them"
+        exit 1
+    fi
+    xcrun clang -std=c11 -O2 -I "$headers" -o "$TMP_DIR/vkr64view" "$REPO_DIR/smoke/vkr64view.c"
+    echo "  Running the host 64-bit view check on lib/external/libvulkan.1.dylib..."
+    run_limited 10 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/vkr64view" "$EXT_DIR/libvulkan.1.dylib"
+    count=$(grep -c "storage view of an image without Metal atomic usage" "$log" || true)
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/vkr64view.c did not exit within 10 seconds"
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/vkr64view.c could not bind its views on the bundle's KosmicKrisp (status $RUN_STATUS)"
+    elif [ "$count" -ne 1 ]; then
+        echo "Error: the bundle's KosmicKrisp warned $count times about 64-bit views of an image without atomic usage, not once"
+    else
+        echo "    KosmicKrisp: a 64-bit view of an image without atomic usage gets one warning"
+        return 0
+    fi
+    cat "$log"
+    exit 1
+}
+
+# check_vkatomic64_host: build smoke/vkatomic64.c for the host and run it on
+# the bundle's lib/external/libvulkan.1.dylib as check_vkalias_host runs
+# smoke/vkalias.c. Exit unless 64-bit image atomics on one texel add up when
+# they reach it through two views with different base layers, or through a
+# 3D view and a 2D view of a slice: KosmicKrisp emulates them under a lock
+# it picks from the texel's coordinates, and took the view's coordinates
+# before, so the two views took different locks and lost adds. The limit is
+# a few times a clean run with a cold shader cache, and the probe's watchdog
+# ends a hang before it. Skipped like check_vkalias_host on a Mac without a
+# Metal 4 GPU.
+check_vkatomic64_host() {
+    local log="$TMP_DIR/vkatomic64.log"
+    local headers="$MESA_BUILD_DIR/vulkan-headers-install/include"
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host 64-bit image atomics check: it needs a KosmicKrisp device."
+        return 0
+    fi
+    if [ ! -f "$headers/vulkan/vulkan_core.h" ]; then
+        echo "Error: no Vulkan headers in $headers for smoke/vkatomic64.c; bin/build-mesa.sh installs them"
+        exit 1
+    fi
+    xcrun clang -std=c11 -O2 -I "$headers" -o "$TMP_DIR/vkatomic64" "$REPO_DIR/smoke/vkatomic64.c"
+    echo "  Running the host 64-bit image atomics check on lib/external/libvulkan.1.dylib..."
+    run_limited 10 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/vkatomic64" "$EXT_DIR/libvulkan.1.dylib"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/vkatomic64.c did not exit within 10 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -eq 1 ]; then
+        echo "Error: 64-bit image atomics on one texel through two views lost adds on the bundle's KosmicKrisp"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/vkatomic64.c could not run a case on the bundle's KosmicKrisp, a missing feature, a failed setup, submit or wait or its watchdog included (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    echo "    KosmicKrisp: $(grep -c '^vkatomic64: .*: ok' "$log") cases of 64-bit image atomics on one texel add up"
+}
+
 # check_gl_host <program> <what> [validation]: build smoke/<program>.c for the
 # host and run it on the bundle's lib/external/libEGL.1.dylib, as
 # check_egl_host runs smoke/egl.c. Exit unless it reports no wrong value.
 # glpbo.c checks float and signed normalized texels moved through pixel
 # buffer objects, which Mesa's state tracker copies as unsigned integers;
 # glstats.c checks statistics queries that are active together, which Zink
-# counts with one Vulkan query. With validation, the run is under Khronos'
-# validation layers (check_validation_layers_build), and it also has to
-# load them and get no validation error from them: no "Validation Error"
-# line and no VUID. Zink's own blit and clear shaders draw with outputs no
-# attachment takes, which the layers report as warnings without a VUID, so
-# warnings do not count.
+# counts with one Vulkan query, and occlusion queries over many frames with
+# query objects that are not begun again, which must not keep KosmicKrisp's
+# occlusion query slots from being used again, more query objects alive at
+# once than KosmicKrisp allows memory allocations, whose query buffers have
+# to share allocations, and more occlusion queries alive at once than
+# KosmicKrisp has slots for, which past the last slot have to report visible
+# instead of crashing Zink. With validation, the run is under Khronos'
+# validation layers (check_validation_layers_build), and it also has to load
+# them and get no validation error from them: no "Validation Error" line and
+# no VUID. Zink's own blit and clear shaders draw with outputs no attachment
+# takes, which the layers report as warnings without a VUID, so warnings do
+# not count. The limit is about 3 times the slowest clean run, glstats.c's
+# 19 s on an Apple M5 Max.
 check_gl_host() {
     local log="$TMP_DIR/$1${3:+-$3}.log"
     local layers=()
@@ -1928,13 +2143,16 @@ check_wmadec_runs() {
 # FEX_X87REDUCEDPRECISION=0, which overrides compatdb's built-in rule for reduced
 # precision x87, and with FEX_DISKCACHE=1 its cases of pages that go away while
 # code runs and of a write that races a compile, as a hit reads the code a
-# compile reads and loads a block instead. The disk cache goes into the prefix.
-# <env-command> drops the caller's FEX_* variables, so each run gets the mode it
-# names and only that run has it. A hang is how these cases usually fail, so the
-# limits are lower than the 120 seconds of the other runs. The slowest clean runs
-# took about 1.9, 4.5, 1.9 and 1.9 seconds on a busy current Mac, and small
-# programs take up to 4 times as long on a hosted runner, so the limits are 2 to
-# 3 times that.
+# compile reads and loads a block instead, once alone and once with
+# FEX_SMCCHECKS=full, whose checks read the code once more and must not leave
+# the cache a block that drops itself on every hit. The disk cache goes into the
+# prefix, a new one for each of the two runs. <env-command> drops the caller's
+# FEX_* variables, so each run gets the mode it names and only that run has it.
+# A hang is how these cases usually fail, so the limits are lower than the 120
+# seconds of the other runs. The slowest clean runs of the first four took about
+# 1.9, 4.5, 1.9 and 1.9 seconds on a busy current Mac and the run with both
+# settings 4.0 seconds on an idle one, and small programs take up to 4 times as
+# long on a hosted runner, so the limits are 2 to 3 times that.
 check_fex_runs() {
     local arch
     for arch in x86_64 i686; do
@@ -1944,6 +2162,10 @@ check_fex_runs() {
         run_fex "$arch" "full precision x87" 20 "$@" FEX_X87REDUCEDPRECISION=0
         rm -rf "$TMP_DIR"/prefix/drive_c/users/*/AppData/Local/fex-emu/DiskCache
         run_fex "$arch" FEX_DISKCACHE=1 15 "$@" FEX_DISKCACHE=1 -- cross_process_protect decommit_race rwx_write_race
+        check_fex_disk_cache "$arch"
+        rm -rf "$TMP_DIR"/prefix/drive_c/users/*/AppData/Local/fex-emu/DiskCache
+        run_fex "$arch" "FEX_SMCCHECKS=full FEX_DISKCACHE=1" 40 "$@" FEX_SMCCHECKS=full FEX_DISKCACHE=1 \
+            -- cross_process_protect decommit_race rwx_write_race
         check_fex_disk_cache "$arch"
     done
 }
@@ -2129,6 +2351,86 @@ check_terminate_runs() {
         fi
         grep "$want" "$log" | sed 's/^/    /'
     done
+}
+
+# check_linger_runs <env-command>...: build smoke/linger.c for x86_64 and run
+# it in the booted throwaway prefix twice. The program starts a child and
+# exits with 42, and the child exits 2 seconds after it saw the parent end
+# (smoke/linger.c says how).
+# - As the process WINE_COMPATDB_APP_PID names, the way a launch from Finder
+#   or the Dock sets it: a shell that exports its own pid and execs wine,
+#   whose process the program then runs in. compatdb.so has to log
+#   linger_at_exit = on, the child has to see the parent end with 42 in under
+#   1000 ms, and wine has to return with 42 only after the child's last line.
+#   The parent exits right after it starts the child, so its end comes while
+#   the child starts up or soon after; 1000 ms leaves room for a slow runner
+#   and stays far below the child's own limit of 5000 ms, which a Windows
+#   exit held back by the linger would reach.
+# - Without the variable: wine has to return with 42 before that line.
+# The run that waits for the child takes about 3 seconds, the other about 1;
+# the limit is 15 for each. The child of the second run is still there when
+# it returns, and smoke_stop ends it.
+check_linger_runs() {
+    local exe="$TMP_DIR/linger-x86_64.exe" log want waited
+    local parent="wine-build smoke test: x86_64 linger child: parent exited with 42"
+    local last="wine-build smoke test: x86_64 linger child exits"
+    "$MINGW_DIR/bin/x86_64-w64-mingw32-clang" -O2 -o "$exe" "$REPO_DIR/smoke/linger.c"
+
+    time_mark "smoke: linger.exe as the app"
+    echo "  Running linger.exe as the process WINE_COMPATDB_APP_PID names..."
+    log="$TMP_DIR/linger-app.log"
+    # shellcheck disable=SC2016 # expanded by the shell the command starts
+    run_limited 15 "$log" "$@" sh -c 'export WINE_COMPATDB_APP_PID=$$; exec "$0" "$@"' \
+        "$WINE_DIR/bin/wine" "$exe"
+    linger_status "linger.exe as the app" "$log"
+    for want in "compatdb:   linger_at_exit = on, WINE_COMPATDB_APP_PID=" "$parent" "$last"; do
+        if ! grep -qF "$want" "$log"; then
+            echo "Error: linger.exe as the app did not print '$want' before wine returned"
+            cat "$log"
+            smoke_stop
+            exit 1
+        fi
+    done
+    waited=$(grep -F "$parent" "$log" | tr -d '\r' | sed -n 's/.*, waited \([0-9][0-9]*\) ms$/\1/p')
+    if [ -z "$waited" ] || [ "$waited" -ge 1000 ]; then
+        echo "Error: the child of linger.exe as the app waited ${waited:-an unknown number of} ms"
+        echo "for its parent's end, not under 1000"
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
+    grep -F "$parent" "$log" | sed 's/^/    /'
+
+    time_mark "smoke: linger.exe without WINE_COMPATDB_APP_PID"
+    echo "  Running linger.exe without WINE_COMPATDB_APP_PID..."
+    log="$TMP_DIR/linger-plain.log"
+    run_limited 15 "$log" "$@" "$WINE_DIR/bin/wine" "$exe"
+    linger_status "linger.exe without WINE_COMPATDB_APP_PID" "$log"
+    want="compatdb:   linger_at_exit = off, WINE_COMPATDB_APP_PID unset"
+    if ! grep -qF "$want" "$log" || grep -qF "$last" "$log"; then
+        echo "Error: wine did not return before the child of linger.exe exited, or compatdb.so"
+        echo "did not print '$want'"
+        cat "$log"
+        smoke_stop
+        exit 1
+    fi
+    echo "    wine returned with 42 while the child ran."
+}
+
+# linger_status <what> <log>: after a run_limited of linger.exe, exit with the
+# log unless wine returned with the program's 42 and Wine had FreeType.
+linger_status() {
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: $1 did not exit within its limit"
+    elif [ "$RUN_STATUS" -ne 42 ]; then
+        echo "Error: $1 returned $RUN_STATUS, not the program's 42"
+    else
+        check_freetype "$1" "$2"
+        return 0
+    fi
+    cat "$2"
+    smoke_stop
+    exit 1
 }
 
 # check_wgl_runs <env-command>...: build smoke/wgl.c for each arch of
@@ -2436,6 +2738,20 @@ check_no_d3d12() {
     echo "    $arch, $label: dxgi.dll loads, d3d12.dll does not (error 126)"
 }
 
+# check_dist_licenses <dist> <script> <component>...: exit unless <script>
+# staged the licence texts of each <component> in <dist>/share/licenses/,
+# which Step 4c installs. A dist staged before its script did so has none.
+check_dist_licenses() {
+    local dist="$1" script="$2" c
+    shift 2
+    for c in "$@"; do
+        if [ -z "$(find "$dist/share/licenses/$c" -type f -size +0 2>/dev/null)" ]; then
+            echo "Error: $dist has no licences in share/licenses/$c (run $script)"
+            exit 1
+        fi
+    done
+}
+
 # check_fex_build: exit unless build-fex.sh staged all of FEX in FEX_DIST
 # from the commit FEX_REF (fex-src.ref unless the environment sets it) names
 # now: the COMMIT it wrote last. Needs the network, to resolve a branch or
@@ -2464,6 +2780,7 @@ check_fex_build() {
             exit 1
         fi
     done
+    check_dist_licenses "$FEX_DIST" build-fex.sh fex
     echo "  FEX: $built"
 }
 
@@ -2510,6 +2827,7 @@ check_mesa_build() {
         exit 1
     fi
     MESA_GALLIUM=${gallium[0]}
+    check_dist_licenses "$MESA_DIST" build-mesa.sh mesa vulkan-loader vulkan-headers
     echo "  Mesa: $built, Vulkan loader $VULKAN_LOADER_GIT_TAG, $MESA_GALLIUM"
 }
 
@@ -2556,6 +2874,7 @@ check_gstreamer_build() {
             exit 1
         fi
     done
+    check_dist_licenses "$GSTREAMER_DIST" build-gstreamer.sh gstreamer
     echo "  GStreamer: $GSTREAMER_GIT_TAG ($built), FFmpeg $GSTREAMER_FFMPEG_GIT_COMMIT"
 }
 
@@ -2704,17 +3023,19 @@ check_capture_layer() {
 # logs that a hook is missing, and every 32-bit program without NX_COMPAT
 # runs with no-execute off and every process gets Apple's OpenGL. The same
 # for set_compat_capture, without which vulkan_capture and metal_capture
-# record nothing.
+# record nothing, and set_compat_linger_at_exit, without which a game that
+# its own launcher started from Finder or the Dock ends with the launcher.
 check_compat_hooks() {
     local hook
-    for hook in set_compat_force_nx set_compat_opengl set_compat_capture; do
+    for hook in set_compat_force_nx set_compat_opengl set_compat_capture set_compat_linger_at_exit; do
         if ! nm -gU "$unixdir/ntdll.so" 2>/dev/null | awk '{print $NF}' | grep -xF "_$hook" >/dev/null; then
             echo "Error: $UNIX_DIR/ntdll.so does not export $hook, the hook through which"
             echo "compatdb.so hands that setting over; the Wine source lacks it"
             exit 1
         fi
     done
-    echo "  ntdll exports set_compat_force_nx, set_compat_opengl and set_compat_capture."
+    echo "  ntdll exports set_compat_force_nx, set_compat_opengl, set_compat_capture and"
+    echo "  set_compat_linger_at_exit."
 }
 
 # check_egl: exit unless OpenGL through Zink hangs together in the bundle:
@@ -2825,6 +3146,7 @@ check_dxmt_build() {
             exit 1
         fi
     done
+    check_dist_licenses "$DXMT_DIST" build-dxmt.sh dxmt
     echo "  DXMT: $describe ($built)"
 }
 
@@ -2858,6 +3180,7 @@ check_vkd3d_proton_build() {
             exit 1
         fi
     done
+    check_dist_licenses "$VKD3D_PROTON_DIST" build-vkd3d-proton.sh vkd3d-proton
     echo "  vkd3d-proton: $(cat "$VKD3D_PROTON_DIST/DESCRIBE") ($built)"
 }
 
@@ -3382,6 +3705,27 @@ if [ ! -x "$MINGW_DIR/bin/llvm-readobj" ]; then
     echo "Error: no llvm-readobj in $MINGW_DIR/bin (Step 4 needs it to tell ARM64X DLLs for the markers)"
     exit 1
 fi
+# The mingw-w64 texts llvm-mingw installs for each target, the same for
+# every one (its build-mingw-w64.sh): the notices of the CRT parts that a
+# binary links, winpthreads' licence and mingw-w64's own (ZPL), as
+# <staged name>=<file in MINGW_LICENSE_DIR> for stage_licenses.
+MINGW_LICENSE_DIR=aarch64-w64-mingw32/share/mingw32
+MINGW_LICENSES="COPYING.MinGW-w64-runtime.txt=COPYING.MinGW-w64-runtime.txt
+COPYING.winpthreads.txt=COPYING.winpthreads.txt
+COPYING.mingw-w64=COPYING"
+# The licence texts Step 4c takes from outside the staged dists. Those of
+# mtld3d's tarball, the Homebrew kegs and the crates are checked there.
+MINGW_LICENSE_FILES=()
+for f in $MINGW_LICENSES; do
+    MINGW_LICENSE_FILES+=("$MINGW_DIR/$MINGW_LICENSE_DIR/${f#*=}")
+done
+for f in "$WINE_SRC/LICENSE" "$WINE_SRC/COPYING.LIB" "$WINE_SRC/NOTICES.md" \
+         "$MINGW_DIR/LICENSE.TXT" "$REPO_DIR/LICENSE" "${MINGW_LICENSE_FILES[@]}"; do
+    if [ ! -s "$f" ]; then
+        echo "Error: no licence text $f (Step 4c installs it)"
+        exit 1
+    fi
+done
 loader_preflight
 
 time_mark "Step 0: Clean previous bundle"
@@ -4002,18 +4346,100 @@ time_mark "Step 4b: Compat database"
 echo "==> Step 4b: Compat database"
 build_compatdb
 
-# ── Step 4c: Icon font ──────────────────────────────────────────────────
+# ── Step 4c: Icon font and licences ─────────────────────────────────────
 # Windows' icon fonts, which programs name for their window controls and
 # toolbars, have no copy in Wine. This replacement goes into the data
 # directory: win32u loads every font there and lists it in the Fonts key
 # dwrite reads. wine.inf aliases the Windows names to its family.
-time_mark "Step 4c: Icon font"
-echo "==> Step 4c: Icon font"
+time_mark "Step 4c: Icon font and licences"
+echo "==> Step 4c: Icon font and licences"
 ICON_FONT="share/wine/fonts/$(basename "$ICON_FONT_TTF")"
 ICON_FONT_LICENSE="share/licenses/uno-fluent-icons.txt"
-mkdir -p "$WINE_DIR/share/wine/fonts" "$WINE_DIR/share/licenses"
+LICENSES_DIR="$WINE_DIR/share/licenses"
+mkdir -p "$WINE_DIR/share/wine/fonts" "$LICENSES_DIR"
 cp "$ICON_FONT_TTF" "$WINE_DIR/$ICON_FONT"
 cp "$REPO_DIR/licenses/uno-fluent-icons.txt" "$WINE_DIR/$ICON_FONT_LICENSE"
+
+# The licence texts of everything else the bundle ships, one directory per
+# component in share/licenses (GFXReconstruct's are in Step 3c):
+#  - wine/: Wine's licence and NOTICES.md, the notices of the code Wine
+#    imported (its libs/ among them), from WINE_SRC, which the build is of.
+#  - fex/, mesa/, vulkan-loader/, vulkan-headers/, gstreamer/, dxmt/,
+#    vkd3d-proton/: what each build script staged out of its pinned tree,
+#    with those of what the component links statically (the preflight
+#    checked they are there).
+#  - mtld3d/: the LICENSE of its release tarball.
+#  - llvm-mingw/: the licence of the LLVM runtime (libc++, libunwind,
+#    compiler-rt) and the mingw-w64 texts (MINGW_LICENSES) of the CRT and
+#    winpthreads, which llvm-mingw links into the PE files built outside
+#    Wine (vkd3d-proton links winpthreads).
+#  - homebrew/<formula>/: the licence files at the top of the keg of each
+#    Homebrew library Step 3 copied (install_keg_licenses).
+#  - mach9/ and compatdb/: Mach9's own licence, which covers compatdb.so,
+#    and those of Rust's standard library and the crates compatdb.so is
+#    built from (bin/rust-licenses.sh).
+# LICENSE_WANT collects the texts and directories Step 5 checks.
+#
+# DIST_LICENSES names, by its staged name, every text the build scripts'
+# lists stage (and DXMT's llvm.txt), so a text dropped from a list fails
+# Step 5; a new entry in a list goes here too. COMPATDB_CRATES names the
+# crates compatdb.so is built from, whose directories rust-licenses.sh names
+# <crate>-<version>; a change to compatdb's dependencies goes here too.
+DIST_LICENSES="fex/fex.txt fex/cephes.txt fex/fmt.txt fex/range-v3.txt
+fex/rpmalloc.txt fex/softfloat.txt fex/tiny-json.txt fex/unordered_dense.txt
+fex/xxhash.txt
+mesa/license.rst mesa/licenses
+vulkan-loader/LICENSE.txt vulkan-loader/LICENSES
+vulkan-headers/LICENSE.md vulkan-headers/LICENSES
+gstreamer/gstreamer.txt gstreamer/gst-plugins-base.txt
+gstreamer/gst-plugins-good.txt gstreamer/gst-plugins-ugly.txt
+gstreamer/gst-plugins-bad.txt gstreamer/gst-libav.txt gstreamer/ffmpeg.md
+gstreamer/ffmpeg-COPYING.LGPLv2.1 gstreamer/glib.txt gstreamer/glib-LICENSES
+gstreamer/libffi.txt gstreamer/pcre2.md gstreamer/proxy-libintl.txt
+dxmt/LICENSE dxmt/COPYING.LIB dxmt/LICENSE.OLD dxmt/dxvk.LICENSE
+dxmt/dxbcparser.txt dxmt/llvm.txt
+vkd3d-proton/LICENSE vkd3d-proton/COPYING vkd3d-proton/dxil-spirv.txt
+vkd3d-proton/dxbc-spirv.txt vkd3d-proton/glslang-spvbuilder.txt
+vkd3d-proton/bc-decoder.txt vkd3d-proton/spirv-headers.txt
+vkd3d-proton/dxil-spirv-spirv-headers.txt
+vkd3d-proton/dxbc-spirv-spirv-headers.txt vkd3d-proton/vulkan-headers.md
+vkd3d-proton/vulkan-headers-LICENSES"
+COMPATDB_CRATES="libc mach2"
+LICENSE_WANT=()
+stage_licenses "$WINE_SRC" "$LICENSES_DIR/wine" "LICENSE=LICENSE
+COPYING.LIB=COPYING.LIB
+NOTICES.md=NOTICES.md"
+LICENSE_WANT+=("share/licenses/wine/LICENSE" "share/licenses/wine/COPYING.LIB" "share/licenses/wine/NOTICES.md")
+for entry in "$FEX_DIST:fex" "$MESA_DIST:mesa" "$MESA_DIST:vulkan-loader" \
+             "$MESA_DIST:vulkan-headers" "$GSTREAMER_DIST:gstreamer" \
+             "$DXMT_DIST:dxmt" "$VKD3D_PROTON_DIST:vkd3d-proton"; do
+    cp -R "${entry%%:*}/share/licenses/${entry#*:}" "$LICENSES_DIR/"
+done
+for rel in $DIST_LICENSES; do
+    LICENSE_WANT+=("share/licenses/$rel")
+done
+if in_list mtld3d "$D3D9_IMPLS"; then
+    stage_licenses "$TMP_DIR/mtld3d" "$LICENSES_DIR/mtld3d" "LICENSE=LICENSE"
+    LICENSE_WANT+=("share/licenses/mtld3d/LICENSE")
+fi
+stage_licenses "$MINGW_DIR" "$LICENSES_DIR/llvm-mingw" "LICENSE.TXT=LICENSE.TXT"
+stage_licenses "$MINGW_DIR/$MINGW_LICENSE_DIR" "$LICENSES_DIR/llvm-mingw" "$MINGW_LICENSES"
+LICENSE_WANT+=("share/licenses/llvm-mingw/LICENSE.TXT")
+for f in $MINGW_LICENSES; do
+    LICENSE_WANT+=("share/licenses/llvm-mingw/${f%%=*}")
+done
+install_keg_licenses "${WALK[@]}"
+stage_licenses "$REPO_DIR" "$LICENSES_DIR/mach9" "LICENSE=LICENSE"
+LICENSE_WANT+=("share/licenses/mach9/LICENSE")
+"$SCRIPT_DIR/rust-licenses.sh" "$LICENSES_DIR/compatdb" "$RUST_TARGET" compatdb
+LICENSE_WANT+=("share/licenses/compatdb/rust-std/COPYRIGHT-library.html")
+# A crate rust-licenses.sh did not stage leaves the pattern itself in
+# LICENSE_WANT, which Step 5 then reports.
+for crate in $COMPATDB_CRATES; do
+    for d in "$LICENSES_DIR/compatdb/$crate"-[0-9]*; do
+        LICENSE_WANT+=("share/licenses/compatdb/${d##*/}")
+    done
+done
 
 # ── Step 4d: FEX ────────────────────────────────────────────────────────
 # FEX as build-fex.sh staged it in FEX_DIST, as the preflight checked: its
@@ -4167,7 +4593,8 @@ WANT=("lib/wine/$UNIX_DIR/compatdb-before-image.so" "lib/wine/$UNIX_DIR/compatdb
       "$ICON_FONT" "$ICON_FONT_LICENSE"
       "lib/wine/$UNIX_DIR/wine.app/Contents/MacOS/wine"
       "lib/wine/$UNIX_DIR/wine.app/Contents/Info.plist"
-      "lib/wine/$UNIX_DIR/wine.app/Contents/embedded.provisionprofile")
+      "lib/wine/$UNIX_DIR/wine.app/Contents/embedded.provisionprofile"
+      "${LICENSE_WANT[@]}")
 if in_list dxmt "$DXGI_IMPLS"; then
     WANT+=("lib/wine/$UNIX_DIR/winemetal.so"
            "lib/wine/dxgi/dxmt/$PE64_DIR/dxgi.dll"

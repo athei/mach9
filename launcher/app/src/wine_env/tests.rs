@@ -8,7 +8,8 @@ use crate::{bundle, config::Settings};
 /// Set for the copy of this test binary that runs
 /// `apply_in_an_inherited_environment`, naming what it applies: `empty` for a
 /// table without rules, `rules` for one with a rule, `config` for a config
-/// that sets [`PROF_SERVICE_VAR`] in `[env]`.
+/// that sets [`PROF_SERVICE_VAR`] in `[env]`, `finder` for a launch from
+/// Finder, whose app is the process `FINDER_PID`.
 const APPLY_ENV: &str = "GAMELAUNCHER_TEST_APPLY";
 
 /// What `apply_in_an_inherited_environment` prints, followed by the value
@@ -72,6 +73,19 @@ fn apply_removes_the_inherited_variables_that_conflict_with_the_rules() {
     assert_eq!(apply_with_an_inherited_table("rules").1, "");
 }
 
+/// The pid `apply_in_an_inherited_environment` applies for a launch from
+/// Finder.
+const FINDER_PID: u32 = 4242;
+
+/// A launch from Finder names its own process, not the one it inherited.
+#[test]
+fn a_launch_from_finder_replaces_an_inherited_app_pid() {
+    assert_eq!(
+        apply_with_an_inherited_table("finder").1,
+        format!("{APP_PID_VAR}={FINDER_PID}")
+    );
+}
+
 /// The inherited value goes, and the one the config asks for reaches Wine.
 #[test]
 fn a_config_sets_the_profiler_service_over_an_inherited_one() {
@@ -96,7 +110,7 @@ fn apply_a_config_with_a_service() {
         ..Settings::default()
     };
     let config = Config::load_or_setup(&support, settings).unwrap();
-    apply(Path::new("/tmp/prefix"), &config.rules.table);
+    apply(Path::new("/tmp/prefix"), &config.rules.table, None);
     apply_user(&config);
     fs::remove_dir_all(&support).unwrap();
 }
@@ -112,9 +126,11 @@ fn apply_in_an_inherited_environment() {
     if table == "config" {
         apply_a_config_with_a_service();
     } else if table == "rules" {
-        apply(Path::new("/tmp/prefix"), &one_rule());
+        apply(Path::new("/tmp/prefix"), &one_rule(), None);
+    } else if table == "finder" {
+        apply(Path::new("/tmp/prefix"), &Table::new(), Some(FINDER_PID));
     } else {
-        apply(Path::new("/tmp/prefix"), &Table::new());
+        apply(Path::new("/tmp/prefix"), &Table::new(), None);
     }
     let value = env::var(COMPATDB_ENV).unwrap_or_else(|_| String::from("<unset>"));
     let kept: Vec<String> = inherited_conflicts()
@@ -155,22 +171,32 @@ fn no_channels_leave_the_launchers_alone() {
     assert_eq!(winedebug(&one_rule()), WINEDEBUG_CHANNELS);
 }
 
-fn launcher_vars(rules: &Table) -> [(&'static str, Option<String>); 3] {
-    launcher_env(Path::new("/tmp/prefix"), rules)
+fn launcher_vars(rules: &Table, app_pid: Option<u32>) -> [(&'static str, Option<String>); 4] {
+    launcher_env(Path::new("/tmp/prefix"), rules, app_pid)
         .map(|(name, value)| (name, value.map(|value| value.into_string().unwrap())))
 }
 
 /// No rules means no table: the variable is removed, an inherited one
-/// included, rather than set empty.
+/// included, rather than set empty. A launch from a terminal names no app.
 #[test]
 fn the_launcher_sets_its_own_variables_and_no_empty_table() {
     assert_eq!(
-        launcher_vars(&Table::new()),
+        launcher_vars(&Table::new(), None),
         [
             ("WINEPREFIX", Some(String::from("/tmp/prefix"))),
             ("WINEMSYNC", Some(String::from("1"))),
             (COMPATDB_ENV, None),
+            (APP_PID_VAR, None),
         ]
+    );
+}
+
+/// A launch from Finder or the Dock names the process wine replaces.
+#[test]
+fn a_launch_from_finder_names_the_apps_main_process() {
+    assert_eq!(
+        launcher_vars(&Table::new(), Some(FINDER_PID))[3],
+        (APP_PID_VAR, Some(FINDER_PID.to_string()))
     );
 }
 
@@ -179,7 +205,7 @@ fn the_launcher_sets_its_own_variables_and_no_empty_table() {
 fn a_config_with_rules_exports_them() {
     let table = one_rule();
     assert_eq!(
-        launcher_vars(&table)[2],
+        launcher_vars(&table, None)[2],
         (COMPATDB_ENV, Some(table.to_string()))
     );
 }

@@ -191,6 +191,7 @@ type FnSetCompatDpiAwareness = unsafe extern "C" fn(c_int);
 type FnSetCompatLargeAddressAware = unsafe extern "C" fn(c_int);
 type FnSetCompatGcmouse = unsafe extern "C" fn(c_int);
 type FnSetCompatForceNx = unsafe extern "C" fn(c_int);
+type FnSetCompatLingerAtExit = unsafe extern "C" fn(c_int);
 type FnSetCompatOpengl = unsafe extern "C" fn(c_int);
 type FnSetCompatCapture = unsafe extern "C" fn(c_int);
 type FnGetUnixFileName = unsafe extern "C" fn(*const u16, *mut *mut c_char, u32) -> NtStatus;
@@ -210,6 +211,7 @@ pub struct Ntdll {
     set_compat_large_address_aware: Option<FnSetCompatLargeAddressAware>,
     set_compat_gcmouse: Option<FnSetCompatGcmouse>,
     set_compat_force_nx: Option<FnSetCompatForceNx>,
+    set_compat_linger_at_exit: Option<FnSetCompatLingerAtExit>,
     set_compat_opengl: Option<FnSetCompatOpengl>,
     set_compat_capture: Option<FnSetCompatCapture>,
     get_unix_file_name: Option<FnGetUnixFileName>,
@@ -246,6 +248,7 @@ impl Ntdll {
             let set_laa = sym(b"set_compat_large_address_aware\0");
             let set_gcmouse = sym(b"set_compat_gcmouse\0");
             let set_force_nx = sym(b"set_compat_force_nx\0");
+            let set_linger = sym(b"set_compat_linger_at_exit\0");
             let set_opengl = sym(b"set_compat_opengl\0");
             let set_capture = sym(b"set_compat_capture\0");
             let unix_name = sym(b"ntdll_get_unix_file_name\0");
@@ -272,6 +275,9 @@ impl Ntdll {
                     .then(|| std::mem::transmute::<*mut c_void, FnSetCompatGcmouse>(set_gcmouse)),
                 set_compat_force_nx: (!set_force_nx.is_null())
                     .then(|| std::mem::transmute::<*mut c_void, FnSetCompatForceNx>(set_force_nx)),
+                set_compat_linger_at_exit: (!set_linger.is_null()).then(|| {
+                    std::mem::transmute::<*mut c_void, FnSetCompatLingerAtExit>(set_linger)
+                }),
                 set_compat_opengl: (!set_opengl.is_null())
                     .then(|| std::mem::transmute::<*mut c_void, FnSetCompatOpengl>(set_opengl)),
                 set_compat_capture: (!set_capture.is_null())
@@ -407,6 +413,20 @@ impl Ntdll {
     /// the process first asks for or changes its execute flags.
     pub fn set_compat_force_nx(&self, value: c_int) {
         if let Some(f) = self.set_compat_force_nx {
+            // SAFETY: the hook takes a plain int and only stores it.
+            unsafe { f(value) }
+        }
+    }
+
+    pub const fn has_set_compat_linger_at_exit(&self) -> bool {
+        self.set_compat_linger_at_exit.is_some()
+    }
+
+    /// Tell ntdll whether the unix process stays after the Windows process
+    /// exits while other user processes run: 1 for on, 0 for Wine's
+    /// behaviour. ntdll reads the value when the process terminates itself.
+    pub fn set_compat_linger_at_exit(&self, value: c_int) {
+        if let Some(f) = self.set_compat_linger_at_exit {
             // SAFETY: the hook takes a plain int and only stores it.
             unsafe { f(value) }
         }

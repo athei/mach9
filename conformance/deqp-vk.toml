@@ -110,6 +110,17 @@ name = "memory-model"
 issues = [63]
 cases = ["dEQP-VK.memory_model.*"]
 
+# 64-bit image atomics on every image type. KosmicKrisp runs all of them but
+# an unused max or min under a lock it picks from the texel's coordinates in
+# the image, the view's base array layer added (#179). The cases use one
+# view per image; smoke/vkatomic64.c checks two views of one texel.
+[[group]]
+name = "image-atomic64"
+issues = [179]
+cases = [
+    "dEQP-VK.image.atomic_operations.*r64*",
+]
+
 # Query results and availability the host or vkCmdCopyQueryPoolResults
 # reads, for the query types KosmicKrisp has besides occlusion (in
 # synchronization and occlusion) and timestamps (in timestamp): pipeline

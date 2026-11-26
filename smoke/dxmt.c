@@ -1,5 +1,6 @@
 /* The DXMT program bundle-wine.sh builds for x86_64 and i686 and runs under
- * the bundled wine, once per case, with the case name as its argument:
+ * the bundled wine, once per case, with the case name as its argument. It
+ * also builds for aarch64, for runs by hand:
  *
  * - bytecode: DXMT's D3D11 device reads shader bytecode within the length
  *   the application passes, not the container size the bytecode's own header
@@ -38,8 +39,19 @@
  *   of every unit, and exactly the two units drawn must be the pixel
  *   shader's red. The index values are chosen so that a draw on the
  *   pipeline of the draw before it lands on another unit.
+ * - release-after-draw: a device released right after a draw is destroyed
+ *   without a crash or a hang. With a 64x64 render target, an input layout,
+ *   a vertex shader, a vertex buffer and a stream output buffer bound, and
+ *   one of two geometry shaders created with stream output and no
+ *   rasterized stream, the case unbinds the geometry shader, draws five
+ *   points, flushes, clears the state and releases every object, the
+ *   context and then the device. DXMT compiles the draw's shader variant
+ *   and pipeline on worker threads and encodes the flushed draw on a thread
+ *   of its command queue, which waits for that pipeline, so the device's
+ *   release comes while both are still at work. The device must then be
+ *   destroyed, and the process must get past its release.
  *
- * The two lifetime cases watch destruction through a tracker object attached
+ * The lifetime cases watch destruction through a tracker object attached
  * with SetPrivateDataInterface: the object holds the tracker's only
  * reference, so the tracker's last release is the object's destruction.
  *
@@ -55,7 +67,9 @@
 #include <initguid.h>
 #include <d3d11_1.h>
 
-#if defined(__x86_64__)
+#if defined(__aarch64__) && !defined(__arm64ec__)
+#define ARCH "aarch64"
+#elif defined(__x86_64__)
 #define ARCH "x86_64"
 #elif defined(__i386__)
 #define ARCH "i686"
@@ -1000,6 +1014,123 @@ done:
     return ret;
 }
 
+static int check_release_after_draw(ID3D11Device *device, ID3D11DeviceContext *context)
+{
+    /* stream output of COLOR, for the second geometry shader */
+    static const D3D11_SO_DECLARATION_ENTRY so_color_decl[] = {
+        {0, "COLOR", 0, 0, 4, 0},
+    };
+    /* Five points for vs_code, which reads POSITION, COLOR and COLOR1. */
+    static const float points[5][12] = {
+        {-0.5f, -0.5f, 0.5f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+        {0.5f, -0.5f, 0.5f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+        {-0.5f, 0.5f, 0.5f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f},
+        {0.5f, 0.5f, 0.5f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, 0.5f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f},
+    };
+    D3D11_VIEWPORT vp = {0.0f, 0.0f, BIAS_SIZE, BIAS_SIZE, 0.0f, 1.0f};
+    D3D11_BUFFER_DESC buffer_desc = {0};
+    D3D11_SUBRESOURCE_DATA data = {0};
+    ID3D11GeometryShader *gs_position = NULL, *gs_color = NULL;
+    ID3D11Buffer *vb = NULL, *so = NULL;
+    ID3D11InputLayout *layout = NULL;
+    ID3D11RenderTargetView *rtv = NULL;
+    ID3D11VertexShader *vs = NULL;
+    ID3D11Texture2D *color = NULL;
+    UINT stride = sizeof(points[0]), so_stride = 16, offset = 0;
+    struct tracker tracker;
+    HRESULT hr;
+
+    hr = ID3D11Device_SetPrivateDataInterface(device, &tracker_key, tracker_init(&tracker));
+    if (!tracker_hand_over(&tracker, hr))
+    {
+        printf(PREFIX "release-after-draw: SetPrivateDataInterface %#lx, tracker references %ld\n",
+               (unsigned long)hr, tracker.refcount);
+        return 3;
+    }
+    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    buffer_desc.ByteWidth = sizeof(points);
+    data.pSysMem = points;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, &data, &vb)))
+        goto failed;
+    buffer_desc.BindFlags = D3D11_BIND_STREAM_OUTPUT;
+    buffer_desc.ByteWidth = 64 * so_stride;
+    if (FAILED(hr = ID3D11Device_CreateBuffer(device, &buffer_desc, NULL, &so))
+        || FAILED(hr = ID3D11Device_CreateVertexShader(device, vs_code, sizeof(vs_code), NULL, &vs))
+        || FAILED(hr = ID3D11Device_CreateInputLayout(device, layout_desc, 3, vs_code, sizeof(vs_code), &layout))
+        || FAILED(hr = ID3D11Device_CreateGeometryShaderWithStreamOutput(
+                      device, vs_code, sizeof(vs_code), so_decl, 1, &so_stride, 1, D3D11_SO_NO_RASTERIZED_STREAM,
+                      NULL, &gs_position))
+        || FAILED(hr = ID3D11Device_CreateGeometryShaderWithStreamOutput(
+                      device, vs_code, sizeof(vs_code), so_color_decl, 1, &so_stride, 1,
+                      D3D11_SO_NO_RASTERIZED_STREAM, NULL, &gs_color))
+        || FAILED(hr = create_bias_texture(device, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_RENDER_TARGET, FALSE,
+                                           &color))
+        || FAILED(hr = ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)color, NULL, &rtv)))
+        goto failed;
+
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &rtv, NULL);
+    ID3D11DeviceContext_RSSetViewports(context, 1, &vp);
+    ID3D11DeviceContext_IASetInputLayout(context, layout);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &vb, &stride, &offset);
+    ID3D11DeviceContext_SOSetTargets(context, 1, &so, &offset);
+    ID3D11DeviceContext_VSSetShader(context, vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, gs_position, NULL, 0);
+
+    /* The draw and the release, in the order of the program the crash was
+       found with. */
+    ID3D11DeviceContext_GSSetShader(context, NULL, NULL, 0);
+    ID3D11DeviceContext_VSSetShader(context, vs, NULL, 0);
+    ID3D11DeviceContext_IASetInputLayout(context, layout);
+    ID3D11DeviceContext_Draw(context, 5, 0);
+    ID3D11DeviceContext_Flush(context);
+    ID3D11DeviceContext_ClearState(context);
+
+    ID3D11RenderTargetView_Release(rtv);
+    ID3D11Texture2D_Release(color);
+    ID3D11GeometryShader_Release(gs_color);
+    ID3D11GeometryShader_Release(gs_position);
+    ID3D11InputLayout_Release(layout);
+    ID3D11VertexShader_Release(vs);
+    ID3D11Buffer_Release(so);
+    ID3D11Buffer_Release(vb);
+    ID3D11DeviceContext_Release(context);
+    ID3D11Device_Release(device);
+
+    printf(PREFIX "release-after-draw: device %s by its release\n", tracker.destroyed ? "destroyed" : "kept");
+    if (!tracker.destroyed)
+    {
+        fail_now("release-after-draw");
+        return 1;
+    }
+    printf(PREFIX "release-after-draw check ok\n");
+    return 0;
+
+failed:
+    printf(PREFIX "release-after-draw: setup failed, %#lx\n", (unsigned long)hr);
+    if (rtv)
+        ID3D11RenderTargetView_Release(rtv);
+    if (color)
+        ID3D11Texture2D_Release(color);
+    if (gs_color)
+        ID3D11GeometryShader_Release(gs_color);
+    if (gs_position)
+        ID3D11GeometryShader_Release(gs_position);
+    if (layout)
+        ID3D11InputLayout_Release(layout);
+    if (vs)
+        ID3D11VertexShader_Release(vs);
+    if (so)
+        ID3D11Buffer_Release(so);
+    if (vb)
+        ID3D11Buffer_Release(vb);
+    ID3D11DeviceContext_Release(context);
+    ID3D11Device_Release(device);
+    return 3;
+}
+
 static const struct
 {
     const char *name;
@@ -1011,6 +1142,7 @@ static const struct
     {"depth-bias", check_depth_bias},
     {"geometry-index", check_geometry_index},
     {"tessellation-index", check_tessellation_index},
+    {"release-after-draw", check_release_after_draw},
 };
 
 int main(int argc, char **argv)
@@ -1026,7 +1158,8 @@ int main(int argc, char **argv)
             break;
     if (i == ARRAYSIZE(cases))
     {
-        printf(PREFIX "usage: dxmt.exe bytecode|swap-state|deferred|depth-bias|geometry-index|tessellation-index\n");
+        printf(PREFIX "usage: dxmt.exe bytecode|swap-state|deferred|depth-bias|geometry-index|tessellation-index"
+                      "|release-after-draw\n");
         return 4;
     }
 

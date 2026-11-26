@@ -201,6 +201,18 @@ jobs:
           path: scripts
           persist-credentials: false
 
+      # The stable toolchain pins/rust.env pins, not the runner image's,
+      # with clippy for the lints and the target compatdb.so and the
+      # launcher build for. RUSTUP_TOOLCHAIN makes every later cargo and
+      # rustc use it, those of the scripts included. Right after the
+      # checkout, since the release checks below already run cargo
+      # metadata and host.sh reports rustc.
+      - name: Install the Rust toolchain
+        run: |
+          . scripts/pins/rust.env
+          rustup toolchain install "$RUST_STABLE" --profile minimal --component clippy --target aarch64-apple-darwin
+          echo "RUSTUP_TOOLCHAIN=$RUST_STABLE" >> "$GITHUB_ENV"
+
       # The checks of a release that need nothing built (appcast.sh, header):
       # the version against the workspace version and the appcast of the
       # latest release, the release notes, and SPARKLE_ED_KEY against the key
@@ -355,9 +367,6 @@ jobs:
           scripts/bin/ci/llvm-mingw.sh "$HOME/llvm-mingw"
           echo "MINGW_DIR=$HOME/llvm-mingw" >> "$GITHUB_ENV"
 
-      - name: Add the Rust target
-        run: rustup target add aarch64-apple-darwin
-
       # What cargo fetches for the tests and lints below and for compatdb.so,
       # which the bundle step builds. Saved at the end of the job, as the
       # pinned downloads.
@@ -380,7 +389,6 @@ jobs:
       - name: Test and lint the crates
         working-directory: scripts
         run: |
-          rustup component add clippy
           cargo test --locked --workspace
           cargo clippy --locked --workspace --all-targets -- -D warnings
 

@@ -92,20 +92,22 @@ GSTREAMER_BUILD_DIR="${GSTREAMER_BUILD_DIR:-$BUILD_TOP/gstreamer}"
 GSTREAMER_DIST="${GSTREAMER_DIST:-$GSTREAMER_BUILD_DIR/dist}"
 # WINE_BUILD_CCACHE: the absolute path of a ccache to run the compilers
 # through. Unset, the default, no compiler goes through ccache. Set,
-# WINE_CCACHE is that path, and the scripts run through it Wine's unix and
-# PE compilers (ccache_bin_dir, which build-wine.sh puts ahead of PATH),
-# Mesa's (its native files) and FEX's (CMake's compiler launcher). Each
-# tree follows a change of it on the next run, without --clean. ccache
-# takes CCACHE_DIR, CCACHE_MAXSIZE and its other settings from the
-# environment, except two set here for every compile:
+# WINE_CCACHE is that path, and the scripts run through it Wine's unix
+# compiler (ccache_bin_dir, which build-wine.sh puts ahead of PATH) and PE
+# compiler (write_pe_cc), Mesa's (its native files) and FEX's (CMake's
+# compiler launcher). Each tree follows a change of it on the next run,
+# without --clean. ccache takes CCACHE_DIR, CCACHE_MAXSIZE and its other
+# settings from the environment, except two set here for every compile:
 #  - CCACHE_BASEDIR is ROOT, so ccache hashes the paths under it relative to
 #    it, and a tree in another place can use the same cache.
 #  - CCACHE_COMPILERCHECK names the compilers by version: Apple's clang and
 #    llvm-mingw's, by the first line of their --version. ccache's default is
 #    the size and time of the file it runs, which for Apple's clang is the
-#    /usr/bin shim that stays the same when Xcode changes, and for llvm-mingw
-#    the wrapper script every target shares. ccache hashes the name it runs
-#    as well, which tells llvm-mingw's targets apart, and
+#    /usr/bin shim that stays the same when Xcode changes. Wine's PE code
+#    runs llvm-mingw's clang itself, and the -target <cpu>-windows configure
+#    puts on each command line tells its targets apart; FEX runs the
+#    <triple>-clang names of the wrapper script every target shares, and
+#    ccache hashes the name it runs. ccache also hashes
 #    MACOSX_DEPLOYMENT_TARGET and DEVELOPER_DIR.
 WINE_CCACHE="${WINE_BUILD_CCACHE:-}"
 if [ -n "$WINE_CCACHE" ]; then
@@ -127,9 +129,7 @@ fi
 # of links named <compiler> to WINE_CCACHE. Run as one of them, ccache
 # compiles with the next program of that name on PATH, so a directory of
 # them ahead of PATH puts ccache in front of those compilers while
-# configure and the Makefiles keep naming them as they do without it: Wine's
-# configure takes llvm-mingw's compilers in its MSVC mode only when it finds
-# them on PATH itself, and in its mingw mode when <arch>_CC names them.
+# configure and the Makefiles keep naming them as they do without it.
 ccache_bin_dir() {
     local dir="$1" cc
     shift
@@ -139,6 +139,52 @@ ccache_bin_dir() {
         ln -s "$WINE_CCACHE" "$dir/$cc"
     done
 }
+
+# write_pe_cc <file>: write <file>, a script that runs llvm-mingw's clang with
+# its arguments, through WINE_CCACHE when it is set. build-wine.sh configures
+# Wine with --with-mingw=<file>, and <file> is named clang, so configure takes
+# it as the compiler of every PE architecture and keeps its MSVC mode
+# (-target <cpu>-windows), since the name gives no target. Without it,
+# configure takes the first of i686-w64-mingw32-gcc and the other names it
+# knows that is on PATH, where a GNU mingw-w64 can come before llvm-mingw.
+# The script is written on every run at the same path, so a tree configured
+# once follows a change of MINGW_DIR or WINE_BUILD_CCACHE.
+write_pe_cc() {
+    mkdir -p "$(dirname "$1")"
+    {
+        echo '#!/bin/sh'
+        if [ -n "$WINE_CCACHE" ]; then
+            echo "exec '$WINE_CCACHE' '$MINGW_DIR/bin/clang' \"\$@\""
+        else
+            echo "exec '$MINGW_DIR/bin/clang' \"\$@\""
+        fi
+    } > "$1"
+    chmod +x "$1"
+}
+
+# pe_cc_configured <tree> <file> <arch>...: succeed when the Makefile of the
+# Wine tree <tree> names <file> as the PE compiler of each <arch>, as a tree
+# configured with --with-mingw=<file> does.
+pe_cc_configured() {
+    local tree="$1" cc="$2" arch
+    shift 2
+    for arch in "$@"; do
+        grep -qxF "${arch}_CC = $cc" "$tree/Makefile" || return 1
+    done
+}
+
+# check_pe_cc <tree> <file> <arch>...: exit unless pe_cc_configured.
+check_pe_cc() {
+    local arch
+    if ! pe_cc_configured "$@"; then
+        echo "Error: configure did not take $2 as the PE compiler of each of ${*:3} in $1:"
+        for arch in "${@:3}"; do
+            grep "^${arch}_CC = " "$1/Makefile" || echo "${arch}_CC is not set"
+        done
+        exit 1
+    fi
+}
+
 # Configure arguments on top of the allowlist in build-wine.sh: the
 # toolchain and where the dependencies are. Tests are left out: with them,
 # the build's `make` would build every Wine test, and the ones the bundle
@@ -519,6 +565,20 @@ src_ref_commit() {
         $2 == "refs/tags/" ref { tag = $1 }
         $2 == "refs/heads/" ref { head = $1 }
         END { if (peeled != "") print peeled; else if (tag != "") print tag; else if (head != "") print head }'
+}
+
+# check_own_repo <dir>: exit unless <dir> is the top level of a git work tree.
+# git looks for a repository upward from the directory it runs in, so when
+# <dir>/.git exists but is not a repository (a copy cut short leaves one), a
+# fetch and checkout run in <dir> would change the enclosing repository.
+check_own_repo() {
+    local top
+    top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || top=""
+    if [ -z "$top" ] || [ ! "$top" -ef "$1" ]; then
+        echo "Error: $1/.git is not a git repository; git finds ${top:-no repository} there."
+        echo "Repair or remove $1; a source directory without .git is cloned again."
+        exit 1
+    fi
 }
 
 # The staged dists. build-mesa.sh, build-gstreamer.sh, build-fex.sh,

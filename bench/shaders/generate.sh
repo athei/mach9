@@ -7,6 +7,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-for src in draw.vert draw.frag count.frag loads.comp loads_wide.comp chain.comp; do
+for src in draw.vert draw.frag count.frag loads.comp loads_wide.comp chain.comp \
+    atomic64_exchange.frag atomic64_texel.frag; do
     glslangValidator -V --target-env vulkan1.3 --vn "${src/./_}" -o "$src.h" "$src"
 done

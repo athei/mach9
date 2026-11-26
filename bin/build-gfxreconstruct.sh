@@ -11,9 +11,12 @@ set -e
 #   share/vulkan/explicit_layer.d/VkLayer_gfxreconstruct.json
 #                   its manifest, which names the layer by a path relative
 #                   to itself
-#   bin/gfxrecon-replay, bin/gfxrecon-info
-#                   the replay and the summary of a capture, which
-#                   bench/gfxr-replay.sh runs; not in the bundle
+#   bin/gfxrecon-replay, bin/gfxrecon-info, bin/gfxrecon-convert,
+#   bin/gfxrecon-extract
+#                   the replay, which bench/gfxr-replay.sh runs, the
+#                   summary of a capture, its calls as text and its shaders
+#                   as SPIR-V files; not in the bundle, so the licences
+#                   below cover the layer only
 #   share/licenses/gfxreconstruct.txt, gfxreconstruct-third-party.txt,
 #   spirv-reflect.txt
 #                   the licences of what the layer is built from, out of
@@ -70,7 +73,7 @@ GFXR_SRC="$GFXRECONSTRUCT_BUILD_DIR/src"
 GFXR_BUILD="$GFXRECONSTRUCT_BUILD_DIR/build"
 LAYER=libVkLayer_gfxreconstruct.dylib
 MANIFEST=VkLayer_gfxreconstruct.json
-TOOLS="gfxrecon-replay gfxrecon-info"
+TOOLS="gfxrecon-replay gfxrecon-info gfxrecon-convert gfxrecon-extract"
 # The submodules the build uses; OpenXR's are left out with OpenXR.
 SUBMODULES="external/Vulkan-Headers external/SPIRV-Headers external/SPIRV-Reflect"
 # The change to the pinned source, and the functions it exports.

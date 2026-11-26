@@ -50,6 +50,16 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 claim_tree "$BUILD_DIR" wine "$CLEAN"
 
+# Both Wine trees compile their PE code with PE_CC (write_pe_cc in
+# profile.sh). configure runs only for a tree without a Makefile, so a tree
+# configured with other PE compilers is emptied here and configured again
+# from scratch below.
+PE_CC="$BUILD_DIR/pe-cc/clang"
+if [ -f "$BUILD_DIR/Makefile" ] && ! pe_cc_configured "$BUILD_DIR" "$PE_CC" ${WINE_ARCHS//,/ }; then
+    echo "==> $BUILD_DIR was configured with other PE compilers than $PE_CC; configuring it again from scratch"
+    claim_tree "$BUILD_DIR" wine 1
+fi
+
 # The sources of the graphics tests the x86 tree builds below carry per-file
 # test selection blocks, which the conformance crate of this repository
 # generates. Tests built from blocks other than the ones the crate writes now
@@ -77,16 +87,15 @@ if ! (cd "$REPO_DIR" && CARGO_TARGET_DIR="$CONFORMANCE_TARGET" \
     exit 1
 fi
 
-# With WINE_BUILD_CCACHE, Wine's configure and make run with a directory of
-# ccache links ahead of PATH (ccache_bin_dir in profile.sh): clang, which CC
-# names, and the llvm-mingw compilers configure looks for first. The build
-# scripts called below get the PATH without it: DXMT's and vkd3d-proton's
-# cross files must find llvm-mingw's own compilers, and FEX, Mesa and
-# GStreamer take ccache their own way.
+# With WINE_BUILD_CCACHE, Wine's configure and make run with a ccache link
+# named clang, which CC names, ahead of PATH (ccache_bin_dir in profile.sh).
+# The build scripts called below get the PATH without it: FEX, Mesa and
+# GStreamer take ccache their own way, and DXMT and vkd3d-proton do not use
+# it.
+write_pe_cc "$PE_CC"
 WINE_PATH="$PATH"
 if [ -n "$WINE_CCACHE" ]; then
-    ccache_bin_dir "$BUILD_DIR/ccache-bin" clang aarch64-w64-mingw32-clang \
-        arm64ec-w64-mingw32-clang i686-w64-mingw32-gcc x86_64-w64-mingw32-gcc
+    ccache_bin_dir "$BUILD_DIR/ccache-bin" clang
     WINE_PATH="$BUILD_DIR/ccache-bin:$PATH"
 fi
 
@@ -127,7 +136,7 @@ CONFIGURE_ALLOWLIST=(
     --with-freetype
     --with-gnutls
     --with-gstreamer
-    --with-mingw
+    --with-mingw="$PE_CC"
     --with-opencl
     --with-opengl
     --with-sdl
@@ -187,6 +196,7 @@ if ! grep -q '^GSTREAMER_LIBS = .*-lgstreamer-1\.0' "$BUILD_DIR/Makefile"; then
     echo "built; rerun with --clean"
     exit 1
 fi
+check_pe_cc "$BUILD_DIR" "$PE_CC" ${WINE_ARCHS//,/ }
 
 # Patch sonames for relocatable bundle. config.status regenerates config.h
 # whenever configure changes (e.g. after a source update), silently reverting
@@ -336,8 +346,8 @@ X86LIBS_WITHOUT=(
     --without-udev --without-usb --without-v4l2 --without-va
     --without-vulkan --without-wayland --without-x
 )
-# shellcheck disable=SC2054 # the comma list is one argument
-X86LIBS_CONFIGURE=(--enable-archs=i386,x86_64,aarch64 --with-mingw "${X86LIBS_WITHOUT[@]}"
+X86LIBS_ARCHS=i386,x86_64,aarch64
+X86LIBS_CONFIGURE=(--enable-archs="$X86LIBS_ARCHS" --with-mingw="$PE_CC" "${X86LIBS_WITHOUT[@]}"
                    --host="$HOST_TRIPLE" --with-wine-tools="$BUILD_DIR"
                    CC="clang -arch arm64" BISON="$DEPS_PREFIX/opt/bison/bin/bison")
 # The tree is configured again from scratch whenever the Wine source or
@@ -356,6 +366,7 @@ else
     claim_tree "$X86LIBS_BUILD_DIR" x86libs
     echo "==> Skipping configure of $X86LIBS_BUILD_DIR (configured with these arguments)"
 fi
+check_pe_cc "$X86LIBS_BUILD_DIR" "$PE_CC" ${X86LIBS_ARCHS//,/ }
 
 # test_exe <pe-dir> <name>: print the path, relative to a build tree, of the
 # test executable of dlls/<name>/tests for <pe-dir>.

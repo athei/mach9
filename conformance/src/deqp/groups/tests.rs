@@ -40,6 +40,7 @@ fn the_committed_groups_parse_and_name_their_issues() {
             "synchronization",
             "synchronization2",
             "memory-model",
+            "image-atomic64",
             "query",
             "aliasing",
             "occlusion",

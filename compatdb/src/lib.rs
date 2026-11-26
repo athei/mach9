@@ -16,7 +16,9 @@
 //! wined3d renderer, DLL load-order overrides, the DPI awareness, large
 //! address awareness, whether the Mac driver reads raw mouse input from
 //! GameController, the Metal HUD, and command-line/environment rewrites. It
-//! logs a rule's `WINEDEBUG` channels, which Wine has read already. All the
+//! logs a rule's `WINEDEBUG` channels, which Wine has read already. The
+//! process that is the macOS app, the one
+//! [`APP_PID_VAR`](compatdb_core::APP_PID_VAR) names, lingers at exit. All the
 //! decision logic lives in [`compatdb_core`]; this crate only moves bytes in
 //! and out of the running process, so its `unsafe` is confined to a thin
 //! shell over ntdll and, for the check-in with a profiler that asks for the
@@ -45,8 +47,8 @@ use std::{
 };
 
 use compatdb_core::{
-    ArgumentsDropped, DllOverrideReset, EnvEntry, EnvStep, Key, Origin, Resolution, Scalar, Table,
-    VersionInfo, Wined3d,
+    APP_PID_VAR, ArgumentsDropped, DllOverrideReset, EnvEntry, EnvStep, Key, Origin, Resolution,
+    Scalar, Table, VersionInfo, Wined3d,
     runtime::{
         Arch, STEAM_APP_VAR, append_cmdline_each, basename_of, effective_d3d9, effective_dxgi,
         env_value, steam_app, wined3d_renderer_in,
@@ -184,6 +186,7 @@ pub extern "C" fn compatdb_apply_current_process() {
     }
     apply::dll_overrides(&nt, &resolution.dll_overrides);
     apply_hooks(&nt, &process, &resolution);
+    apply::linger_at_exit(&nt, read_env(APP_PID_VAR).as_deref(), std::process::id());
     let (cmd, appended) = append_cmdline_each(&process.cmdline, &resolution.arguments);
     log::line(&list_line(
         Key::Arguments,
@@ -412,6 +415,25 @@ fn env_line(step: &EnvStep, has: Option<&str>) -> String {
     };
     // The entry prints as `NAME=value`, and a removal as `NAME=`.
     format!("  env {}, {}: {what}", step.entry, step.origin.label())
+}
+
+/// The log line of whether the process lingers at exit. `app_pid` is the
+/// value of [`APP_PID_VAR`], `on` whether it names this process and `hooked`
+/// whether ntdll has the hook.
+fn linger_line(app_pid: Option<&str>, on: bool, hooked: bool) -> String {
+    match (app_pid, on, hooked) {
+        (None, ..) => format!("  linger_at_exit = off, {APP_PID_VAR} unset"),
+        (Some(pid), false, _) => {
+            format!("  linger_at_exit = off, {APP_PID_VAR}={pid} is another process")
+        }
+        (Some(pid), true, true) => {
+            format!("  linger_at_exit = on, {APP_PID_VAR}={pid} is this process")
+        }
+        (Some(pid), true, false) => format!(
+            "  linger_at_exit = on, {APP_PID_VAR}={pid} is this process: ntdll lacks \
+             set_compat_linger_at_exit, ignored"
+        ),
+    }
 }
 
 /// The log line of the Steam app id of a process that has one.

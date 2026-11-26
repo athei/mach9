@@ -43,16 +43,16 @@ scripts also run alone ([commands](internals.md#commands)).
 
 | Path | What it holds |
 |------|---------------|
-| [`bin/`](../bin) | The build and bundle scripts; [`bin/lib/profile.sh`](../bin/lib/profile.sh) holds the settings and helpers they share, [`bin/ci/`](../bin/ci) what the workflows run besides them |
-| [`pins/`](../pins) | The pinned inputs: [`redist.env`](../pins/redist.env), the refs of the sources the build checks out, and the Homebrew formulae a CI build installs |
+| [`bin/`](../bin) | The build and bundle scripts; [`bin/lib/profile.sh`](../bin/lib/profile.sh) holds the settings and helpers they share, [`bin/ci/`](../bin/ci) what the workflows run besides them; [`bin/fmt.sh`](../bin/fmt.sh) formats the Rust code with the rustfmt the workflows check it with ([Rust toolchains](maintenance.md#rust-toolchains)) |
+| [`pins/`](../pins) | The pinned inputs: [`redist.env`](../pins/redist.env), the refs of the sources the build checks out, the Homebrew formulae a CI build installs, and the Rust toolchains of the workflows in [`rust.env`](../pins/rust.env) |
 | [`.github/workflows/`](../.github/workflows) | The CI workflows ([releases](maintenance.md#releases)) |
 | [`compatdb/`](../compatdb) | The crates of `compatdb.so` and `compatdb-core` ([compatdb.md](compatdb.md)); the Cargo workspace is the repository root, so run cargo there |
 | [`conformance/`](../conformance) | The runner of Wine's graphics tests ([conformance runner](internals.md#conformance-runner)) and of the [deqp-vk suite](internals.md#deqp-vk-suite): the tests and units it knows in [`wine-tests.toml`](../conformance/wine-tests.toml), the deqp-vk groups in [`deqp-vk.toml`](../conformance/deqp-vk.toml), and in `baselines/` the baselines and expected results it records and the triage files people keep |
 | [`launcher/`](../launcher) | The source of [Mach9.app](app.md)'s launcher (`app`), its Dock tile plug-in (`docktile`) and the code both share (`core`), and the Makefile and scripts that assemble, sign and release the app ([Mach9.app](#mach9app)); nothing the bundle step builds depends on it |
 | [`release-notes/`](../release-notes) | The notes the app's update window shows, one file per release ([README](../release-notes/README.md)) |
 | [`smoke/`](../smoke) | The programs the bundle step builds and runs to check the bundle |
-| [`bench/`](../bench) | Benchmarks run by hand: [`kk.sh`](../bench/kk.sh) times KosmicKrisp ([Vulkan](internals.md#vulkan)), [`zink.sh`](../bench/zink.sh) a shadow map pass on Zink ([OpenGL](internals.md#opengl)), [`gfxr-replay.sh`](../bench/gfxr-replay.sh) the frames of a Vulkan capture ([Vulkan capture](internals.md#vulkan-capture)) |
-| [`licenses/`](../licenses) | The licence texts the bundle step installs |
+| [`bench/`](../bench) | Benchmarks run by hand: [`kk.sh`](../bench/kk.sh) times KosmicKrisp ([Vulkan](internals.md#vulkan)), [`zink.sh`](../bench/zink.sh) a shadow map pass on Zink ([OpenGL](internals.md#opengl)), [`gfxr-replay.sh`](../bench/gfxr-replay.sh) the frames of a Vulkan capture, or writes them as images ([Vulkan capture](internals.md#vulkan-capture)) |
+| [`licenses/`](../licenses) | The licence texts the bundle step and Mach9.app install that no pinned tree or package carries |
 | [`signing/`](../signing) | The loader's provisioning profile |
 | [`docs/`](.) | The documentation the README links to |
 
@@ -105,7 +105,7 @@ The libraries built here that configure finds are described with them:
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
 | `share/vulkan/explicit_layer.d/` | GFXReconstruct's layer manifest, naming the layer in `lib/external/` the same way; the loader reads it only for a process compatdb.so gives `vulkan_capture` ([Vulkan capture](internals.md#vulkan-capture)) |
 | `share/wine/fonts/` | Wine's fonts and the [icon font](internals.md#icon-font) |
-| `share/licenses/` | The licences of the [icon font](internals.md#icon-font) and of GFXReconstruct's layer ([Vulkan capture](internals.md#vulkan-capture)) |
+| `share/licenses/` | The licence texts of what the bundle ships, most in a directory per component ([licences](internals.md#licences)) |
 
 What the Direct3D trees and the default directories hold, and why, is in
 [Direct3D trees](maintenance.md#direct3d-trees).
@@ -119,8 +119,10 @@ make -C launcher install                       # the launcher's parts into an in
 ```
 
 - `app` assembles the bundle from nothing: the Wine runtime, the launcher,
-  the Dock tile plug-in, Sparkle, the icon and the Info.plist. It refuses a
-  Wine tree with development files.
+  the Dock tile plug-in, Sparkle, the icon, the Info.plist and, in
+  `Contents/Resources/licenses`, the licence texts of the launcher's parts
+  ([licences](internals.md#licences)). It refuses a Wine tree with
+  development files.
 - `install` is for development. It replaces the launcher's parts in an
   existing bundle (`APP=` names another than the one in `/Applications`)
   and signs it with the Developer ID identity in the keychain.

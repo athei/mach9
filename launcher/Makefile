@@ -103,10 +103,16 @@ $(PLUGIN_BIN): cargo-build $(PLUGIN_PLIST)
 	cp $(RELEASE)/libdocktile.dylib $@
 	cp $(PLUGIN_PLIST) $(PLUGIN)/Contents/Info.plist
 
+# The licence texts of the launcher's parts, in Contents/Resources/licenses
+# (those of the Wine runtime are in its share/licenses): Mach9's own,
+# Sparkle's, and those of Rust's standard library and the crates the
+# launcher and the plug-in are built from (bin/rust-licenses.sh).
+APP_LICENSES = Contents/Resources/licenses
+
 # Puts the launcher's parts into the bundle $(1): the launcher, the Dock tile
-# plug-in, Sparkle, the icon and the Info.plist, with the version stamped
-# into both Info.plists. The executable is removed before the copy for the
-# reason given at $(BIN).
+# plug-in, Sparkle, the icon, the Info.plist and the licences, with the
+# version stamped into both Info.plists. The executable is removed before
+# the copy for the reason given at $(BIN).
 #
 # The plug-in's principal class has to be unique per installed bundle,
 # because every pinned copy of the app loads into the same Dock plug-in host,
@@ -122,6 +128,11 @@ define populate
 	rm -rf "$(1)/Contents/Frameworks/Sparkle.framework"
 	ditto "$(SPARKLE_FW)" "$(1)/Contents/Frameworks/Sparkle.framework"
 	cp "$(ICON)" "$(1)/Contents/Resources/"
+	rm -rf "$(1)/$(APP_LICENSES)"
+	mkdir -p "$(1)/$(APP_LICENSES)/mach9" "$(1)/$(APP_LICENSES)/sparkle"
+	cp "$(ROOT)/LICENSE" "$(1)/$(APP_LICENSES)/mach9/"
+	cp "$(SPARKLE_DIR)/LICENSE" "$(1)/$(APP_LICENSES)/sparkle/"
+	$(ROOT)/bin/rust-licenses.sh "$(1)/$(APP_LICENSES)/gamelauncher" $(TARGET) gamelauncher gamelauncher-docktile
 	cp "$(INFO_SRC)" "$(1)/Contents/Info.plist"
 	$(SCRIPTS)/version.sh --stamp $(SHORT_ARGS) "$(1)" $(VERSION)
 	$(SCRIPTS)/version.sh --stamp $(SHORT_ARGS) "$(1)/Contents/PlugIns/$(PLUGIN_NAME).docktileplugin" $(VERSION)

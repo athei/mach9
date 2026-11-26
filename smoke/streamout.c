@@ -64,17 +64,42 @@
  *                    also from an output signature blob; it is drawn also
  *                    into a full target, by a draw and an indirect one; with
  *                    rasterized stream 1 it is streamed out and not drawn
- *   geometry-cut     an indexed triangle strip with a cut index: without a
- *                    geometry shader the cut leaves a gap between two quads;
- *                    through a geometry shader that passes its triangles
- *                    through and one that does not, rasterized stream 0
- *                    draws the pixels the shader draws without stream
- *                    output. It does not check the quads through a geometry
- *                    shader, so it accepts the right quad DXMT leaves out
- *                    (#159); the fix of #159 adds that check.
+ *   geometry-cut     an indexed triangle strip with a cut index at an even
+ *                    position: every pipeline draws two quads with a gap
+ *                    between them, through a geometry shader that passes its
+ *                    triangles and the render target array index through
+ *                    (into slice 1 of two) and one that does not pass its
+ *                    triangles through, each with and without stream
+ *                    output, without a geometry shader and through a vertex
+ *                    shader that streams out; the stream output writes the
+ *                    4 triangles of the quads and SO_STATISTICS counts 4
+ *   geometry-cut-blocks  an indexed strip of 2600 indices with cuts, the
+ *                    first and the last index among them, over the blocks of
+ *                    1024 indices of DXMT's strip cut scan, of 16 and 32 bits,
+ *                    with a start index and two instances, directly and
+ *                    indirectly, through a geometry shader and through a
+ *                    vertex shader, which also draws it as a line strip: the
+ *                    primitives without a cut are written in order, each
+ *                    triangle with the winding of its place in its strip
+ *   geometry-pass-through  a D3D11 geometry shader that passes its triangles
+ *                    and the render target array index through, with
+ *                    rasterized stream 0, streams out and draws into the
+ *                    slice it picks, and DrawAuto draws what it wrote
  *   geometry-rasterized  a geometry shader with rasterized stream 0 streams
  *                    out and draws, also into a full target; without a
  *                    rasterized stream it does not draw
+ *   geometry-streams-rasterized  a geometry shader with a point in each of
+ *                    four streams, each at its own place and with its own
+ *                    colour in a register no other stream writes, created
+ *                    with rasterized stream 0 to 3 in turn: only the
+ *                    rasterized stream's point is drawn, in its colour, and
+ *                    every stream appends its point to its slot; for
+ *                    streams 1 to 3 it accepts that DXMT leaves the draw
+ *                    out (athei/mach9#197)
+ *   geometry-uav     a geometry shader that streams out and adds 1 to a UAV
+ *                    for each of 40 input points: the UAV holds 40, not
+ *                    one count per pass of DXMT's geometry pipeline, and the
+ *                    points are written in order
  *   geometry-shapes  a triangle strip of 4 vertices without a cut, a line
  *                    strip, and a geometry shader of 4 instances are written
  *                    as lists, the instances in order
@@ -101,8 +126,10 @@
  *                    points, one and two blocks of DXMT's counts: every
  *                    stream's points and queries
  *
- * Every case runs on a device of its own, and every buffer but the targets of
- * geometry-large and geometry-streams-blocks starts filled with a pattern.
+ * Every case runs on a device of its own, of feature level 11_0, or 11_1 for
+ * geometry-uav, which gives a geometry shader UAVs. Every buffer but the
+ * targets of geometry-large and geometry-streams-blocks starts filled with a
+ * pattern.
  * The cases up to geometry-strips read their targets back between draws,
  * which waits for the GPU; the ones after it draw without a readback between,
  * so DXMT has to order what two draws of a render pass write.
@@ -128,7 +155,7 @@
  * test_so_statistics_query and the gs_4_code and gs_5_code of
  * test_layered_rendering in Wine's dlls/d3d11/tests/d3d11.c, the gs_code of
  * test_stream_output_resume in its dlls/d3d10core/tests/d3d10core.c, and
- * geometry shaders assembled here. */
+ * geometry and pixel shaders assembled here. */
 
 #define COBJMACROS
 #include <stdarg.h>
@@ -292,21 +319,57 @@ static const uint32_t count_gs_shdr[] = {
 #define TRIANGLE_GS_OSGN ((const uint32_t *)triangle_gs_code + 24)
 #define TRIANGLE_GS_SIGNATURE_WORDS 13
 
-/* A geometry shader that passes its triangle through, which DXMT recognises
- * as such: the three vertices emitted one after another */
-static const uint32_t pass_gs_shdr[] = {
-    0x52444853, 0x00000094, 0x00020040, 0x00000025,
+/* SV_POSITION in register 0 and a uint LAYER .x in register 1: the output
+ * signature of layer_vs and the input signature of layer_pass_gs */
+#define LAYER_SIGNATURE(tag, position_mask, layer_mask)                                                      \
+    tag, 0x0000004c, 0x00000002, 0x00000008,                                                               \
+    0x00000038, 0x00000000, 0x00000001, 0x00000003, 0x00000000, position_mask,                            \
+    0x00000044, 0x00000000, 0x00000000, 0x00000001, 0x00000001, layer_mask,                               \
+    0x505f5653, 0x5449534f, 0x004e4f49, 0x4559414c, 0xabab0052 /* "SV_POSITION", "LAYER" */
+static const uint32_t layer_vs_osgn[] = { LAYER_SIGNATURE(0x4e47534f, 0x0000000f, 0x00000e01) };
+static const uint32_t layer_gs_isgn[] = { LAYER_SIGNATURE(0x4e475349, 0x00000f0f, 0x00000101) };
+
+/* SV_POSITION in register 0 and SV_RenderTargetArrayIndex .x in register 1 */
+static const uint32_t layer_gs_osgn[] = {
+    0x4e47534f, 0x00000060, 0x00000002, 0x00000008,
+    0x00000038, 0x00000000, 0x00000001, 0x00000003, 0x00000000, 0x0000000f,
+    0x00000044, 0x00000000, 0x00000004, 0x00000001, 0x00000001, 0x00000e01,
+    0x505f5653, 0x5449534f, 0x004e4f49,                         /* "SV_POSITION" */
+    0x525f5653, 0x65646e65, 0x72615472, 0x41746567, 0x79617272, 0x65646e49, 0xabab0078, /* "SV_RenderTargetArrayIndex" */
+};
+
+/* float4 position : POSITION in, the position and LAYER 1 out */
+static const uint32_t layer_vs_shdr[] = {
+    0x52444853, 0x0000005c, 0x00010040, 0x00000017,
+    0x0300005f, 0x001010f2, 0x00000000,                         /* dcl_input v0.xyzw */
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */
+    0x03000065, 0x00102012, 0x00000001,                         /* dcl_output o1.x */
+    0x05000036, 0x001020f2, 0x00000000, 0x00101e46, 0x00000000, /* mov o0, v0 */
+    0x05000036, 0x00102012, 0x00000001, 0x00004001, 0x00000001, /* mov o1.x, l(1) */
+    0x0100003e,                                                 /* ret */
+};
+
+/* A geometry shader that passes its triangle through, the three vertices
+ * emitted one after another, with LAYER as SV_RenderTargetArrayIndex. DXMT's
+ * CheckGSBBIsPassThrough accepts no shader today (#199), so DXMT draws it
+ * through its geometry pipeline; the render target array index makes it pass
+ * DXMT's signature check for a pass-through once that is fixed, which only a
+ * shader that passes the render target array or viewport index through
+ * does. */
+#define LAYER_PASS_VERTEX(v)                                                                                 \
+    0x06000036, 0x001020f2, 0x00000000, 0x00201e46, v, 0x00000000, /* mov o0, v[v][0] */                   \
+    0x06000036, 0x00102012, 0x00000001, 0x0020100a, v, 0x00000001, /* mov o1.x, v[v][1].x */               \
+    0x01000013                                                     /* emit */
+static const uint32_t layer_pass_gs_shdr[] = {
+    0x52444853, 0x000000fc, 0x00020040, 0x0000003f,
     0x05000061, 0x002010f2, 0x00000003, 0x00000000, 0x00000001, /* dcl_input_siv v[3][0].xyzw, position */
+    0x0400005f, 0x00201012, 0x00000003, 0x00000001,             /* dcl_input v[3][1].x */
     0x0100185d,                                                 /* dcl_inputprimitive triangle */
     0x0100285c,                                                 /* dcl_outputtopology trianglestrip */
     0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */
+    0x04000067, 0x00102012, 0x00000001, 0x00000004,             /* dcl_output_siv o1.x, rendertarget_array_index */
     0x0200005e, 0x00000003,                                     /* dcl_maxout 3 */
-    0x06000036, 0x001020f2, 0x00000000, 0x00201e46, 0x00000000, 0x00000000, /* mov o0, v[0][0] */
-    0x01000013,                                                 /* emit */
-    0x06000036, 0x001020f2, 0x00000000, 0x00201e46, 0x00000001, 0x00000000, /* mov o0, v[1][0] */
-    0x01000013,                                                 /* emit */
-    0x06000036, 0x001020f2, 0x00000000, 0x00201e46, 0x00000002, 0x00000000, /* mov o0, v[2][0] */
-    0x01000013,                                                 /* emit */
+    LAYER_PASS_VERTEX(0), LAYER_PASS_VERTEX(1), LAYER_PASS_VERTEX(2),
     0x0100003e,                                                 /* ret */
 };
 
@@ -486,7 +549,67 @@ static const DWORD streams_gs_code[] = {
     0x00000000, 0x00000000, 0x03000075, 0x00110000, 0x00000003, 0x01000015, 0x0100003e,
 };
 
+/* The shader chunk of a geometry shader that adds 1 to a UAV for each input
+ * point and emits the point, assembled here as gs_5_0 with the ISGN and OSGN
+ * chunks of count_gs:
+ * RWByteAddressBuffer counter : register(u1);
+ * [maxvertexcount(1)]
+ * void main(point vertex input[1], inout PointStream<vertex> output)
+ * { counter.InterlockedAdd(0, 1); output.Append(input[0]); } */
+static const uint32_t uav_gs_shdr[] = {
+    0x58454853, 0x0000007c, 0x00020050, 0x0000001f,
+    0x0300009d, 0x0011e000, 0x00000001,                         /* dcl_uav_raw u1 */
+    0x0400005f, 0x002010f2, 0x00000001, 0x00000000,             /* dcl_input v[1][0].xyzw */
+    0x0100085d,                                                 /* dcl_inputprimitive point */
+    0x0100085c,                                                 /* dcl_outputtopology pointlist */
+    0x03000065, 0x001020f2, 0x00000000,                         /* dcl_output o0.xyzw */
+    0x0200005e, 0x00000001,                                     /* dcl_maxout 1 */
+    0x070000ad, 0x0011e000, 0x00000001, 0x00004001, 0x00000000, 0x00004001, 0x00000001, /* atomic_iadd u1, l(0), l(1) */
+    0x06000036, 0x001020f2, 0x00000000, 0x00201e46, 0x00000000, 0x00000000, /* mov o0, v[0][0] */
+    0x01000013,                                                 /* emit */
+    0x0100003e,                                                 /* ret */
+};
+
+/* The OSG5 and shader chunks of a geometry shader that emits one point into
+ * each of 4 streams, assembled here as gs_5_0 with the ISGN chunk of
+ * count_gs. Stream s writes SV_Position into o0, the centre of pixel
+ * (8 + 16 * s, 32) of the 64x64 render target, and COLOR into o<1 + s>, a
+ * register no other stream writes: green, blue, white and yellow. */
+static const uint32_t raster_streams_osg5[] = {
+    0x3547534f, 0x000000fc, 0x00000008, 0x00000008,
+#define RASTER_STREAM_OSG5(s) \
+    s, 0x000000e8, 0x00000000, 0x00000001, 0x00000003, 0x00000000, 0x0000000f, /* SV_Position o0 */ \
+    s, 0x000000f4, 0x00000000, 0x00000000, 0x00000003, 1 + s, 0x0000000f       /* COLOR o<1 + s> */
+    RASTER_STREAM_OSG5(0), RASTER_STREAM_OSG5(1), RASTER_STREAM_OSG5(2), RASTER_STREAM_OSG5(3),
+#undef RASTER_STREAM_OSG5
+    0x505f5653, 0x7469736f, 0x006e6f69, 0x4f4c4f43, 0xabab0052, /* "SV_Position", "COLOR" */
+};
+static const uint32_t raster_streams_shdr[] = {
+    0x58454853, 0x00000208, 0x00020050, 0x00000082,
+    0x0400005f, 0x002010f2, 0x00000001, 0x00000000,             /* dcl_input v[1][0].xyzw */
+    0x0100085d,                                                 /* dcl_inputprimitive point */
+#define RASTER_STREAM_DCL(s) \
+    0x0300008f, 0x00110000, s,                                  /* dcl_stream m<s> */ \
+    0x0100085c,                                                 /* dcl_outputtopology pointlist */ \
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */ \
+    0x03000065, 0x001020f2, 1 + s                               /* dcl_output o<1 + s>.xyzw */
+    RASTER_STREAM_DCL(0), RASTER_STREAM_DCL(1), RASTER_STREAM_DCL(2), RASTER_STREAM_DCL(3),
+#undef RASTER_STREAM_DCL
+    0x0200005e, 0x00000004,                                     /* dcl_maxout 4 */
+#define RASTER_STREAM_EMIT(s, x, r, g, b) \
+    0x08000036, 0x001020f2, 0x00000000, 0x00004002, x, 0xbc800000, 0x3f000000, 0x3f800000, /* mov o0, l(x, y, 0.5, 1.0) */ \
+    0x08000036, 0x001020f2, 1 + s, 0x00004002, r, g, b, 0x3f800000, /* mov o<1 + s>, l(r, g, b, 1.0) */ \
+    0x03000075, 0x00110000, s                                   /* emit_stream m<s> */
+    RASTER_STREAM_EMIT(0, 0xbf3c0000, 0x00000000, 0x3f800000, 0x00000000), /* x -0.734375, green */
+    RASTER_STREAM_EMIT(1, 0xbe700000, 0x00000000, 0x00000000, 0x3f800000), /* x -0.234375, blue */
+    RASTER_STREAM_EMIT(2, 0x3e880000, 0x3f800000, 0x3f800000, 0x3f800000), /* x 0.265625, white */
+    RASTER_STREAM_EMIT(3, 0x3f440000, 0x3f800000, 0x3f800000, 0x00000000), /* x 0.765625, yellow */
+#undef RASTER_STREAM_EMIT
+    0x0100003e,                                                 /* ret */
+};
+
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define CONTAINER_WORDS 256
 #define VERTEX_COUNT 64
 #define VERTEX_STRIDE 48
 #define TARGET_SIZE 256
@@ -715,7 +838,8 @@ static void bind_pipeline(ID3D11Buffer *vb)
     ID3D11DeviceContext_GSSetShader(context, gs, NULL, 0);
 }
 
-static void setup(void)
+/* <level> is the feature level of the device, 11_0 when 0 */
+static void setup(D3D_FEATURE_LEVEL level)
 {
     static const D3D11_INPUT_ELEMENT_DESC layout_desc[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -723,11 +847,11 @@ static void setup(void)
         { "COLOR", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
     static const D3D11_SO_DECLARATION_ENTRY so_decl[] = { { 0, "POSITION", 0, 0, 4, 0 } };
-    static const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
     D3D11_TEXTURE2D_DESC rt_desc = { 64, 64, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, { 1, 0 }, D3D11_USAGE_DEFAULT,
                                      D3D11_BIND_RENDER_TARGET, 0, 0 };
     UINT stride = 16;
 
+    if (!level) level = D3D_FEATURE_LEVEL_11_0;
     check_hr(create_device(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, &level, 1, D3D11_SDK_VERSION, &device, NULL,
                            &context), "D3D11CreateDevice");
     check_hr(ID3D11Device_CreateTexture2D(device, &rt_desc, NULL, &rt), "CreateTexture2D");
@@ -1095,22 +1219,44 @@ static void signature_blob_case(void)
              oversized_gs ? "returned" : "none");
 }
 
-/* The pixel of the render target at x, y as R8G8B8A8 */
-static uint32_t read_pixel(unsigned x, unsigned y)
+/* The pixel at x, y of slice <slice> of <texture>, a 64 by 64 R8G8B8A8 render
+ * target, as R8G8B8A8 */
+static uint32_t read_slice_pixel(ID3D11Texture2D *texture, unsigned slice, unsigned x, unsigned y)
 {
-    D3D11_TEXTURE2D_DESC desc = { 64, 64, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, { 1, 0 }, D3D11_USAGE_STAGING, 0,
-                                  D3D11_CPU_ACCESS_READ, 0 };
+    D3D11_TEXTURE2D_DESC desc;
     D3D11_MAPPED_SUBRESOURCE map;
     ID3D11Texture2D *staging;
     uint32_t value;
 
+    ID3D11Texture2D_GetDesc(texture, &desc);
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     check_hr(ID3D11Device_CreateTexture2D(device, &desc, NULL, &staging), "CreateTexture2D");
-    ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)staging, (ID3D11Resource *)rt);
-    check_hr(ID3D11DeviceContext_Map(context, (ID3D11Resource *)staging, 0, D3D11_MAP_READ, 0, &map), "Map");
+    ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)staging, (ID3D11Resource *)texture);
+    check_hr(ID3D11DeviceContext_Map(context, (ID3D11Resource *)staging, slice, D3D11_MAP_READ, 0, &map), "Map");
     value = *(const uint32_t *)((const char *)map.pData + y * map.RowPitch + x * 4);
-    ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)staging, 0);
+    ID3D11DeviceContext_Unmap(context, (ID3D11Resource *)staging, slice);
     ID3D11Texture2D_Release(staging);
     return value;
+}
+
+/* The pixel of the render target at x, y as R8G8B8A8 */
+static uint32_t read_pixel(unsigned x, unsigned y)
+{
+    return read_slice_pixel(rt, 0, x, y);
+}
+
+/* A render target of two slices, which layer_vs and layer_pass_gs draw into
+ * slice 1 of, and the view of both */
+static void create_layered_rt(ID3D11Texture2D **texture, ID3D11RenderTargetView **view)
+{
+    D3D11_TEXTURE2D_DESC desc = { 64, 64, 1, 2, DXGI_FORMAT_R8G8B8A8_UNORM, { 1, 0 }, D3D11_USAGE_DEFAULT,
+                                  D3D11_BIND_RENDER_TARGET, 0, 0 };
+
+    check_hr(ID3D11Device_CreateTexture2D(device, &desc, NULL, texture), "CreateTexture2D");
+    check_hr(ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)*texture, NULL, view),
+             "CreateRenderTargetView");
 }
 
 #define RED 0xff0000ffu
@@ -1258,8 +1404,8 @@ static void rasterized_case(void)
 }
 
 /* The DXBC container of an input signature, an output signature and a shader
- * chunk in <out> of 128 words, with a zero checksum, which DXMT does not
- * check. Returns its size. */
+ * chunk in <out> of CONTAINER_WORDS words, with a zero checksum, which DXMT
+ * does not check. Returns its size. */
 static uint32_t build_container(uint32_t *out, const uint32_t *isgn, uint32_t isgn_words, const uint32_t *osgn,
                                 uint32_t osgn_words, const uint32_t *shdr, uint32_t shdr_words)
 {
@@ -1276,7 +1422,7 @@ static uint32_t build_container(uint32_t *out, const uint32_t *isgn, uint32_t is
     out[7] = ARRAY_SIZE(chunks);
     for (i = 0; i < ARRAY_SIZE(chunks); i++)
     {
-        if (size + 4 * chunks[i].count > 128 * sizeof(*out)) fail(2, "a shader does not fit");
+        if (size + 4 * chunks[i].count > CONTAINER_WORDS * sizeof(*out)) fail(2, "a shader does not fit");
         out[8 + i] = size;
         memcpy((char *)out + size, chunks[i].words, 4 * chunks[i].count);
         size += 4 * chunks[i].count;
@@ -1296,6 +1442,19 @@ static uint32_t build_position_gs(uint32_t *out, const uint32_t *shdr, uint32_t 
 {
     return build_container(out, TRIANGLE_GS_ISGN, TRIANGLE_GS_SIGNATURE_WORDS, TRIANGLE_GS_OSGN,
                            TRIANGLE_GS_SIGNATURE_WORDS, shdr, shdr_words);
+}
+
+/* layer_vs_shdr with the input signature of position_vs_code */
+static uint32_t build_layer_vs(uint32_t *out)
+{
+    return build_container(out, (const uint32_t *)position_vs_code + 11, 13, layer_vs_osgn, ARRAY_SIZE(layer_vs_osgn),
+                           layer_vs_shdr, ARRAY_SIZE(layer_vs_shdr));
+}
+
+static uint32_t build_layer_pass_gs(uint32_t *out)
+{
+    return build_container(out, layer_gs_isgn, ARRAY_SIZE(layer_gs_isgn), layer_gs_osgn, ARRAY_SIZE(layer_gs_osgn),
+                           layer_pass_gs_shdr, ARRAY_SIZE(layer_pass_gs_shdr));
 }
 
 /* Appends to <want>, which has <n> points, the points count_gs emits for the
@@ -1329,7 +1488,7 @@ static int has_points(const uint32_t *data, unsigned first, const float (*want)[
 static void geometry_case(void)
 {
     static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "custom", 0, 0, 4, 0 } };
-    static uint32_t code[128], data[TARGET_WORDS];
+    static uint32_t code[CONTAINER_WORDS], data[TARGET_WORDS];
     static float want[32][4];
     D3D11_QUERY_DATA_SO_STATISTICS statistics;
     ID3D11GeometryShader *count_gs;
@@ -1527,12 +1686,191 @@ static void geometry_streams_case(void)
              (unsigned)statistics[3].NumPrimitivesWritten, (unsigned)statistics[3].PrimitivesStorageNeeded);
 }
 
+/* A pixel shader that returns the COLOR it reads from register <reg>,
+ * assembled here as ps_4_0 with the OSGN chunk of green_ps_code */
+static uint32_t build_color_ps(uint32_t *out, uint32_t reg)
+{
+    const uint32_t isgn[] = {
+        0x4e475349, 0x00000028, 0x00000001, 0x00000008, 0x00000020, 0x00000000, 0x00000000, 0x00000003,
+        reg, 0x00000f0f, 0x4f4c4f43, 0xabab0052,
+    };
+    const uint32_t shdr[] = {
+        0x52444853, 0x00000038, 0x00000040, 0x0000000e,
+        0x03001062, 0x001010f2, reg,                                /* dcl_input_ps linear v<reg>.xyzw */
+        0x03000065, 0x001020f2, 0x00000000,                         /* dcl_output o0.xyzw */
+        0x05000036, 0x001020f2, 0x00000000, 0x00101e46, reg,        /* mov o0, v<reg> */
+        0x0100003e,                                                 /* ret */
+    };
+
+    return build_container(out, isgn, ARRAY_SIZE(isgn), (const uint32_t *)green_ps_code + 24, 13, shdr,
+                           ARRAY_SIZE(shdr));
+}
+
+/* The four streams of raster_streams_shdr, one point each, with rasterized
+ * stream 0, 1, 2 and 3 in turn: only the rasterized stream's point is drawn,
+ * in its colour, and each draw appends every stream's point to its slot.
+ * DXMT creates no pipeline for rasterized stream 1 to 3 and leaves those
+ * draws out (athei/mach9#197): the case accepts a draw that draws no pixel
+ * and appends no point there, and the fix of #197 removes that. */
+static void geometry_streams_rasterized_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = {
+        { 0, "COLOR", 0, 0, 4, 0 },
+        { 1, "COLOR", 0, 0, 4, 1 },
+        { 2, "COLOR", 0, 0, 4, 2 },
+        { 3, "COLOR", 0, 0, 4, 3 },
+    };
+    static const float colors[4][4] = {
+        { 0.0f, 1.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 0.0f, 1.0f },
+    };
+    static const uint32_t pixel_colors[4] = { 0xff00ff00u, 0xffff0000u, 0xffffffffu, 0xff00ffffu };
+    static const float clear[] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    static uint32_t gs_code[CONTAINER_WORDS], ps_code[CONTAINER_WORDS], data[4][TARGET_WORDS];
+    ID3D11GeometryShader *streams_gs;
+    ID3D11PixelShader *color_ps;
+    ID3D11VertexShader *id_vs;
+    ID3D11Buffer *targets[4];
+    UINT offsets[4];
+    uint32_t pixels[4], gs_size, ps_size;
+    unsigned r, s, correct = 0;
+
+    check_hr(ID3D11Device_CreateVertexShader(device, id_vs_code, sizeof(id_vs_code), NULL, &id_vs),
+             "CreateVertexShader");
+    gs_size = build_container(gs_code, count_gs_isgn, ARRAY_SIZE(count_gs_isgn), raster_streams_osg5,
+                              ARRAY_SIZE(raster_streams_osg5), raster_streams_shdr, ARRAY_SIZE(raster_streams_shdr));
+    targets[0] = target;
+    for (s = 1; s < 4; s++) targets[s] = create_buffer(TARGET_SIZE, TARGET_FILL);
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_IASetInputLayout(context, NULL);
+    ID3D11DeviceContext_VSSetShader(context, id_vs, NULL, 0);
+    for (r = 0; r < 4; r++)
+    {
+        int ok = 1;
+
+        check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, gs_code, gs_size, decl, 4, NULL, 0, r,
+                                                                   NULL, &streams_gs),
+                 "CreateGeometryShaderWithStreamOutput");
+        ps_size = build_color_ps(ps_code, 1 + r);
+        check_hr(ID3D11Device_CreatePixelShader(device, ps_code, ps_size, NULL, &color_ps), "CreatePixelShader");
+        /* The first draw writes at the start of each slot, each later one
+           appends its point */
+        for (s = 0; s < 4; s++) offsets[s] = r ? ~0u : 0;
+        ID3D11DeviceContext_ClearRenderTargetView(context, rtv, clear);
+        ID3D11DeviceContext_GSSetShader(context, streams_gs, NULL, 0);
+        ID3D11DeviceContext_PSSetShader(context, color_ps, NULL, 0);
+        ID3D11DeviceContext_SOSetTargets(context, 4, targets, offsets);
+        ID3D11DeviceContext_Draw(context, 1, 0);
+        for (s = 0; s < 4; s++)
+        {
+            pixels[s] = read_pixel(8 + 16 * s, 32);
+            read_buffer(targets[s], data[s]);
+        }
+        ID3D11PixelShader_Release(color_ps);
+        ID3D11GeometryShader_Release(streams_gs);
+        say("rasterized stream %u: pixels %#x %#x %#x %#x", r, pixels[0], pixels[1], pixels[2], pixels[3]);
+        for (s = 0; s < 4; s++)
+        {
+            const float *point = (const float *)data[s] + 4 * r;
+            unsigned changed = count_changed(data[s], 4 * (r + 1), TARGET_WORDS, TARGET_FILL);
+
+            say("rasterized stream %u: stream %u point %u (%g, %g, %g, %g), words after it changed %u", r, s, r,
+                point[0], point[1], point[2], point[3], changed);
+            ok &= pixels[s] == (s == r ? pixel_colors[r] : 0u);
+            ok &= !memcmp(point, colors[s], sizeof(colors[s])) && !changed;
+        }
+        if (!ok && r && !(pixels[0] | pixels[1] | pixels[2] | pixels[3]))
+        {
+            unsigned untouched = 1;
+
+            for (s = 0; s < 4; s++) untouched &= !count_changed(data[s], 4, TARGET_WORDS, TARGET_FILL);
+            if (untouched)
+            {
+                say("rasterized stream %u: accepted, DXMT leaves the draw out (athei/mach9#197)", r);
+                ok = 1;
+            }
+        }
+        correct += ok;
+    }
+    ID3D11DeviceContext_ClearState(context);
+    for (s = 1; s < 4; s++) ID3D11Buffer_Release(targets[s]);
+    ID3D11VertexShader_Release(id_vs);
+    if (correct != 4)
+        fail(1, "rasterized streams that drew only their point in their colour and appended every stream's point "
+             "%u/4", correct);
+}
+
+#define UAV_POINTS 40
+
+/* A geometry shader that streams out and adds 1 to a UAV for each input
+ * point: after a draw of 40 points, more than an object threadgroup of 32
+ * takes, the UAV holds 40, and the target the 40 points in order */
+static void geometry_uav_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "custom", 0, 0, 4, 0 } };
+    static const uint32_t zero[4] = { 0 };
+    static uint32_t code[CONTAINER_WORDS], data[LARGE_WORDS], counter[4];
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
+    ID3D11UnorderedAccessView *uav;
+    ID3D11GeometryShader *uav_gs;
+    ID3D11VertexShader *id_vs;
+    ID3D11Buffer *buffer, *large;
+    UINT stride = 16;
+    uint32_t size;
+    unsigned i, c, correct = 0;
+
+    size = build_container(code, count_gs_isgn, ARRAY_SIZE(count_gs_isgn), count_gs_osgn, ARRAY_SIZE(count_gs_osgn),
+                           uav_gs_shdr, ARRAY_SIZE(uav_gs_shdr));
+    check_hr(ID3D11Device_CreateVertexShader(device, id_vs_code, sizeof(id_vs_code), NULL, &id_vs),
+             "CreateVertexShader");
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, code, size, decl, 1, &stride, 1,
+                                                               D3D11_SO_NO_RASTERIZED_STREAM, NULL, &uav_gs),
+             "CreateGeometryShaderWithStreamOutput");
+    buffer = create_data_buffer(zero, sizeof(zero), D3D11_BIND_UNORDERED_ACCESS,
+                                D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS);
+    memset(&uav_desc, 0, sizeof(uav_desc));
+    uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    uav_desc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uav_desc.Buffer.NumElements = ARRAY_SIZE(zero);
+    uav_desc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+    check_hr(ID3D11Device_CreateUnorderedAccessView(device, (ID3D11Resource *)buffer, &uav_desc, &uav),
+             "CreateUnorderedAccessView");
+    large = create_buffer(LARGE_SIZE, TARGET_FILL);
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_IASetInputLayout(context, NULL);
+    ID3D11DeviceContext_VSSetShader(context, id_vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, uav_gs, NULL, 0);
+    ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews(context, 1, &rtv, NULL, 1, 1, &uav, NULL);
+    bind_target(large, 0);
+    ID3D11DeviceContext_Draw(context, UAV_POINTS, 0);
+    read_buffer_size(buffer, counter, sizeof(counter));
+    read_buffer_size(large, data, LARGE_SIZE);
+
+    ID3D11DeviceContext_ClearState(context);
+    ID3D11Buffer_Release(large);
+    ID3D11UnorderedAccessView_Release(uav);
+    ID3D11Buffer_Release(buffer);
+    ID3D11GeometryShader_Release(uav_gs);
+    ID3D11VertexShader_Release(id_vs);
+    for (i = 0; i < UAV_POINTS; i++)
+    {
+        int same = 1;
+
+        for (c = 0; c < 4; c++) same &= ((const float *)data)[i * 4 + c] == (float)i;
+        correct += same;
+    }
+    say("UAV %u, points in order %u/%u", counter[0], correct, UAV_POINTS);
+    if (counter[0] != UAV_POINTS || correct != UAV_POINTS
+        || count_changed(data, 4 * UAV_POINTS, LARGE_WORDS, TARGET_FILL))
+        fail(1, "UAV %u (want %u), points in order %u/%u, words after them changed %u (want 0)", counter[0],
+             UAV_POINTS, correct, UAV_POINTS, count_changed(data, 4 * UAV_POINTS, LARGE_WORDS, TARGET_FILL));
+}
+
 /* Bind id_vs_code and count_gs streaming out into <so> at offset 0, and
  * return the shaders in <vs_out> and <gs_out> */
 static void bind_count_gs(ID3D11Buffer *so, ID3D11VertexShader **vs_out, ID3D11GeometryShader **gs_out)
 {
     static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "custom", 0, 0, 4, 0 } };
-    static uint32_t code[128];
+    static uint32_t code[CONTAINER_WORDS];
     uint32_t size = build_count_gs(code);
     UINT stride = 16;
 
@@ -1686,7 +2024,7 @@ static void geometry_shapes_case(void)
     };
     static const unsigned strip[] = { 0, 1, 2, 1, 0, 2 }, lines[] = { 0, 1, 1, 2 };
     static const uint32_t layer_offset[4] = { 0 };
-    static uint32_t code[128], strip_data[LARGE_WORDS], line_data[LARGE_WORDS], instance_data[LARGE_WORDS];
+    static uint32_t code[CONTAINER_WORDS], strip_data[LARGE_WORDS], line_data[LARGE_WORDS], instance_data[LARGE_WORDS];
     unsigned instance, v, c, correct = 0;
     ID3D11Buffer *cb;
     uint32_t size;
@@ -1724,17 +2062,21 @@ static void geometry_shapes_case(void)
              ok_strip ? "written" : "not written", ok_lines ? "written" : "not written", correct);
 }
 
-/* An indexed triangle strip with a cut index between two quads. Without a
- * geometry shader the cut leaves a gap between them. Through a geometry
- * shader that passes its triangles through and one that does not, a
- * rasterized stream 0 draws what the same shader draws without stream
- * output. The quads through a geometry shader are not checked: DXMT leaves
- * out the right one (#159), and the fix of #159 adds that check. */
+/* An indexed triangle strip with a cut index at an even position between two
+ * quads: the cut leaves a gap between them, and the strip after it starts
+ * with the winding of a first triangle, so the default rasterizer state draws
+ * the right quad. Every pipeline draws both quads: a geometry shader that
+ * passes its triangles and layer through (layer_pass_gs after layer_vs, into
+ * slice 1 of a render target of two, slice 0 left alone) and one that does
+ * not pass its triangles through, each with and without stream output, no
+ * geometry shader, and a vertex shader that streams out. The stream output
+ * of each writes the 4 triangles of the quads as a list, the triangles that
+ * hold the cut left out, and SO_STATISTICS counts 4. */
 static void geometry_cut_case(void)
 {
     static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "SV_Position", 0, 0, 4, 0 } };
-    static const char *names[] = { "pass-through", "pass-through without stream output", "loop",
-                                   "loop without stream output", "no geometry shader" };
+    static const char *names[] = { "layered pass-through", "layered pass-through without stream output", "loop",
+                                   "loop without stream output", "no geometry shader", "vertex shader" };
     static const float red[] = { 1.0f, 0.0f, 0.0f, 1.0f };
     static const float vertices[8][4] = {
         { -1.0f, -1.0f, 0.5f, 1.0f }, { -1.0f, 1.0f, 0.5f, 1.0f },
@@ -1743,48 +2085,345 @@ static void geometry_cut_case(void)
         { 1.0f, -1.0f, 0.5f, 1.0f }, { 1.0f, 1.0f, 0.5f, 1.0f },
     };
     static const uint16_t indices[] = { 0, 1, 2, 3, 0xffff, 4, 5, 6, 7 };
-    static uint32_t code[128];
-    ID3D11GeometryShader *shaders[5] = { NULL, NULL, NULL, NULL, NULL };
-    ID3D11Buffer *vb, *ib;
+    static const unsigned list[] = { 0, 1, 2, 1, 3, 2, 4, 5, 6, 5, 7, 6 };
+    static uint32_t code[CONTAINER_WORDS], vs_code_layer[CONTAINER_WORDS], data[6][TARGET_WORDS];
+    ID3D11GeometryShader *shaders[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
+    D3D11_QUERY_DATA_SO_STATISTICS statistics[6];
+    ID3D11Buffer *vb, *ib, *targets[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
+    ID3D11Query *queries[6] = { NULL, NULL, NULL, NULL, NULL, NULL };
+    ID3D11RenderTargetView *layered_rtv;
+    ID3D11Texture2D *layered_rt;
+    ID3D11VertexShader *layer_vs;
     UINT stride = 16, offset = 0;
-    uint32_t pixels[5][3], size;
-    unsigned i;
+    uint32_t pixels[6][4], size;
+    unsigned i, v, c, failed = 0;
 
-    size = build_position_gs(code, pass_gs_shdr, ARRAY_SIZE(pass_gs_shdr));
+    size = build_layer_vs(vs_code_layer);
+    check_hr(ID3D11Device_CreateVertexShader(device, vs_code_layer, size, NULL, &layer_vs), "CreateVertexShader");
+    size = build_layer_pass_gs(code);
     check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, code, size, decl, 1, &stride, 1, 0, NULL,
                                                                &shaders[0]),
              "CreateGeometryShaderWithStreamOutput of a pass-through shader");
     check_hr(ID3D11Device_CreateGeometryShader(device, code, size, NULL, &shaders[1]), "CreateGeometryShader");
+    create_layered_rt(&layered_rt, &layered_rtv);
     check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, triangle_gs_code, sizeof(triangle_gs_code),
                                                                decl, 1, &stride, 1, 0, NULL, &shaders[2]),
              "CreateGeometryShaderWithStreamOutput");
     check_hr(ID3D11Device_CreateGeometryShader(device, triangle_gs_code, sizeof(triangle_gs_code), NULL, &shaders[3]),
              "CreateGeometryShader");
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, position_vs_code, sizeof(position_vs_code),
+                                                               decl, 1, &stride, 1, 0, NULL, &shaders[5]),
+             "CreateGeometryShaderWithStreamOutput of a vertex shader");
     vb = create_data_buffer(vertices, sizeof(vertices), D3D11_BIND_VERTEX_BUFFER, 0);
     ib = create_data_buffer(indices, sizeof(indices), D3D11_BIND_INDEX_BUFFER, 0);
     bind_quad();
     ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &vb, &stride, &offset);
     ID3D11DeviceContext_IASetIndexBuffer(context, ib, DXGI_FORMAT_R16_UINT, 0);
-    bind_target(target, 0);
     for (i = 0; i < ARRAY_SIZE(shaders); i++)
     {
-        ID3D11DeviceContext_ClearRenderTargetView(context, rtv, red);
+        int streams = i == 0 || i == 2 || i == 5, layered = i < 2;
+
+        ID3D11DeviceContext_OMSetRenderTargets(context, 1, layered ? &layered_rtv : &rtv, NULL);
+        ID3D11DeviceContext_ClearRenderTargetView(context, layered ? layered_rtv : rtv, red);
+        ID3D11DeviceContext_VSSetShader(context, layered ? layer_vs : quad_vs, NULL, 0);
         ID3D11DeviceContext_GSSetShader(context, shaders[i], NULL, 0);
+        if (streams)
+        {
+            targets[i] = create_buffer(TARGET_SIZE, TARGET_FILL);
+            queries[i] = create_query(D3D11_QUERY_SO_STATISTICS);
+            bind_target(targets[i], 0);
+            ID3D11DeviceContext_Begin(context, (ID3D11Asynchronous *)queries[i]);
+        }
         ID3D11DeviceContext_DrawIndexed(context, ARRAY_SIZE(indices), 0, 0);
-        pixels[i][0] = read_pixel(10, 32);
-        pixels[i][1] = read_pixel(32, 32);
-        pixels[i][2] = read_pixel(54, 32);
+        if (streams)
+        {
+            ID3D11DeviceContext_End(context, (ID3D11Asynchronous *)queries[i]);
+            get_query_data(queries[i], &statistics[i], sizeof(statistics[i]));
+            read_buffer(targets[i], data[i]);
+        }
+        /* The quads, in slice 1 of the layered render target, and a pixel of
+           the left quad in its slice 0, which nothing draws to */
+        pixels[i][0] = read_slice_pixel(layered ? layered_rt : rt, layered, 10, 32);
+        pixels[i][1] = read_slice_pixel(layered ? layered_rt : rt, layered, 32, 32);
+        pixels[i][2] = read_slice_pixel(layered ? layered_rt : rt, layered, 54, 32);
+        pixels[i][3] = layered ? read_slice_pixel(layered_rt, 0, 10, 32) : RED;
     }
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &rtv, NULL);
     release_quad();
+    ID3D11RenderTargetView_Release(layered_rtv);
+    ID3D11Texture2D_Release(layered_rt);
+    ID3D11VertexShader_Release(layer_vs);
     ID3D11Buffer_Release(ib);
     ID3D11Buffer_Release(vb);
-    for (i = 0; i < 4; i++) ID3D11GeometryShader_Release(shaders[i]);
     for (i = 0; i < ARRAY_SIZE(shaders); i++)
-        say("%s: left %#x, gap %#x, right %#x", names[i], pixels[i][0], pixels[i][1], pixels[i][2]);
-    if (pixels[4][0] != GREEN || pixels[4][1] != RED || pixels[4][2] != GREEN)
-        fail(1, "without a geometry shader, want %#x, %#x, %#x", GREEN, RED, GREEN);
-    if (memcmp(pixels[0], pixels[1], sizeof(pixels[0])) || memcmp(pixels[2], pixels[3], sizeof(pixels[2])))
-        fail(1, "a rasterized stream draws other pixels than the shader without stream output");
+    {
+        if (shaders[i]) ID3D11GeometryShader_Release(shaders[i]);
+        if (targets[i]) ID3D11Buffer_Release(targets[i]);
+        if (queries[i]) ID3D11Query_Release(queries[i]);
+    }
+    for (i = 0; i < ARRAY_SIZE(shaders); i++)
+    {
+        int written = 1;
+
+        if (targets[i])
+        {
+            for (v = 0; v < ARRAY_SIZE(list); v++)
+                for (c = 0; c < 4; c++)
+                    written &= ((const float *)data[i])[v * 4 + c] == vertices[list[v]][c];
+            written &= !count_changed(data[i], 4 * ARRAY_SIZE(list), TARGET_WORDS, TARGET_FILL);
+            say("%s: left %#x, gap %#x, right %#x, slice 0 %#x; the 4 triangles %s, primitives written %u, "
+                "storage needed %u", names[i], pixels[i][0], pixels[i][1], pixels[i][2], pixels[i][3],
+                written ? "written" : "not written", (unsigned)statistics[i].NumPrimitivesWritten,
+                (unsigned)statistics[i].PrimitivesStorageNeeded);
+            written &= statistics[i].NumPrimitivesWritten == 4 && statistics[i].PrimitivesStorageNeeded == 4;
+        }
+        else
+        {
+            say("%s: left %#x, gap %#x, right %#x, slice 0 %#x", names[i], pixels[i][0], pixels[i][1], pixels[i][2],
+                pixels[i][3]);
+        }
+        if (pixels[i][0] != GREEN || pixels[i][1] != RED || pixels[i][2] != GREEN || pixels[i][3] != RED || !written)
+            failed++;
+    }
+    if (failed)
+        fail(1, "%u pipelines (want 0) did not draw %#x, %#x, %#x into their slice or did not stream out the 4 "
+             "triangles", failed, GREEN, RED, GREEN);
+}
+
+/* Positions of the indexed strip of geometry-cut-blocks: the strip runs over
+ * blocks of DXMT's strip cut scan (1024 indices), with cuts at even and odd
+ * positions, so that a strip crosses a block with the winding of a cut in
+ * the block before it */
+#define CUT_BLOCKS_COUNT 2600
+#define CUT_BLOCKS_START 3
+#define CUT_BLOCKS_INSTANCES 2
+#define CUT_BLOCKS_VERTICES 4096
+#define CUT_BLOCKS_TARGET (CUT_BLOCKS_COUNT * CUT_BLOCKS_INSTANCES * 3 * 16)
+
+static int is_cut_position(unsigned p)
+{
+    static const unsigned cuts[] = { 0, 4, 6, 1500, 2101, 2102, 2104, CUT_BLOCKS_COUNT - 1 };
+    unsigned i;
+
+    for (i = 0; i < ARRAY_SIZE(cuts); i++)
+        if (p == cuts[i]) return 1;
+    return 0;
+}
+
+/* The vertices D3D11 streams out of the strip, <vertices> of each primitive
+ * of a strip whose primitive takes <vertices> indices, and with the winding
+ * of each triangle's place in its strip. Returns the primitives of an
+ * instance. */
+static unsigned cut_blocks_primitives(unsigned vertices, uint16_t *out)
+{
+    unsigned p, v, first = 0, primitives = 0;
+
+    for (p = 0; p + vertices <= CUT_BLOCKS_COUNT; p++)
+    {
+        int cut = 0;
+
+        for (v = 0; v < vertices; v++) cut |= is_cut_position(p + v);
+        if (is_cut_position(p)) first = p + 1;
+        if (cut) continue;
+        for (v = 0; v < vertices; v++) out[primitives * vertices + v] = p + v;
+        if (vertices == 3 && ((p - first) & 1))
+        {
+            out[primitives * 3 + 1] = p + 2;
+            out[primitives * 3 + 2] = p + 1;
+        }
+        primitives++;
+    }
+    return primitives;
+}
+
+/* An indexed strip of 2600 indices with cut indices, the first and the last
+ * among them, of 16 and of 32 bits, drawn with a start index and two
+ * instances, directly and indirectly: through a geometry shader that does
+ * not pass its triangles through (DXMT's geometry pipeline), and through a
+ * vertex shader that streams out (DXMT's emulated stream output), also as a
+ * line strip. Each instance writes the primitives without a cut in the order
+ * of the strip, each triangle with the winding of its place in its strip, and
+ * SO_STATISTICS counts them. */
+static void geometry_cut_blocks_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "SV_Position", 0, 0, 4, 0 } };
+    static const D3D11_INPUT_ELEMENT_DESC layout_desc[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+    static const char *names[] = { "geometry shader", "geometry shader, indirect", "vertex shader",
+                                   "vertex shader, indirect", "vertex shader, line strip" };
+    static const uint32_t arguments[] = { CUT_BLOCKS_COUNT, CUT_BLOCKS_INSTANCES, CUT_BLOCKS_START, 0, 0 };
+    static const char *formats[] = { "16-bit", "32-bit" };
+    static float vertices[CUT_BLOCKS_VERTICES][4];
+    static uint16_t indices16[CUT_BLOCKS_START + CUT_BLOCKS_COUNT], want[CUT_BLOCKS_COUNT * 3];
+    static uint32_t indices32[CUT_BLOCKS_START + CUT_BLOCKS_COUNT], data[CUT_BLOCKS_TARGET / 4];
+    D3D11_BUFFER_DESC target_desc = { CUT_BLOCKS_TARGET, D3D11_USAGE_DEFAULT, D3D11_BIND_STREAM_OUTPUT, 0, 0, 0 };
+    D3D11_QUERY_DATA_SO_STATISTICS statistics;
+    ID3D11GeometryShader *loop_gs, *vs_gs;
+    ID3D11InputLayout *position_layout;
+    ID3D11VertexShader *position_vs;
+    ID3D11Buffer *vb, *ibs[2], *args, *large;
+    ID3D11Query *query;
+    UINT stride = 16, offset = 0;
+    unsigned d, p, v, c, primitives, failed = 0;
+
+    for (v = 0; v < CUT_BLOCKS_VERTICES; v++)
+    {
+        vertices[v][0] = (float)v;
+        vertices[v][1] = 0.0f;
+        vertices[v][2] = 0.5f;
+        vertices[v][3] = 1.0f;
+    }
+    for (p = 0; p < CUT_BLOCKS_COUNT; p++)
+    {
+        indices16[CUT_BLOCKS_START + p] = is_cut_position(p) ? 0xffff : p;
+        indices32[CUT_BLOCKS_START + p] = is_cut_position(p) ? 0xffffffff : p;
+    }
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, triangle_gs_code, sizeof(triangle_gs_code),
+                                                               decl, 1, &stride, 1, D3D11_SO_NO_RASTERIZED_STREAM,
+                                                               NULL, &loop_gs),
+             "CreateGeometryShaderWithStreamOutput");
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, position_vs_code, sizeof(position_vs_code),
+                                                               decl, 1, &stride, 1, D3D11_SO_NO_RASTERIZED_STREAM,
+                                                               NULL, &vs_gs),
+             "CreateGeometryShaderWithStreamOutput of a vertex shader");
+    check_hr(ID3D11Device_CreateInputLayout(device, layout_desc, 1, position_vs_code, sizeof(position_vs_code),
+                                            &position_layout),
+             "CreateInputLayout");
+    check_hr(ID3D11Device_CreateVertexShader(device, position_vs_code, sizeof(position_vs_code), NULL, &position_vs),
+             "CreateVertexShader");
+    vb = create_data_buffer(vertices, sizeof(vertices), D3D11_BIND_VERTEX_BUFFER, 0);
+    ibs[0] = create_data_buffer(indices16, sizeof(indices16), D3D11_BIND_INDEX_BUFFER, 0);
+    ibs[1] = create_data_buffer(indices32, sizeof(indices32), D3D11_BIND_INDEX_BUFFER, 0);
+    args = create_data_buffer(arguments, sizeof(arguments), 0, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS);
+    query = create_query(D3D11_QUERY_SO_STATISTICS);
+    bind_pipeline(vb0);
+    ID3D11DeviceContext_IASetInputLayout(context, position_layout);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &vb, &stride, &offset);
+    ID3D11DeviceContext_VSSetShader(context, position_vs, NULL, 0);
+    for (d = 0; d < 2 * ARRAY_SIZE(names); d++)
+    {
+        unsigned f = d / ARRAY_SIZE(names), i = d % ARRAY_SIZE(names);
+        unsigned per_primitive = i == 4 ? 2 : 3, instance, bad = 0;
+        int ok;
+
+        ID3D11DeviceContext_IASetIndexBuffer(context, ibs[f], f ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT, 0);
+        ID3D11DeviceContext_IASetPrimitiveTopology(context, i == 4 ? D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP
+                                                                   : D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+        ID3D11DeviceContext_GSSetShader(context, i < 2 ? loop_gs : vs_gs, NULL, 0);
+        /* A new target, so that a draw that writes nothing does not find the
+           primitives of the draw before */
+        check_hr(ID3D11Device_CreateBuffer(device, &target_desc, NULL, &large), "CreateBuffer");
+        bind_target(large, 0);
+        ID3D11DeviceContext_Begin(context, (ID3D11Asynchronous *)query);
+        if (i == 1 || i == 3)
+            ID3D11DeviceContext_DrawIndexedInstancedIndirect(context, args, 0);
+        else
+            ID3D11DeviceContext_DrawIndexedInstanced(context, CUT_BLOCKS_COUNT, CUT_BLOCKS_INSTANCES, CUT_BLOCKS_START,
+                                                     0, 0);
+        ID3D11DeviceContext_End(context, (ID3D11Asynchronous *)query);
+        get_query_data(query, &statistics, sizeof(statistics));
+        read_buffer_size(large, data, sizeof(data));
+        bind_target(NULL, 0);
+        ID3D11Buffer_Release(large);
+        primitives = cut_blocks_primitives(per_primitive, want);
+        for (instance = 0; instance < CUT_BLOCKS_INSTANCES; instance++)
+        {
+            for (v = 0; v < primitives * per_primitive; v++)
+            {
+                const float *vertex = (const float *)&data[((instance * primitives * per_primitive) + v) * 4];
+
+                for (c = 0; c < 4; c++)
+                    if (vertex[c] != vertices[want[v]][c])
+                    {
+                        if (!bad) say("%s, %s: instance %u, vertex %u: %g, want %g", names[i], formats[f], instance,
+                                      v, vertex[0], vertices[want[v]][0]);
+                        bad++;
+                        break;
+                    }
+            }
+        }
+        ok = !bad && statistics.NumPrimitivesWritten == CUT_BLOCKS_INSTANCES * primitives
+             && statistics.PrimitivesStorageNeeded == CUT_BLOCKS_INSTANCES * primitives;
+        say("%s, %s: %u vertices wrong, primitives written %u, storage needed %u (want %u)", names[i], formats[f],
+            bad, (unsigned)statistics.NumPrimitivesWritten, (unsigned)statistics.PrimitivesStorageNeeded,
+            CUT_BLOCKS_INSTANCES * primitives);
+        if (!ok) failed++;
+    }
+    ID3D11DeviceContext_ClearState(context);
+    ID3D11Query_Release(query);
+    ID3D11Buffer_Release(args);
+    ID3D11Buffer_Release(ibs[1]);
+    ID3D11Buffer_Release(ibs[0]);
+    ID3D11Buffer_Release(vb);
+    ID3D11VertexShader_Release(position_vs);
+    ID3D11InputLayout_Release(position_layout);
+    ID3D11GeometryShader_Release(vs_gs);
+    ID3D11GeometryShader_Release(loop_gs);
+    if (failed)
+        fail(1, "%u of %u draws (want 0) wrote other primitives or counts", failed, 2 * (unsigned)ARRAY_SIZE(names));
+}
+
+/* A D3D11 geometry shader that passes its triangles and the layer of layer_vs
+ * through (layer_pass_gs), created with rasterized stream 0: the strip of two
+ * triangles over the render target is streamed out as a list and drawn into
+ * slice 1 of a render target of two, slice 0 left alone, and DrawAuto from
+ * the target draws the list again */
+static void geometry_pass_through_case(void)
+{
+    static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "SV_Position", 0, 0, 4, 0 } };
+    static const unsigned list[] = { 0, 1, 2, 1, 3, 2 };
+    static const float red[] = { 1.0f, 0.0f, 0.0f, 1.0f };
+    static uint32_t code[CONTAINER_WORDS], vs_code_layer[CONTAINER_WORDS], data[TARGET_WORDS];
+    ID3D11RenderTargetView *layered_rtv;
+    ID3D11GeometryShader *pass_gs;
+    ID3D11Texture2D *layered_rt;
+    ID3D11VertexShader *layer_vs;
+    ID3D11Buffer *auto_target;
+    UINT stride = 16, offset = 0;
+    uint32_t drawn, drawn_slice0, drawn_auto, size;
+    int ok;
+
+    size = build_layer_vs(vs_code_layer);
+    check_hr(ID3D11Device_CreateVertexShader(device, vs_code_layer, size, NULL, &layer_vs), "CreateVertexShader");
+    size = build_layer_pass_gs(code);
+    check_hr(ID3D11Device_CreateGeometryShaderWithStreamOutput(device, code, size, decl, 1, &stride, 1, 0, NULL,
+                                                               &pass_gs),
+             "CreateGeometryShaderWithStreamOutput of a pass-through shader");
+    create_layered_rt(&layered_rt, &layered_rtv);
+    auto_target = create_buffer_bind(TARGET_SIZE, TARGET_FILL, D3D11_BIND_STREAM_OUTPUT | D3D11_BIND_VERTEX_BUFFER);
+    bind_quad();
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &layered_rtv, NULL);
+    ID3D11DeviceContext_ClearRenderTargetView(context, layered_rtv, red);
+    ID3D11DeviceContext_VSSetShader(context, layer_vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, pass_gs, NULL, 0);
+    bind_target(auto_target, 0);
+    ID3D11DeviceContext_Draw(context, 4, 0);
+    drawn = read_slice_pixel(layered_rt, 1, 10, 20);
+    drawn_slice0 = read_slice_pixel(layered_rt, 0, 10, 20);
+    read_buffer(auto_target, data);
+    /* DrawAuto through the vertex shader of the quad into the render target
+       of one slice */
+    ID3D11DeviceContext_OMSetRenderTargets(context, 1, &rtv, NULL);
+    ID3D11DeviceContext_ClearRenderTargetView(context, rtv, red);
+    ID3D11DeviceContext_VSSetShader(context, quad_vs, NULL, 0);
+    ID3D11DeviceContext_GSSetShader(context, NULL, NULL, 0);
+    ID3D11DeviceContext_SOSetTargets(context, 0, NULL, NULL);
+    ID3D11DeviceContext_IASetVertexBuffers(context, 0, 1, &auto_target, &stride, &offset);
+    ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11DeviceContext_DrawAuto(context);
+    drawn_auto = read_pixel(10, 20);
+    release_quad();
+    ID3D11Buffer_Release(auto_target);
+    ID3D11RenderTargetView_Release(layered_rtv);
+    ID3D11Texture2D_Release(layered_rt);
+    ID3D11GeometryShader_Release(pass_gs);
+    ID3D11VertexShader_Release(layer_vs);
+    ok = has_quad(data, 0, ARRAY_SIZE(list), list) && !count_changed(data, 24, TARGET_WORDS, TARGET_FILL);
+    say("the two triangles %s, slice 1 %#x, slice 0 %#x, after DrawAuto %#x", ok ? "written" : "not written", drawn,
+        drawn_slice0, drawn_auto);
+    if (!ok || drawn != GREEN || drawn_slice0 != RED || drawn_auto != GREEN)
+        fail(1, "want the two triangles written, slice 1 %#x, slice 0 %#x, after DrawAuto %#x", GREEN, RED, GREEN);
 }
 
 #define PARTICLE_FRAMES 5
@@ -1835,7 +2474,7 @@ static void geometry_particles_case(void)
         { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
     static const D3D11_SO_DECLARATION_ENTRY decl[] = { { 0, "SV_Position", 0, 0, 4, 0 } };
-    static uint32_t code[128], data[LARGE_WORDS], copy[LARGE_WORDS];
+    static uint32_t code[CONTAINER_WORDS], data[LARGE_WORDS], copy[LARGE_WORDS];
     static float want[LARGE_WORDS / 4][4], initial[8][4];
     ID3D11GeometryShader *particle_gs, *copy_gs;
     ID3D11Buffer *initial_vb, *ping[2], *copied;
@@ -2382,6 +3021,8 @@ static const struct
 {
     const char *name;
     void (*run)(void);
+    /* the feature level of the case's device, 11_0 when 0 */
+    D3D_FEATURE_LEVEL level;
 } cases[] = {
     { "bounds", bounds_case },
     { "append", append_case },
@@ -2395,7 +3036,11 @@ static const struct
     { "signature-blob", signature_blob_case },
     { "rasterized", rasterized_case },
     { "geometry-cut", geometry_cut_case },
+    { "geometry-cut-blocks", geometry_cut_blocks_case },
+    { "geometry-pass-through", geometry_pass_through_case },
     { "geometry-rasterized", geometry_rasterized_case },
+    { "geometry-streams-rasterized", geometry_streams_rasterized_case },
+    { "geometry-uav", geometry_uav_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-shapes", geometry_shapes_case },
     { "geometry-strips", geometry_strips_case },
     { "geometry", geometry_case },
@@ -2420,7 +3065,7 @@ static void run_case(unsigned i)
 {
     current = cases[i].name;
     say("case %s", current);
-    setup();
+    setup(cases[i].level);
     cases[i].run();
     teardown();
 }

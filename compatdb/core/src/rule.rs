@@ -591,9 +591,19 @@ impl Rule {
     }
 
     /// Text appended to the command line when the process loads, each
-    /// entry unless the command line already holds it. The test is a
-    /// case-sensitive substring test, which leaves a Chromium `--type=`
-    /// child that inherited its parent's switches alone.
+    /// entry unless the command line the process started with already holds
+    /// it: the entry's arguments occur there in a row, as whole arguments
+    /// after the program name, compared case-sensitively
+    /// ([`runtime::append_cmdline`] has the splitting). That leaves a
+    /// Chromium `--type=` child that inherited its parent's switches alone,
+    /// and entries never hold each other back, so a value that repeats is
+    /// appended each time.
+    ///
+    /// Write a switch and its value as one entry (`+r_SSDO 0`): they are
+    /// then held only together, while a value on its own is held whenever
+    /// the command line has that value as an argument anywhere.
+    ///
+    /// [`runtime::append_cmdline`]: crate::runtime::append_cmdline
     #[must_use]
     pub fn arguments(&self) -> &[Argument] {
         &self.arguments

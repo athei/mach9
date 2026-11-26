@@ -1,0 +1,3 @@
+FreeType 2.15.0 (tag VER-2-15-0): the credit section 2 of docs/FTL.TXT requires, in the text the FTL's introduction suggests, with the last year of the keg's README copyright line (2006-2026).
+
+Portions of this software are copyright © 2026 The FreeType Project (https://freetype.org). All rights reserved.

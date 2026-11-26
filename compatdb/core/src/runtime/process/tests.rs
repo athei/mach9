@@ -65,6 +65,21 @@ fn a_value_that_is_no_app_id_reads_as_none() {
 }
 
 #[test]
+fn only_the_process_the_app_pid_names_lingers_at_exit() {
+    assert!(linger_at_exit(Some("4242"), 4242));
+    assert!(linger_at_exit(Some("4294967295"), u32::MAX));
+    // Every other process of the session inherits the variable.
+    assert!(!linger_at_exit(Some("4242"), 4243));
+    assert!(!linger_at_exit(None, 4242));
+    // A value that is no decimal pid names no process.
+    for value in ["", " 4242", "4242 ", "+4242", "-4242", "0x1092", "4242a"] {
+        assert!(!linger_at_exit(Some(value), 4242), "{value:?}");
+    }
+    // Too large for a pid, which does not wrap around to 0.
+    assert!(!linger_at_exit(Some("4294967296"), 0));
+}
+
+#[test]
 fn append_cmdline_is_idempotent() -> TestResult {
     let base = u16s("cmd.exe");
     let appends = vec!["--in-process-gpu".to_string()];
@@ -100,6 +115,86 @@ fn append_cmdline_applies_each_new_text_once() -> TestResult {
     let (out, appended) = append_cmdline_each(&base, &["--foo".to_string()]);
     assert_eq!((out, appended), (None, vec![false]));
     Ok(())
+}
+
+#[test]
+fn a_repeated_value_is_appended_every_time() -> TestResult {
+    let appends = [
+        "+com_skipBootSequence",
+        "1",
+        "+r_SSDO",
+        "0",
+        "+r_clusteredDeferredRendering",
+        "0",
+        "+r_imageAtlasMaxAniso",
+        "1",
+    ];
+    let (out, appended) = append_cmdline_each(&u16s("game.exe"), &appends);
+    assert_eq!(
+        String::from_utf16_lossy(&out.ok_or("appended")?),
+        format!("game.exe {}", appends.join(" "))
+    );
+    assert_eq!(appended, [true; 8]);
+    Ok(())
+}
+
+#[test]
+fn text_inside_a_longer_argument_is_not_held() -> TestResult {
+    for (base, text) in [
+        ("game.exe -windowed2", "-windowed"),
+        ("app.exe --lang=en", "en"),
+        ("\"C:\\Games\\Foo -windowed\\foo.exe\"", "-windowed"),
+    ] {
+        let out = append_cmdline(&u16s(base), &[text]).ok_or(base)?;
+        assert_eq!(String::from_utf16_lossy(&out), format!("{base} {text}"));
+    }
+    Ok(())
+}
+
+#[test]
+fn an_entry_of_several_arguments_is_held_only_in_that_order() {
+    let entry = ["-availablevidmem 2048.0"];
+    for base in [
+        "GTAIV.exe -availablevidmem 2048.0",
+        "GTAIV.exe -a -availablevidmem   2048.0 -b",
+        "GTAIV.exe \"-availablevidmem\" 2048.0",
+    ] {
+        assert_eq!(append_cmdline(&u16s(base), &entry), None, "{base}");
+    }
+    for base in [
+        "GTAIV.exe 2048.0 -availablevidmem",
+        "GTAIV.exe -availablevidmem 1024 2048.0",
+        "GTAIV.exe \"-availablevidmem 2048.0\"",
+    ] {
+        assert!(append_cmdline(&u16s(base), &entry).is_some(), "{base}");
+    }
+}
+
+#[test]
+fn a_chromium_child_keeps_the_switches_it_inherited() {
+    let child = "\"C:\\Program Files (x86)\\Steam\\bin\\cef\\steamwebhelper.exe\" \
+                 --type=gpu-process --in-process-gpu --lang=en-US";
+    assert_eq!(append_cmdline(&u16s(child), &["--in-process-gpu"]), None);
+}
+
+#[test]
+fn the_command_line_splits_as_the_c_runtime_splits_it() {
+    let split = |line: &str| -> Vec<String> {
+        args_after_program(&u16s(line))
+            .iter()
+            .map(|arg| String::from_utf16_lossy(arg))
+            .collect()
+    };
+    // The program name takes no escapes: its trailing backslash does not
+    // quote the closing quote.
+    assert_eq!(split("\"C:\\Games\\\" -a\t \"b c\""), ["-a", "b c"]);
+    assert_eq!(split("game.exe"), [] as [&str; 0]);
+    assert_eq!(split("game.exe   "), [] as [&str; 0]);
+    assert_eq!(split("game.exe \"\""), [""]);
+    assert_eq!(split(r#"game.exe "a \"b\" c""#), [r#"a "b" c"#]);
+    assert_eq!(split(r#"game.exe a\\\\"b c" d\e"#), [r"a\\b c", r"d\e"]);
+    assert_eq!(split(r#"game.exe a\\\"b"#), [r#"a\"b"#]);
+    assert_eq!(split(r#"game.exe "a""b" c"#), [r#"a"b"#, "c"]);
 }
 
 #[test]

@@ -15,6 +15,8 @@
 #                       when the bundle is assembled
 #   bin/                generate_keys, generate_appcast, sign_update,
 #                       BinaryDelta
+#   LICENSE             Sparkle's licence and those of the code it carries,
+#                       which the bundle ships with the framework
 #
 # The dSYMs Sparkle ships alongside the framework are dropped: codesign-bundle.sh
 # would have to strip them out of the bundle again before notarization.
@@ -52,7 +54,7 @@ require_macos
 
 STAMP="$DEST/.version"
 if [[ $FORCE -eq 0 && -f "$STAMP" && "$(cat "$STAMP")" == "$SPARKLE_VERSION" \
-      && -d "$DEST/Sparkle.framework" && -x "$DEST/bin/generate_appcast" ]]; then
+      && -d "$DEST/Sparkle.framework" && -x "$DEST/bin/generate_appcast" && -s "$DEST/LICENSE" ]]; then
   # The Makefile rule that runs this script has the stamp as its target and
   # the script and redist.env as its prerequisites, so after an edit to
   # either that leaves the version alone, the stamp has to move or make runs
@@ -88,6 +90,8 @@ for tool in generate_keys generate_appcast sign_update BinaryDelta; do
   [[ -f "$TMP_DIR/bin/$tool" ]] || die "no $tool in the tarball"
   ditto "$TMP_DIR/bin/$tool" "$DEST/bin/$tool"
 done
+[[ -s "$TMP_DIR/LICENSE" ]] || die "no LICENSE in the tarball"
+cp "$TMP_DIR/LICENSE" "$DEST/LICENSE"
 codesign --verify --strict "$DEST/Sparkle.framework" \
   || die "the extracted framework does not verify"
 printf '%s\n' "$SPARKLE_VERSION" > "$STAMP"

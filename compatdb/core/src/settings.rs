@@ -19,9 +19,9 @@
 //! refuses ([`check_env_name`]).
 
 use crate::{
-    Argument, DEFAULT_VALUE, DebugChannel, DllOverride, EnvEntry, EnvName, Exe, FILE_ENV_VAR,
-    FieldError, Fingerprint, Key, KeyKind, PROF_SERVICE_VAR, Rule, Scalar, ScalarValue, Setting,
-    Severity,
+    APP_PID_VAR, Argument, DEFAULT_VALUE, DebugChannel, DllOverride, EnvEntry, EnvName, Exe,
+    FILE_ENV_VAR, FieldError, Fingerprint, Key, KeyKind, PROF_SERVICE_VAR, Rule, Scalar,
+    ScalarValue, Setting, Severity,
 };
 
 /// The keys that are no longer read, each with why and what to do instead
@@ -152,6 +152,8 @@ fn env_name(name: &str) -> Result<EnvName, FieldError> {
 /// - [`PROF_SERVICE_VAR`]: every process of the launch would hand its task
 ///   control port to the service it names, so a launch must not take it from
 ///   where the launcher was started.
+/// - [`APP_PID_VAR`]: an inherited pid names the app of another launch, and
+///   a process that got that pid would stay after its exit.
 ///
 /// All but `WINEDLLOVERRIDES` are not retired, so a launcher may still set
 /// them for the whole launch on purpose. `WINEDLLOVERRIDES` is (see
@@ -163,6 +165,7 @@ pub const fn inherited_conflicts() -> &'static [&'static str] {
         "WINE_LARGE_ADDRESS_AWARE",
         FILE_ENV_VAR,
         PROF_SERVICE_VAR,
+        APP_PID_VAR,
     ]
 }
 

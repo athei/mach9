@@ -138,8 +138,11 @@ fn launch(
     // First, while no other thread can be reading the environment, which
     // `set_var` needs: reading the display below already talks to the window
     // server. The only threads by now are the idle libdispatch workers an
-    // update check's read of the user defaults may have started.
-    wine_env::apply(&prefix, &cfg.rules.table);
+    // update check's read of the user defaults may have started. A launch
+    // with a log is one from Finder or the Dock, where wine replaces this
+    // process, the app's main process.
+    let app_pid = log_fd.is_some().then(std::process::id);
+    wine_env::apply(&prefix, &cfg.rules.table, app_pid);
     wine_env::apply_user(cfg);
 
     info!(

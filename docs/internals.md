@@ -77,7 +77,7 @@ script's header says what it builds and stages.
 | [`build-wine.sh`](../bin/build-wine.sh) | Runs `build-mesa.sh`, `build-gstreamer.sh` and `build-gfxreconstruct.sh`, builds Wine and the [Wine SDK](#wine-sdk), then runs `build-fex.sh`, `build-dxmt.sh` and `build-vkd3d-proton.sh`; passes `--clean` on to each of them |
 | [`build-mesa.sh`](../bin/build-mesa.sh) | The Vulkan loader, KosmicKrisp, and EGL with Zink ([Vulkan](#vulkan), [OpenGL](#opengl)) |
 | [`build-gstreamer.sh`](../bin/build-gstreamer.sh) | GStreamer with glib and FFmpeg ([GStreamer](#gstreamer)) |
-| [`build-gfxreconstruct.sh`](../bin/build-gfxreconstruct.sh) | GFXReconstruct's capture layer and replay ([Vulkan capture](#vulkan-capture)) |
+| [`build-gfxreconstruct.sh`](../bin/build-gfxreconstruct.sh) | GFXReconstruct's capture layer and tools ([Vulkan capture](#vulkan-capture)) |
 | [`build-fex.sh`](../bin/build-fex.sh) | FEX's emulator DLLs and their unix halves ([FEX](#fex)) |
 | [`build-dxmt.sh`](../bin/build-dxmt.sh) | DXMT, after a Wine build ([DXMT](#dxmt)) |
 | [`build-vkd3d-proton.sh`](../bin/build-vkd3d-proton.sh) | vkd3d-proton's D3D12 DLLs, after a Wine build ([vkd3d-proton](#vkd3d-proton)) |
@@ -308,6 +308,18 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   becomes active (`IOConsoleLocked` of `ioreg -n Root -d1`). They check
   the selection, the bundle, the baselines, the triage file, the state
   directory and the running wineservers before they take the activation.
+- WindowServer loses Mach ports with every application that registers
+  with it, and each test process is one, as is the AutoFill helper AppKit
+  starts for it. When its port table is full, the kernel kills it and the
+  session is logged out (mach9 #190). `run` and `record` read its port
+  count with `top` before they start, before each unit and before a
+  second pass, and stop above a threshold with an error that says to log
+  out and in, or restart the Mac, which starts a new WindowServer
+  ([`window_server.rs`](../conformance/src/window_server.rs)). The same
+  command then continues where it stopped. A count that cannot be read
+  stops a run before it starts and only prints a warning later. The run
+  prints the count when it starts, and after the totals the count at the
+  end and how much it changed.
 - Every process gets the caller's environment without the variables that
   change Wine, the libraries it loads, its graphics stack or the test
   framework (`SCRUBBED` in
@@ -315,6 +327,15 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   no `WINEDLLOVERRIDES`: the DLL overrides are those of compatdb's
   built-in rules, as in a game's prefix, which keep the Mono and Gecko
   installers from opening a dialog.
+- Every Wine process of `run` and `record` gets `DEFAULT_WINEDEBUG` (in
+  [`environment.rs`](../conformance/src/environment.rs)) as its
+  `WINEDEBUG`: Wine's `err` class of every channel without `fixme`, and
+  the `seh` and `loaddll` channels. `run --winedebug` appends its channels
+  to it, and `record` refuses the option, so a baseline is recorded under
+  the default. A test that crashes or stalls once and passes when it runs
+  again leaves only its raw log, which then has its `err:` lines, the
+  `trace:seh:dispatch_exception` line of a fault and the load address of
+  each module. Their lines count as output for the stall limit.
 - Before it trusts a result, the runner checks the test process's
   `compatdb:` lines ([logging](compatdb.md#logging-and-verification))
   against the `expect` of its executable in `wine-tests.toml`, and stops on
@@ -399,11 +420,12 @@ After a regression:
 
 - Trace a key with `--winedebug <channels>`, which `run` takes and
   `record` refuses. Every Wine process of the invocation gets the channels
-  as its `WINEDEBUG` instead of `-all`, and the traces go into the raw
-  logs: a test's into its log, the session's into `session.log`. A trace
-  slows a test and counts as output for the stall limit, so its result is
-  that of the traced test, and its state is never continued without the
-  option:
+  after the default in its `WINEDEBUG`. A later option for the same
+  channel wins, and `-all` changes only the channels no option names. The
+  traces go into the raw logs: a test's into its log, the session's into
+  `session.log`. A trace slows a test and counts as output for the stall
+  limit, so its result is that of the traced test, and its state is never
+  continued without the option:
 
   ```bash
   cargo run -p conformance -- run ddraw --leg x86_64 --only ddraw7/test_coop_level_mode_set --winedebug +win,+event
@@ -704,10 +726,16 @@ them natively on KosmicKrisp, without the game, Wine or FEX. The rule's doc
 is the spec of the trigger, the frames a capture holds and the file names.
 
 - [`build-gfxreconstruct.sh`](../bin/build-gfxreconstruct.sh), which
-  `build-wine.sh` runs, builds the capture layer and `gfxrecon-replay`
-  from the pin in [`redist.env`](../pins/redist.env), with
+  `build-wine.sh` runs, builds the capture layer and the tools from the pin
+  in [`redist.env`](../pins/redist.env), with
   [`gfxreconstruct-macos-exports.patch`](../pins/gfxreconstruct-macos-exports.patch);
-  its header says what it stages.
+  its header says what it stages. Besides `gfxrecon-replay` and
+  `gfxrecon-info`, it stages `gfxrecon-convert`, which prints the calls of
+  a capture as text (JSON, or JSON Lines with `--format jsonl`, to a file
+  or with `--output stdout` to standard output), and `gfxrecon-extract`,
+  which writes the SPIR-V of each shader module of a capture into a file
+  of its own, the form `gfxrecon-replay --replace-shaders` reads back. The
+  tools stay out of the bundle.
 - The bundle carries the layer in `lib/external`, its manifest in
   `share/vulkan/explicit_layer.d`, which the Vulkan loader does not search
   by itself, so the layer loads only into a process whose rule asks for it,
@@ -742,9 +770,18 @@ its header has the options. The replay draws into images of its own, so it
 opens no window, and no display paces it. Compare two Mesa builds as for
 `bench/kk.sh`, by alternating invocations.
 
+With `--screenshots <dir>` it replays the capture once and writes its frames
+into `<dir>` as PNG files instead, to compare what two stacks draw. A
+capture recorded on another GPU can fail to replay on this one, for
+example with `VK_ERROR_OUT_OF_DEVICE_MEMORY`: `-m rebind` lets the replay
+choose the memory types and allocations, and `--remove-unsupported` drops
+what the capture enabled that the driver does not have. Both work in
+either mode.
+
 ```bash
 bench/gfxr-replay.sh Game/captures/Game-<pid>_trim_trigger_<time>.gfxr
 bench/gfxr-replay.sh ../build/mesa/dist Game/captures/Game-<pid>_trim_trigger_<time>.gfxr
+bench/gfxr-replay.sh Game/captures/Game-<pid>_trim_trigger_<time>.gfxr --screenshots frames -m rebind
 ```
 
 ### Metal capture
@@ -861,6 +898,33 @@ the icons draw as boxes.
 - Its licences are in [`licenses/`](../licenses), installed into
   `share/licenses/`.
 
+## Licences
+
+The bundle and Mach9.app carry the licence texts of what they ship, taken
+from the trees and packages that ship it, so a text follows its pin.
+
+- A component script stages the texts of its component, and of what the
+  component links statically, out of its pinned tree into its dist's
+  `share/licenses/<component>/`, from the list in the script.
+  `stage_licenses` in [`licenses.sh`](../bin/lib/licenses.sh) copies them
+  and stops the build when one is gone; a text that is only in a file
+  header is cut out of it.
+- Step 4c of [`bundle-wine.sh`](../bin/bundle-wine.sh) installs those
+  directories and the texts of what the bundle takes from elsewhere: the
+  Wine source, downloads, llvm-mingw, the kegs of the Homebrew libraries
+  Step 3 copies, and the crates of `compatdb.so`
+  ([`rust-licenses.sh`](../bin/rust-licenses.sh)). Its comment is the list.
+  The preflight refuses a dist without its texts, a text Step 4c cannot
+  find stops it, and Step 5 checks they are in place. Step 4c names each
+  text the build scripts stage (`DIST_LICENSES`) and each crate of
+  `compatdb.so` (`COMPATDB_CRATES`), so one dropped from a list fails
+  Step 5.
+- `make app` and `make install` put the texts of the launcher's parts into
+  `Contents/Resources/licenses` (`APP_LICENSES` in the
+  [`Makefile`](../launcher/Makefile)).
+- [`licenses/`](../licenses) holds only texts no tree or package carries,
+  each naming where it comes from.
+
 ## Loader app
 
 The loader needs `com.apple.developer.cross-architecture-support`, and Wine
@@ -928,16 +992,16 @@ validation layers and the llvm-mingw compilers.
 
 | Checks | Where |
 |--------|-------|
-| macOS SDK, formulae, Wine SDK, each staged component current against its pin or `*_REF` (which needs the network), on a Mac with a Metal 4 GPU the validation layers at their pin, llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
+| macOS SDK, formulae, Wine SDK, each staged component current against its pin or `*_REF` (which needs the network) and with its [licences](#licences), on a Mac with a Metal 4 GPU the validation layers at their pin, llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
 | No function of FEX's DLLs stores into the stack slot where its prologue saved a callee-saved register ([FEX](maintenance.md#fex)) | Step 4d: `check_fex_save_slots`, [`check-save-slots.pl`](../bin/check-save-slots.pl) |
 | Inherited `com.apple.quarantine` removed, nothing else | Step 4f |
 | No reference to `LEAK_PREFIXES`, no `@rpath` dependency outside the bundle, every dylib loads ([`smoke/dlopen.c`](../smoke/dlopen.c)), GStreamer loads only from the bundle | `check_no_leaks`, `check_rpath_deps`, `check_dylibs_load`, `check_gstreamer` |
-| Copied-in components in place, the [icon font](#icon-font)'s aliases in `wine.inf`, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
+| Copied-in components and their [licences](#licences) in place, the [icon font](#icon-font)'s aliases in `wine.inf`, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
 | No PE debug sections or symbol tables (stripped by Step 4e; `--keep-symbols` skips the stripping in Step 4e, and Step 5 reports the count of files with symbols instead of failing), no dangling symlinks | Step 5 |
 | Vulkan driver and manifest, EGL with Zink, ntdll's compatdb hooks | `check_vulkan`, `check_egl`, `check_compat_hooks` |
 | `wine.app` signature, entitlements and `Info.plist` | `check_loader_app` |
 | `minos` of every Mach-O at most the floor, no import of `FLOOR_NEWER_FUNCS` ([macOS floors](maintenance.md#macos-floors)) | `check_minos`, `check_floor_newer_imports` |
-| A fresh prefix boots with msync and compatdb, with the DLL overrides of the built-in rules alone and no Mono or Gecko dialog, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, DXMT's stream output from vertex and geometry shaders, with and without a rasterized stream, under Metal shader validation, DXMT's bounds on shader bytecode, its context state and deferred context lifetimes, its depth bias on D24 targets and its geometry and tessellation pipelines across index formats and indexed and non-indexed draws, each of these also under Metal shader validation, wined3d, WMA decoding, FEX on code that faults or changes, also from another process, x87 code included and with both x87 precisions, on x87 operations, which must keep the callee-saved registers, on code whose pages go away or that is written while it compiles also with its disk cache on, and memory and other system calls that write its pages, the EFLAGS exception handlers run with and give back, an aarch64 debugger attaching to and detaching from an i386 and an x86_64 process and an x86_64 debugger doing so with an i386 process, each once continuing its break-in and once passing it on, threads terminated while they signal an event, wait on one, on two or alertably, close handles, map new msync pages or query memory, with a handle that takes the value of one a terminated thread used still cached by ntdll, and outside Wine, GStreamer, KosmicKrisp reading data written through one buffer or image back through another bound to the same memory (built against the Vulkan headers in `MESA_BUILD_DIR`, so a bundle step on a Mac with a Metal 4 GPU needs that tree), and EGL with Zink's depth bias on 24-bit depth buffers, multisampled ones included, its pixel buffer object transfers of float and signed normalized texels and its statistics queries that are active together, the latter also under Khronos' validation layers, which may report no error | `smoke_test` and the `check_*` functions it calls |
+| A fresh prefix boots with msync and compatdb, with the DLL overrides of the built-in rules alone and no Mono or Gecko dialog, and the programs in `smoke/` run on every arch and tree: Direct3D trees, WGL, Vulkan, D3D12, DXMT's stream output from vertex and geometry shaders, with and without a rasterized stream, under Metal shader validation, DXMT's bounds on shader bytecode, its context state and deferred context lifetimes, the release of its device right after a draw, its depth bias on D24 targets and its geometry and tessellation pipelines across index formats and indexed and non-indexed draws, each of these also under Metal shader validation, wined3d, WMA decoding, FEX on code that faults or changes, also from another process, x87 code included and with both x87 precisions, on x87 operations, which must keep the callee-saved registers, on code whose pages go away or that is written while it compiles also with its disk cache on, alone and with full SMC checks, and memory and other system calls that write its pages, the EFLAGS exception handlers run with and give back, an aarch64 debugger attaching to and detaching from an i386 and an x86_64 process and an x86_64 debugger doing so with an i386 process, each once continuing its break-in and once passing it on, threads terminated while they signal an event, wait on one, on two or alertably, close handles, map new msync pages or query memory, with a handle that takes the value of one a terminated thread used still cached by ntdll, a program that starts a child and exits ending at once for that child, its unix process staying until the child exits when `WINE_COMPATDB_APP_PID` names it ([linger at exit](compatdb.md#linger-at-exit)) and not without, and outside Wine, GStreamer, KosmicKrisp reading data written through one buffer or image back through another bound to the same memory and giving the same depth from two vertex shaders that compute the same position, with and without `Invariant`, warning once that a 64-bit view of an image without atomic usage takes the lock for 64-bit atomics, and adding up 64-bit image atomics on one texel through two views of it (all built against the Vulkan headers in `MESA_BUILD_DIR`, so a bundle step on a Mac with a Metal 4 GPU needs that tree), and EGL with Zink's depth bias on 24-bit depth buffers, multisampled ones included, its pixel buffer object transfers of float and signed normalized texels, its queries: statistics queries that are active together, occlusion queries over many frames with query objects that are not begun again, more live query objects than KosmicKrisp allows memory allocations and more occlusion queries alive at once than KosmicKrisp has slots for, the queries also under Khronos' validation layers, which may report no error | `smoke_test` and the `check_*` functions it calls |
 
 On a Mac without a Metal 4 GPU, such as a hosted CI runner, the checks
 that need a KosmicKrisp device or Zink change or are left out, and so are
@@ -1026,6 +1090,7 @@ A `*-src.ref` file names a branch, tag or commit of the component's
 | Wine | Not pinned: whatever `WINE_SRC` has checked out. A CI build checks out the branch [`wine-src.ref`](../pins/wine-src.ref) names. The SDK and DXMT record the commit, and the bundle step refuses either when it is not the current one. All uncommitted states count as one (`-dirty`), so the bundle step cannot tell them apart: rebuild after changing uncommitted changes |
 | Homebrew libraries | Not pinned ([Homebrew libraries and the floor](#homebrew-libraries-and-the-floor)); a CI build installs [`brew-formulae`](../pins/brew-formulae) at Homebrew's newest versions ([Homebrew formulae](maintenance.md#homebrew-formulae)) |
 | llvm-mingw | A CI build: [`redist.env`](../pins/redist.env), version and SHA-256. A local build: `MINGW_DIR` |
+| Rust toolchains | [`rust.env`](../pins/rust.env): the stable toolchain the workflows build, test and lint with, and the nightly whose rustfmt formats the code, in the workflows and through [`bin/fmt.sh`](../bin/fmt.sh) locally ([Rust toolchains](maintenance.md#rust-toolchains)). A local build: whatever toolchain rustup or `PATH` selects |
 | Provisioning profile | [`signing/loader.provisionprofile`](../signing/loader.provisionprofile); replace it when it expires or the App ID changes |
 | Sparkle, Mach9.app's updater | [`redist.env`](../pins/redist.env): version and SHA-256 of the release tarball |
 | VK-GL-CTS, for the [deqp-vk suite](#deqp-vk-suite) | [`redist.env`](../pins/redist.env): tag and commit; the sources it builds on at the commits and checksums its `external/fetch_sources.py` pins |

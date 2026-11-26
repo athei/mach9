@@ -1,6 +1,8 @@
 //! The process side: its arch, and the UTF-16 image path, command line and
 //! environment block as wine hands them over.
 
+use std::iter::{Peekable, repeat_n};
+
 use crate::{EnvEntry, part::steam_app_id};
 
 /// The variable of the environment block that holds a process's Steam app id,
@@ -71,28 +73,38 @@ pub fn basename_of(image_path: &[u16]) -> String {
     String::from_utf16_lossy(image_path.get(start..).unwrap_or(&[]))
 }
 
-/// Append each text to the command line unless it is already present.
+/// Append each text to the command line unless the command line already
+/// holds it.
 ///
-/// The substring test is case-sensitive, the rule that leaves Chromium
-/// `--type=` children, which inherit their parent's switches, untouched.
-/// Returns `None` when nothing changed.
+/// The command line holds a text when the text's arguments occur in a row,
+/// in that order, among the arguments after the program name, compared
+/// case-sensitively. Both are split as the Microsoft C runtime splits a
+/// command line, so quoting and the spaces between arguments do not matter,
+/// and a text that is only part of a longer argument is not held. The test
+/// looks only at the command line the process started with: a Chromium
+/// `--type=` child, which inherits its parent's switches, stays as it is,
+/// and the texts never hold each other back, so a value that repeats is
+/// appended each time. Returns `None` when nothing changed.
 #[must_use]
 pub fn append_cmdline(cmdline: &[u16], appends: &[impl AsRef<str>]) -> Option<Vec<u16>> {
     append_cmdline_each(cmdline, appends).0
 }
 
 /// [`append_cmdline`], also saying for each text whether it was appended:
-/// false for one that was already present, or empty.
+/// false for one the command line already holds, or one without an
+/// argument (empty or only blanks).
 #[must_use]
 pub fn append_cmdline_each(
     cmdline: &[u16],
     appends: &[impl AsRef<str>],
 ) -> (Option<Vec<u16>>, Vec<bool>) {
+    let held = args_after_program(cmdline);
     let mut cur = cmdline.to_vec();
     let mut appended = Vec::with_capacity(appends.len());
     for text in appends {
         let text = text.as_ref();
-        if text.is_empty() || contains_cs(&cur, text) {
+        let wanted = split_args(text.encode_utf16().peekable());
+        if wanted.is_empty() || held.windows(wanted.len()).any(|run| run == wanted) {
             appended.push(false);
             continue;
         }
@@ -128,6 +140,25 @@ pub fn env_value(block: &[u16], name: &str) -> Option<String> {
 #[must_use]
 pub fn steam_app(block: &[u16]) -> Option<u32> {
     steam_app_id(&env_value(block, STEAM_APP_VAR)?)
+}
+
+/// Whether the process `pid` keeps its unix process after its Windows
+/// process exits.
+///
+/// It keeps it while any other user process of the wineserver session runs,
+/// other than Wine's system processes and the owner of the desktop window.
+/// `app_pid` is the value of [`APP_PID_VAR`](crate::APP_PID_VAR) in the
+/// unix environment, which a launcher sets to the pid of the process that is
+/// the macOS app. Only that process lingers: its exit would end the app, and
+/// macOS would end the app's other processes with it, the game the process
+/// started included. Every process inherits the variable, and the others
+/// have another pid. A value that is no decimal pid matches no process.
+#[must_use]
+pub fn linger_at_exit(app_pid: Option<&str>, pid: u32) -> bool {
+    app_pid
+        .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|value| value.parse::<u32>().ok())
+        == Some(pid)
 }
 
 /// Merge environment entries into a `NAME=value\0...\0\0` block.
@@ -187,16 +218,71 @@ pub const fn to_lower_u16(u: u16) -> u16 {
     }
 }
 
-/// Case-sensitive substring test.
-fn contains_cs(haystack: &[u16], needle: &str) -> bool {
-    let n: Vec<u16> = needle.encode_utf16().collect();
-    if n.is_empty() {
-        return true;
+const QUOTE: u16 = b'"' as u16;
+const BACKSLASH: u16 = b'\\' as u16;
+
+/// Whether `u` separates arguments outside quotes.
+const fn is_blank(u: u16) -> bool {
+    u == b' ' as u16 || u == b'\t' as u16
+}
+
+/// The arguments of a command line after the program name.
+///
+/// The program name ends at the first blank outside quotes and takes no
+/// backslash escapes, so a quoted path that ends in a backslash ends at its
+/// closing quote.
+fn args_after_program(cmdline: &[u16]) -> Vec<Vec<u16>> {
+    let mut units = cmdline.iter().copied().peekable();
+    let mut quoted = false;
+    while let Some(u) = units.next_if(|&u| quoted || !is_blank(u)) {
+        if u == QUOTE {
+            quoted = !quoted;
+        }
     }
-    if haystack.len() < n.len() {
-        return false;
+    split_args(units)
+}
+
+/// Split text into arguments by the rules of the Microsoft C runtime:
+/// blanks outside quotes separate, quotes group, `""` inside quotes is a
+/// quote, and backslashes escape only a quote (`2n` backslashes before a
+/// quote are `n` backslashes and a grouping quote, `2n+1` are `n` and a
+/// literal quote).
+fn split_args(mut units: Peekable<impl Iterator<Item = u16>>) -> Vec<Vec<u16>> {
+    let mut args = Vec::new();
+    loop {
+        while units.next_if(|&u| is_blank(u)).is_some() {}
+        if units.peek().is_none() {
+            return args;
+        }
+        let mut arg = Vec::new();
+        let mut quoted = false;
+        while let Some(u) = units.next_if(|&u| quoted || !is_blank(u)) {
+            if u == BACKSLASH {
+                let mut count: usize = 1;
+                while units.next_if_eq(&BACKSLASH).is_some() {
+                    count = count.saturating_add(1);
+                }
+                if units.peek() == Some(&QUOTE) {
+                    arg.extend(repeat_n(BACKSLASH, count / 2));
+                    if !count.is_multiple_of(2) {
+                        units.next();
+                        arg.push(QUOTE);
+                    }
+                } else {
+                    arg.extend(repeat_n(BACKSLASH, count));
+                }
+            } else if u == QUOTE {
+                if quoted && units.next_if_eq(&QUOTE).is_some() {
+                    arg.push(QUOTE);
+                } else {
+                    quoted = !quoted;
+                }
+            } else {
+                arg.push(u);
+            }
+        }
+        args.push(arg);
     }
-    haystack.windows(n.len()).any(|w| w == n.as_slice())
 }
 
 /// Split an environment block into its `NAME=value` segments, dropping the

@@ -170,8 +170,10 @@ struct RunArgs {
     #[arg(long, value_name = "SECONDS", default_value_t = 900,
           value_parser = clap::value_parser!(u64).range(1..))]
     time_limit: u64,
-    /// `run` only: the WINEDEBUG of every Wine process, such as
-    /// `+win,+event`, to trace a test. The traces go into the raw logs.
+    /// `run` only: channels such as `+win,+event`, to trace a test. They
+    /// follow the default in the WINEDEBUG of every Wine process, which
+    /// keeps Wine's err class and traces exceptions and DLL loads, and the
+    /// traces go into the raw logs.
     #[arg(long, value_name = "CHANNELS")]
     winedebug: Option<String>,
     #[command(flatten)]

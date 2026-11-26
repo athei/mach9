@@ -8,7 +8,11 @@
  * on KosmicKrisp, also with a geometry shader and with transform feedback
  * beside GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN, and beside the compute
  * shader counter. Vulkan allows one active statistics query at a time, so
- * Zink has to count them all with one.
+ * Zink has to count them all with one. It also runs occlusion queries over
+ * many frames, more than KosmicKrisp has slots for (test_query_slots), keeps
+ * more query objects alive at once than KosmicKrisp allows allocations
+ * (test_query_objects), and more occlusion queries alive at once than it has
+ * slots for (test_query_spill).
  * Each count that the draws and dispatches fix is compared exactly; counters
  * a driver may count differently (fragment and vertex shader invocations,
  * clipping output) only have to be nonzero. The results are read with
@@ -91,9 +95,15 @@ typedef float GLfloat;
 #define GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN 0x8C88
 #define GL_TRANSFORM_FEEDBACK_BUFFER 0x8C8E
 #define GL_SAMPLES_PASSED 0x8914
+#define GL_SCISSOR_TEST 0x0C11
+#define GL_COLOR_BUFFER_BIT 0x4000
+#define GL_RGBA 0x1908
+#define GL_UNSIGNED_BYTE 0x1401
+#define GL_QUERY_WAIT 0x8E13
 
 #define GL_FUNCS \
     X(void, glGenQueries, (GLsizei, GLuint *)) \
+    X(void, glDeleteQueries, (GLsizei, const GLuint *)) \
     X(void, glBeginQuery, (GLenum, GLuint)) \
     X(void, glEndQuery, (GLenum)) \
     X(void, glGetQueryObjectui64v, (GLuint, GLenum, GLuint64 *)) \
@@ -130,6 +140,15 @@ typedef float GLfloat;
     X(void, glBeginTransformFeedback, (GLenum)) \
     X(void, glEndTransformFeedback, (void)) \
     X(void, glFinish, (void)) \
+    X(void, glFlush, (void)) \
+    X(void, glEnable, (GLenum)) \
+    X(void, glDisable, (GLenum)) \
+    X(void, glScissor, (GLint, GLint, GLsizei, GLsizei)) \
+    X(void, glClearColor, (GLfloat, GLfloat, GLfloat, GLfloat)) \
+    X(void, glClear, (GLuint)) \
+    X(void, glReadPixels, (GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *)) \
+    X(void, glBeginConditionalRender, (GLuint, GLenum)) \
+    X(void, glEndConditionalRender, (void)) \
     X(GLenum, glGetError, (void)) \
     X(const unsigned char *, glGetString, (GLenum))
 
@@ -157,7 +176,7 @@ static const GLfloat vertices[] =
 };
 #define LOOP_FIRST 9
 
-static GLuint gfx_program, compute_program, geometry_program, xfb_program;
+static GLuint gfx_program, compute_program, geometry_program, xfb_program, cover_program;
 static unsigned int failures;
 
 static void report(const char *test, const char *what, GLuint64 got, const char *want)
@@ -681,6 +700,262 @@ static void test_query_buffer(void)
     check_error("query buffer");
 }
 
+/* Occlusion queries over many frames, as a game that tests visibility with a
+ * few query objects does, with one more query object now and then that is
+ * not begun again and is read only at the end. Each query counts a scissor
+ * rectangle of the 64x64 target that a triangle covering the target fills;
+ * the reused query objects write their results into a query buffer object,
+ * which is read once a frame. KosmicKrisp has 32768 occlusion query slots
+ * for the device, and a Zink query pool takes up to 512 of them: a query
+ * object that is not begun again has to hold only its own query of a pool,
+ * and Zink has to use the pool's other queries again, or the 100 queries
+ * kept here take every slot and the queries begun after that count
+ * nothing. */
+#define SLOT_FRAMES 100
+#define SLOT_FRAME_QUERIES 1000
+#define SLOT_RING 4
+static void test_query_slots(void)
+{
+    GLuint ring[SLOT_RING], kept[SLOT_FRAMES], buffer;
+    GLuint64 values[SLOT_FRAME_QUERIES], got;
+    unsigned int frame, i, wrong = 0, total = 0;
+
+    p_glGenQueries(SLOT_RING, ring);
+    p_glGenQueries(SLOT_FRAMES, kept);
+    p_glGenBuffers(1, &buffer);
+    p_glBindBuffer(GL_QUERY_BUFFER, buffer);
+    p_glBufferData(GL_QUERY_BUFFER, sizeof(values), NULL, GL_STREAM_READ);
+    p_glUseProgram(cover_program);
+    p_glEnable(GL_SCISSOR_TEST);
+    for (frame = 0; frame < SLOT_FRAMES; frame++)
+    {
+        for (i = 0; i < SLOT_FRAME_QUERIES; i++)
+        {
+            GLuint q = ring[i % SLOT_RING];
+
+            p_glScissor(0, 0, 1 + i % 64, 64);
+            p_glBeginQuery(GL_SAMPLES_PASSED, q);
+            p_glDrawArrays(GL_TRIANGLES, 0, 3);
+            p_glEndQuery(GL_SAMPLES_PASSED);
+            p_glGetQueryObjectui64v(q, GL_QUERY_RESULT, (GLuint64 *)(uintptr_t)(i * sizeof(GLuint64)));
+        }
+        p_glScissor(0, 0, 1 + frame % 64, 32);
+        p_glBeginQuery(GL_SAMPLES_PASSED, kept[frame]);
+        p_glDrawArrays(GL_TRIANGLES, 0, 3);
+        p_glEndQuery(GL_SAMPLES_PASSED);
+
+        p_glGetBufferSubData(GL_QUERY_BUFFER, 0, sizeof(values), values);
+        for (i = 0; i < SLOT_FRAME_QUERIES; i++, total++)
+        {
+            if (values[i] == 64 * (1 + i % 64))
+                continue;
+            if (wrong++ < 5)
+                printf("glstats: query slots: frame %u, query %u counted %llu samples, expected %u\n",
+                       frame, i, (unsigned long long)values[i], 64 * (1 + i % 64));
+        }
+    }
+    p_glDisable(GL_SCISSOR_TEST);
+    p_glBindBuffer(GL_QUERY_BUFFER, 0);
+    for (frame = 0; frame < SLOT_FRAMES; frame++, total++)
+    {
+        got = result(kept[frame]);
+        if (got == 32 * (1 + frame % 64))
+            continue;
+        if (wrong++ < 5)
+            printf("glstats: query slots: the query kept from frame %u counted %llu samples, expected %u\n",
+                   frame, (unsigned long long)got, 32 * (1 + frame % 64));
+    }
+    if (wrong)
+        printf("glstats: query slots: %u of %u queries counted wrong\n", wrong, total);
+    failures += wrong;
+    check_error("query slots");
+}
+
+/* Many query objects alive at once, each begun once. Zink gives each query
+ * object a buffer of its own for its results, at most 4 KiB for an
+ * occlusion query; KosmicKrisp reports a maxMemoryAllocationCount of 4096, so
+ * those buffers have to share allocations, or the run under the validation
+ * layers reports VUID-vkAllocateMemory-maxMemoryAllocationCount-04101. Each
+ * object counts a scissor rectangle of its own, read at the end. */
+#ifndef QUERY_OBJECTS
+#define QUERY_OBJECTS 8192
+#endif
+static void test_query_objects(void)
+{
+    static GLuint objects[QUERY_OBJECTS];
+    unsigned int i, wrong = 0;
+    GLuint64 got;
+
+    p_glGenQueries(QUERY_OBJECTS, objects);
+    p_glUseProgram(cover_program);
+    p_glEnable(GL_SCISSOR_TEST);
+    for (i = 0; i < QUERY_OBJECTS; i++)
+    {
+        p_glScissor(0, 0, 1 + i % 64, 1 + i / 64 % 64);
+        p_glBeginQuery(GL_SAMPLES_PASSED, objects[i]);
+        p_glDrawArrays(GL_TRIANGLES, 0, 3);
+        p_glEndQuery(GL_SAMPLES_PASSED);
+    }
+    p_glDisable(GL_SCISSOR_TEST);
+    for (i = 0; i < QUERY_OBJECTS; i++)
+    {
+        got = result(objects[i]);
+        if (got == (1 + i % 64) * (1 + i / 64 % 64))
+            continue;
+        if (wrong++ < 5)
+            printf("glstats: query objects: object %u counted %llu samples, expected %u\n", i,
+                   (unsigned long long)got, (1 + i % 64) * (1 + i / 64 % 64));
+    }
+    p_glDeleteQueries(QUERY_OBJECTS, objects);
+    p_glFinish();
+    if (wrong)
+        printf("glstats: query objects: %u of %u objects counted wrong\n", wrong, QUERY_OBJECTS);
+    failures += wrong;
+    check_error("query objects");
+}
+
+/* More occlusion queries alive at once than KosmicKrisp has slots for. Each
+ * of SPILL_OBJECTS query objects stays active over SPILL_FLUSHES draws with
+ * a glFlush after each, so Zink gives it a Vulkan query of its own for every
+ * flush, and keeps them all until the object is begun again or deleted; the
+ * objects are read only at the end. (Query objects of their own would do the
+ * same; test_query_objects keeps many of those alive.) Once the slots are
+ * gone vkCreateQueryPool fails, and Zink has to go on without a Vulkan query
+ * for the draws after that, instead of crashing. An occlusion query that
+ * missed draws that way reports them visible (SPILL_VISIBLE samples), so
+ * that culling and conditional rendering draw rather than hide them. So the
+ * objects count all their draws up to the first draw without a Vulkan query,
+ * and from the object of that draw on they report SPILL_VISIBLE; the last
+ * one also into a query buffer object, and a conditional render on it draws.
+ * The case fails when every draw got a Vulkan query: it is for a driver with
+ * KosmicKrisp's slot limit. Once the objects are deleted, the slots are free
+ * again and new queries count, at the latest SPILL_FRAMES frames later. */
+#define SPILL_OBJECTS 8
+#define SPILL_FLUSHES 4500
+#define SPILL_FRAMES 16
+#define SPILL_VISIBLE 0x7fffffff
+static void test_query_spill(void)
+{
+    unsigned int frame, i, j, wrong = 0;
+    GLuint spill[SPILL_OBJECTS], ring[SLOT_RING], buffer;
+    GLuint64 got, want, written[2];
+    unsigned char pixel[4] = { 0 };
+    int first_visible = -1;
+
+    p_glGenQueries(SPILL_OBJECTS, spill);
+    p_glUseProgram(cover_program);
+    p_glEnable(GL_SCISSOR_TEST);
+    for (i = 0; i < SPILL_OBJECTS; i++)
+    {
+        p_glScissor(0, 0, 8 * (i + 1), 64);
+        p_glBeginQuery(GL_SAMPLES_PASSED, spill[i]);
+        for (j = 0; j < SPILL_FLUSHES; j++)
+        {
+            p_glDrawArrays(GL_TRIANGLES, 0, 3);
+            p_glFlush();
+        }
+        p_glEndQuery(GL_SAMPLES_PASSED);
+    }
+    for (i = 0; i < SPILL_OBJECTS; i++)
+    {
+        got = result(spill[i]);
+        want = 8 * (i + 1) * 64 * SPILL_FLUSHES;
+        if (got == SPILL_VISIBLE && first_visible < 0)
+            first_visible = i;
+        else if (got != (first_visible < 0 ? want : SPILL_VISIBLE) && wrong++ < 5)
+            printf("glstats: query spill: object %u counted %llu samples, expected %llu\n", i,
+                   (unsigned long long)got,
+                   first_visible < 0 ? (unsigned long long)want : SPILL_VISIBLE);
+    }
+    if (first_visible < 0)
+    {
+        printf("glstats: query spill: every draw got a Vulkan query, the slots never ran out\n");
+        wrong++;
+    }
+    else
+        printf("glstats: query spill: the slots ran out in object %d of %u\n", first_visible,
+               SPILL_OBJECTS);
+
+    /* the last object reports visible also into a query buffer object, as a
+     * 64-bit and a 32-bit value */
+    memset(written, 0, sizeof(written));
+    p_glGenBuffers(1, &buffer);
+    p_glBindBuffer(GL_QUERY_BUFFER, buffer);
+    p_glBufferData(GL_QUERY_BUFFER, sizeof(written), written, GL_STREAM_READ);
+    p_glGetQueryObjectui64v(spill[SPILL_OBJECTS - 1], GL_QUERY_RESULT, (GLuint64 *)0);
+    p_glGetQueryObjectuiv(spill[SPILL_OBJECTS - 1], GL_QUERY_RESULT,
+                          (GLuint *)(uintptr_t)sizeof(GLuint64));
+    p_glGetBufferSubData(GL_QUERY_BUFFER, 0, sizeof(written), written);
+    p_glBindBuffer(GL_QUERY_BUFFER, 0);
+    if (first_visible >= 0 && (written[0] != SPILL_VISIBLE || (GLuint)written[1] != SPILL_VISIBLE))
+    {
+        printf("glstats: query spill: the last object wrote %llu and %u into a query buffer, expected %u\n",
+               (unsigned long long)written[0], (GLuint)written[1], SPILL_VISIBLE);
+        wrong++;
+    }
+
+    /* the last object reports visible, so the conditional render draws */
+    p_glDisable(GL_SCISSOR_TEST);
+    p_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    p_glClear(GL_COLOR_BUFFER_BIT);
+    p_glBeginConditionalRender(spill[SPILL_OBJECTS - 1], GL_QUERY_WAIT);
+    p_glDrawArrays(GL_TRIANGLES, 0, 3);
+    p_glEndConditionalRender();
+    p_glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    if (first_visible >= 0 && pixel[0] != 0xff)
+    {
+        printf("glstats: query spill: a conditional render on a query that missed draws did not draw\n");
+        wrong++;
+    }
+    p_glEnable(GL_SCISSOR_TEST);
+    p_glDeleteQueries(SPILL_OBJECTS, spill);
+
+    /* Zink frees the queries of the deleted objects once the batches that
+     * could still use them are done and their states are reused, which
+     * takes a few flushes: frames of queries, each ending in a glFinish,
+     * until all queries of a frame count again; until then they report
+     * visible */
+    p_glGenQueries(SLOT_RING, ring);
+    for (frame = 0; frame < SPILL_FRAMES; frame++)
+    {
+        unsigned int frame_counted = 0;
+
+        for (i = 0; i < SLOT_FRAME_QUERIES; i++)
+        {
+            GLuint q = ring[i % SLOT_RING];
+
+            p_glScissor(0, 0, 1 + i % 64, 64);
+            p_glBeginQuery(GL_SAMPLES_PASSED, q);
+            p_glDrawArrays(GL_TRIANGLES, 0, 3);
+            p_glEndQuery(GL_SAMPLES_PASSED);
+            got = result(q);
+            want = 64 * (1 + i % 64);
+            if (got == want)
+                frame_counted++;
+            else if (got != SPILL_VISIBLE && wrong++ < 5)
+                printf("glstats: query spill: after the delete, frame %u, query %u counted %llu samples, expected %llu or %u\n",
+                       frame, i, (unsigned long long)got, (unsigned long long)want, SPILL_VISIBLE);
+        }
+        p_glFinish();
+        if (frame_counted == SLOT_FRAME_QUERIES)
+            break;
+    }
+    if (frame == SPILL_FRAMES)
+    {
+        printf("glstats: query spill: %u frames after the delete, queries still got no Vulkan query\n",
+               SPILL_FRAMES);
+        wrong++;
+    }
+    else
+        printf("glstats: query spill: frame %u after the delete counted all its queries\n", frame);
+    p_glDeleteQueries(SLOT_RING, ring);
+    p_glDisable(GL_SCISSOR_TEST);
+    if (wrong)
+        printf("glstats: query spill: %u queries counted wrong\n", wrong);
+    failures += wrong;
+    check_error("query spill");
+}
+
 static GLuint compile(GLenum type, const char *source)
 {
     GLuint shader = p_glCreateShader(type);
@@ -736,7 +1011,13 @@ static int setup(void)
         "        EndPrimitive();\n"
         "    }\n"
         "}\n";
-    GLuint vao, vbo, fbo, rb, v, f, c, g;
+    /* one triangle that covers the target */
+    static const char cover_vs[] = "#version 430 core\n"
+        "void main()\n"
+        "{\n"
+        "    gl_Position = vec4((gl_VertexID & 1) * 4 - 1, (gl_VertexID >> 1) * 4 - 1, 0.0, 1.0);\n"
+        "}\n";
+    GLuint vao, vbo, fbo, rb, v, f, c, g, cv;
 
     p_glGenFramebuffers(1, &fbo);
     p_glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -761,8 +1042,10 @@ static int setup(void)
 
     if (!(v = compile(GL_VERTEX_SHADER, vs)) || !(f = compile(GL_FRAGMENT_SHADER, fs)) ||
         !(c = compile(GL_COMPUTE_SHADER, cs)) || !(g = compile(GL_GEOMETRY_SHADER, gs)) ||
+        !(cv = compile(GL_VERTEX_SHADER, cover_vs)) ||
         !(gfx_program = link(v, f, 0, 0)) || !(compute_program = link(c, 0, 0, 0)) ||
-        !(geometry_program = link(v, g, f, 0)) || !(xfb_program = link(v, f, 0, 1)))
+        !(geometry_program = link(v, g, f, 0)) || !(xfb_program = link(v, f, 0, 1)) ||
+        !(cover_program = link(cv, f, 0, 0)))
     {
         printf("glstats: a shader did not compile or link\n");
         return 0;
@@ -862,6 +1145,9 @@ int main(int argc, char **argv)
     test_many_starts();
     test_query_buffer();
     test_query_buffer_unstarted();
+    test_query_slots();
+    test_query_objects();
+    test_query_spill();
 
     printf("glstats: %u wrong values\n", failures);
     make_current(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);

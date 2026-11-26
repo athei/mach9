@@ -22,6 +22,8 @@ on:
       - 'Cargo.lock'
       - 'clippy.toml'
       - 'rustfmt.toml'
+      - 'pins/rust.env'
+      - 'bin/fmt.sh'
       - '.github/workflows/compatdb.yml'
   workflow_dispatch:
 
@@ -50,15 +52,19 @@ jobs:
         with:
           persist-credentials: false
 
-      # rustfmt.toml uses options that only nightly rustfmt applies.
+      # The toolchains pins/rust.env pins: RUSTUP_TOOLCHAIN makes every
+      # later cargo use RUST_STABLE, and bin/fmt.sh runs the rustfmt of
+      # RUST_NIGHTLY, since rustfmt.toml uses options that only nightly
+      # rustfmt applies.
       - name: Install the toolchains
         run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup toolchain install nightly --profile minimal --component rustfmt
-          rustup default stable
+          . pins/rust.env
+          rustup toolchain install "$RUST_STABLE" --profile minimal --component clippy
+          rustup toolchain install "$RUST_NIGHTLY" --profile minimal --component rustfmt
+          echo "RUSTUP_TOOLCHAIN=$RUST_STABLE" >> "$GITHUB_ENV"
 
       - name: Check the formatting
-        run: cargo +nightly fmt --manifest-path "$MANIFEST" -p compatdb -p compatdb-core --check
+        run: bin/fmt.sh --manifest-path "$MANIFEST" -p compatdb -p compatdb-core --check
 
       # Before the tests: the tests of DOCS_URL's links check each anchor
       # against the built pages when they exist (compatdb/core/src/docs).
