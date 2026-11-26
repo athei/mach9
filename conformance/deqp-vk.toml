@@ -174,7 +174,7 @@ cases = [
 # timestamps inside render passes.
 [[group]]
 name = "timestamp"
-issues = [106]
+issues = [106, 117]
 cases = [
     "dEQP-VK.pipeline.monolithic.timestamp.*",
     "dEQP-VK.multiview.*timestamp*",

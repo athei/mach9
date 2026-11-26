@@ -1,6 +1,7 @@
 /* GPU time of KosmicKrisp on the patterns behind the Enshrouded gap (#36):
  * indirect-count draws with a large maxDrawCount (#61), buffer loads under
- * robust buffer access (#62) and chains of compute barriers (#63); and
+ * robust buffer access (#62) and chains of compute barriers (#63); of
+ * timestamps written outside render passes (#117); and
  * whether fragment shaders with 64-bit atomics lose the device. It runs
  * natively, outside Wine, on the Vulkan loader it is given, which takes the
  * driver from VK_DRIVER_FILES. Build and run it with kk.sh next to it:
@@ -60,6 +61,7 @@
  * | dispatch-loads | robustness off, robustBufferAccess, robustBufferAccess2 | DISPATCHES single-workgroup dispatches of 32 threads, LOAD_ITERATIONS iterations of one storage and one uniform buffer load each |
  * | dispatch-loads-wide | the same | the same with four storage and two uniform buffer loads per iteration, each from a buffer of its own |
  * | barrier-chain | barriers on, off | CHAIN_LENGTH single-workgroup dispatches, with a compute-to-compute vkCmdPipelineBarrier2 between each or none |
+ * | timestamps | TIMESTAMP_COUNT timestamps, 1 timestamp | vkCmdWriteTimestamp into each query of a pool of that size, in order, then one vkCmdCopyQueryPoolResults of them all |
  *
  * - A robustness setting is a device feature, so each setting has a device
  *   of its own. The pipelineRobustness arm enables only the feature; its
@@ -107,6 +109,14 @@
  *   about 27 us of GPU time (#117). In the draw cases the first timestamp's
  *   encoder ends when rendering begins, so that resolve falls inside the
  *   interval: a constant of the case, the same in each arm.
+ * - The timestamps case times what timestamps cost, resolves included: the
+ *   copy waits for the resolves of the timestamps before it, so they fall
+ *   inside the interval. The difference between its arms over
+ *   TIMESTAMP_COUNT - 1 is the GPU time of one timestamp. Each round uses
+ *   the counter heap entries the round before gave back, so the arms show
+ *   whether a KosmicKrisp resolves the timestamps of consecutive queries in
+ *   one call after a reset. The check compares the copied values with
+ *   vkGetQueryPoolResults and requires them non-zero and not decreasing.
  * - MESA_KK_DEBUG=msl prints the MSL of each arm's shaders as the driver
  *   compiles them, for #62.
  *
@@ -153,6 +163,9 @@
 /* vec4s in each storage buffer of dispatch-loads, a power of two. */
 #define SOURCE_VEC4S 16384
 #define CHAIN_LENGTH 256
+/* The timestamps of the larger timestamps arm, those of the Metal
+ * measurement in #117. */
+#define TIMESTAMP_COUNT 1024
 /* The bindings of loads_wide.comp, the most of any shader here. */
 #define MAX_BINDINGS 7
 /* The load before each timed interval: about 29 ms of GPU time on an M5 Max,
@@ -242,7 +255,8 @@
     X(vkCmdDrawIndexedIndirectCount)                                                               \
     X(vkCmdDraw)                                                                                   \
     X(vkCmdCopyBufferToImage)                                                                      \
-    X(vkCmdCopyImageToBuffer)
+    X(vkCmdCopyImageToBuffer)                                                                      \
+    X(vkCmdCopyQueryPoolResults)
 
 #define DECLARE(name) static PFN_##name name;
 INSTANCE_FUNCS(DECLARE)
@@ -272,6 +286,7 @@ enum kind
     KIND_NONINDEXED,
     KIND_LOADS,
     KIND_CHAIN,
+    KIND_TIMESTAMPS,
     KIND_ATOMIC64,
 };
 
@@ -322,6 +337,8 @@ struct arm
     /* dispatch-loads-wide: loads_wide.comp instead of loads.comp. */
     bool wide;
     enum pattern pattern;
+    /* timestamps: the timestamps written between the two of the interval. */
+    uint32_t timestamps;
 
     bool selected, ready, failed;
     /* A draw arm's check: the occlusion query missed the expected count. */
@@ -339,6 +356,8 @@ struct arm
     VkImage counters;
     VkDeviceMemory counters_memory;
     VkImageView counters_view;
+    /* The query pool of a timestamps arm. */
+    VkQueryPool queries;
     /* result: the fragment counter of a draw arm's check, what a compute
      * arm writes, or the guards of atomic64-exchange. readback: the
      * counters of the atomic64 image cases, zero before the first draw. */
@@ -358,6 +377,7 @@ struct arm
 #define LOADS(case_name, robust, is_wide)                                                          \
     { .name = case_name, .kind = KIND_LOADS, .robustness = robust, .wide = is_wide }
 #define CHAIN(on) { .name = "barrier-chain", .kind = KIND_CHAIN, .barriers = on }
+#define TIMESTAMPS(n) { .name = "timestamps", .kind = KIND_TIMESTAMPS, .timestamps = n }
 #define ATOMIC64(case_name, what) { .name = case_name, .kind = KIND_ATOMIC64, .pattern = what }
 
 static struct arm arms[] = {
@@ -391,6 +411,8 @@ static struct arm arms[] = {
     LOADS("dispatch-loads-wide", ROBUST_RBA2, true),
     CHAIN(true),
     CHAIN(false),
+    TIMESTAMPS(TIMESTAMP_COUNT),
+    TIMESTAMPS(1),
     ATOMIC64("atomic64-exchange", PATTERN_EXCHANGE),
     ATOMIC64("atomic64-one-texel", PATTERN_ONE_TEXEL),
     ATOMIC64("atomic64-own-texel", PATTERN_OWN_TEXEL),
@@ -463,6 +485,9 @@ static void settings(const struct arm *arm, char *out, size_t size)
     case KIND_CHAIN:
         snprintf(out, size, "barriers=%s dispatches=%u", arm->barriers ? "on" : "off",
                  CHAIN_LENGTH);
+        break;
+    case KIND_TIMESTAMPS:
+        snprintf(out, size, "timestamps=%u", arm->timestamps);
         break;
     case KIND_ATOMIC64:
         snprintf(out, size, "draw=%ux%u seconds=%u", atomic64_width(arm), atomic64_height(arm),
@@ -926,7 +951,8 @@ static bool create_target(struct arm *arm, VkFormat format, VkImageUsageFlags us
 }
 
 /* The size of an arm's result buffer: one vec4 or counter per lane of a
- * compute arm, the fragment counter of a draw arm. */
+ * compute arm, the copied timestamps of a timestamps arm, the fragment
+ * counter of a draw arm. */
 static size_t result_size(const struct arm *arm)
 {
     switch (arm->kind)
@@ -935,6 +961,8 @@ static size_t result_size(const struct arm *arm)
         return 32 * 4 * sizeof(float);
     case KIND_CHAIN:
         return 32 * sizeof(uint32_t);
+    case KIND_TIMESTAMPS:
+        return arm->timestamps * sizeof(uint64_t);
     default:
         return sizeof(uint32_t);
     }
@@ -1041,6 +1069,78 @@ static bool setup_chain(struct arm *arm)
                          NULL, &arm->result) &&
            create_set(arm, buffers, 1) &&
            create_compute_pipeline(arm, chain_comp, sizeof(chain_comp), 0);
+}
+
+static bool setup_timestamps(struct arm *arm)
+{
+    VkQueryPoolCreateInfo info = { .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                                   .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                                   .queryCount = arm->timestamps };
+
+    return create_buffer(arm->dev, result_size(arm), VK_BUFFER_USAGE_TRANSFER_DST_BIT, NULL,
+                         &arm->result) &&
+           ok(vkCreateQueryPool(arm->dev->device, &info, NULL, &arm->queries),
+              "vkCreateQueryPool");
+}
+
+/* Records the work of a timestamps arm: a timestamp into each query of its
+ * pool, in order, and one copy of them all into its result buffer, which
+ * waits for their resolves. */
+static void record_timestamps(struct arm *arm, VkCommandBuffer cmd)
+{
+    uint32_t i;
+
+    for (i = 0; i < arm->timestamps; i++)
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, arm->queries, i);
+    vkCmdCopyQueryPoolResults(cmd, arm->queries, 0, arm->timestamps, arm->result.buffer, 0,
+                              sizeof(uint64_t),
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+}
+
+/* The check of a timestamps arm: every copied timestamp is non-zero, none
+ * is earlier than the one before, the last is later than the first, and
+ * each equals what vkGetQueryPoolResults reads. */
+static bool check_timestamps(struct arm *arm, char *wrong, size_t size)
+{
+    const uint64_t *copied = arm->result.map;
+    uint64_t *read = calloc(arm->timestamps, sizeof(uint64_t));
+    bool good = false;
+    uint32_t i;
+
+    if (!read)
+    {
+        snprintf(wrong, size, "out of memory");
+        return false;
+    }
+    if (!ok(vkGetQueryPoolResults(arm->dev->device, arm->queries, 0, arm->timestamps,
+                                  arm->timestamps * sizeof(uint64_t), read, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT),
+            "vkGetQueryPoolResults"))
+    {
+        snprintf(wrong, size, "the results could not be read");
+        goto out;
+    }
+    for (i = 0; i < arm->timestamps; i++)
+    {
+        if (!copied[i] || copied[i] != read[i] || (i && copied[i] < copied[i - 1]))
+        {
+            snprintf(wrong, size, "timestamp %u was copied as %llu and reads %llu, after %llu", i,
+                     (unsigned long long)copied[i], (unsigned long long)read[i],
+                     i ? (unsigned long long)copied[i - 1] : 0ull);
+            goto out;
+        }
+    }
+    if (arm->timestamps > 1 && copied[arm->timestamps - 1] == copied[0])
+    {
+        snprintf(wrong, size, "all %u timestamps read %llu", arm->timestamps,
+                 (unsigned long long)copied[0]);
+        goto out;
+    }
+    good = true;
+
+out:
+    free(read);
+    return good;
 }
 
 /* The descriptor set of an atomic64 image case: its storage image at
@@ -1349,11 +1449,14 @@ static bool run(struct arm *arm, bool check, double *ms)
     VkSubmitInfo submit = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                             .commandBufferCount = 1,
                             .pCommandBuffers = &dev->cmd };
-    /* Makes the shader writes the check reads visible to the host. */
+    /* Makes the shader writes and copies the check reads visible to the
+     * host. */
     VkMemoryBarrier2 to_host = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
                                  .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                 .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                 VK_PIPELINE_STAGE_2_COPY_BIT,
+                                 .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                                  VK_ACCESS_2_TRANSFER_WRITE_BIT,
                                  .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
                                  .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT };
     VkDependencyInfo dependency = { .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -1363,6 +1466,8 @@ static bool run(struct arm *arm, bool check, double *ms)
 
     if (check) memset(arm->result.map, 0, result_size(arm));
     vkResetQueryPool(dev->device, dev->timestamps, 0, 2);
+    if (arm->kind == KIND_TIMESTAMPS)
+        vkResetQueryPool(dev->device, arm->queries, 0, arm->timestamps);
     if (!ok(vkResetFences(dev->device, 1, &dev->fence), "vkResetFences") ||
         !ok(vkResetCommandBuffer(dev->cmd, 0), "vkResetCommandBuffer") ||
         !ok(vkBeginCommandBuffer(dev->cmd, &begin), "vkBeginCommandBuffer"))
@@ -1380,6 +1485,8 @@ static bool run(struct arm *arm, bool check, double *ms)
         vkCmdResetQueryPool(dev->cmd, dev->occlusion, 0, 1);
     if (arm->kind == KIND_INDEXED || arm->kind == KIND_NONINDEXED)
         record_draws(arm, dev->cmd, check);
+    else if (arm->kind == KIND_TIMESTAMPS)
+        record_timestamps(arm, dev->cmd);
     else
         record_dispatches(arm, dev->cmd, arm->kind == KIND_LOADS ? DISPATCHES : CHAIN_LENGTH, 1);
     if (check)
@@ -1418,6 +1525,15 @@ static bool run(struct arm *arm, bool check, double *ms)
                 printf("kk: FAIL %s %s: the occlusion query counted %llu samples, not %u\n",
                        arm->name, what, (unsigned long long)samples, want);
                 arm->query_failed = true;
+            }
+        }
+        else if (arm->kind == KIND_TIMESTAMPS)
+        {
+            char wrong[160];
+            if (!check_timestamps(arm, wrong, sizeof(wrong)))
+            {
+                printf("kk: FAIL %s %s: %s\n", arm->name, what, wrong);
+                return false;
             }
         }
         else
@@ -1492,6 +1608,9 @@ static bool setup(struct arm *arm)
     case KIND_CHAIN:
         if (!setup_chain(arm)) return false;
         break;
+    case KIND_TIMESTAMPS:
+        if (!setup_timestamps(arm)) return false;
+        break;
     case KIND_ATOMIC64:
         /* Not timed: stress() runs them on a device of their own. */
         return false;
@@ -1515,6 +1634,7 @@ static void teardown(struct arm *arm)
     if (arm->counters_view) vkDestroyImageView(dev->device, arm->counters_view, NULL);
     if (arm->counters) vkDestroyImage(dev->device, arm->counters, NULL);
     if (arm->counters_memory) vkFreeMemory(dev->device, arm->counters_memory, NULL);
+    if (arm->queries) vkDestroyQueryPool(dev->device, arm->queries, NULL);
     destroy_buffer(dev, &arm->vertices);
     destroy_buffer(dev, &arm->indices);
     destroy_buffer(dev, &arm->indirect);
