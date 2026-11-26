@@ -98,6 +98,14 @@ The comments in config files an earlier Mach9 wrote link to
 `docs.mach9.app`, which no longer exists. The same pages are on
 `mach9.app`: replace the host in the link.
 
+## Licences
+
+Licenses in the Dock menu opens, in Finder, the folder with the licence
+texts of Mach9 and of what it ships, with `SOURCES.md` selected. That file
+names, for each component under a GNU licence (GPL or LGPL), the source it
+was built from and where to get it. The texts of the Wine engine are in the
+folder `engine`.
+
 ## When something goes wrong
 
 - The Dock menu shows no games, only Options and Open: open Mach9 once from

@@ -29,7 +29,7 @@ itself.
 | `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking; a non-empty directory without `bin/wine` is still refused |
 | `bundle-wine.sh` | `--runtime-only` | No development files; the flavor to put into an application |
 | `bundle-wine.sh` | `--runtime-dest <dir>` | Also writes the `--runtime-only` bundle to `<dir>/wine`, copied from the full bundle after its checks (Step 5 and the smoke test); the copy gets no `wine-symbols`, even with `--symbols`; excludes `--runtime-only` |
-| `bundle-wine.sh` | `--strict-floor` | A Mach-O above the floor is an error, not a warning ([Homebrew libraries and the floor](internals.md#homebrew-libraries-and-the-floor)) |
+| `bundle-wine.sh` | `--strict-floor` | A Mach-O above the floor is an error, not a warning ([Homebrew libraries and the floor](internals.md#homebrew-libraries-and-the-floor)), and so is a source the source notice names at a commit no public repository has ([licences](internals.md#licences)) |
 | `bundle-wine.sh` | `--symbols` | Also keeps the unstripped PE files in `wine-symbols` next to the bundle |
 | `bundle-wine.sh` | `--keep-symbols` | Skips the stripping in Step 4e, so the PE files keep their DWARF and COFF symbols; for local bundles that get debugged or profiled, and excludes `--symbols` |
 | `bundle-wine.sh` | `--skip-smoke` | Leaves out the smoke test and the preflight checks only it needs (validation layers, llvm-mingw compilers); Step 5 and Step 6 still run; for local deploys of a build that was already tested |
@@ -105,7 +105,7 @@ The libraries built here that configure finds are described with them:
 | `share/vulkan/icd.d/` | KosmicKrisp's manifest, naming the driver by a path relative to the manifest |
 | `share/vulkan/explicit_layer.d/` | GFXReconstruct's layer manifest, naming the layer in `lib/external/` the same way; the loader reads it only for a process compatdb.so gives `vulkan_capture` ([Vulkan capture](internals.md#vulkan-capture)) |
 | `share/wine/fonts/` | Wine's fonts and the [icon font](internals.md#icon-font) |
-| `share/licenses/` | The licence texts of what the bundle ships, most in a directory per component ([licences](internals.md#licences)) |
+| `share/licenses/` | The licence texts of what the bundle ships, most in a directory per component, and `SOURCES.md`, the source each component under a GNU licence was built from ([licences](internals.md#licences)) |
 
 What the Direct3D trees and the default directories hold, and why, is in
 [Direct3D trees](maintenance.md#direct3d-trees).
@@ -121,8 +121,8 @@ make -C launcher install                       # the launcher's parts into an in
 - `app` assembles the bundle from nothing: the Wine runtime, the launcher,
   the Dock tile plug-in, Sparkle, the icon, the Info.plist and, in
   `Contents/Resources/licenses`, the licence texts of the launcher's parts
-  ([licences](internals.md#licences)). It refuses a Wine tree with
-  development files.
+  with links to the runtime's ([licences](internals.md#licences)). It
+  refuses a Wine tree with development files or without the source notice.
 - `install` is for development. It replaces the launcher's parts in an
   existing bundle (`APP=` names another than the one in `/Applications`)
   and signs it with the Developer ID identity in the keychain.

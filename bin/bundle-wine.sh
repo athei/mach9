@@ -12,6 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # stage_licenses, for the licence texts Step 4c installs.
 # shellcheck source=lib/licenses.sh
 . "$SCRIPT_DIR/lib/licenses.sh"
+# GIT_SOURCES and published_repo, for the source notice Step 4c writes.
+# shellcheck source=lib/sources.sh
+. "$SCRIPT_DIR/lib/sources.sh"
 CACHE_DIR="${CACHE_DIR:-$ROOT/cache}"
 MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
@@ -52,12 +55,15 @@ usage() {
 # bottles, which carry the minos of the macOS they were poured for, so they
 # meet the floor only on a host of the floor's major version, where such a
 # build has to run (docs/internals.md). A local build on a newer macOS gets
-# newer bottles and is not distributed, so a warning is enough there.
-# --symbols keeps the PE files as they were before Step 4e stripped them in
-# <dir>/wine-symbols. --yes deletes an existing bundle at <dir>/wine without
-# asking first, for a run nobody watches. --keep-symbols skips the stripping in
-# Step 4e, so the PE files in the bundle keep their DWARF and COFF symbols, for
-# a local bundle that gets debugged or profiled. It excludes --symbols, which
+# newer bottles and is not distributed, so a warning is enough there. For the
+# same reason --strict-floor also refuses a source the source notice names at
+# a commit no public repository has, which a local build may be and the
+# notice then marks (check_sources_published). --symbols keeps the PE files
+# as they were before Step 4e stripped them in <dir>/wine-symbols. --yes
+# deletes an existing bundle at <dir>/wine without asking first, for a run
+# nobody watches. --keep-symbols skips the stripping in Step 4e, so the PE
+# files in the bundle keep their DWARF and COFF symbols, for a local bundle
+# that gets debugged or profiled. It excludes --symbols, which
 # would have nothing to split off. --runtime-dest also writes the runtime-only
 # bundle, the one --runtime-only would write, to <dir>/wine: Step 6 copies
 # the finished full bundle there, after the smoke test, and removes what the
@@ -485,10 +491,12 @@ rpath_dep_source() {
 # licence files at the top of its keg (DEPS_PREFIX/Cellar/<formula>/<version>,
 # where the library's path leads once its symlinks are resolved) into
 # share/licenses/homebrew/<formula>/, once per formula, and add that
-# directory to LICENSE_WANT. A formula KEG_PINNED_LICENSES names also gets
-# the texts from this repository's licenses/ that its keg lacks, with a
-# warning when the keg, without Homebrew's _<n> revision, is at another
-# version than the one a text was pinned from. Other paths are skipped.
+# directory to LICENSE_WANT and <formula>:<keg> to NOTICE_KEGS, for the
+# source notice (write_source_notice). A formula KEG_PINNED_LICENSES names
+# also gets the texts from this repository's licenses/ that its keg lacks,
+# with a warning when the keg, without Homebrew's _<n> revision, is at
+# another version than the one a text was pinned from. Other paths are
+# skipped.
 # Exits on a library outside a keg and on a keg without a licence file.
 #
 # KEG_PINNED_LICENSES, as <formula>:<version>:<file in licenses/>: freetype's
@@ -537,6 +545,7 @@ install_keg_licenses() {
         fi
         echo "    share/licenses/homebrew/$formula:$found"
         LICENSE_WANT+=("share/licenses/homebrew/$formula")
+        NOTICE_KEGS+=("$formula:$keg")
         for entry in $KEG_PINNED_LICENSES; do
             [ "${entry%%:*}" = "$formula" ] || continue
             pinned=${entry##*:}
@@ -554,6 +563,265 @@ install_keg_licenses() {
             fi
         done
     done
+}
+
+# ── Source notice ───────────────────────────────────────────────────────
+# share/licenses/SOURCES.md names, for every component the bundle ships under
+# a GNU licence (GPL, LGPL or AGPL, alone or as one choice), the source it was
+# built from and how to get it, so that a recipient of the bundle or of
+# Mach9.app can get the source the licence entitles them to. Step 4c writes it
+# from the data the bundle is assembled from.
+
+SOURCE_NOTICE=share/licenses/SOURCES.md
+# The wraps build-gstreamer.sh stages in GSTREAMER_DIST/wraps whose tarballs
+# the bundle ships under the LGPL, as <wrap>:<licence texts under
+# share/licenses, comma separated>. libffi and pcre2 are MIT and BSD.
+NOTICE_WRAPS="glib:gstreamer/glib.txt,gstreamer/glib-LICENSES
+proxy-libintl:gstreamer/proxy-libintl.txt"
+
+# notice_git_sources: print each git source the notice names as
+# <name>|<repository>|<commit>|<licence texts>: this repository, whose
+# scripts control how each component is compiled and linked and which the
+# LGPL counts as part of the source (mach9_source in sources.sh); WINE_SRC at
+# wine_src_commit, which the preflight matched with the Wine SDK; and each
+# LGPL component of GIT_SOURCES, the *_REPO its build script fetched from
+# with the commit it wrote into its dist, which the preflight matched with
+# the pin or *_REF. A repository URL has colons, hence the bars.
+notice_git_sources() {
+    local name repo file texts
+    echo "Mach9 build scripts|$(mach9_source)|mach9/LICENSE"
+    echo "Wine|$WINE_SRC|$(wine_src_commit)|wine/LICENSE,wine/COPYING.LIB"
+    while IFS=: read -r name repo _ file texts; do
+        [ -n "$texts" ] || continue
+        echo "$name|${!repo}|$(source_commit "$file")|$texts"
+    done <<< "$GIT_SOURCES"
+}
+
+# check_sources_published: with --strict-floor, for a bundle that is
+# distributed, exit unless every source notice_git_sources names is public
+# (published_repo): the notice would otherwise name a commit nobody can
+# fetch. Runs in the preflight, before anything is deleted.
+check_sources_published() {
+    local name repo commit bad=0
+    [ "$STRICT_FLOOR" -eq 1 ] || return 0
+    while IFS='|' read -r name repo commit _; do
+        if [ -z "$commit" ] || [ -z "$(published_repo "$repo" "$commit")" ]; then
+            echo "  ERROR: $name is at ${commit:-no commit}, which no public repository has"
+            bad=1
+        fi
+    done < <(notice_git_sources)
+    if [ "$bad" -ne 0 ]; then
+        echo "Error: --strict-floor bundles only from published sources, which the source notice names"
+        echo "(push the commits, or commit the changes, and build again)"
+        exit 1
+    fi
+    echo "  Sources: every source the notice names is published."
+}
+
+# wrap_value <wrap file> <key>: print the value of <key> in a meson wrap.
+wrap_value() {
+    sed -n "s/^$2 *= *//p" "$1" | head -n 1
+}
+
+# sbom_value <sbom> <key path>: print a string of the SPDX document <sbom>,
+# or nothing.
+sbom_value() {
+    plutil -extract "$2" raw -o - "$1" 2>/dev/null || true
+}
+
+# sbom_download <sbom> <index>: print the download URL and SHA-256 of the
+# package at <index> of the SPDX document <sbom> as "<url> <sha256>", or
+# nothing when it lacks either.
+sbom_download() {
+    local url sha
+    url=$(sbom_value "$1" "packages.$2.downloadLocation")
+    case "$url" in
+        http://*|https://*) ;;
+        *) return 0 ;;
+    esac
+    [ "$(sbom_value "$1" "packages.$2.checksums.0.algorithm")" = SHA256 ] || return 0
+    sha=$(sbom_value "$1" "packages.$2.checksums.0.checksumValue")
+    [ -n "$sha" ] && echo "$url $sha"
+    return 0
+}
+
+# keg_source <formula> <keg>: set KEG_URL, KEG_SHA256, KEG_VERSION and
+# KEG_LICENSE from the package of the formula's source archive in the keg's
+# SPDX document (sbom.spdx.json, which Homebrew writes into each keg it
+# installs, poured from a bottle or built: SPDXRef-Archive-<id>-src, named
+# after the formula), KEG_PATCHES to "<url> <sha256>" of each patch the
+# document lists as applied to it (SPDXRef-Patch-<id>-<n>), and KEG_TAP from
+# the install receipt. The formula's own revision is not recoverable from a
+# keg (an install from Homebrew's API records no tap commit), so the patches
+# come from the document. Exits when one is missing, a patch included.
+keg_source() {
+    local formula="$1" keg="$2" sbom="$2/sbom.spdx.json" i=0 id download
+    KEG_URL="" KEG_SHA256="" KEG_VERSION="" KEG_LICENSE="" KEG_PATCHES=()
+    while id=$(plutil -extract "packages.$i.SPDXID" raw -o - "$sbom" 2>/dev/null); do
+        case "$id" in
+            SPDXRef-Archive-*-src)
+                if [ "$(sbom_value "$sbom" "packages.$i.name")" = "$formula" ]; then
+                    download=$(sbom_download "$sbom" "$i")
+                    KEG_URL=${download% *}
+                    KEG_SHA256=${download##* }
+                    KEG_VERSION=$(sbom_value "$sbom" "packages.$i.versionInfo")
+                    KEG_LICENSE=$(sbom_value "$sbom" "packages.$i.licenseConcluded")
+                fi
+                ;;
+            SPDXRef-Patch-*)
+                download=$(sbom_download "$sbom" "$i")
+                if [ -z "$download" ]; then
+                    echo "Error: the keg $keg lists the patch $id in sbom.spdx.json without a URL"
+                    echo "and SHA-256, so the source notice cannot name it"
+                    exit 1
+                fi
+                KEG_PATCHES+=("$download")
+                ;;
+        esac
+        i=$((i + 1))
+    done
+    KEG_TAP=$(plutil -extract source.tap raw -o - "$keg/INSTALL_RECEIPT.json" 2>/dev/null) || KEG_TAP=""
+    [ "$KEG_LICENSE" != NOASSERTION ] || KEG_LICENSE=""
+    if [ -z "$KEG_URL" ] || [ -z "$KEG_SHA256" ] || [ -z "$KEG_VERSION" ] ||
+       [ -z "$KEG_LICENSE" ] || [ -z "$KEG_TAP" ]; then
+        echo "Error: the keg $keg does not name its source in sbom.spdx.json (the package"
+        echo "SPDXRef-Archive-<id>-src named $formula, with URL, SHA-256, version and licence)"
+        echo "and its tap in INSTALL_RECEIPT.json, which the source notice needs (brew reinstall $formula)"
+        exit 1
+    fi
+}
+
+# notice_line <text>: add a line to NOTICE.
+notice_line() {
+    NOTICE+="$1"$'\n'
+}
+
+# notice_texts <texts>: add the licence line of a section for the texts, comma
+# separated paths under share/licenses, or exit when Step 4c installed one
+# of them not.
+notice_texts() {
+    local t line=""
+    for t in ${1//,/ }; do
+        if [ ! -e "$LICENSES_DIR/$t" ]; then
+            echo "Error: the source notice names share/licenses/$t, which Step 4c did not install"
+            exit 1
+        fi
+        line="${line:+$line, }\`$t\`"
+    done
+    notice_line "- Licence texts: $line"
+}
+
+# write_source_notice: write SOURCE_NOTICE and add it to LICENSE_WANT. One
+# section per source:
+#  - This repository's scripts, Wine and the LGPL components of GIT_SOURCES
+#    (notice_git_sources): the public repository and the commit. A commit no
+#    public repository has (published_repo), from a local commit or a tree
+#    with uncommitted changes, is written as not published, with a warning;
+#    the preflight refused it already under --strict-floor.
+#  - glib and proxy-libintl (NOTICE_WRAPS): the tarball, its SHA-256 and the
+#    patches the wrap GStreamer was built with names.
+#  - Each Homebrew keg Step 3 copied from (NOTICE_KEGS) whose source the
+#    keg's SPDX document puts under a licence that names a GNU GPL, LGPL or
+#    AGPL, as the only licence or as one choice: the tarball, its SHA-256,
+#    the patches and the formula that built it (keg_source).
+# Exits when the data of a section or one of its licence texts is missing.
+write_source_notice() {
+    local name repo commit texts url hash entry wrap file patches p formula keg
+    local unpublished=()
+    NOTICE=""
+    notice_line "# Sources of the components under a GNU licence"
+    notice_line ""
+    notice_line "These components are under the GNU General, Lesser General or Library"
+    notice_line "General Public License, or can be used under one of them. Each section"
+    notice_line "names the source the component was built from, where to get it, and its"
+    notice_line "licence texts, which are in the directory of this file, the engine's"
+    notice_line "share/licenses. The first section names the scripts that built the"
+    notice_line "others and control how each is compiled and linked."
+    notice_line ""
+    notice_line "- A repository and a commit: \`git clone <repository> src\`, then"
+    notice_line "  \`git -C src checkout <commit>\` and"
+    notice_line "  \`git -C src submodule update --init --recursive\`."
+    notice_line "- A tarball and a SHA-256: download the tarball and compare its SHA-256."
+    notice_line ""
+    notice_line "proxy-libintl is linked statically into glib and GStreamer. Both are LGPL"
+    notice_line "themselves and are built from the sources below by those scripts, so a"
+    notice_line "recipient can modify proxy-libintl and relink them."
+    while IFS='|' read -r name repo commit texts; do
+        if [ -z "$commit" ]; then
+            echo "Error: the source notice has no commit for $name"
+            exit 1
+        fi
+        url=$(published_repo "$repo" "$commit")
+        notice_line ""
+        notice_line "## $name"
+        notice_line ""
+        if [ -n "$url" ]; then
+            notice_line "- Repository: $url"
+            notice_line "- Commit: \`$commit\`"
+        else
+            case "$commit" in
+                *-dirty) notice_line "- Source: not published: commit \`${commit%-dirty}\` with uncommitted changes (a local build)" ;;
+                *) notice_line "- Source: not published: commit \`$commit\`, which no public repository has (a local build)" ;;
+            esac
+            unpublished+=("$name")
+        fi
+        notice_texts "$texts"
+    done < <(notice_git_sources)
+    while IFS=: read -r wrap texts; do
+        file="$GSTREAMER_DIST/wraps/$wrap.wrap"
+        url=$(wrap_value "$file" source_url 2>/dev/null)
+        hash=$(wrap_value "$file" source_hash 2>/dev/null)
+        if [ -z "$url" ] || [ -z "$hash" ]; then
+            echo "Error: $GSTREAMER_DIST has no wraps/$wrap.wrap with its source_url and source_hash"
+            echo "(run build-gstreamer.sh)"
+            exit 1
+        fi
+        notice_line ""
+        notice_line "## $wrap"
+        notice_line ""
+        notice_line "- Tarball: $url"
+        notice_line "- SHA-256: \`$hash\`"
+        if [ -n "$(wrap_value "$file" patch_url)" ]; then
+            notice_line "- Build files: $(wrap_value "$file" patch_url) (SHA-256 \`$(wrap_value "$file" patch_hash)\`)"
+        fi
+        patches=""
+        for p in $(wrap_value "$file" diff_files | tr ',' ' '); do
+            patches="${patches:+$patches, }\`$p\`"
+        done
+        if [ -n "$patches" ]; then
+            notice_line "- Patches: $patches in \`subprojects/packagefiles/\` of GStreamer's source above"
+        fi
+        notice_texts "$texts"
+    done <<< "$NOTICE_WRAPS"
+    for entry in "${NOTICE_KEGS[@]}"; do
+        formula=${entry%%:*}
+        keg=${entry#*:}
+        keg_source "$formula" "$keg"
+        case "$KEG_LICENSE" in
+            *GPL*) ;;
+            *) continue ;;
+        esac
+        notice_line ""
+        notice_line "## $formula (Homebrew)"
+        notice_line ""
+        notice_line "- Tarball: $KEG_URL"
+        notice_line "- SHA-256: \`$KEG_SHA256\`"
+        for p in "${KEG_PATCHES[@]}"; do
+            notice_line "- Patch: ${p% *} (SHA-256 \`${p##* }\`)"
+        done
+        notice_line "- Built by: the formula $formula of the Homebrew tap $KEG_TAP, version"
+        notice_line "  $KEG_VERSION (keg ${keg##*/})"
+        notice_line "- Licence, as Homebrew gives it: $KEG_LICENSE"
+        notice_texts "homebrew/$formula"
+    done
+    printf '%s' "$NOTICE" > "$WINE_DIR/$SOURCE_NOTICE"
+    LICENSE_WANT+=("$SOURCE_NOTICE")
+    echo "    $SOURCE_NOTICE: $(grep -c '^## ' "$WINE_DIR/$SOURCE_NOTICE") components"
+    if [ ${#unpublished[@]} -gt 0 ]; then
+        p=$(printf '%s, ' "${unpublished[@]}")
+        echo "  WARNING: $SOURCE_NOTICE names no public source for ${p%, };"
+        echo "  this bundle is for local use only (--strict-floor refuses it)"
+    fi
 }
 
 # check_rpath_deps <dylib>...: report every @rpath dependency of the dylibs
@@ -2733,7 +3001,8 @@ check_mesa_build() {
 # check_gstreamer_build: exit unless build-gstreamer.sh staged GStreamer
 # completely from the commits redist.env pins: the COMMIT it wrote last and
 # its FFMPEG_COMMIT, and the libraries and plugins Wine's media code needs
-# first, and that winegstreamer.so was built against this dist. Set
+# first, its licences and the wraps of NOTICE_WRAPS, and that
+# winegstreamer.so was built against this dist. Set
 # GST_LIBGSTREAMER to the file name of libgstreamer-1.0, which
 # carries its version.
 check_gstreamer_build() {
@@ -2774,6 +3043,15 @@ check_gstreamer_build() {
         fi
     done
     check_dist_licenses "$GSTREAMER_DIST" build-gstreamer.sh gstreamer
+    # The source notice names the tarball of each of these wraps.
+    while IFS=: read -r f _; do
+        if [ -z "$(wrap_value "$GSTREAMER_DIST/wraps/$f.wrap" source_url 2>/dev/null)" ] ||
+           [ -z "$(wrap_value "$GSTREAMER_DIST/wraps/$f.wrap" source_hash 2>/dev/null)" ]; then
+            echo "Error: $GSTREAMER_DIST has no wraps/$f.wrap with its source_url and source_hash"
+            echo "(run build-gstreamer.sh)"
+            exit 1
+        fi
+    done <<< "$NOTICE_WRAPS"
     echo "  GStreamer: $GSTREAMER_GIT_TAG ($built), FFmpeg $GSTREAMER_FFMPEG_GIT_COMMIT"
 }
 
@@ -3585,6 +3863,7 @@ check_vkd3d_proton_build
 check_mesa_build
 check_gstreamer_build
 check_gfxreconstruct_build
+check_sources_published
 if [ "$SKIP_SMOKE" -eq 0 ]; then
     check_validation_layers_build
     for arch in $SMOKE_PE_ARCHS x86_64 i686; do
@@ -4277,6 +4556,9 @@ cp "$REPO_DIR/licenses/uno-fluent-icons.txt" "$WINE_DIR/$ICON_FONT_LICENSE"
 #  - mach9/ and compatdb/: Mach9's own licence, which covers compatdb.so,
 #    and those of Rust's standard library and the crates compatdb.so is
 #    built from (bin/rust-licenses.sh).
+#  - SOURCES.md: the source notice of the components under a GNU licence,
+#    written last from this repository, the Wine source, the dists and the
+#    kegs (write_source_notice).
 # LICENSE_WANT collects the texts and directories Step 5 checks.
 #
 # DIST_LICENSES names, by its staged name, every text the build scripts'
@@ -4327,6 +4609,7 @@ LICENSE_WANT+=("share/licenses/llvm-mingw/LICENSE.TXT")
 for f in $MINGW_LICENSES; do
     LICENSE_WANT+=("share/licenses/llvm-mingw/${f%%=*}")
 done
+NOTICE_KEGS=()
 install_keg_licenses "${WALK[@]}"
 stage_licenses "$REPO_DIR" "$LICENSES_DIR/mach9" "LICENSE=LICENSE"
 LICENSE_WANT+=("share/licenses/mach9/LICENSE")
@@ -4339,6 +4622,7 @@ for crate in $COMPATDB_CRATES; do
         LICENSE_WANT+=("share/licenses/compatdb/${d##*/}")
     done
 done
+write_source_notice
 
 # ── Step 4d: FEX ────────────────────────────────────────────────────────
 # FEX as build-fex.sh staged it in FEX_DIST, as the preflight checked: its

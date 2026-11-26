@@ -18,11 +18,12 @@ set -e
 #
 # The notes are one bullet per source the bundle was built from: the Wine
 # source, as the ref in pins/wine-src.ref with the commit and `git describe`
-# of WINE_SRC, this repository's commit, the commits FEX, Mesa, DXMT and
-# vkd3d-proton were built from, whose refs are branches, and GStreamer's tag
-# and commit, which redist.env pins. The rest is pinned by this repository's
-# commit, except the Homebrew libraries in
-# lib/external, which the notes do not name. The Wine source and this
+# of WINE_SRC, this repository's commit, and the ref and commit of each of
+# GIT_SOURCES (bin/lib/sources.sh): FEX, Mesa, DXMT and vkd3d-proton, whose
+# refs are branches, and GStreamer and its FFmpeg, which redist.env pins. The
+# rest is pinned by this repository's commit, except the Homebrew libraries
+# in lib/external, which the notes do not name (the bundle's source notice
+# names those under a GNU licence). The Wine source and this
 # repository must have no uncommitted changes, and the Wine SDK must be
 # staged from that Wine commit, or the notes would name something the bundle
 # was not built from.
@@ -43,6 +44,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # GStreamer's tag and repository.
 # shellcheck source=../../pins/redist.env
 . "$PINS_DIR/redist.env"
+# GIT_SOURCES, github_name and mach9_repo.
+# shellcheck source=../lib/sources.sh
+. "$SCRIPT_DIR/lib/sources.sh"
 
 usage() {
     echo "Usage: $0 [--notes-only] <tag> <outdir>"
@@ -65,15 +69,6 @@ SYMBOLS_DIR="$BUNDLE_DEST/wine-symbols"
 BUNDLE_TAR="$OUT/wine-$TAG-macos-arm64.tar.xz"
 SYMBOLS_TAR="$OUT/wine-$TAG-macos-arm64-symbols.tar.xz"
 NOTES="$OUT/notes.md"
-
-# github_name <url>: owner/name of a GitHub repository URL, or the URL as
-# given when it is not one.
-github_name() {
-    local n="${1%.git}"
-    n=${n#https://github.com/}
-    n=${n#git@github.com:}
-    echo "$n"
-}
 
 # short <commit>: the commit abbreviated as the release notes write it.
 short() {
@@ -170,7 +165,7 @@ if [ ! -L "$WINE_DIR/bin/wine" ] && [ ! -e "$WINE_DIR/bin/wine" ]; then
     exit 1
 fi
 clean_tree "$REPO_DIR"
-self="$(github_name "${GITHUB_REPOSITORY:-$(git -C "$REPO_DIR" remote get-url origin)}")@$(git -C "$REPO_DIR" rev-parse --short=11 HEAD)"
+self="$(github_name "$(mach9_repo)")@$(git -C "$REPO_DIR" rev-parse --short=11 HEAD)"
 if [ ! -d "$SYMBOLS_DIR" ]; then
     echo "Error: no $SYMBOLS_DIR (run bundle-wine.sh with --symbols)"
     exit 1
@@ -192,13 +187,12 @@ describe=$(git -C "$WINE_SRC" describe --long HEAD 2>/dev/null) || {
 describe=${describe%-g*}
 wine_ref=$(tr -d '[:space:]' < "$PINS_DIR/wine-src.ref")
 wine_repo=$(github_name "$(git -C "$WINE_SRC" remote get-url origin)")
-for f in "$FEX_DIST/COMMIT" "$MESA_DIST/COMMIT" "$DXMT_DIST/COMMIT" \
-         "$VKD3D_PROTON_DIST/COMMIT" "$GSTREAMER_DIST/COMMIT"; do
-    if [ ! -s "$f" ]; then
-        echo "Error: no $f (run build-wine.sh)"
+while IFS=: read -r name _ _ file _; do
+    if [ -z "$(source_commit "$file")" ]; then
+        echo "Error: no commit of $name in $file (run build-wine.sh)"
         exit 1
     fi
-done
+done <<< "$GIT_SOURCES"
 if ! command -v xz >/dev/null; then
     echo "Error: no xz on PATH (brew install xz)"
     exit 1
@@ -216,11 +210,9 @@ fi
 {
     echo "- Wine: $wine_repo@$wine_ref ($(short "$wine_commit"), $describe)"
     echo "- Mach9: $self"
-    echo "- FEX: $(github_name "$FEX_REPO")@$FEX_REF ($(short "$(cat "$FEX_DIST/COMMIT")"))"
-    echo "- Mesa: $(github_name "$MESA_REPO")@$MESA_REF ($(short "$(cat "$MESA_DIST/COMMIT")"))"
-    echo "- DXMT: $(github_name "$DXMT_REPO")@$DXMT_REF ($(short "$(cat "$DXMT_DIST/COMMIT")"))"
-    echo "- vkd3d-proton: $(github_name "$VKD3D_PROTON_REPO")@$VKD3D_PROTON_REF ($(short "$(cat "$VKD3D_PROTON_DIST/COMMIT")"))"
-    echo "- GStreamer: $(github_name "$GSTREAMER_GIT_URL")@$GSTREAMER_GIT_TAG ($(short "$(cat "$GSTREAMER_DIST/COMMIT")"))"
+    while IFS=: read -r name repo ref file _; do
+        echo "- $name: $(github_name "${!repo}")@${!ref} ($(short "$(source_commit "$file")"))"
+    done <<< "$GIT_SOURCES"
 } > "$NOTES"
 
 echo "==> Notes ($NOTES)"

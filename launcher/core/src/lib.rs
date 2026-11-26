@@ -6,3 +6,4 @@ pub mod bundle;
 pub mod docktile;
 pub mod fsutil;
 pub mod games;
+pub mod licenses;

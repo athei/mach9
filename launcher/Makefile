@@ -103,11 +103,17 @@ $(PLUGIN_BIN): cargo-build $(PLUGIN_PLIST)
 	cp $(RELEASE)/libdocktile.dylib $@
 	cp $(PLUGIN_PLIST) $(PLUGIN)/Contents/Info.plist
 
-# The licence texts of the launcher's parts, in Contents/Resources/licenses
-# (those of the Wine runtime are in its share/licenses): Mach9's own,
-# Sparkle's, and those of Rust's standard library and the crates the
-# launcher and the plug-in are built from (bin/rust-licenses.sh).
+# The licence texts of the launcher's parts, in Contents/Resources/licenses:
+# Mach9's own, Sparkle's, and those of Rust's standard library and the crates
+# the launcher and the plug-in are built from (bin/rust-licenses.sh). Those
+# of the Wine runtime, with the source notice bin/bundle-wine.sh writes, are
+# in its share/licenses, which is linked there as `engine`, and the notice as
+# SOURCES.md, so that the Dock menu's Licenses item finds all of them in one
+# folder (gamelauncher_core::licenses). A link is made only when its target
+# is there: codesign-bundle.sh refuses a link that resolves to nothing, and a
+# runtime bundled before it had the notice has none.
 APP_LICENSES = Contents/Resources/licenses
+RUNTIME_LICENSES = Contents/Resources/wine/share/licenses
 
 # Puts the launcher's parts into the bundle $(1): the launcher, the Dock tile
 # plug-in, Sparkle, the icon, the Info.plist and the licences, with the
@@ -133,6 +139,8 @@ define populate
 	cp "$(ROOT)/LICENSE" "$(1)/$(APP_LICENSES)/mach9/"
 	cp "$(SPARKLE_DIR)/LICENSE" "$(1)/$(APP_LICENSES)/sparkle/"
 	$(ROOT)/bin/rust-licenses.sh "$(1)/$(APP_LICENSES)/gamelauncher" $(TARGET) gamelauncher gamelauncher-docktile
+	if [ -d "$(1)/$(RUNTIME_LICENSES)" ]; then ln -s ../wine/share/licenses "$(1)/$(APP_LICENSES)/engine"; fi
+	if [ -f "$(1)/$(RUNTIME_LICENSES)/SOURCES.md" ]; then ln -s engine/SOURCES.md "$(1)/$(APP_LICENSES)/SOURCES.md"; fi
 	cp "$(INFO_SRC)" "$(1)/Contents/Info.plist"
 	$(SCRIPTS)/version.sh --stamp $(SHORT_ARGS) "$(1)" $(VERSION)
 	$(SCRIPTS)/version.sh --stamp $(SHORT_ARGS) "$(1)/Contents/PlugIns/$(PLUGIN_NAME).docktileplugin" $(VERSION)
@@ -155,6 +163,8 @@ app: build
 	  || { echo "error: $(WINE_RUNTIME) has no lib/wine/aarch64-unix/wine.app, so it is no Wine runtime" >&2; exit 1; }
 	@test ! -e "$(WINE_RUNTIME)/lib/wine/tests" && test ! -e "$(WINE_RUNTIME)/lib/wine/x86_64-windows" \
 	  || { echo "error: $(WINE_RUNTIME) holds development files; bundle it with --runtime-only" >&2; exit 1; }
+	@test -f "$(WINE_RUNTIME)/share/licenses/SOURCES.md" \
+	  || { echo "error: $(WINE_RUNTIME) has no share/licenses/SOURCES.md; bundle it again with this checkout" >&2; exit 1; }
 	rm -rf "$(STAGE_APP)"
 	mkdir -p "$(STAGE_APP)/Contents/Resources"
 	ditto "$(WINE_RUNTIME)" "$(STAGE_APP)/Contents/Resources/wine"

@@ -23,6 +23,10 @@ set -e
 #                             glib, FFmpeg and what they link statically,
 #                             out of the clone and its subprojects, which
 #                             the bundle step installs
+#   wraps/                    the monorepo's wraps of glib, libffi, pcre2 and
+#                             proxy-libintl, which name the tarball and
+#                             patches each was built from, for the bundle
+#                             step's source notice
 #   FFMPEG_COMMIT             the commit of GStreamer's FFmpeg port
 #   KEY                       what the dist was built from
 #                             (dist_key in profile.sh)
@@ -700,6 +704,13 @@ pcre2.md=subprojects/$PCRE2_DIR/LICENCE.md
 proxy-libintl.txt=subprojects/$INTL_DIR/COPYING"
 stage_licenses "$GST_SRC" "$part/share/licenses/gstreamer" "$LICENSES"
 echo "    licences: $(cd "$part/share/licenses/gstreamer" && echo *)"
+# The wraps of those four as the build used them: each names the tarball the
+# setup unpacked, with its checksum, and any patches, which the source notice
+# of the bundle step names (write_source_notice in bundle-wine.sh).
+mkdir -p "$part/wraps"
+for wrap in glib libffi pcre2 proxy-libintl; do
+    cp "$GST_SRC/subprojects/$wrap.wrap" "$part/wraps/"
+done
 
 echo "$GSTREAMER_FFMPEG_GIT_COMMIT" > "$part/FFMPEG_COMMIT"
 gstreamer_key "$GSTREAMER_GIT_COMMIT" > "$part/KEY"

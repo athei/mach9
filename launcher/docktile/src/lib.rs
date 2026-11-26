@@ -1,11 +1,12 @@
 //! The Dock icon's context menu: the saved games with the selected one
-//! checked, "New Executable", "Open Config Folder", "Check for Updates" and
-//! "Website". Clicking a game writes the `game` file and starts the app; "New
-//! Executable" opens the app with `--add-game`, which shows the window that
-//! saves a new game or runs something once; "Open Config Folder" shows the
-//! support directory in Finder; "Check for Updates" opens the app with
-//! `--check-updates`; "Website" opens <https://mach9.app> in the default
-//! browser.
+//! checked, "New Executable", "Open Config Folder", "Check for Updates",
+//! "Website" and "Licenses". Clicking a game writes the `game` file and starts
+//! the app; "New Executable" opens the app with `--add-game`, which shows the
+//! window that saves a new game or runs something once; "Open Config Folder"
+//! shows the support directory in Finder; "Check for Updates" opens the app
+//! with `--check-updates`; "Website" opens <https://mach9.app> in the default
+//! browser; "Licenses" shows the app's licence folder in Finder with the
+//! source notice selected (`gamelauncher_core::licenses`).
 //!
 //! This is an `NSDockTilePlugIn` bundle. The Dock loads it into its plug-in
 //! host while the app is pinned and not running, so the launcher itself never
@@ -34,6 +35,7 @@ use gamelauncher_core::{
     bundle,
     docktile::{CLASS_PREFIX, class_name, principal_class},
     games,
+    licenses::{self, Show},
 };
 use objc2::{
     ClassType, MainThreadMarker, MainThreadOnly, define_class,
@@ -54,6 +56,7 @@ const RUN_EXECUTABLE_TAG: isize = 1_000_000;
 const OPEN_CONFIG_TAG: isize = 1_000_001;
 const CHECK_UPDATES_TAG: isize = 1_000_002;
 const OPEN_WEBSITE_TAG: isize = 1_000_003;
+const SHOW_LICENSES_TAG: isize = 1_000_004;
 
 /// What "Website" opens.
 const WEBSITE: &str = "https://mach9.app";
@@ -145,6 +148,32 @@ define_class!(
                 log(&format!("the default browser did not open {WEBSITE}"));
             }
         }
+
+        #[unsafe(method(showLicenses:))]
+        fn show_licenses(&self, _sender: Option<&NSMenuItem>) {
+            let Some(host) = self.host() else {
+                return;
+            };
+            match licenses::what_to_show(&host.app) {
+                Some(Show::Notice(notice)) => {
+                    let url = NSURL::fileURLWithPath(&NSString::from_str(&notice.to_string_lossy()));
+                    NSWorkspace::sharedWorkspace()
+                        .activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&[url]));
+                }
+                Some(Show::Folder(dir)) => {
+                    log(&format!("{} has no source notice", dir.display()));
+                    let url = NSURL::fileURLWithPath(&NSString::from_str(&dir.to_string_lossy()));
+                    if !NSWorkspace::sharedWorkspace().openURL(&url) {
+                        log(&format!("Finder did not open {}", dir.display()));
+                    }
+                }
+                None => log(&format!(
+                    "{} has no {}",
+                    host.app.display(),
+                    licenses::LICENSES_DIR
+                )),
+            }
+        }
     }
 );
 
@@ -209,6 +238,7 @@ impl DockTile {
             CHECK_UPDATES_TAG,
         ));
         menu.addItem(&self.item(mtm, "Website", sel!(openWebsite:), OPEN_WEBSITE_TAG));
+        menu.addItem(&self.item(mtm, "Licenses", sel!(showLicenses:), SHOW_LICENSES_TAG));
         LAST_MENU.with(|last| *last.borrow_mut() = Some(menu.clone()));
         Some(menu)
     }

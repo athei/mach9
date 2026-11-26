@@ -534,6 +534,13 @@ setting; the bundle step checks the `force_nx`, `opengl`, `capture` and
   starts to link statically needs its text added to the list and to
   `DIST_LICENSES` in `bundle-wine.sh`; a change to compatdb's crates
   changes `COMPATDB_CRATES` there ([licences](internals.md#licences)).
+- A new component the bundle ships under a GNU licence needs a section in
+  the source notice: a git source gets its licence texts in its
+  `GIT_SOURCES` line in [`sources.sh`](../bin/lib/sources.sh), a new
+  GStreamer wrap a line in `NOTICE_WRAPS` in `bundle-wine.sh` and a copy in
+  `build-gstreamer.sh`'s dist. A Homebrew keg needs nothing: the bundle
+  step names every keg whose licence names a GNU licence, with the patches
+  its SBOM lists, and stops when a keg does not name its source.
 - Each file in [`licenses/`](../licenses) names its source and version in
   its header. Refresh a file when its source moves. `KEG_PINNED_LICENSES` in
   `bundle-wine.sh` lists the files that belong to a Homebrew keg; the bundle

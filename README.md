@@ -85,6 +85,10 @@ Other defaults that differ from Wine, besides the built-in rules
   ([bundle layout](docs/building.md#bundle-layout)).
 - Sign the app without touching `wine.app`
   ([loader app](docs/internals.md#loader-app)).
+- Keep `share/licenses/` in the copy: it has the licence texts of what the
+  bundle ships and `SOURCES.md`, the source of each component under a GNU
+  licence
+  ([licences](docs/internals.md#licences)).
 - Minimum macOS: [macOS floors](docs/maintenance.md#macos-floors).
 - Prefixes after an upgrade:
   [upgrade checklist](docs/maintenance.md#upgrade-checklist).

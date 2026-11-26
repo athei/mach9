@@ -919,9 +919,40 @@ from the trees and packages that ship it, so a text follows its pin.
   text the build scripts stage (`DIST_LICENSES`) and each crate of
   `compatdb.so` (`COMPATDB_CRATES`), so one dropped from a list fails
   Step 5.
+- Step 4c also writes `share/licenses/SOURCES.md`, the source notice: for
+  each component the bundle ships under a GNU licence (GPL, LGPL or AGPL,
+  alone or as one choice), the source it was built from and its licence
+  texts (`write_source_notice`; its comment says where each section's data
+  comes from). It takes the data the bundle is assembled from:
+  - this repository and its commit, since its scripts control how every
+    component is compiled and linked, which the LGPL counts as part of the
+    source: in a workflow run `GITHUB_REPOSITORY` and `GITHUB_SHA`,
+    otherwise the checkout's commit (`mach9_source` in
+    [`sources.sh`](../bin/lib/sources.sh));
+  - the Wine source's commit;
+  - the repository and commit of each LGPL fork and of GStreamer and FFmpeg
+    (`GIT_SOURCES` in `sources.sh`, which
+    [`package.sh`](../bin/ci/package.sh) prints into the release notes);
+  - the tarballs of the GStreamer wraps `build-gstreamer.sh` stages in its
+    dist;
+  - for each Homebrew keg Step 3 copies from whose licence names a GNU
+    licence, the source tarball and the patches of the keg's
+    `sbom.spdx.json`.
+
+  A section without its data stops the step.
+- A commit no public repository has, a local commit or a tree with
+  uncommitted changes, is marked in the notice as not published, with a
+  warning; `--strict-floor`, which a CI or release build passes, refuses it
+  in the preflight.
+- proxy-libintl is linked statically into glib and GStreamer, which are
+  LGPL themselves and built from public sources by these scripts, so a
+  recipient can modify it and relink them; the notice says so.
 - `make app` and `make install` put the texts of the launcher's parts into
   `Contents/Resources/licenses` (`APP_LICENSES` in the
-  [`Makefile`](../launcher/Makefile)).
+  [`Makefile`](../launcher/Makefile)) and link the runtime's
+  `share/licenses` there as `engine` and its notice as `SOURCES.md`, which
+  the Dock menu's Licenses item selects in Finder
+  ([`licenses.rs`](../launcher/core/src/licenses.rs)).
 - [`licenses/`](../licenses) holds only texts no tree or package carries,
   each naming where it comes from.
 
@@ -992,11 +1023,11 @@ validation layers and the llvm-mingw compilers.
 
 | Checks | Where |
 |--------|-------|
-| macOS SDK, formulae, Wine SDK, each staged component current against its pin or `*_REF` (which needs the network) and with its [licences](#licences), on a Mac with a Metal 4 GPU the validation layers at their pin, llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `loader_preflight` |
+| macOS SDK, formulae, Wine SDK, each staged component current against its pin or `*_REF` (which needs the network) and with its [licences](#licences), GStreamer's wraps the source notice names, under `--strict-floor` every git source of the source notice published, on a Mac with a Metal 4 GPU the validation layers at their pin, llvm-mingw tools, provisioning profile and identity | Preflight: `check_*_build`, `check_wine_sdk`, `check_sources_published`, `loader_preflight` |
 | No function of FEX's DLLs stores into the stack slot where its prologue saved a callee-saved register ([FEX](maintenance.md#fex)) | Step 4d: `check_fex_save_slots`, [`check-save-slots.pl`](../bin/check-save-slots.pl) |
 | Inherited `com.apple.quarantine` removed, nothing else | Step 4f |
 | No reference to `LEAK_PREFIXES`, no `@rpath` dependency outside the bundle, every dylib loads ([`smoke/dlopen.c`](../smoke/dlopen.c)), GStreamer loads only from the bundle | `check_no_leaks`, `check_rpath_deps`, `check_dylibs_load`, `check_gstreamer` |
-| Copied-in components and their [licences](#licences) in place, the [icon font](#icon-font)'s aliases in `wine.inf`, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
+| Copied-in components, their [licences](#licences) and the source notice in place, the [icon font](#icon-font)'s aliases in `wine.inf`, mtld3d's DLLs the release's, FEX as `xtajit*.dll`, marker machines, native 64-bit PE ([Direct3D trees](maintenance.md#direct3d-trees)) | Step 5, `check_trees_arm64x`, `check_pe64_native` (`profile.sh`) |
 | No PE debug sections or symbol tables (stripped by Step 4e; `--keep-symbols` skips the stripping in Step 4e, and Step 5 reports the count of files with symbols instead of failing), no dangling symlinks | Step 5 |
 | Vulkan driver and manifest, EGL with Zink, ntdll's compatdb hooks | `check_vulkan`, `check_egl`, `check_compat_hooks` |
 | `wine.app` signature, entitlements and `Info.plist` | `check_loader_app` |
