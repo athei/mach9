@@ -22,8 +22,10 @@
 //! Every process's output is kept in `runs/<run id>/<leg>/<exe>/<unit>/`
 //! of the state directory, with how it ended appended; `record` copies the
 //! logs of the recorded run to `baseline-raw/<exe>/`. A [`Resume`] file per
-//! leg keeps the finished tests, so an interrupted invocation continues
-//! where it stopped when it is started again with the same arguments.
+//! leg keeps the finished tests, each with the id of the invocation that
+//! ran it, so an interrupted invocation continues where it stopped when it
+//! is started again with the same arguments and finds the logs of the tests
+//! it takes from there.
 //!
 //! The resume files of every executable stay until all executables are
 //! done and the session has ended. Only then does `record` write its
@@ -547,7 +549,8 @@ impl Prepared<'_> {
         stop: &AtomicBool,
     ) -> Result<Conclusion, Failure> {
         let state = &self.state;
-        let run_dir = state.runs().join(layout::run_id(SystemTime::now()));
+        let run_id = layout::run_id(SystemTime::now());
+        let run_dir = state.runs().join(&run_id);
         fs::create_dir_all(&run_dir).map_err(|e| setup_io(&run_dir, &e))?;
         println!("conformance: raw logs in {}", run_dir.display());
         println!(
@@ -581,6 +584,7 @@ impl Prepared<'_> {
         let mut runner = Runner {
             bundle: &self.bundle,
             state,
+            run_id,
             run_dir,
             env: &env,
             winedebug,
@@ -683,8 +687,8 @@ fn setup_io(path: &Path, e: &std::io::Error) -> Failure {
 struct LegRun {
     leg: PeDir,
     resume: Resume,
-    first: BTreeMap<(String, Key), Outcome>,
-    confirm: BTreeMap<(String, Key), Outcome>,
+    first: Outcomes,
+    confirm: Outcomes,
 }
 
 /// What the first pass of one executable gave.
@@ -693,12 +697,29 @@ struct FirstPass {
     /// The keys in the order the pass ran them: leg by leg, the keys of each
     /// unit in the order of its listing.
     order: Vec<TestId>,
+    /// The invocations whose run directories hold the log of each key
+    /// ([`add_run`]).
+    runs: Runs,
+}
+
+/// The ids of the invocations that ran each test, in the order of its
+/// passes, each once: this one, or the one a resume record names.
+type Runs = BTreeMap<TestId, Vec<String>>;
+
+/// Add `run` to the invocations that ran `id`.
+fn add_run(runs: &mut Runs, id: &TestId, run: String) {
+    let ids = runs.entry(id.clone()).or_default();
+    if !ids.contains(&run) {
+        ids.push(run);
+    }
 }
 
 /// What every test of an invocation shares.
 struct Runner<'a> {
     bundle: &'a Bundle,
     state: &'a State,
+    /// The id of this invocation, whose directory `run_dir` is.
+    run_id: String,
     run_dir: PathBuf,
     env: &'a [(OsString, OsString)],
     /// The channels of `--winedebug`, part of the resume scope.
@@ -740,6 +761,7 @@ impl Runner<'_> {
         let FirstPass {
             results: first,
             order,
+            mut runs,
         } = self.first_pass(plan, &mut legs)?;
         let report = diff::diff(exe, Some(baseline), header, &first, &plan.scope, triage);
         let again = run_again_in_order(&report, &order);
@@ -748,12 +770,12 @@ impl Runner<'_> {
         }
         let mut second = BTreeMap::new();
         for id in again {
-            let outcome = self.confirm(plan, &mut legs, &id)?;
-            second.insert(id, outcome);
+            let ran = self.confirm(plan, &mut legs, &id)?;
+            add_run(&mut runs, &id, ran.run);
+            second.insert(id, ran.outcome);
         }
         if self.layer_env.is_some() {
-            let ids: Vec<&TestId> = first.keys().collect();
-            self.read_validation(plan, &ids)?;
+            self.read_validation(plan, &runs)?;
         }
         let decided = decide_run(exe, baseline, header, first, &second, &plan.scope, triage);
         print!("{}", decided.report.text());
@@ -780,6 +802,7 @@ impl Runner<'_> {
         let FirstPass {
             results: first,
             order,
+            mut runs,
         } = self.first_pass(plan, &mut legs)?;
         let again = to_confirm_in_order(old, &first, &order);
         if !again.is_empty() {
@@ -787,8 +810,9 @@ impl Runner<'_> {
         }
         let mut second = BTreeMap::new();
         for id in again {
-            let outcome = self.confirm(plan, &mut legs, &id)?;
-            second.insert(id, outcome);
+            let ran = self.confirm(plan, &mut legs, &id)?;
+            add_run(&mut runs, &id, ran.run);
+            second.insert(id, ran.outcome);
         }
         let merge = decide_record(exe, old, header, &first, &second, &plan.scope)
             .map_err(|e| Failure::Setup(format!("{exe}: {e}")))?;
@@ -800,7 +824,7 @@ impl Runner<'_> {
             all: matches!(plan.scope, Scope::All),
             path: baseline_path(baselines, exe),
             merge,
-            results: first,
+            runs,
         });
         Ok(unstable)
     }
@@ -861,6 +885,7 @@ impl Runner<'_> {
     fn first_pass(&mut self, plan: &Plan<'_>, legs: &mut [LegRun]) -> Result<FirstPass, Failure> {
         let mut results = BTreeMap::new();
         let mut order = Vec::new();
+        let mut runs = Runs::new();
         for leg_run in legs {
             let leg = leg_run.leg;
             for unit in plan
@@ -876,13 +901,17 @@ impl Runner<'_> {
                 };
                 for key in keys {
                     let slot = (unit.name.clone(), key.clone());
-                    let outcome = if let Some(outcome) = leg_run.first.get(&slot) {
+                    let ran = if let Some(ran) = leg_run.first.get(&slot) {
                         self.resumed += 1;
-                        *outcome
+                        ran.clone()
                     } else {
                         let outcome = self.run_test(plan, leg, &unit.name, &key, Pass::First)?;
-                        append(&mut leg_run.resume, Pass::First, &unit.name, &key, outcome)?;
-                        outcome
+                        let ran = Ran {
+                            outcome,
+                            run: self.run_id.clone(),
+                        };
+                        append(&mut leg_run.resume, Pass::First, &unit.name, &key, &ran)?;
+                        ran
                     };
                     let id = TestId {
                         leg,
@@ -890,11 +919,16 @@ impl Runner<'_> {
                         key,
                     };
                     order.push(id.clone());
-                    results.insert(id, outcome);
+                    add_run(&mut runs, &id, ran.run);
+                    results.insert(id, ran.outcome);
                 }
             }
         }
-        Ok(FirstPass { results, order })
+        Ok(FirstPass {
+            results,
+            order,
+            runs,
+        })
     }
 
     /// Run `id` a second time, or take its second result from the state.
@@ -903,24 +937,22 @@ impl Runner<'_> {
         plan: &Plan<'_>,
         legs: &mut [LegRun],
         id: &TestId,
-    ) -> Result<Outcome, Failure> {
+    ) -> Result<Ran, Failure> {
         let leg_run = legs
             .iter_mut()
             .find(|run| run.leg == id.leg)
             .ok_or_else(|| Failure::Setup(format!("{id} is outside the run's legs")))?;
-        if let Some(outcome) = leg_run.confirm.get(&(id.unit.clone(), id.key.clone())) {
+        if let Some(ran) = leg_run.confirm.get(&(id.unit.clone(), id.key.clone())) {
             self.resumed += 1;
-            return Ok(*outcome);
+            return Ok(ran.clone());
         }
         let outcome = self.run_test(plan, id.leg, &id.unit, &id.key, Pass::Confirm)?;
-        append(
-            &mut leg_run.resume,
-            Pass::Confirm,
-            &id.unit,
-            &id.key,
+        let ran = Ran {
             outcome,
-        )?;
-        Ok(outcome)
+            run: self.run_id.clone(),
+        };
+        append(&mut leg_run.resume, Pass::Confirm, &id.unit, &id.key, &ran)?;
+        Ok(ran)
     }
 
     /// The keys of `unit` the plan runs, in the order its listing prints
@@ -1137,30 +1169,19 @@ impl Runner<'_> {
         Ok(finished)
     }
 
-    /// Read the validation messages of the logs of `ids`, the tests of
-    /// `plan`, and of this run's listings of its units, resumed tests
-    /// included.
+    /// Read the validation messages of the logs of the tests of `plan`, in
+    /// the directory of each invocation in `runs` that ran one, resumed
+    /// tests included, and of this run's listings of its units.
     ///
     /// # Errors
     ///
-    /// Returns [`Failure::Setup`] for a log that cannot be read and for a leg
-    /// in which no test process created a Vulkan instance: then none ran
-    /// under the layers, which cannot be told from a loader that logged
-    /// nothing.
-    fn read_validation(&mut self, plan: &Plan<'_>, ids: &[&TestId]) -> Result<(), Failure> {
+    /// Returns [`Failure::Setup`] for a log that is missing
+    /// ([`validation_logs`]) or cannot be read and for a leg in which no
+    /// test process created a Vulkan instance: then none ran under the
+    /// layers, which cannot be told from a loader that logged nothing.
+    fn read_validation(&mut self, plan: &Plan<'_>, runs: &Runs) -> Result<(), Failure> {
         let exe = &plan.exe.name;
-        let mut logs: Vec<(String, String, PeDir, PathBuf)> = Vec::new();
-        for id in ids {
-            let file = Path::new(&id.unit).join(layout::log_file(&id.key));
-            if let Some(log) = find_log(self.state, &self.run_dir, id.leg, exe, &file) {
-                logs.push((
-                    format!("{exe}/{}/{}", id.unit, id.key),
-                    format!("{exe} {} {}/{}", id.leg.as_str(), id.unit, id.key),
-                    id.leg,
-                    log,
-                ));
-            }
-        }
+        let mut logs = validation_logs(self.state, exe, runs)?;
         for &leg in &plan.legs {
             for unit in plan.exe.units.iter().filter(|u| plan.runs_unit(&u.name)) {
                 let log = self
@@ -1247,21 +1268,30 @@ fn append(
     pass: Pass,
     unit: &str,
     key: &Key,
-    outcome: Outcome,
+    ran: &Ran,
 ) -> Result<(), Failure> {
     resume
         .append(&Record {
             pass,
+            run: ran.run.clone(),
             unit: unit.to_owned(),
             key: key.clone(),
-            outcome,
+            outcome: ran.outcome,
         })
         .map_err(|e| Failure::Setup(format!("cannot write the resume state: {e}")))
 }
 
-/// The first-pass and the second-pass outcomes of a leg's resume records,
-/// each by unit and key; a later record of a key replaces an earlier one
-/// of its pass.
+/// One finished run of a test: its outcome and the id of the invocation
+/// that ran it, whose run directory holds its log.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Ran {
+    pub outcome: Outcome,
+    pub run: String,
+}
+
+/// The first-pass and the second-pass runs of a leg's resume records, each
+/// by unit and key; a later record of a key replaces an earlier one of its
+/// pass.
 #[must_use]
 pub fn split_records(records: Vec<Record>) -> (Outcomes, Outcomes) {
     let mut first = BTreeMap::new();
@@ -1271,13 +1301,19 @@ pub fn split_records(records: Vec<Record>) -> (Outcomes, Outcomes) {
             Pass::First => &mut first,
             Pass::Confirm => &mut confirm,
         };
-        slot.insert((record.unit, record.key), record.outcome);
+        slot.insert(
+            (record.unit, record.key),
+            Ran {
+                outcome: record.outcome,
+                run: record.run,
+            },
+        );
     }
     (first, confirm)
 }
 
-/// The outcomes of one leg by unit and key.
-pub type Outcomes = BTreeMap<(String, Key), Outcome>;
+/// The finished runs of one pass of one leg by unit and key.
+pub type Outcomes = BTreeMap<(String, Key), Ran>;
 
 /// The keys `run` runs a second time, each with its baseline outcome: those
 /// whose change gates and that the run listed.
@@ -1451,8 +1487,11 @@ fn finalize(
 }
 
 /// Replace the recorded raw logs of a recorded executable with the logs of
-/// its tests and this run's listings. A record of all tests replaces the
-/// directory; a smaller one replaces their files.
+/// its tests and this run's listings. A test whose passes ran in two
+/// invocations, one of them resumed, gets both logs in one file; a log
+/// whose run directory was deleted is named in a line and left out. A
+/// record of all tests replaces the directory; a smaller one replaces their
+/// files.
 fn copy_raw(state: &State, run_dir: &Path, pending: &Pending) -> Result<(), Failure> {
     let exe = &pending.exe;
     let dest = state.baseline_raw(exe);
@@ -1462,11 +1501,20 @@ fn copy_raw(state: &State, run_dir: &Path, pending: &Pending) -> Result<(), Fail
         layout::claim_inner(&dest, BASELINE_RAW_TREE)
     }
     .map_err(Failure::Setup)?;
-    let mut copies: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for id in pending.results.keys() {
-        let file = Path::new(&id.unit).join(layout::log_file(&id.key));
-        if let Some(source) = find_log(state, run_dir, id.leg, exe, &file) {
-            copies.push((source, dest.join(id.leg.as_str()).join(file)));
+    // Each target with its sources: a test's log from each invocation that
+    // ran one of its passes, one after the other.
+    let mut copies: Vec<(Vec<PathBuf>, PathBuf)> = Vec::new();
+    for (id, runs) in &pending.runs {
+        let Logs {
+            found: sources,
+            missing,
+        } = logs_of(state, exe, id, runs);
+        for log in &missing {
+            println!("{}", missing_log(exe, id, log));
+        }
+        if !sources.is_empty() {
+            let file = Path::new(&id.unit).join(layout::log_file(&id.key));
+            copies.push((sources, dest.join(id.leg.as_str()).join(file)));
         }
     }
     for &leg in &pending.legs {
@@ -1477,37 +1525,93 @@ fn copy_raw(state: &State, run_dir: &Path, pending: &Pending) -> Result<(), Fail
         for entry in entries.flatten() {
             let name = entry.file_name();
             if name.to_string_lossy().ends_with(".list.log") {
-                copies.push((entry.path(), dest.join(leg.as_str()).join(name)));
+                copies.push((vec![entry.path()], dest.join(leg.as_str()).join(name)));
             }
         }
     }
-    for (source, target) in copies {
+    for (sources, target) in copies {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|e| setup_io(parent, &e))?;
         }
-        fs::copy(&source, &target).map_err(|e| setup_io(&source, &e))?;
+        let mut text = Vec::new();
+        for source in &sources {
+            text.extend(fs::read(source).map_err(|e| setup_io(source, &e))?);
+        }
+        fs::write(&target, text).map_err(|e| setup_io(&target, &e))?;
     }
     Ok(())
 }
 
-/// The raw log `<leg>/<exe>/<file>` of this run, or of the latest earlier
-/// run that has it, for a test taken from a resume file.
-fn find_log(state: &State, run_dir: &Path, leg: PeDir, exe: &str, file: &Path) -> Option<PathBuf> {
-    let rel = Path::new(leg.as_str()).join(exe).join(file);
-    let here = run_dir.join(&rel);
-    if here.is_file() {
-        return Some(here);
+/// The raw logs of one test in the directories of the invocations that ran
+/// it.
+#[derive(PartialEq, Eq, Debug)]
+struct Logs {
+    /// The logs there are, in the order of the invocations.
+    found: Vec<PathBuf>,
+    /// The logs of invocations whose run directory no longer has them, as
+    /// after a run directory was deleted by hand.
+    missing: Vec<PathBuf>,
+}
+
+/// The raw logs of `id` of `exe`, `<leg>/<exe>/<unit>/<key>.log` in the
+/// directory of each invocation of `runs`, in that order.
+fn logs_of(state: &State, exe: &str, id: &TestId, runs: &[String]) -> Logs {
+    let rel = Path::new(id.leg.as_str())
+        .join(exe)
+        .join(&id.unit)
+        .join(layout::log_file(&id.key));
+    let (found, missing) = runs
+        .iter()
+        .map(|run| state.runs().join(run).join(&rel))
+        .partition(|path| path.is_file());
+    Logs { found, missing }
+}
+
+/// The line that says the log of `id` of `exe` is missing at `log`.
+fn missing_log(exe: &str, id: &TestId, log: &Path) -> String {
+    format!(
+        "conformance: {exe} {id}: its log {} is missing; the run directory of the invocation \
+         that ran it was deleted",
+        log.display()
+    )
+}
+
+/// The logs of each test of `exe` in `runs` for the validation scan, each
+/// with the test's name and label and its leg.
+///
+/// # Errors
+///
+/// Returns [`Failure::Setup`], after a line per missing log, when a test's
+/// log is missing: the scan would not see its messages.
+fn validation_logs(
+    state: &State,
+    exe: &str,
+    runs: &Runs,
+) -> Result<Vec<(String, String, PeDir, PathBuf)>, Failure> {
+    let mut logs = Vec::new();
+    let mut missing = 0;
+    for (id, ids) in runs {
+        let found = logs_of(state, exe, id, ids);
+        for log in &found.missing {
+            println!("{}", missing_log(exe, id, log));
+            missing += 1;
+        }
+        for log in found.found {
+            logs.push((
+                format!("{exe}/{}/{}", id.unit, id.key),
+                format!("{exe} {} {}/{}", id.leg.as_str(), id.unit, id.key),
+                id.leg,
+                log,
+            ));
+        }
     }
-    let mut runs: Vec<PathBuf> = fs::read_dir(state.runs())
-        .ok()?
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
-    runs.sort();
-    runs.into_iter()
-        .rev()
-        .map(|run| run.join(&rel))
-        .find(|path| path.is_file())
+    if missing > 0 {
+        return Err(Failure::Setup(format!(
+            "{exe}: {missing} logs of tests taken from the resume files are missing, so their \
+             validation messages cannot be read; run the suite again without the resume state"
+        )));
+    }
+    Ok(logs)
 }
 
 /// A recorded executable whose baseline and raw logs are written once
@@ -1520,7 +1624,8 @@ struct Pending {
     all: bool,
     path: PathBuf,
     merge: record::Merge,
-    results: BTreeMap<TestId, Outcome>,
+    /// The invocations that ran each recorded test.
+    runs: Runs,
 }
 
 /// Append `text` to the raw log `path`.

@@ -3,7 +3,8 @@
 //!
 //! The state is one file in a directory the caller names, per mode,
 //! executable and leg. Its first lines are the [`Identity`] of the run,
-//! then one [`Record`] per line:
+//! then one [`Record`] per line, with the id of the invocation that ran the
+//! test, whose directory in `runs/` holds its log:
 //!
 //! ```text
 //! conformance resume
@@ -15,7 +16,7 @@
 //! wine=wine-11.21-37-g53def89293a
 //! component=dxmt=8c0b5f1
 //! end
-//! first d3d11 test_create_device ok failed=0 sites=0 todo_succeeded=0 skipped=0
+//! first 20261126-010000 d3d11 test_create_device ok failed=0 sites=0 todo_succeeded=0 skipped=0
 //! ```
 //!
 //! The identity is written to a temporary file that is renamed into place,
@@ -32,6 +33,7 @@ use std::{
 
 use crate::{
     header::Header,
+    layout::is_run_id,
     model::PeDir,
     outcome::{Key, Outcome},
 };
@@ -133,6 +135,8 @@ impl Pass {
 #[derive(PartialEq, Eq, Debug)]
 pub struct Record {
     pub pass: Pass,
+    /// The id of the invocation that ran it ([`crate::layout::run_id`]).
+    pub run: String,
     pub unit: String,
     pub key: Key,
     pub outcome: Outcome,
@@ -141,11 +145,12 @@ pub struct Record {
 impl Record {
     fn parse(line: &str) -> Option<Self> {
         let tokens: Vec<&str> = line.split(' ').collect();
-        let [pass, unit, key, outcome @ ..] = &tokens[..] else {
+        let [pass, run, unit, key, outcome @ ..] = &tokens[..] else {
             return None;
         };
         Some(Self {
             pass: Pass::parse(pass)?,
+            run: is_run_id(run).then(|| (*run).to_owned())?,
             unit: crate::model::is_ident(unit).then(|| (*unit).to_owned())?,
             key: Key::parse(key)?,
             outcome: Outcome::parse(outcome).ok()?,
@@ -225,7 +230,7 @@ impl Resume {
     /// # Errors
     ///
     /// Returns the I/O error of the write, or an `InvalidInput` error for a
-    /// unit that is not a C name.
+    /// unit that is not a C name or a run that is not a run id.
     pub fn append(&mut self, record: &Record) -> io::Result<()> {
         if !crate::model::is_ident(&record.unit) {
             return Err(io::Error::new(
@@ -233,9 +238,16 @@ impl Resume {
                 format!("unit {:?} is not a C name", record.unit),
             ));
         }
+        if !is_run_id(&record.run) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("run {:?} is not a run id", record.run),
+            ));
+        }
         let line = format!(
-            "{} {} {} {}\n",
+            "{} {} {} {} {}\n",
             record.pass.as_str(),
+            record.run,
             record.unit,
             record.key,
             record.outcome

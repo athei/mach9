@@ -357,7 +357,11 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   - `runs/<run id>/` holds the raw logs of each invocation. The runner
     never deletes them; delete old runs by hand.
   - `baseline-raw/<suite>/` holds the logs of the last record of each
-    suite, on the machine that recorded it only.
+    suite, on the machine that recorded it only. For a resumed record a
+    test's log is the one of each invocation that ran it, one after the
+    other. A log whose run directory was deleted is named in a line and
+    left out; `run --validation` stops there as an error, since it cannot
+    read that test's messages.
   - `record` writes the baselines and `baseline-raw/` once every suite of
     the invocation is done.
 - Interrupts:
@@ -402,7 +406,7 @@ cargo run -p conformance -- record d3d11     # write the baselines again
 | Stale baseline | `run`: a key got better or is new: record the suite | 1 |
 | New validation messages | `run --validation`: a message of the [validation layers](#validation-layers) no known message names; the last line also gives the result of the comparison | 1 |
 | Unstable | `run`: a changed key gave its baseline's result the second time. `record`: a key gave two results and is written with the higher status and the larger of each count | 1 |
-| Error | Bad arguments, no baseline, or a bundle, state directory or implementation the runner cannot use; under `--validation` also layers that are missing or not at the pin, and a test process that ran without them | 2 |
+| Error | Bad arguments, no baseline, or a bundle, state directory or implementation the runner cannot use; under `--validation` also layers that are missing or not at the pin, a test process that ran without them, and a resumed test whose log is missing | 2 |
 | Interrupted | Stopped by a signal, or for `run` and `record` by a quit request or a stop key | 130 |
 
 - The last line of the output names the result. What counts as worse or
@@ -421,7 +425,8 @@ After a regression:
   test's log in it is `<leg>/<suite>/<unit>/<key>.log` (`whole.log` for a
   whole unit), with every run of the key and how each ended; a stall also
   leaves a sample beside it. A resumed test's log is in the directory of
-  the invocation that ran it.
+  the invocation that ran it, which the resume file names, and a key whose
+  two runs came from two invocations has a log in each.
 - On the machine that recorded the baseline, `baseline-raw/<suite>/` has
   the same test's log from that record.
 - Rerun one key alone, which also rules out a process an earlier key left

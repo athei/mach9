@@ -333,6 +333,18 @@ const OK: Outcome = outcome(Status::Ok, 0);
 const FAIL: Outcome = outcome(Status::Fail, 2);
 const WORSE: Outcome = outcome(Status::Fail, 4);
 
+/// The ids of three invocations, in the order they started.
+const RUN_A: &str = "20261126-010000";
+const RUN_B: &str = "20261126-010500";
+const RUN_C: &str = "20261126-011000";
+
+fn ran(outcome: Outcome, run: &str) -> Ran {
+    Ran {
+        outcome,
+        run: run.to_owned(),
+    }
+}
+
 fn id(leg: PeDir, key: &str) -> TestId {
     TestId {
         leg,
@@ -523,7 +535,7 @@ impl Finish {
             all: true,
             path: baselines.join("d3d12.txt"),
             merge,
-            results: first,
+            runs: BTreeMap::from([(a, vec![String::from(RUN_A)])]),
         };
         let resume_file = state.resume().join("record-d3d12-i386-windows.txt");
         Self {
@@ -551,7 +563,7 @@ impl Finish {
             Pass::First,
             "d3d12",
             &function("test_a"),
-            FAIL,
+            &ran(FAIL, RUN_A),
         )
         .unwrap();
         opened.resume
@@ -574,7 +586,7 @@ fn a_failing_end_of_a_record_keeps_the_old_baseline_and_the_resume_file() {
     fs::create_dir_all(&target).unwrap();
     fs::create_dir_all(finish.state.dir.join("baseline-raw")).unwrap();
     std::os::unix::fs::symlink(&target, finish.state.baseline_raw("d3d12")).unwrap();
-    let run_dir = finish.state.runs().join("run");
+    let run_dir = finish.state.runs().join(RUN_A);
     let result = finalize(
         &finish.state,
         &run_dir,
@@ -596,7 +608,7 @@ fn a_failing_end_of_a_record_keeps_the_old_baseline_and_the_resume_file() {
 fn the_end_of_a_record_writes_the_baseline_and_then_removes_the_resume_file() {
     let finish = Finish::new("writes");
     let resume = finish.resume();
-    let run_dir = finish.state.runs().join("run");
+    let run_dir = finish.state.runs().join(RUN_A);
     let log = run_dir.join("i386-windows/d3d12/d3d12/test_a.log");
     fs::create_dir_all(log.parent().unwrap()).unwrap();
     fs::write(&log, "a log\n").unwrap();
@@ -623,27 +635,34 @@ fn the_end_of_a_record_writes_the_baseline_and_then_removes_the_resume_file() {
 /// is no first outcome, and a later record of a pass replaces an earlier.
 #[test]
 fn resume_records_split_by_pass() {
-    let record = |pass, key: &str, outcome| Record {
+    let record = |pass, key: &str, outcome, run: &str| Record {
         pass,
+        run: run.to_owned(),
         unit: String::from("d3d12"),
         key: function(key),
         outcome,
     };
     let (first, confirm) = split_records(vec![
-        record(Pass::First, "test_a", FAIL),
-        record(Pass::Confirm, "test_a", OK),
-        record(Pass::First, "test_b", OK),
-        record(Pass::Confirm, "test_c", FAIL),
-        record(Pass::First, "test_b", WORSE),
+        record(Pass::First, "test_a", FAIL, RUN_A),
+        record(Pass::Confirm, "test_a", OK, RUN_A),
+        record(Pass::First, "test_b", OK, RUN_A),
+        record(Pass::Confirm, "test_c", FAIL, RUN_B),
+        record(Pass::First, "test_b", WORSE, RUN_B),
     ]);
     let slot = |key: &str| (String::from("d3d12"), function(key));
     assert_eq!(
         first,
-        BTreeMap::from([(slot("test_a"), FAIL), (slot("test_b"), WORSE)])
+        BTreeMap::from([
+            (slot("test_a"), ran(FAIL, RUN_A)),
+            (slot("test_b"), ran(WORSE, RUN_B))
+        ])
     );
     assert_eq!(
         confirm,
-        BTreeMap::from([(slot("test_a"), OK), (slot("test_c"), FAIL)])
+        BTreeMap::from([
+            (slot("test_a"), ran(OK, RUN_A)),
+            (slot("test_c"), ran(FAIL, RUN_B))
+        ])
     );
 }
 
@@ -670,37 +689,29 @@ fn record_decides_the_same_with_resumed_passes() {
     assert_eq!(fresh.unstable, [(a, WORSE)]);
     assert_eq!(fresh.baseline.entries[&c], OK);
 
+    let record = |pass, key: &str, outcome| Record {
+        pass,
+        run: String::from(RUN_A),
+        unit: String::from("d3d12"),
+        key: function(key),
+        outcome,
+    };
     let records = vec![
-        Record {
-            pass: Pass::First,
-            unit: String::from("d3d12"),
-            key: function("test_a"),
-            outcome: FAIL,
-        },
-        Record {
-            pass: Pass::Confirm,
-            unit: String::from("d3d12"),
-            key: function("test_a"),
-            outcome: WORSE,
-        },
-        Record {
-            pass: Pass::Confirm,
-            unit: String::from("d3d12"),
-            key: function("test_b"),
-            outcome: FAIL,
-        },
+        record(Pass::First, "test_a", FAIL),
+        record(Pass::Confirm, "test_a", WORSE),
+        record(Pass::Confirm, "test_b", FAIL),
     ];
     let (_, confirm) = split_records(records);
     let mut second: BTreeMap<TestId, Outcome> = confirm
         .into_iter()
-        .map(|((unit, key), outcome)| {
+        .map(|((unit, key), ran)| {
             (
                 TestId {
                     leg: PeDir::I386,
                     unit,
                     key,
                 },
-                outcome,
+                ran.outcome,
             )
         })
         .collect();
@@ -740,5 +751,181 @@ fn a_traced_scope_differs_from_the_untraced_one() {
     assert_eq!(
         traced_scope(scope, Some("+win,+event")),
         "legs=i386-windows only=all winedebug=+win,+event"
+    );
+}
+
+/// The log of `d3d11/test_a` on `x86_64` in the directory of the invocation
+/// `run`, written with `text`.
+fn write_log(state: &State, run: &str, text: &str) -> PathBuf {
+    let log = state
+        .runs()
+        .join(run)
+        .join(PeDir::X86_64.as_str())
+        .join("d3d11/d3d11/test_a.log");
+    fs::create_dir_all(log.parent().unwrap()).unwrap();
+    fs::write(&log, text).unwrap();
+    log
+}
+
+fn test_a() -> TestId {
+    TestId {
+        leg: PeDir::X86_64,
+        unit: String::from("d3d11"),
+        key: function("test_a"),
+    }
+}
+
+/// An invocation of `mode` is interrupted after `test_a` (A), one of the
+/// other mode runs `test_a` (B) with its own resume file, and the first
+/// resumes (C): the log of `test_a` is A's, in both orders. With `record`
+/// first, B's log would land in `baseline-raw/`; with `run --validation`
+/// first, the scan would read the log of a record without the layers.
+#[test]
+fn a_resumed_test_takes_the_log_of_the_invocation_that_ran_it() {
+    let dir = Scratch::new("runner", "resumed-log");
+    let state = State::claim(&dir.join("state")).unwrap();
+    let identity = |mode| Identity {
+        mode,
+        exe: String::from("d3d11"),
+        leg: PeDir::X86_64,
+        digest: String::from("fnv1a64:0:0"),
+        scope: String::from("legs=x86_64-windows only=all"),
+        header: header(),
+    };
+    for mode in [Mode::Record, Mode::Run] {
+        let a = write_log(&state, RUN_A, "the run of A\n");
+        let mut resume = Resume::open(&state.resume(), &identity(mode))
+            .unwrap()
+            .resume;
+        append(
+            &mut resume,
+            Pass::First,
+            "d3d11",
+            &function("test_a"),
+            &ran(OK, RUN_A),
+        )
+        .unwrap();
+        drop(resume);
+        write_log(&state, RUN_B, "the run of B, of the other mode\n");
+        let opened = Resume::open(&state.resume(), &identity(mode)).unwrap();
+        assert!(opened.discarded.is_none());
+        let (first, _) = split_records(opened.records);
+        let resumed = &first[&(String::from("d3d11"), function("test_a"))];
+        assert_eq!(resumed, &ran(OK, RUN_A));
+        let mut runs = Runs::new();
+        add_run(&mut runs, &test_a(), resumed.run.clone());
+        assert_eq!(
+            logs_of(&state, "d3d11", &test_a(), &runs[&test_a()]),
+            Logs {
+                found: vec![a],
+                missing: Vec::new()
+            }
+        );
+        opened.resume.finish().unwrap();
+    }
+}
+
+/// A key whose first pass is resumed from A and whose second pass runs in
+/// C has a log in each: both are read, and `baseline-raw/` gets both, A's
+/// first.
+#[test]
+fn a_key_whose_passes_ran_in_two_invocations_keeps_both_logs() {
+    let dir = Scratch::new("runner", "two-invocations");
+    let state = State::claim(&dir.join("state")).unwrap();
+    let a = write_log(&state, RUN_A, "the first run, in A\n");
+    let c = write_log(&state, RUN_C, "the second run, in C\n");
+    let mut runs = Runs::new();
+    add_run(&mut runs, &test_a(), String::from(RUN_A));
+    add_run(&mut runs, &test_a(), String::from(RUN_C));
+    add_run(&mut runs, &test_a(), String::from(RUN_C));
+    assert_eq!(
+        logs_of(&state, "d3d11", &test_a(), &runs[&test_a()]),
+        Logs {
+            found: vec![a, c],
+            missing: Vec::new()
+        }
+    );
+    let first = map(&[(&test_a(), FAIL)]);
+    let merge = decide_record(
+        "d3d11",
+        None,
+        &header(),
+        &first,
+        &BTreeMap::new(),
+        &Scope::All,
+    )
+    .unwrap();
+    let pending = Pending {
+        exe: String::from("d3d11"),
+        legs: vec![PeDir::X86_64],
+        all: true,
+        path: dir.join("d3d11.txt"),
+        merge,
+        runs,
+    };
+    copy_raw(&state, &state.runs().join(RUN_C), &pending).unwrap();
+    let copied = state
+        .baseline_raw("d3d11")
+        .join("x86_64-windows/d3d11/test_a.log");
+    assert_eq!(
+        fs::read_to_string(copied).unwrap(),
+        "the first run, in A\nthe second run, in C\n"
+    );
+}
+
+/// A resumed key whose run directory was deleted by hand has a missing
+/// log: the validation scan stops as an error, since it would not see the
+/// key's messages, and a record copies the log it has.
+#[test]
+fn a_log_in_a_deleted_run_directory_is_missing() {
+    let dir = Scratch::new("runner", "deleted-run");
+    let state = State::claim(&dir.join("state")).unwrap();
+    let a = write_log(&state, RUN_A, "the first run, in A\n");
+    let c = write_log(&state, RUN_C, "the second run, in C\n");
+    fs::remove_dir_all(state.runs().join(RUN_A)).unwrap();
+    let mut runs = Runs::new();
+    add_run(&mut runs, &test_a(), String::from(RUN_A));
+    add_run(&mut runs, &test_a(), String::from(RUN_C));
+    assert_eq!(
+        logs_of(&state, "d3d11", &test_a(), &runs[&test_a()]),
+        Logs {
+            found: vec![c],
+            missing: vec![a.clone()]
+        }
+    );
+    let line = missing_log("d3d11", &test_a(), &a);
+    assert!(line.contains("d3d11 x86_64-windows d3d11/test_a"), "{line}");
+    assert!(line.contains(RUN_A), "{line}");
+    let Err(Failure::Setup(message)) = validation_logs(&state, "d3d11", &runs) else {
+        panic!("a missing log was not an error of the validation scan");
+    };
+    assert!(message.contains("1 logs"), "{message}");
+    let mut kept = Runs::new();
+    add_run(&mut kept, &test_a(), String::from(RUN_C));
+    assert_eq!(validation_logs(&state, "d3d11", &kept).unwrap().len(), 1);
+    let merge = decide_record(
+        "d3d11",
+        None,
+        &header(),
+        &map(&[(&test_a(), FAIL)]),
+        &BTreeMap::new(),
+        &Scope::All,
+    )
+    .unwrap();
+    let pending = Pending {
+        exe: String::from("d3d11"),
+        legs: vec![PeDir::X86_64],
+        all: true,
+        path: dir.join("d3d11.txt"),
+        merge,
+        runs,
+    };
+    copy_raw(&state, &state.runs().join(RUN_C), &pending).unwrap();
+    let copied = state
+        .baseline_raw("d3d11")
+        .join("x86_64-windows/d3d11/test_a.log");
+    assert_eq!(
+        fs::read_to_string(copied).unwrap(),
+        "the second run, in C\n"
     );
 }

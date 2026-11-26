@@ -331,6 +331,20 @@ pub fn run_id(time: SystemTime) -> String {
     id
 }
 
+/// Whether `text` has the shape of a [`run_id`]: eight digits, `-` and six
+/// digits, so it names a directory in `runs/` and nothing else.
+#[must_use]
+pub fn is_run_id(text: &str) -> bool {
+    text.len() == 15
+        && text.bytes().enumerate().all(|(index, b)| {
+            if index == 8 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
+}
+
 /// The proleptic Gregorian date of `days` since 1970-01-01, after Howard
 /// Hinnant's `civil_from_days`.
 const fn civil_from_days(days: i64) -> (i64, i64, i64) {

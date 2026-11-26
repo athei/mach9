@@ -19,6 +19,7 @@ fn identity() -> Identity {
 fn record(pass: Pass, key: &str, failed: u32) -> Record {
     Record {
         pass,
+        run: String::from("20261126-010000"),
         unit: String::from("d3d11"),
         key: Key::Function(key.to_owned()),
         outcome: Outcome {
@@ -146,10 +147,17 @@ fn a_broken_file_is_discarded() {
     let path = dir.join("record-d3d11-x86_64-windows.txt");
     let full = fs::read_to_string(&path).unwrap();
     let identity_len = identity().text().len();
+    let changed = |broken: String| {
+        assert_ne!(broken, full);
+        broken
+    };
     for broken in [
         full[..identity_len - 1].to_owned(),
-        full.replacen("first d3d11 test_b", "first d3d11 test b", 1),
-        full.replacen("confirm", "second", 1),
+        changed(full.replacen("d3d11 test_b", "d3d11 test b", 1)),
+        changed(full.replacen("confirm", "second", 1)),
+        // A record of a runner that wrote no run id.
+        changed(full.replacen("first 20261126-010000 ", "first ", 1)),
+        changed(full.replacen("20261126-010000", "../010000", 1)),
         format!("{full}\n"),
     ] {
         fs::write(&path, &broken).unwrap();
@@ -174,8 +182,12 @@ fn bad_input_is_refused() {
     bad.scope = String::from("all\r");
     assert!(Resume::open(&dir, &bad).is_err());
     let mut opened = Resume::open(&dir, &identity()).unwrap();
-    let mut record = record(Pass::First, "test_a", 0);
-    record.unit = String::from("d3d 11");
-    let error = opened.resume.append(&record).unwrap_err();
+    let mut bad = record(Pass::First, "test_a", 0);
+    bad.unit = String::from("d3d 11");
+    let error = opened.resume.append(&bad).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    let mut bad = record(Pass::First, "test_a", 0);
+    bad.run = String::from("../runs");
+    let error = opened.resume.append(&bad).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 }
