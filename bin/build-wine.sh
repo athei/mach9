@@ -438,14 +438,10 @@ for pe in $WINE_TEST_PE_DIRS; do
 done
 # lib/wine/tests/VERSION: the `wine --version` string of the Wine the tests
 # were built from, so a copy of lib/wine/tests taken alone still says which
-# build it is (mtld3d's conformance runner reads its first line). ntdll prints
-# wine_build for --version, which make writes into dlls/ntdll/unix/version.c
-# from `git describe` of the source on every build, so the string is read
-# from that file in the build tree, as compiled into the ntdll.so the bundle
-# installs. The build's loader cannot be asked: it refuses to start outside
-# the signed wine.app. The x86 tree builds the same WINE_SRC, so the string
-# names the tests' source too.
-tests_version=$(sed -n 's/^const char wine_build\[\] = "\(.*\)";$/\1/p' "$BUILD_DIR/dlls/ntdll/unix/version.c")
+# build it is (mtld3d's conformance runner reads its first line), as the build
+# tree has it (wine_build_version in profile.sh). The x86 tree builds the
+# same WINE_SRC, so the string names the tests' source too.
+tests_version=$(wine_build_version "$BUILD_DIR")
 if [ -z "$tests_version" ]; then
     echo "Error: $BUILD_DIR/dlls/ntdll/unix/version.c defines no wine_build"
     exit 1

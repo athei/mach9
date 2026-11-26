@@ -1043,6 +1043,9 @@ The app:
 - It is named Mach9, the launcher this Wine runs under, and carries the
   games category and Game Mode keys, so a game the launcher starts gets
   Game Mode. The bundle identifier stays the one the profile grants.
+- Its `CFBundleShortVersionString` is the Wine version `wine --version`
+  prints, without `wine-`, and its `CFBundleVersion` the first three whole
+  numbers of it. Sparkle compares Mach9.app's version, not this one.
 - The signature claims only what the loader needs; `package_loader` and
   `LOADER_RUNTIME_ENTITLEMENTS` list each entitlement with its reason.
 - It is signed once as a whole with the hardened runtime and a secure

@@ -659,6 +659,16 @@ check_own_repo() {
     fi
 }
 
+# wine_build_version <build tree>: print the `wine --version` string of the
+# Wine built in <build tree>, or nothing. ntdll prints wine_build for
+# --version, which make writes into dlls/ntdll/unix/version.c from `git
+# describe` of the source on every build, so the string is read from that
+# file, as compiled into the ntdll.so the bundle installs. The build's loader
+# cannot be asked: it refuses to start outside the signed wine.app.
+wine_build_version() {
+    sed -n 's/^const char wine_build\[\] = "\(.*\)";$/\1/p' "$1/dlls/ntdll/unix/version.c" 2>/dev/null
+}
+
 # The staged dists. build-mesa.sh, build-gstreamer.sh, build-fex.sh,
 # build-dxmt.sh and build-vkd3d-proton.sh each stage what the bundle takes
 # from them in a directory of its own (MESA_DIST, GSTREAMER_DIST, FEX_DIST,

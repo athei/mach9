@@ -3659,6 +3659,29 @@ com.apple.security.cs.disable-executable-page-protection
 com.apple.security.cs.disable-library-validation
 com.apple.security.device.audio-input"
 
+# loader_short_version <wine version>: print wine.app's
+# CFBundleShortVersionString for a `wine --version` string: the string
+# without its "wine-", such as 11.21-56-g<commit> (56 commits on top of
+# wine-11.21), or nothing for an empty one. macOS shows it with the
+# CFBundleVersion, in a crash report for example. Sparkle reads neither key
+# of wine.app, only Mach9.app's, and macOS keeps the loader's privacy grants
+# (the microphone) by its identifier and signature, so a new version with
+# every build changes no update and no grant.
+loader_short_version() {
+    if [ -n "$1" ]; then
+        echo "${1#wine-}"
+    fi
+}
+
+# loader_bundle_version <wine version>: print wine.app's CFBundleVersion for
+# a `wine --version` string: its first three fields that are whole numbers,
+# split at . and -, joined by dots, since a CFBundleVersion is one to three
+# such numbers. 11.21-56-g<commit> gives 11.21.56, a release 11.21, and a
+# release candidate 11.0-rc2 gives 11.0. Nothing when there is none.
+loader_bundle_version() {
+    echo "$1" | tr '.-' '\n' | grep -xE '[0-9]+' | head -n 3 | paste -sd . -
+}
+
 # package_loader: wrap the loader `make install` left in lib/wine/<unix>/wine
 # into wine.app and sign it. Hadron's layout:
 #   lib/wine/<unix>/wine.app/Contents/{MacOS/wine, Info.plist, embedded.provisionprofile}
@@ -3666,15 +3689,25 @@ com.apple.security.device.audio-input"
 #   bin/wine -> ../lib/wine/<unix>/wine.app/Contents/MacOS/wine
 # The app is signed as a whole, without --deep (nothing inside it is code but
 # the loader), with the hardened runtime and, unless LOADER_TIMESTAMP=0, a
-# secure timestamp from Apple's server.
+# secure timestamp from Apple's server. The version keys name the Wine of
+# the build tree (loader_short_version); the loader cannot be asked, since it
+# refuses to run before it is in wine.app and signed, and check_loader_app
+# compares them with what the signed loader prints.
 package_loader() {
-    local app="$unixdir/wine.app" ents="$TMP_DIR/loader-entitlements.plist" version key
+    local app="$unixdir/wine.app" ents="$TMP_DIR/loader-entitlements.plist" wine_version key
+    local short_version bundle_version
     if [ ! -f "$unixdir/wine" ] || [ -L "$unixdir/wine" ]; then
         echo "Error: no loader binary at $UNIX_DIR/wine"
         exit 1
     fi
-    version=$("$unixdir/wine" --version 2>/dev/null | sed 's/^wine-//')
-    [ -n "$version" ] || version=0
+    wine_version=$(wine_build_version "$BUILD_DIR")
+    short_version=$(loader_short_version "$wine_version")
+    bundle_version=$(loader_bundle_version "$wine_version")
+    if [ -z "$short_version" ] || [ -z "$bundle_version" ]; then
+        echo "Error: $BUILD_DIR/dlls/ntdll/unix/version.c gives no Wine version for wine.app's"
+        echo "Info.plist (wine_build is '$wine_version'; run build-wine.sh)"
+        exit 1
+    fi
     mkdir -p "$app/Contents/MacOS"
     mv "$unixdir/wine" "$app/Contents/MacOS/wine"
     cp "$LOADER_PROFILE" "$app/Contents/embedded.provisionprofile"
@@ -3704,9 +3737,9 @@ package_loader() {
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>$version</string>
+    <string>$short_version</string>
     <key>CFBundleVersion</key>
-    <string>$version</string>
+    <string>$bundle_version</string>
     <key>LSMinimumSystemVersion</key>
     <string>$MACOS_FLOOR</string>
     <key>NSPrincipalClass</key>
@@ -3761,6 +3794,7 @@ loader_timestamp_flag() {
 check_loader_app() {
     local bundle="${1:-$WINE_DIR}"
     local app="$bundle/lib/wine/$UNIX_DIR/wine.app" info signed="$TMP_DIR/signed-entitlements.plist" key want got pair
+    local version
     if ! codesign --verify --strict "$app" 2>"$TMP_DIR/codesign.log"; then
         echo "Error: wine.app does not verify:"
         cat "$TMP_DIR/codesign.log"
@@ -3827,6 +3861,22 @@ check_loader_app() {
         fi
     done
     echo "  wine.app is named Mach9 and supports Game Mode."
+    # The version keys package_loader took from the build tree, against what
+    # the signed loader prints.
+    if ! version=$("$bundle/bin/wine" --version) || [ -z "$version" ]; then
+        echo "Error: $bundle/bin/wine --version failed"
+        exit 1
+    fi
+    for pair in "CFBundleShortVersionString=$(loader_short_version "$version")" \
+                "CFBundleVersion=$(loader_bundle_version "$version")"; do
+        if [ "$(/usr/libexec/PlistBuddy -c "Print :${pair%%=*}" "$app/Contents/Info.plist" 2>/dev/null)" \
+                != "${pair#*=}" ]; then
+            echo "Error: wine.app's Info.plist does not set ${pair%%=*} to ${pair#*=}, which the"
+            echo "loader's version $version gives"
+            exit 1
+        fi
+    done
+    echo "  wine.app's version is $(loader_short_version "$version") ($(loader_bundle_version "$version"))."
     if [ "$LOADER_TIMESTAMP" = 1 ]; then
         echo "  wine.app is signed by $LOADER_IDENTITY_NAME with the hardened runtime, a secure timestamp"
     else
