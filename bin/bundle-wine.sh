@@ -1703,8 +1703,8 @@ check_egl_host() {
     fi
     grep "^egl: depth-bias check" "$log" | sed 's/^egl: /    /'
     check_gl_host glpbo "texels copied unchanged through pixel buffer objects"
-    check_gl_host glstats "pipeline statistics queries counted at once, occlusion queries over many frames and past the last slot"
-    check_gl_host glstats "pipeline statistics queries counted at once, occlusion queries over many frames and past the last slot, under the validation layers" validation
+    check_gl_host glstats "pipeline statistics queries counted at once, occlusion queries over many frames, in many live query objects and past the last slot"
+    check_gl_host glstats "pipeline statistics queries counted at once, occlusion queries over many frames, in many live query objects and past the last slot, under the validation layers" validation
 }
 
 # check_vkalias_host: build smoke/vkalias.c for the host and run it on the
@@ -1877,15 +1877,17 @@ check_vkatomic64_host() {
 # glstats.c checks statistics queries that are active together, which Zink
 # counts with one Vulkan query, and occlusion queries over many frames with
 # query objects that are not begun again, which must not keep KosmicKrisp's
-# occlusion query slots from being used again, and more occlusion queries
-# alive at once than KosmicKrisp has slots for, which past the last slot
-# have to report visible instead of crashing Zink. With validation, the run
-# is under Khronos' validation layers (check_validation_layers_build), and
-# it also has to load them and get no validation error from them: no
-# "Validation Error" line and no VUID. Zink's own blit and clear shaders
-# draw with outputs no attachment takes, which the layers report as warnings
-# without a VUID, so warnings do not count. The limit is about 3 times the
-# slowest clean run, glstats.c's 19 s on an Apple M5 Max.
+# occlusion query slots from being used again, more query objects alive at
+# once than KosmicKrisp allows memory allocations, whose query buffers have
+# to share allocations, and more occlusion queries alive at once than
+# KosmicKrisp has slots for, which past the last slot have to report visible
+# instead of crashing Zink. With validation, the run is under Khronos'
+# validation layers (check_validation_layers_build), and it also has to load
+# them and get no validation error from them: no "Validation Error" line and
+# no VUID. Zink's own blit and clear shaders draw with outputs no attachment
+# takes, which the layers report as warnings without a VUID, so warnings do
+# not count. The limit is about 3 times the slowest clean run, glstats.c's
+# 19 s on an Apple M5 Max.
 check_gl_host() {
     local log="$TMP_DIR/$1${3:+-$3}.log"
     local layers=()

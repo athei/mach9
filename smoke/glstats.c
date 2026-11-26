@@ -9,9 +9,10 @@
  * beside GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN, and beside the compute
  * shader counter. Vulkan allows one active statistics query at a time, so
  * Zink has to count them all with one. It also runs occlusion queries over
- * many frames, more than KosmicKrisp has slots for (test_query_slots), and
- * keeps more of them alive at once than it has slots for
- * (test_query_spill).
+ * many frames, more than KosmicKrisp has slots for (test_query_slots), keeps
+ * more query objects alive at once than KosmicKrisp allows allocations
+ * (test_query_objects), and more occlusion queries alive at once than it has
+ * slots for (test_query_spill).
  * Each count that the draws and dispatches fix is compared exactly; counters
  * a driver may count differently (fragment and vertex shader invocations,
  * clipping output) only have to be nonzero. The results are read with
@@ -770,23 +771,65 @@ static void test_query_slots(void)
     check_error("query slots");
 }
 
+/* Many query objects alive at once, each begun once. Zink gives each query
+ * object a buffer of its own for its results, at most 4 KiB for an
+ * occlusion query; KosmicKrisp reports a maxMemoryAllocationCount of 4096, so
+ * those buffers have to share allocations, or the run under the validation
+ * layers reports VUID-vkAllocateMemory-maxMemoryAllocationCount-04101. Each
+ * object counts a scissor rectangle of its own, read at the end. */
+#ifndef QUERY_OBJECTS
+#define QUERY_OBJECTS 8192
+#endif
+static void test_query_objects(void)
+{
+    static GLuint objects[QUERY_OBJECTS];
+    unsigned int i, wrong = 0;
+    GLuint64 got;
+
+    p_glGenQueries(QUERY_OBJECTS, objects);
+    p_glUseProgram(cover_program);
+    p_glEnable(GL_SCISSOR_TEST);
+    for (i = 0; i < QUERY_OBJECTS; i++)
+    {
+        p_glScissor(0, 0, 1 + i % 64, 1 + i / 64 % 64);
+        p_glBeginQuery(GL_SAMPLES_PASSED, objects[i]);
+        p_glDrawArrays(GL_TRIANGLES, 0, 3);
+        p_glEndQuery(GL_SAMPLES_PASSED);
+    }
+    p_glDisable(GL_SCISSOR_TEST);
+    for (i = 0; i < QUERY_OBJECTS; i++)
+    {
+        got = result(objects[i]);
+        if (got == (1 + i % 64) * (1 + i / 64 % 64))
+            continue;
+        if (wrong++ < 5)
+            printf("glstats: query objects: object %u counted %llu samples, expected %u\n", i,
+                   (unsigned long long)got, (1 + i % 64) * (1 + i / 64 % 64));
+    }
+    p_glDeleteQueries(QUERY_OBJECTS, objects);
+    p_glFinish();
+    if (wrong)
+        printf("glstats: query objects: %u of %u objects counted wrong\n", wrong, QUERY_OBJECTS);
+    failures += wrong;
+    check_error("query objects");
+}
+
 /* More occlusion queries alive at once than KosmicKrisp has slots for. Each
  * of SPILL_OBJECTS query objects stays active over SPILL_FLUSHES draws with
  * a glFlush after each, so Zink gives it a Vulkan query of its own for every
  * flush, and keeps them all until the object is begun again or deleted; the
  * objects are read only at the end. (Query objects of their own would do the
- * same, but each gets a buffer of its own, and so many exceed the device's
- * maxMemoryAllocationCount.) Once the slots are gone vkCreateQueryPool
- * fails, and Zink has to go on without a Vulkan query for the draws after
- * that, instead of crashing. An occlusion query that missed draws that way
- * reports them visible (SPILL_VISIBLE samples), so that culling and
- * conditional rendering draw rather than hide them. So the objects count
- * all their draws up to the first draw without a Vulkan query, and from the
- * object of that draw on they report SPILL_VISIBLE; the last one also into
- * a query buffer object, and a conditional render on it draws. The case fails when every draw got a Vulkan
- * query: it is for a driver with KosmicKrisp's slot limit. Once the objects
- * are deleted, the slots are free again and new queries count, at the
- * latest SPILL_FRAMES frames later. */
+ * same; test_query_objects keeps many of those alive.) Once the slots are
+ * gone vkCreateQueryPool fails, and Zink has to go on without a Vulkan query
+ * for the draws after that, instead of crashing. An occlusion query that
+ * missed draws that way reports them visible (SPILL_VISIBLE samples), so
+ * that culling and conditional rendering draw rather than hide them. So the
+ * objects count all their draws up to the first draw without a Vulkan query,
+ * and from the object of that draw on they report SPILL_VISIBLE; the last
+ * one also into a query buffer object, and a conditional render on it draws.
+ * The case fails when every draw got a Vulkan query: it is for a driver with
+ * KosmicKrisp's slot limit. Once the objects are deleted, the slots are free
+ * again and new queries count, at the latest SPILL_FRAMES frames later. */
 #define SPILL_OBJECTS 8
 #define SPILL_FLUSHES 4500
 #define SPILL_FRAMES 16
@@ -1103,6 +1146,7 @@ int main(int argc, char **argv)
     test_query_buffer();
     test_query_buffer_unstarted();
     test_query_slots();
+    test_query_objects();
     test_query_spill();
 
     printf("glstats: %u wrong values\n", failures);
