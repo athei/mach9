@@ -382,6 +382,12 @@ fn a_field_that_cannot_be_read_is_ignored_and_the_rest_applies() -> TestResult {
             "dll_overrides=mscoree",
             "DLL override \"mscoree\" without '=' before its load order",
         ),
+        // Two WINEDLLOVERRIDES elements in one field, which ntdll would read
+        // as one.
+        (
+            "dll_overrides=mshtml=default%3Bmscoree=n",
+            "DLL override \"mshtml=default;mscoree=n\" with a ';'",
+        ),
         ("env==1", "invalid variable name \"\""),
         ("env=A%3DB=1", "invalid variable name \"A=B\""),
     ] {
@@ -963,7 +969,8 @@ fn awkward() -> Result<Table, FieldError> {
             .with_large_address_aware(Setting::Reset)
             .with_gcmouse(true)
             .with_force_nx(Setting::Reset)
-            .with_dll_override(DllOverride::new(format!("{text}=n,b"))?)
+            // A DLL override is one WINEDLLOVERRIDES element, without a `;`.
+            .with_dll_override(DllOverride::new(format!("{}=n,b", text.replace(';', ",")))?)
             .with_dll_override(DllOverride::new("a=")?)
             .with_argument(Argument::new(text)?)
             .with_argument(Argument::new("%")?)

@@ -307,7 +307,10 @@ impl Rule {
     /// [`Rule::set_env`]. A `debug_channels` value is split at each `,` into
     /// entries of their own, as `WINEDEBUG` reads it, so that
     /// [`Table::winedebug`](crate::Table::winedebug) scopes each of them to
-    /// the rule's `exe`; an empty entry, `+relay,` included, is refused.
+    /// the rule's `exe`; an empty entry, `+relay,` included, is refused. A
+    /// `dll_overrides` value is split at each `;` the same way, as
+    /// `WINEDLLOVERRIDES` reads it, so `mshtml=default;mscoree=n` gives two
+    /// overrides, and each part needs its `=`.
     ///
     /// On an error the rule is left as it was.
     ///
@@ -348,7 +351,13 @@ impl Rule {
             Key::Company => self.company = Some(Fingerprint::new(value)?),
             Key::Product => self.product = Some(Fingerprint::new(value)?),
             Key::OriginalFilename => self.original_filename = Some(Fingerprint::new(value)?),
-            Key::DllOverrides => self.dll_overrides.push(DllOverride::new(value)?),
+            Key::DllOverrides => {
+                let overrides = value
+                    .split(';')
+                    .map(DllOverride::new)
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.dll_overrides.extend(overrides);
+            }
             Key::Arguments => self.arguments.push(Argument::new(value)?),
             Key::ArgumentsOverride => {
                 let argument = Argument::new(value)?;

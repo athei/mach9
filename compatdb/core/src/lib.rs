@@ -131,8 +131,9 @@
 //!   so a name cannot hold one ([`EnvName`]); the value may. An empty
 //!   value, or none, removes the variable.
 //! - What each list entry and matcher may hold is the type of its part:
-//!   [`Exe`], [`Fingerprint`], [`DllOverride`] (needs a `=`), [`Argument`],
-//!   [`DebugChannel`] (no `,`) and [`EnvName`]. None of them holds a NUL.
+//!   [`Exe`], [`Fingerprint`], [`DllOverride`] (needs a `=`, no `;`),
+//!   [`Argument`], [`DebugChannel`] (no `,`) and [`EnvName`]. None of them
+//!   holds a NUL.
 //!
 //! Escaping. In a value, `Display` writes `%`, `;` and every ASCII control
 //! character (U+0000 to U+001F and U+007F, CR and LF among them) as `%XX`,

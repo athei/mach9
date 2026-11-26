@@ -52,6 +52,9 @@ pub enum FieldError {
     /// A DLL override without the `=` between its modules and its load
     /// order, as it was written.
     InvalidDllOverride(String),
+    /// A DLL override with a `;`, as it was written, which
+    /// `WINEDLLOVERRIDES` would read as more than one entry.
+    SemicolonInDllOverride(String),
     /// A `%` in a value that two hex digits do not follow.
     BadEscape,
     /// A value whose escapes decode to bytes that are not UTF-8.
@@ -149,6 +152,7 @@ impl fmt::Display for FieldError {
             Self::InvalidDllOverride(text) => {
                 write!(f, "DLL override {text:?} without '=' before its load order")
             }
+            Self::SemicolonInDllOverride(text) => write!(f, "DLL override {text:?} with a ';'"),
             Self::BadEscape => f.write_str("a '%' without two hex digits after it"),
             Self::InvalidUtf8 => f.write_str("escapes that are not UTF-8"),
             Self::MissingEquals => f.write_str("a field without '='"),

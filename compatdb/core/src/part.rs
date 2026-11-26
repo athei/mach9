@@ -331,11 +331,22 @@ impl DebugChannel {
 
 /// One `WINEDLLOVERRIDES` element, `<modules>=<order>`.
 ///
-/// That is comma-separated module names, `=`, and a load order such as
-/// `n,b`, empty to disable the modules, or `default` to take them out of the
-/// overrides of the rules folded before. The text is kept as written.
+/// That is module names separated by `,`, spaces or tabs, `=`, and a load
+/// order such as `n,b`, empty to disable the modules, or `default` to take
+/// them out of the overrides of the rules folded before. The text is kept as
+/// written, and ntdll reads it as it reads an element of `WINEDLLOVERRIDES`.
+///
+/// A `;` separates the elements of `WINEDLLOVERRIDES`, but ntdll takes the
+/// text of one override as one element, so the text after a `;` would be
+/// part of the load order: `d3d9=n;dxgi=n` would give `d3d9` an override and
+/// `dxgi` none. [`Rule::set`] splits such a value into overrides of their
+/// own.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DllOverride(String);
+
+/// The characters ntdll separates the module names of a DLL override at
+/// (`separatorsW` in Wine's `dlls/ntdll/unix/loadorder.c`).
+const MODULE_SEPARATORS: [char; 3] = [',', ' ', '\t'];
 
 impl DllOverride {
     /// `text` as a DLL override.
@@ -343,10 +354,13 @@ impl DllOverride {
     /// # Errors
     ///
     /// [`FieldError::InvalidDllOverride`] when `text` has no `=`,
+    /// [`FieldError::SemicolonInDllOverride`] when it holds a `;`,
     /// [`FieldError::Nul`] when it holds a NUL.
     pub fn new(text: impl Into<String>) -> Result<Self, FieldError> {
         let text = without_nul(text.into())?;
-        if text.contains('=') {
+        if text.contains(';') {
+            Err(FieldError::SemicolonInDllOverride(text))
+        } else if text.contains('=') {
             Ok(Self(text))
         } else {
             Err(FieldError::InvalidDllOverride(text))
@@ -366,11 +380,11 @@ impl DllOverride {
         &self.0
     }
 
-    /// The module names before the `=`, trimmed, without empty ones.
+    /// The module names before the first `=`, as ntdll names them: split at
+    /// `,`, spaces and tabs, without empty ones.
     pub fn modules(&self) -> impl Iterator<Item = &str> {
         self.names()
-            .split(',')
-            .map(str::trim)
+            .split(MODULE_SEPARATORS)
             .filter(|name| !name.is_empty())
     }
 

@@ -160,6 +160,40 @@ fn a_dll_override_needs_an_equals_and_keeps_its_text() -> TestResult {
 }
 
 #[test]
+fn a_dll_override_is_one_element_with_the_modules_ntdll_names() -> TestResult {
+    // ntdll separates the module names at `,`, spaces and tabs, and only
+    // there.
+    for (text, modules) in [
+        ("d3d12 d3d12core=", &["d3d12", "d3d12core"][..]),
+        ("a\tb,c=n", &["a", "b", "c"]),
+        (" ,a,, b\t=b", &["a", "b"]),
+        ("a.dll=n", &["a.dll"]),
+        ("=n", &[]),
+    ] {
+        let entry = DllOverride::new(text)?;
+        assert_eq!(entry.modules().collect::<Vec<_>>(), modules, "{text:?}");
+    }
+    // A `;` would end the element in WINEDLLOVERRIDES, and ntdll would read
+    // the rest as part of the load order.
+    for text in ["mshtml=default;mscoree=n", "d3d9=n;dxgi=n", "a=n;", ";a=n"] {
+        assert_eq!(
+            DllOverride::new(text),
+            Err(FieldError::SemicolonInDllOverride(text.into())),
+            "{text:?}"
+        );
+    }
+    assert_eq!(
+        DllOverride::new("a;b"),
+        Err(FieldError::SemicolonInDllOverride("a;b".into()))
+    );
+    assert_eq!(
+        FieldError::SemicolonInDllOverride("a=n;b=n".into()).to_string(),
+        "DLL override \"a=n;b=n\" with a ';'"
+    );
+    Ok(())
+}
+
+#[test]
 fn an_env_name_is_not_empty_and_has_no_equals() -> TestResult {
     assert_eq!(EnvName::new("Path")?.as_str(), "Path");
     for bad in ["", "A=B", "=C:"] {

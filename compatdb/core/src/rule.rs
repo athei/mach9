@@ -575,7 +575,8 @@ impl Rule {
     /// An entry whose order is `default` sets no load order: it removes the
     /// entries that the rules folded before it gave its modules, so the
     /// registry and `WINEDLLOVERRIDES` decide for them again (see
-    /// [`DllOverride::is_default`]). Module names match
+    /// [`DllOverride::is_default`]). An entry's module names are split at
+    /// `,`, spaces and tabs, as ntdll splits them, and match
     /// ASCII-case-insensitively, with or without `.dll`.
     ///
     /// With no entry, `WINEDLLOVERRIDES` and the registry decide, as in

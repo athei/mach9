@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    Exe, Fingerprint,
+    Exe, Fingerprint, Key,
     runtime::{append_cmdline_each, merge_env},
 };
 
@@ -577,6 +577,121 @@ fn a_default_dll_override_takes_its_modules_out_of_the_entries_before_it() {
     );
     assert_eq!(without_module(&entry("a="), "a"), Without::Emptied);
     assert_eq!(without_module(&entry("a="), "b"), Without::Absent);
+}
+
+/// The load order ntdll gives each module for `entries`, each handed to its
+/// `add_load_order_override` in turn: a port of `add_load_order_set` and
+/// `parse_load_order` in Wine's `dlls/ntdll/unix/loadorder.c`. A later entry
+/// for a module replaces the earlier one. Modules are in lowercase without
+/// `.dll`; an order is `""` (disabled), `n`, `b`, `n,b` or `b,n`.
+fn ntdll_applies(entries: &[DllOverride]) -> Vec<(String, &'static str)> {
+    let separator = |c: char| matches!(c, ',' | ' ' | '\t');
+    let mut applied: Vec<(String, &'static str)> = Vec::new();
+    for entry in entries {
+        let Some((names, order)) = entry.as_str().split_once('=') else {
+            continue;
+        };
+        let mut lo = "";
+        for word in order.split(separator).filter(|word| !word.is_empty()) {
+            match (word.chars().next(), lo) {
+                (Some('n' | 'N'), "") => lo = "n",
+                (Some('n' | 'N'), "b") => {
+                    lo = "b,n";
+                    break;
+                }
+                (Some('b' | 'B'), "") => lo = "b",
+                (Some('b' | 'B'), "n") => {
+                    lo = "n,b";
+                    break;
+                }
+                _ => {}
+            }
+        }
+        for name in names.split(separator).filter(|name| !name.is_empty()) {
+            let name = name.to_ascii_lowercase();
+            let name = name.strip_suffix(".dll").unwrap_or(&name).to_owned();
+            match applied.iter_mut().find(|(module, _)| *module == name) {
+                Some(slot) => slot.1 = lo,
+                None => applied.push((name, lo)),
+            }
+        }
+    }
+    applied
+}
+
+#[test]
+fn a_winedlloverrides_value_set_as_one_entry_resets_and_overrides() -> TestResult {
+    // The value is split into its elements: the reset takes the built-in
+    // mshtml= out, and mscoree gets its order.
+    let mut rule = Rule::new(Exe::Any);
+    rule.set(Key::DllOverrides, "mshtml=default;mscoree=n")?;
+    let mut table = Table::new();
+    table.push(rule);
+    let game = table.preview("Game.exe", &VersionInfo::default());
+    assert_eq!(
+        game.dll_overrides_reset,
+        [DllOverrideReset {
+            module: "mshtml".into(),
+            by: Origin::Line(1),
+            removed: vec![Origin::BuiltIn],
+        }]
+    );
+    assert_eq!(
+        game.dll_overrides.last().map(DllOverride::as_str),
+        Some("mscoree=n")
+    );
+    let applied = ntdll_applies(&game.dll_overrides);
+    assert!(!applied.iter().any(|(module, _)| module == "mshtml"));
+    assert!(applied.contains(&("mscoree".into(), "n")));
+    Ok(())
+}
+
+#[test]
+fn each_element_is_an_entry_of_its_own_as_ntdll_applies_it() -> TestResult {
+    let mut rule = Rule::new(Exe::new("Game.exe")?);
+    rule.set(Key::DllOverrides, "d3d9=n;dxgi=n")?;
+    let mut table = Table::new();
+    table.push(rule);
+    let game = table.preview("Game.exe", &VersionInfo::default());
+    let mine: Vec<DllOverride> = game
+        .dll_overrides
+        .iter()
+        .rev()
+        .take(2)
+        .rev()
+        .cloned()
+        .collect();
+    assert_eq!(mine, ["d3d9=n", "dxgi=n"]);
+    assert_eq!(
+        ntdll_applies(&mine),
+        [("d3d9".into(), "n"), ("dxgi".into(), "n")]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_default_entry_finds_a_module_listed_with_a_blank() -> TestResult {
+    // ntdll separates module names at blanks too: the reset takes d3d12 out
+    // and leaves d3d12core disabled.
+    let table = Table::parse_strict(
+        "exe=*;dll_overrides=d3d12 d3d12core=\nexe=Game.exe;dll_overrides=D3D12.dll=default",
+    )?;
+    let game = table.preview("Game.exe", &VersionInfo::default());
+    let reset = game
+        .dll_overrides_reset
+        .iter()
+        .find(|reset| reset.module == "D3D12.dll")
+        .ok_or("no reset of d3d12")?;
+    assert_eq!(reset.removed, [Origin::Line(1)]);
+    assert!(
+        game.dll_overrides
+            .iter()
+            .any(|entry| *entry == "d3d12core=")
+    );
+    let applied = ntdll_applies(&game.dll_overrides);
+    assert!(!applied.iter().any(|(module, _)| module == "d3d12"));
+    assert!(applied.contains(&("d3d12core".into(), "")));
+    Ok(())
 }
 
 #[test]

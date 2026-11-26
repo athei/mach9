@@ -212,6 +212,37 @@ fn a_debug_channels_value_is_split_at_each_comma_and_each_part_is_scoped() -> Te
 }
 
 #[test]
+fn a_dll_overrides_value_is_split_at_each_semicolon() -> TestResult {
+    let mut rule = game()?;
+    rule.set(Key::DllOverrides, "mshtml=default;mscoree=n")?;
+    rule.set_list(Key::DllOverrides, ["d3d9=n;dxgi=n", "d3d12="])?;
+    assert_eq!(rule.dll_overrides(), ["d3d9=n", "dxgi=n", "d3d12="]);
+    let mut table = Table::new();
+    table.push(rule.clone());
+    assert_eq!(
+        table.to_string(),
+        "exe=Game.exe;dll_overrides=d3d9=n;dll_overrides=dxgi=n;dll_overrides=d3d12="
+    );
+    // Each part needs its `=`, an empty one included, and the rule is left
+    // as it was.
+    for (bad, part) in [
+        ("d3d9=n;", ""),
+        (";d3d9=n", ""),
+        ("a=n;;b=n", ""),
+        ("a=n;b", "b"),
+    ] {
+        let before = rule.clone();
+        assert_eq!(
+            rule.set(Key::DllOverrides, bad),
+            Err(FieldError::InvalidDllOverride(part.into())),
+            "{bad:?}"
+        );
+        assert_eq!(rule, before, "{bad:?}");
+    }
+    Ok(())
+}
+
+#[test]
 fn the_inherited_conflicts_are_the_variables_a_launcher_removes() {
     assert_eq!(
         inherited_conflicts(),

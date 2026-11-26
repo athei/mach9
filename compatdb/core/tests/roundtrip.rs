@@ -180,12 +180,12 @@ impl Gen {
         }
         for over in self.list(|names| DllOverride::new(format!("{names}=")))? {
             let order = self.pick(ORDERS).copied().unwrap_or_default();
-            let text = if self.one_in(4) {
-                format!("{over}{}", self.text())
+            let over = if self.one_in(4) {
+                self.part(|text| DllOverride::new(format!("{over}{text}")))?
             } else {
-                format!("{over}{order}")
+                DllOverride::new(format!("{over}{order}"))?
             };
-            rule = rule.with_dll_override(DllOverride::new(text)?);
+            rule = rule.with_dll_override(over);
         }
         for argument in self.list(Argument::new)? {
             rule = rule.with_argument(argument);
@@ -364,9 +364,11 @@ fn every_short_text_round_trips_in_every_field() -> TestResult {
     // fingerprint, both sides of a DLL override, an argument, a debug
     // channel, an env name and an env value.
     for text in every_text(ALPHABET, 3) {
-        let mut rule = Rule::new(Exe::new(format!("x{text}"))?)
-            .with_company(Fingerprint::new(text.clone())?)
-            .with_dll_override(DllOverride::new(format!("{text}={text}"))?);
+        let mut rule =
+            Rule::new(Exe::new(format!("x{text}"))?).with_company(Fingerprint::new(text.clone())?);
+        if let Ok(over) = DllOverride::new(format!("{text}={text}")) {
+            rule = rule.with_dll_override(over);
+        }
         if let Ok(exe) = Exe::new(text.clone()) {
             rule.set(Key::Exe, exe.as_str())?;
         }
