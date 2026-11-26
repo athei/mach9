@@ -40,3 +40,4 @@ dxgi/dxgi/d3d12:test_set_fullscreen issue=113  # AppKit moves the restored windo
 dxgi/dxgi/test_inexact_modes issue=113  # AppKit moves the restored window below the menu bar
 dxgi/dxgi/d3d10:test_resize_target issue=97
 dxgi/dxgi/d3d12:test_resize_target issue=97
+vulkan-1/vulkan/test_win32_surface issue=236 flaky  # on x86_64, the first Vulkan run after other Wine work can lose the KosmicKrisp device (MTL_COMMAND_QUEUE_ERROR_TIMEOUT), which adds 9 or 10 failures of vr -4; the rerun gives the baseline

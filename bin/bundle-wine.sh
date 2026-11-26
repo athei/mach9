@@ -2392,12 +2392,13 @@ check_wmadec_runs() {
 # FEX_SMCCHECKS=full, under which FEX tracks writes to code another way, with
 # FEX_X87REDUCEDPRECISION=0, which overrides compatdb's built-in rule for reduced
 # precision x87, and with FEX_DISKCACHE=1 its cases of pages that go away while
-# code runs and of writes, also from another process, that race a compile, as a
-# hit reads the code a compile reads and loads a block instead, and the cache
-# must not keep a block under code that changed while it compiled, once alone
-# and once with FEX_SMCCHECKS=full, whose checks read the code once more and
-# must not leave the cache a block that drops itself on every hit. The disk
-# cache goes into the prefix, a new one for each of the two runs.
+# code runs and of writes, also from another process, and protects that race a
+# compile, as a hit reads the code a compile reads and loads a block instead,
+# and the cache must not keep a block under code or a protection that changed
+# while it compiled, once alone and once with FEX_SMCCHECKS=full, whose checks
+# read the code once more and must not leave the cache a block that drops
+# itself on every hit. The disk cache goes into the prefix, a new one for each
+# of the two runs.
 # <env-command> drops the caller's FEX_* variables, so each run gets the mode it
 # names and only that run has it. A hang is how these cases usually fail, so the
 # limits are lower than the 120 seconds of the other runs. The slowest clean
@@ -2413,11 +2414,11 @@ check_fex_runs() {
         run_fex "$arch" "full precision x87" 20 "$@" FEX_X87REDUCEDPRECISION=0
         rm -rf "$TMP_DIR"/prefix/drive_c/users/*/AppData/Local/fex-emu/DiskCache
         run_fex "$arch" FEX_DISKCACHE=1 15 "$@" FEX_DISKCACHE=1 \
-            -- cross_process_protect decommit_race rwx_write_race cross_process_write_race
+            -- cross_process_protect decommit_race rwx_write_race cross_process_write_race rx_to_rwx_race
         check_fex_disk_cache "$arch"
         rm -rf "$TMP_DIR"/prefix/drive_c/users/*/AppData/Local/fex-emu/DiskCache
         run_fex "$arch" "FEX_SMCCHECKS=full FEX_DISKCACHE=1" 40 "$@" FEX_SMCCHECKS=full FEX_DISKCACHE=1 \
-            -- cross_process_protect decommit_race rwx_write_race cross_process_write_race
+            -- cross_process_protect decommit_race rwx_write_race cross_process_write_race rx_to_rwx_race
         check_fex_disk_cache "$arch"
     done
 }
