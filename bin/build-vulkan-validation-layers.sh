@@ -53,8 +53,8 @@ done
 # The tree: the clone, the sources update_deps.py fetches, and the CMake
 # tree. Set here rather than in profile.sh, which every component's KEY
 # hashes, as build-vk-gl-cts.sh does; bundle-wine.sh takes the same default.
-VULKAN_VALIDATION_LAYERS_BUILD_DIR="${VULKAN_VALIDATION_LAYERS_BUILD_DIR:-$BUILD_TOP/vulkan-validation-layers}"
-VULKAN_VALIDATION_LAYERS_DIST="${VULKAN_VALIDATION_LAYERS_DIST:-$VULKAN_VALIDATION_LAYERS_BUILD_DIR/dist}"
+path_setting VULKAN_VALIDATION_LAYERS_BUILD_DIR "$BUILD_TOP/vulkan-validation-layers"
+path_setting VULKAN_VALIDATION_LAYERS_DIST "$VULKAN_VALIDATION_LAYERS_BUILD_DIR/dist"
 VVL_SRC="$VULKAN_VALIDATION_LAYERS_BUILD_DIR/src"
 VVL_DEPS="$VULKAN_VALIDATION_LAYERS_BUILD_DIR/external"
 VVL_BUILD="$VULKAN_VALIDATION_LAYERS_BUILD_DIR/build"

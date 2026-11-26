@@ -54,7 +54,6 @@ set -e
 # prints that KEY and exits (print_dist_key).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
 CLEAN=0
 PRINT_KEY=0
@@ -71,6 +70,7 @@ done
 # whose winebuild marks the DLLs.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
+path_setting MINGW_DIR /opt/llvm-mingw
 # shellcheck source=lib/licenses.sh
 . "$SCRIPT_DIR/lib/licenses.sh"
 

@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 . "$SCRIPT_DIR/lib/profile.sh"
 # shellcheck source=../../pins/redist.env
 . "$PINS_DIR/redist.env"
-CACHE_DIR="${CACHE_DIR:-$ROOT/cache}"
+path_setting CACHE_DIR "$ROOT/cache"
 
 if [ $# -ne 1 ]; then
     echo "Usage: $0 <dir>"

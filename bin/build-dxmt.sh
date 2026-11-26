@@ -68,7 +68,6 @@ set -e
 # Wine build.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
 CLEAN=0
 PRINT_KEY=0
@@ -85,6 +84,7 @@ done
 # pins LLVM.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
+path_setting MINGW_DIR /opt/llvm-mingw
 # shellcheck source=../pins/redist.env
 . "$PINS_DIR/redist.env"
 # shellcheck source=lib/licenses.sh

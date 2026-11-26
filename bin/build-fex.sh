@@ -29,7 +29,6 @@ set -e
 # FEX_DIST first. --print-key prints that KEY and exits (print_dist_key).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
 CLEAN=0
 PRINT_KEY=0
@@ -45,6 +44,7 @@ done
 # trees go and pins the floor of the unix half.
 # shellcheck source=lib/profile.sh
 . "$SCRIPT_DIR/lib/profile.sh"
+path_setting MINGW_DIR /opt/llvm-mingw
 # shellcheck source=lib/licenses.sh
 . "$SCRIPT_DIR/lib/licenses.sh"
 

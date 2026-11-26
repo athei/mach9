@@ -2,7 +2,6 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
 
 usage() {
     echo "Usage: $0 [--clean]"
@@ -21,6 +20,7 @@ done
 . "$SCRIPT_DIR/lib/profile.sh"
 # shellcheck source=lib/wine-tests.sh
 . "$SCRIPT_DIR/lib/wine-tests.sh"
+path_setting MINGW_DIR /opt/llvm-mingw
 
 if [ ! -f "$WINE_SRC/configure" ]; then
     echo "Error: Wine source not found at $WINE_SRC"

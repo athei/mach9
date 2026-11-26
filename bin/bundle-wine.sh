@@ -15,8 +15,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # GIT_SOURCES and published_repo, for the source notice Step 4c writes.
 # shellcheck source=lib/sources.sh
 . "$SCRIPT_DIR/lib/sources.sh"
-CACHE_DIR="${CACHE_DIR:-$ROOT/cache}"
-MINGW_DIR="${MINGW_DIR:-/opt/llvm-mingw}"
+path_setting CACHE_DIR "$ROOT/cache"
+path_setting MINGW_DIR /opt/llvm-mingw
 
 # The pins of every third-party input (MTLD3D_URL/MTLD3D_SHA256 etc.).
 # shellcheck source=../pins/redist.env
@@ -3884,7 +3884,7 @@ EXT_DIR="$WINE_DIR/lib/external"
 
 # Khronos' validation layers, which check_gl_host runs smoke/glstats.c under;
 # the default of build-vulkan-validation-layers.sh. Not part of the bundle.
-VULKAN_VALIDATION_LAYERS_DIST="${VULKAN_VALIDATION_LAYERS_DIST:-$BUILD_TOP/vulkan-validation-layers/dist}"
+path_setting VULKAN_VALIDATION_LAYERS_DIST "$BUILD_TOP/vulkan-validation-layers/dist"
 VVL_LAYER_DIR="$VULKAN_VALIDATION_LAYERS_DIST/share/vulkan/explicit_layer.d"
 
 # check_validation_layers_build: on a Mac with a Metal 4 GPU, where the smoke
@@ -3909,7 +3909,7 @@ check_validation_layers_build() {
 # GFXReconstruct's capture layer, which Step 3 copies into lib/external and
 # Step 3c names in share/vulkan/explicit_layer.d, for compatdb's
 # vulkan_capture; the default of build-gfxreconstruct.sh.
-GFXRECONSTRUCT_DIST="${GFXRECONSTRUCT_DIST:-$BUILD_TOP/gfxreconstruct/dist}"
+path_setting GFXRECONSTRUCT_DIST "$BUILD_TOP/gfxreconstruct/dist"
 GFXR_LAYER=libVkLayer_gfxreconstruct.dylib
 GFXR_MANIFEST=VkLayer_gfxreconstruct.json
 # The licences of what the layer is built from, which build-gfxreconstruct.sh

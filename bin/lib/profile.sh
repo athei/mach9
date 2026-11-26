@@ -15,12 +15,34 @@
 # component, and the bundle in dist/wine. WINE_BUILD_ROOT overrides ROOT,
 # for a checkout kept elsewhere (a worktree) that should use the same trees.
 #
-# A path set below as "${NAME:-default}" is overridden by an environment
-# variable of the same name. MACOSX_DEPLOYMENT_TARGET may raise the floor but
-# not lower it.
+# A path set below with path_setting is overridden by an environment
+# variable of the same name, and so is one the scripts set with it.
+# MACOSX_DEPLOYMENT_TARGET may raise the floor but not lower it.
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PINS_DIR="$REPO_DIR/pins"
-ROOT="${WINE_BUILD_ROOT:-$(cd "$REPO_DIR/.." && pwd)}"
+
+# path_setting <name> <default>: set the path variable <name> to the value
+# the environment gives it, without trailing slashes, or to <default> when
+# the environment gives none or an empty one. Every path override goes
+# through here, so each spelling of a directory names it the same way: a
+# script that stages <dist>.part and then deletes <dist> would otherwise,
+# for a <dist> with a trailing slash, stage into the dist it deletes.
+path_setting() {
+    local value="${!1:-}"
+    if [ -z "$value" ]; then
+        printf -v "$1" '%s' "$2"
+        return 0
+    fi
+    while [ "$value" != / ] && [ "${value%/}" != "$value" ]; do
+        value="${value%/}"
+    done
+    printf -v "$1" '%s' "$value"
+}
+
+# WINE_BUILD_ROOT, when the environment sets it, is ROOT. Its own value is
+# the one path_setting gives, so a script started from here reads that one.
+path_setting WINE_BUILD_ROOT "$(cd "$REPO_DIR/.." && pwd)"
+ROOT="$WINE_BUILD_ROOT"
 # Where the build trees go by default, and where claim_tree adopts an
 # unmarked one.
 BUILD_TOP="$ROOT/build"
@@ -60,8 +82,8 @@ ref_source() {
 }
 
 # The Wine source: upstream Wine with our series, a checkout of athei/wine.
-WINE_SRC="${WINE_SRC:-$ROOT/src}"
-BUILD_DIR="${BUILD_DIR:-$BUILD_TOP/wine}"
+path_setting WINE_SRC "$ROOT/src"
+path_setting BUILD_DIR "$BUILD_TOP/wine"
 # What bundle-wine.sh writes <dest>/wine into without --dest.
 BUNDLE_DEST="$ROOT/dist"
 HOST_TRIPLE=aarch64-apple-darwin
@@ -81,15 +103,15 @@ MESA_FORMULAE="llvm spirv-llvm-translator spirv-tools"
 # MESA_DIST.
 MESA_REPO="${MESA_REPO:-https://github.com/athei/mesa}"
 MESA_REF="${MESA_REF:-$(pin_ref mesa-src.ref)}"
-MESA_SRC="${MESA_SRC:-$ROOT/src-mesa}"
-MESA_BUILD_DIR="${MESA_BUILD_DIR:-$BUILD_TOP/mesa}"
-MESA_DIST="${MESA_DIST:-$MESA_BUILD_DIR/dist}"
+path_setting MESA_SRC "$ROOT/src-mesa"
+path_setting MESA_BUILD_DIR "$BUILD_TOP/mesa"
+path_setting MESA_DIST "$MESA_BUILD_DIR/dist"
 # GStreamer's tree (the monorepo clone at the tag redist.env pins, with its
 # wraps, and the meson tree) and GStreamer with glib and FFmpeg as
 # build-gstreamer.sh stages them for winegstreamer.so and the bundle. Set
 # ahead of the configure flags, which name GSTREAMER_DIST.
-GSTREAMER_BUILD_DIR="${GSTREAMER_BUILD_DIR:-$BUILD_TOP/gstreamer}"
-GSTREAMER_DIST="${GSTREAMER_DIST:-$GSTREAMER_BUILD_DIR/dist}"
+path_setting GSTREAMER_BUILD_DIR "$BUILD_TOP/gstreamer"
+path_setting GSTREAMER_DIST "$GSTREAMER_BUILD_DIR/dist"
 # WINE_BUILD_CCACHE: the absolute path of a ccache to run the compilers
 # through. Unset, the default, no compiler goes through ccache. Set,
 # WINE_CCACHE is that path, and the scripts run through it Wine's unix
@@ -257,8 +279,8 @@ D3D9_IMPLS="mtld3d wined3d"
 # The link-library tree for the x86_64 PE archives and the tests of
 # WINE_TESTS, and the Wine SDK build-wine.sh stages from it and the main
 # build.
-X86LIBS_BUILD_DIR="${X86LIBS_BUILD_DIR:-$BUILD_TOP/x86libs}"
-WINE_SDK_DIR="${WINE_SDK_DIR:-$BUILD_TOP/sdk}"
+path_setting X86LIBS_BUILD_DIR "$BUILD_TOP/x86libs"
+path_setting WINE_SDK_DIR "$BUILD_TOP/sdk"
 # The PE directories of the x86 code games run, which the tests of
 # WINE_TESTS (wine-tests.sh) are built for unless their entry names others.
 TEST_PE_DIRS="i386-windows x86_64-windows"
@@ -268,25 +290,25 @@ TEST_PE_DIRS="i386-windows x86_64-windows"
 # bundle.
 DXMT_REPO="${DXMT_REPO:-https://github.com/athei/dxmt}"
 DXMT_REF="${DXMT_REF:-$(pin_ref dxmt-src.ref)}"
-DXMT_BUILD_DIR="${DXMT_BUILD_DIR:-$BUILD_TOP/dxmt}"
-DXMT_LLVM="${DXMT_LLVM:-$DXMT_BUILD_DIR/llvm15}"
-DXMT_DIST="${DXMT_DIST:-$DXMT_BUILD_DIR/dist}"
+path_setting DXMT_BUILD_DIR "$BUILD_TOP/dxmt"
+path_setting DXMT_LLVM "$DXMT_BUILD_DIR/llvm15"
+path_setting DXMT_DIST "$DXMT_BUILD_DIR/dist"
 # vkd3d-proton's repository (upstream vkd3d-proton plus our commits) and its
 # ref, which build-vkd3d-proton.sh clones into VKD3D_PROTON_BUILD_DIR and
 # checks out, its trees, and its D3D12 DLLs as build-vkd3d-proton.sh stages
 # them for the bundle.
 VKD3D_PROTON_REPO="${VKD3D_PROTON_REPO:-https://github.com/athei/vkd3d-proton}"
 VKD3D_PROTON_REF="${VKD3D_PROTON_REF:-$(pin_ref vkd3d-proton-src.ref)}"
-VKD3D_PROTON_BUILD_DIR="${VKD3D_PROTON_BUILD_DIR:-$BUILD_TOP/vkd3d-proton}"
-VKD3D_PROTON_DIST="${VKD3D_PROTON_DIST:-$VKD3D_PROTON_BUILD_DIR/dist}"
+path_setting VKD3D_PROTON_BUILD_DIR "$BUILD_TOP/vkd3d-proton"
+path_setting VKD3D_PROTON_DIST "$VKD3D_PROTON_BUILD_DIR/dist"
 # FEX's repository and its ref, the local clone build-fex.sh checks out that
 # ref in, its build trees, and FEX as build-fex.sh stages it for the bundle.
 FEX_REPO="${FEX_REPO:-https://github.com/athei/FEX}"
 FEX_REF="${FEX_REF:-$(pin_ref fex-src.ref)}"
-FEX_SRC="${FEX_SRC:-$ROOT/src-fex}"
-FEX_BUILD_DIR="${FEX_BUILD_DIR:-$BUILD_TOP/fex}"
-FEX_DIST="${FEX_DIST:-$FEX_BUILD_DIR/dist}"
-LOADER_PROFILE="${LOADER_PROFILE:-$REPO_DIR/signing/loader.provisionprofile}"
+path_setting FEX_SRC "$ROOT/src-fex"
+path_setting FEX_BUILD_DIR "$BUILD_TOP/fex"
+path_setting FEX_DIST "$FEX_BUILD_DIR/dist"
+path_setting LOADER_PROFILE "$REPO_DIR/signing/loader.provisionprofile"
 # The llvm-mingw targets the smoke test builds smoke/hello.c for and runs:
 # native, and the two x86 ones FEX emulates.
 SMOKE_PE_ARCHS="aarch64 x86_64 i686"

@@ -52,8 +52,8 @@ done
 # tree. Set here rather than in profile.sh, which every component's KEY
 # hashes, since only this script and the runner use them; the runner takes
 # the same default.
-VK_GL_CTS_BUILD_DIR="${VK_GL_CTS_BUILD_DIR:-$BUILD_TOP/vk-gl-cts}"
-VK_GL_CTS_DIST="${VK_GL_CTS_DIST:-$VK_GL_CTS_BUILD_DIR/dist}"
+path_setting VK_GL_CTS_BUILD_DIR "$BUILD_TOP/vk-gl-cts"
+path_setting VK_GL_CTS_DIST "$VK_GL_CTS_BUILD_DIR/dist"
 CTS_SRC="$VK_GL_CTS_BUILD_DIR/src"
 CTS_BUILD="$VK_GL_CTS_BUILD_DIR/build"
 MODULE_DIR=external/vulkancts/modules/vulkan

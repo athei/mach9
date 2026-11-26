@@ -67,8 +67,8 @@ done
 # profile.sh, which every component's KEY hashes, as
 # build-vulkan-validation-layers.sh does; bundle-wine.sh takes the same
 # default.
-GFXRECONSTRUCT_BUILD_DIR="${GFXRECONSTRUCT_BUILD_DIR:-$BUILD_TOP/gfxreconstruct}"
-GFXRECONSTRUCT_DIST="${GFXRECONSTRUCT_DIST:-$GFXRECONSTRUCT_BUILD_DIR/dist}"
+path_setting GFXRECONSTRUCT_BUILD_DIR "$BUILD_TOP/gfxreconstruct"
+path_setting GFXRECONSTRUCT_DIST "$GFXRECONSTRUCT_BUILD_DIR/dist"
 GFXR_SRC="$GFXRECONSTRUCT_BUILD_DIR/src"
 GFXR_BUILD="$GFXRECONSTRUCT_BUILD_DIR/build"
 LAYER=libVkLayer_gfxreconstruct.dylib

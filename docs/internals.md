@@ -113,8 +113,9 @@ Every tree lives under `build/` and the bundle in `dist/wine`, in the
 the same name, set in [`profile.sh`](../bin/lib/profile.sh) or, for
 `MINGW_DIR`, `CACHE_DIR` and the `VK_GL_CTS_*`,
 `VULKAN_VALIDATION_LAYERS_*` and `GFXRECONSTRUCT_*` ones, at the top of the
-scripts that use them. A `MACOSX_DEPLOYMENT_TARGET` may raise the floor but
-not lower it.
+scripts that use them. Each override is read through `path_setting` in
+`profile.sh`, which drops a trailing slash. A `MACOSX_DEPLOYMENT_TARGET` may
+raise the floor but not lower it.
 
 | Variable | What it is |
 |----------|------------|

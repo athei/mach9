@@ -42,7 +42,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/../bin" && pwd)"
 # shellcheck source=stack.sh
 . "$REPO_DIR/bench/stack.sh"
 
-GFXRECONSTRUCT_DIST="${GFXRECONSTRUCT_DIST:-$BUILD_TOP/gfxreconstruct/dist}"
+path_setting GFXRECONSTRUCT_DIST "$BUILD_TOP/gfxreconstruct/dist"
 replay="$GFXRECONSTRUCT_DIST/bin/gfxrecon-replay"
 
 usage() {
