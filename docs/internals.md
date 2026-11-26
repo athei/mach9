@@ -385,6 +385,15 @@ cargo run -p conformance -- record d3d11     # write the baselines again
   focus, so they run locally only;
   [`conformance.yml`](../.github/workflows/conformance.yml) runs only the
   crate's own tests.
+- A change to the output parser is checked against the raw logs of earlier
+  runs, a run's directory or `baseline-raw/`:
+  [`tests/replay.rs`](../conformance/tests/replay.rs) parses each run of a
+  test's log again and fails where the outcome differs from the
+  `[conformance] parsed:` line of the log.
+
+  ```bash
+  CONFORMANCE_REPLAY=build/conformance/baseline-raw cargo test -p conformance --test replay -- --ignored --nocapture
+  ```
 
 | Result | Meaning | Exit code |
 |--------|---------|-----------|
