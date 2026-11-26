@@ -235,6 +235,34 @@ fn the_file_reads_like_the_variable_with_its_own_sources() {
 }
 
 #[test]
+fn a_byte_order_mark_at_the_start_is_skipped() -> TestResult {
+    // An editor may save the file with a UTF-8 byte order mark in front.
+    let records = "exe=Game.exe;dpi_aware=false\nexe=*;gcmouse=false";
+    let (bare, _) = Table::parse_file_lenient(records);
+    for text in [
+        format!("\u{feff}{records}"),
+        format!("\u{feff}v=7\n{records}"),
+    ] {
+        let (file, diagnostics) = Table::parse_file_lenient(&text);
+        assert_eq!(diagnostics, [], "{text:?}");
+        assert_eq!(file.rules(), bare.rules(), "{text:?}");
+        let (variable, diagnostics) = Table::parse_lenient(&text);
+        assert_eq!(diagnostics, [], "{text:?}");
+        assert_eq!(variable.rules(), bare.rules(), "{text:?}");
+    }
+    let (file, _) = Table::parse_file_lenient(&format!("\u{feff}{records}"));
+    assert_eq!(file.sources(), [Source::FileLine(1), Source::FileLine(2)]);
+    let strict = Table::parse_strict(&format!("\u{feff}{records}"))?;
+    assert_eq!(strict.to_string(), records);
+    // Only the first character of the text: a mark at the start of a later
+    // line is part of its first key.
+    let (table, diagnostics) = parse(&format!("{records}\n\u{feff}exe=x.exe"));
+    assert_eq!(table.rules().len(), 2);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+    Ok(())
+}
+
+#[test]
 fn a_diagnostic_names_the_text_of_its_line() {
     let text = "exe=a.exe;bogus=1\ngcmouse=false";
     let (_, variable) = Table::parse_lenient(text);

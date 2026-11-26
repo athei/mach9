@@ -24,6 +24,10 @@ use crate::{
 #[cfg(doc)]
 use crate::{ENV_VAR, FILE_ENV_VAR};
 
+/// The byte order mark, U+FEFF, which [`Table::parse_lenient`] skips at the
+/// start of the text.
+const BYTE_ORDER_MARK: char = '\u{feff}';
+
 /// Whether `line` is a version header of the old format, `v=` and nothing
 /// but ASCII digits, which launchers wrote as the first line of a table. The
 /// `v` is a key, so it is matched ASCII-case-insensitively like any other.
@@ -54,7 +58,8 @@ impl Table {
     ///
     /// A first line that is a version header of the old format
     /// (`v=<digits>`) is skipped without a diagnostic, so a launcher that
-    /// still writes one keeps working; it still counts as a line.
+    /// still writes one keeps working; it still counts as a line. So is a
+    /// byte order mark (U+FEFF) at the start of the text, which is no line.
     #[must_use]
     pub fn parse_lenient(text: &str) -> (Self, Vec<Diagnostic>) {
         Self::parse_text(text, RulesText::Variable)
@@ -70,8 +75,10 @@ impl Table {
         Self::parse_text(text, RulesText::File)
     }
 
-    /// Read `value`, the whole of the text `text`.
+    /// Read `value`, the whole of the text `text`. A byte order mark that an
+    /// editor put in front of the text is no part of the first key.
     fn parse_text(value: &str, text: RulesText) -> (Self, Vec<Diagnostic>) {
+        let value = value.strip_prefix(BYTE_ORDER_MARK).unwrap_or(value);
         let mut lines = value.lines().enumerate().peekable();
         lines.next_if(|(_, line)| is_legacy_header(line));
         let mut table = Self::new();
@@ -96,8 +103,8 @@ impl Table {
 
     /// Read the value of [`ENV_VAR`], refusing any problem that
     /// [`Table::parse_lenient`] would report. A table this gives back writes
-    /// itself (see [`Table`]'s `Display`) as `text` with blank lines and a
-    /// legacy header dropped and every word in lowercase.
+    /// itself (see [`Table`]'s `Display`) as `text` with a byte order mark,
+    /// blank lines and a legacy header dropped and every word in lowercase.
     ///
     /// # Errors
     ///

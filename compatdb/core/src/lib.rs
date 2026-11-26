@@ -113,6 +113,8 @@
 //!   whitespace alone is skipped. Lines are counted from 1, blank lines
 //!   included; that number is the rule's [`Source::Line`], and the line
 //!   of each [`Diagnostic`]. The file below counts its own lines.
+//! - A byte order mark (U+FEFF) at the start of the text is skipped, as
+//!   an editor may save the file with one.
 //! - A record is fields joined by `;`. An empty field is skipped.
 //! - A field is `key=value`, and the key ends at the first `=`. The keys
 //!   are those of [`Key`].
