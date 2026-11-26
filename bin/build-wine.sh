@@ -60,6 +60,27 @@ if [ -f "$BUILD_DIR/Makefile" ] && ! pe_cc_configured "$BUILD_DIR" "$PE_CC" ${WI
     claim_tree "$BUILD_DIR" wine 1
 fi
 
+# make builds the source a tree was configured from, its Makefile's srcdir,
+# while the SDK's WINE_COMMIT, DXMT and the source notice name the commit of
+# WINE_SRC. A tree configured from another checkout, such as the default
+# BUILD_DIR built with WINE_SRC naming a worktree, would build the one and
+# record the other. Such a tree holds hours of build of that checkout, so it
+# is not emptied here: the build stops, before anything else is built.
+if [ -f "$BUILD_DIR/Makefile" ]; then
+    configured=$(sed -n 's/^srcdir = //p' "$BUILD_DIR/Makefile" | head -n 1)
+    case "$configured" in
+        /*) ;;
+        *) configured="$BUILD_DIR/$configured" ;;
+    esac
+    if [ "$(canonical_path "$configured")" != "$(canonical_path "$WINE_SRC")" ]; then
+        echo "Error: $BUILD_DIR was configured for the Wine source"
+        echo "$configured, not for WINE_SRC=$WINE_SRC."
+        echo "Rerun with --clean, which also rebuilds every component, to configure it for"
+        echo "WINE_SRC, or set BUILD_DIR to a tree of its own for that source"
+        exit 1
+    fi
+fi
+
 # The sources of the graphics tests the x86 tree builds below carry per-file
 # test selection blocks, which the conformance crate of this repository
 # generates. Tests built from blocks other than the ones the crate writes now

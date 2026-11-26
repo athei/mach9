@@ -23,7 +23,7 @@ itself.
 
 | Script | Flag | Effect |
 |--------|------|--------|
-| `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile ([commands](internals.md#commands)) |
+| `build-wine.sh` | none | Incremental build; configure runs only when the build directory has no Makefile, and the build stops when its Makefile is for another Wine source than `WINE_SRC` ([commands](internals.md#commands)) |
 | `build-wine.sh` | `--clean` | Wipes the build directories and what they staged first; needed for changed configure flags or deployment target |
 | `bundle-wine.sh` | `--dest <dir>` | Writes `<dir>/wine` instead of the bundle in the [layout](#layout) |
 | `bundle-wine.sh` | `--yes` | Deletes an existing bundle without asking; a non-empty directory without `bin/wine` is still refused |
