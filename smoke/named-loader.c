@@ -4,12 +4,14 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <libproc.h>
+#include <poll.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #include "named_loader.h"
@@ -34,30 +36,72 @@ static char profile_byte( int lease )
 
 static void check_root_contention( const char *tmp )
 {
-    char root[PATH_MAX], *path;
-    int lock, lease = 0, status;
+    char root[PATH_MAX], *path, byte;
+    struct pollfd waiter;
+    int lock, ready[2], lease, status;
     pid_t pid;
 
     snprintf( root, sizeof(root), "%s/wine-named-loaders-v3", tmp );
     lock = open( root, O_RDONLY | O_DIRECTORY | O_EXLOCK | O_NONBLOCK | O_CLOEXEC );
     assert( lock != -1 );
+    assert( !pipe( ready ) );
     pid = fork();
     assert( pid != -1 );
     if (!pid)
     {
         close( lock );
-        alarm( 5 ); /* Bound the test if prepare regresses to waiting for the lock. */
-        assert( !prepare_named_loader( tmp, tmp, "Contended title", &lease ) && lease == -1 );
+        close( ready[0] );
+        alarm( 10 );
+        assert( write( ready[1], "!", 1 ) == 1 );
+        path = prepare_named_loader( tmp, tmp, "Contended title", &lease );
+        assert( path && lease != -1 );
+        close( lease );
+        free( path );
         _exit( 0 );
     }
-    /* Keep the lock held until the other launcher has fallen back. */
-    assert( waitpid( pid, &status, 0 ) == pid && WIFEXITED(status) && !WEXITSTATUS(status) );
+    close( ready[1] );
+    assert( read( ready[0], &byte, 1 ) == 1 );
+    /* The pipe stays open while the other launcher is waiting for our lock. */
+    waiter.fd = ready[0];
+    waiter.events = POLLIN;
+    assert( !poll( &waiter, 1, 250 ) );
     close( lock );
+    assert( waitpid( pid, &status, 0 ) == pid && WIFEXITED(status) && !WEXITSTATUS(status) );
+    close( ready[0] );
+}
 
-    path = prepare_named_loader( tmp, tmp, "Contended title", &lease );
-    assert( path && lease != -1 );
+static void check_quarantine_reuse( const char *tmp, const char *profile )
+{
+    static const char attr[] = "com.apple.quarantine";
+    static const char downloaded[] = "0083;65000000;Safari;";
+    static const char opened[] = "00c3;65000000;Safari;";
+    char source[PATH_MAX], *exe, *again;
+    struct stat before, after;
+    int live, lease, bundle, copy_profile;
+
+    snprintf( source, sizeof(source), "%s/wine.app", tmp );
+    assert( !setxattr( source, attr, downloaded, sizeof(downloaded) - 1, 0, 0 ) );
+    assert( !setxattr( profile, attr, downloaded, sizeof(downloaded) - 1, 0, 0 ) );
+    exe = prepare_named_loader( tmp, tmp, "Quarantine", &live );
+    assert( exe && !stat( exe, &before ) );
+    bundle = openat( live, "Quarantine.app", O_RDONLY | O_DIRECTORY );
+    assert( bundle != -1 );
+    copy_profile = openat( bundle, "Contents/embedded.provisionprofile", O_RDONLY );
+    assert( copy_profile != -1 );
+    assert( !fsetxattr( bundle, attr, opened, sizeof(opened) - 1, 0, XATTR_REPLACE ) );
+    assert( !fsetxattr( copy_profile, attr, opened, sizeof(opened) - 1, 0, XATTR_REPLACE ) );
+    again = prepare_named_loader( tmp, tmp, "Quarantine", &lease );
+    assert( again && !strcmp( again, exe ) && !stat( again, &after ) && before.st_ino == after.st_ino );
     close( lease );
-    free( path );
+    free( again );
+
+    /* A marked file missing its marker still invalidates the live copy. */
+    assert( !fremovexattr( copy_profile, attr, 0 ) );
+    assert( !prepare_named_loader( tmp, tmp, "Quarantine", &lease ) && lease == -1 );
+    close( copy_profile );
+    close( bundle );
+    close( live );
+    free( exe );
 }
 
 static void check_punctuation( const char *tmp )
@@ -228,6 +272,7 @@ int main( int argc, char **argv )
     }
     free( new_exe );
     free( old_exe );
+    check_quarantine_reuse( tmp, profile );
     puts( "named-loader: passed" );
     return 0;
 }

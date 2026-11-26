@@ -1023,12 +1023,6 @@ smoke_test() {
 check_named_loader() {
     local src="$WINE_SRC/dlls/ntdll/unix" tmp="$TMP_DIR/named-loader" log="$TMP_DIR/named-loader.log"
     local probe="$tmp/wine.app/Contents/MacOS/wine"
-    # Earlier Wine pins lack title-returning leases and nonblocking cache acquisition.
-    [ -f "$src/named_loader.h" ] || return 0
-    if ! grep -Eq '^#define NAMED_LOADER_API_VERSION [1-9][0-9]*$' "$src/named_loader.h"; then
-        echo "  Named loader smoke skipped: Wine predates the versioned loader API."
-        return 0
-    fi
     time_mark "smoke: named macOS loader"
     mkdir -p "${probe%/*}"
     xcrun clang -Wall -Wextra -Werror -I"$BUILD_DIR/include" -I"$src" \
