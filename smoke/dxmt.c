@@ -68,6 +68,11 @@
  *   drops the vertex shader's SV_ClipDistance of -1, the red D3D draws
  *   without the clip distance. A shader taken as a pass-through by mistake
  *   would draw the strip in red, or, for the last one, clip it away.
+ * - swap-chain-detach: a swap chain released during DLL detach at process
+ *   exit is destroyed and the process ends. The case creates a swap chain,
+ *   presents once and hands it to smoke/dxmthold.c's DLL, which holds the
+ *   last reference and releases it in its DLL_PROCESS_DETACH, and prints
+ *   the case's result from there.
  *
  * The lifetime cases watch destruction through a tracker object attached
  * with SetPrivateDataInterface: the object holds the tracker's only
@@ -1766,6 +1771,68 @@ done:
     return ret;
 }
 
+static int check_swap_chain_detach(ID3D11Device *device, ID3D11DeviceContext *context)
+{
+    DXGI_SWAP_CHAIN_DESC desc = {0};
+    IDXGISwapChain *swap_chain = NULL;
+    IDXGIDevice *dxgi_device = NULL;
+    IDXGIAdapter *adapter = NULL;
+    IDXGIFactory *factory = NULL;
+    void (*hold)(IUnknown *) = NULL;
+    HMODULE module;
+    HWND window;
+    HRESULT hr = E_FAIL;
+    int ret = 3;
+
+    if ((module = LoadLibraryA("dxmthold-" ARCH ".dll")))
+        hold = (void (*)(IUnknown *))GetProcAddress(module, "hold");
+    window = CreateWindowA("static", "dxmt swap-chain-detach", WS_POPUP, 0, 0, BIAS_SIZE, BIAS_SIZE, NULL, NULL,
+                           NULL, NULL);
+    if (!hold || !window)
+    {
+        printf(PREFIX "swap-chain-detach: dxmthold-" ARCH ".dll %s, window %p\n", hold ? "loaded" : "not loaded",
+               (void *)window);
+        goto done;
+    }
+    desc.BufferDesc.Width = BIAS_SIZE;
+    desc.BufferDesc.Height = BIAS_SIZE;
+    desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc.BufferCount = 1;
+    desc.OutputWindow = window;
+    desc.Windowed = TRUE;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    if (FAILED(hr = ID3D11Device_QueryInterface(device, &IID_IDXGIDevice, (void **)&dxgi_device))
+        || FAILED(hr = IDXGIDevice_GetAdapter(dxgi_device, &adapter))
+        || FAILED(hr = IDXGIAdapter_GetParent(adapter, &IID_IDXGIFactory, (void **)&factory))
+        || FAILED(hr = IDXGIFactory_CreateSwapChain(factory, (IUnknown *)device, &desc, &swap_chain))
+        || FAILED(hr = IDXGISwapChain_Present(swap_chain, 0, 0)))
+    {
+        printf(PREFIX "swap-chain-detach: setup failed, %#lx\n", (unsigned long)hr);
+        goto done;
+    }
+    /* The DLL's reference is then the swap chain's only one, and the DLL
+       releases it in its DLL_PROCESS_DETACH at process exit. */
+    hold((IUnknown *)swap_chain);
+    printf(PREFIX "swap-chain-detach: the swap chain is left to the DLL detach at process exit\n");
+    fflush(stdout);
+    ret = 0;
+
+done:
+    if (swap_chain)
+        IDXGISwapChain_Release(swap_chain);
+    if (factory)
+        IDXGIFactory_Release(factory);
+    if (adapter)
+        IDXGIAdapter_Release(adapter);
+    if (dxgi_device)
+        IDXGIDevice_Release(dxgi_device);
+    ID3D11DeviceContext_Release(context);
+    ID3D11Device_Release(device);
+    return ret;
+}
+
 static const struct
 {
     const char *name;
@@ -1779,6 +1846,7 @@ static const struct
     {"tessellation-index", check_tessellation_index},
     {"release-after-draw", check_release_after_draw},
     {"pass-through", check_pass_through},
+    {"swap-chain-detach", check_swap_chain_detach},
 };
 
 int main(int argc, char **argv)
@@ -1795,7 +1863,7 @@ int main(int argc, char **argv)
     if (i == ARRAYSIZE(cases))
     {
         printf(PREFIX "usage: dxmt.exe bytecode|swap-state|deferred|depth-bias|geometry-index|tessellation-index"
-                      "|release-after-draw|pass-through\n");
+                      "|release-after-draw|pass-through|swap-chain-detach\n");
         return 4;
     }
 

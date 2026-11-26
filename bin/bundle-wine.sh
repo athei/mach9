@@ -1875,10 +1875,12 @@ check_streamout_runs() {
 # of indexed and non-indexed, gets a pipeline of its own (geometry-index,
 # tessellation-index), and a device released right after a draw, while DXMT
 # still compiles and encodes it, is destroyed without a crash or a hang
-# (release-after-draw), and a geometry shader that passes its triangles
-# through is taken as a pass-through, which DXMT draws behind tessellation,
-# and no shader that differs from one is (pass-through); smoke/dxmt.c says
-# how. Each case is a process of its
+# (release-after-draw), a geometry shader that passes its triangles through
+# is taken as a pass-through, which DXMT draws behind tessellation, and no
+# shader that differs from one is (pass-through), and a swap chain released
+# in a DLL's detach at process exit, the DLL smoke/dxmthold.c built beside
+# the program, is destroyed and the process ends (swap-chain-detach);
+# smoke/dxmt.c says how. Each case is a process of its
 # own, so a case that crashes cannot hide the result of another, and each
 # has to get the default dxmt tree from compatdb.so, since Wine's own d3d11
 # passes them too. DXMT's shader cache is off, so that a shader variant an
@@ -1901,6 +1903,9 @@ check_dxmt_runs() {
     for arch in x86_64 i686; do
         "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -o "$TMP_DIR/dxmt-$arch.exe" \
             "$REPO_DIR/smoke/dxmt.c" -ld3d11
+        # Beside the program, where its swap-chain-detach case loads it
+        "$MINGW_DIR/bin/$arch-w64-mingw32-clang" -O2 -shared -o "$TMP_DIR/dxmthold-$arch.dll" \
+            "$REPO_DIR/smoke/dxmthold.c"
     done
     if [ "$METAL4" -eq 0 ]; then
         echo "  Skipping the dxmt.exe runs: DXMT's path for Apple GPUs needs one."
@@ -1910,7 +1915,7 @@ check_dxmt_runs() {
         exe="$TMP_DIR/dxmt-$arch.exe"
         time_mark "smoke: dxmt.exe $arch"
         for name in bytecode swap-state deferred depth-bias geometry-index tessellation-index \
-                    release-after-draw pass-through; do
+                    release-after-draw pass-through swap-chain-detach; do
             log="$TMP_DIR/dxmt-$arch-$name.log"
             echo "  Running dxmt.exe $name for $arch..."
             run_limited 5 "$log" "$@" DXMT_SHADER_CACHE=0 "$WINE_DIR/bin/wine" "$exe" "$name"
