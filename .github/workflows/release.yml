@@ -58,6 +58,7 @@ on:
       - 'Cargo.lock'
       - 'clippy.toml'
       - 'rustfmt.toml'
+      - 'LICENSE'
       - 'licenses/**'
       - 'pins/**'
       - 'signing/**'
