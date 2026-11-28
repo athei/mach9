@@ -2186,7 +2186,10 @@ check_vkr64view_host() {
 # they reach it through two views with different base layers, or through a
 # 3D view and a 2D view of a slice: KosmicKrisp emulates them under a lock
 # it picks from the texel's coordinates, and took the view's coordinates
-# before, so the two views took different locks and lost adds. The limit is
+# before, so the two views took different locks and lost adds. They also have
+# to add up, in bounded time, when 65536 invocations add through one view: a
+# compute subgroup whose lanes all target one texel takes one lock, and with
+# a lock per lane such a dispatch takes seconds (#240). The limit is
 # a few times a clean run with a cold shader cache, and the probe's watchdog
 # ends a hang before it. Skipped like check_vkalias_host on a Mac without a
 # Metal 4 GPU.
@@ -2210,7 +2213,7 @@ check_vkatomic64_host() {
         cat "$log"
         exit 1
     elif [ "$RUN_STATUS" -eq 1 ]; then
-        echo "Error: 64-bit image atomics on one texel through two views lost adds on the bundle's KosmicKrisp"
+        echo "Error: 64-bit image atomics on one texel lost adds on the bundle's KosmicKrisp"
         cat "$log"
         exit 1
     elif [ "$RUN_STATUS" -ne 0 ]; then

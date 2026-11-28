@@ -18,14 +18,20 @@
  *   3d-slice    texel (0, 0) of slice 1 of a 3D image of depth 2, half the
  *               adds through a 2D view of slice 1
  *               (VK_EXT_image_2d_view_of_3d) and half through the 3D view
+ *   one-view-many
+ *               as one-view, with MANY_ADDS adds whatever <adds> is: every
+ *               lane of each subgroup on one texel, which KosmicKrisp runs
+ *               under one lock per subgroup in compute shaders; with a lock
+ *               per lane its time grows with the square of the adds, and a
+ *               round does not finish within FENCE_TIMEOUT_NS (#240)
  *
  * Each case runs ROUNDS dispatches, each on a texel set to 0 by a copy before
  * it, and reads the texel back after it. Prints a line per case with the
- * rounds whose sum was not <adds>. Exits with 2 as soon as a case cannot run, a
- * missing feature, a failed setup, submit or wait included, else with 1 when
- * a round lost an add, 0 otherwise. A watchdog ends a run that hangs with 2
- * after a few seconds. Build it against the Vulkan headers (-I) the loader
- * was built with.
+ * rounds whose sum was not the case's adds. Exits with 2 as soon as a case
+ * cannot run, a missing feature, a failed setup, submit or wait included,
+ * else with 1 when a round lost an add, 0 otherwise. A watchdog ends a run
+ * that hangs with 2 after a few seconds. Build it against the Vulkan headers
+ * (-I) the loader was built with.
  */
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
@@ -44,6 +50,7 @@
 
 #define GROUP_SIZE 64 /* local_size_x of vkatomic64.comp */
 #define ADDS (1u << 12)
+#define MANY_ADDS (1u << 16)
 #define ROUNDS 10
 #define WATCHDOG_SECONDS 5
 #define FENCE_TIMEOUT_NS 3000000000ull
@@ -106,12 +113,15 @@ struct atomic_case
 {
     const char *name;
     enum mode mode;
+    /* The adds of each round; 0 for <adds>. */
+    uint32_t adds;
 };
 
 static const struct atomic_case cases[] = {
-    { "one-view", MODE_ONE_VIEW },
-    { "two-views", MODE_TWO_VIEWS },
-    { "3d-slice", MODE_3D_SLICE },
+    { "one-view", MODE_ONE_VIEW, 0 },
+    { "two-views", MODE_TWO_VIEWS, 0 },
+    { "3d-slice", MODE_3D_SLICE, 0 },
+    { "one-view-many", MODE_ONE_VIEW, MANY_ADDS },
 };
 
 struct buffer
@@ -141,6 +151,11 @@ static VkImageView layer_view, array_view, volume_view, slice_view;
 static VkDescriptorSet layered_set, volume_set;
 static struct buffer zero, readback;
 static uint32_t adds = ADDS;
+
+static uint32_t case_adds(const struct atomic_case *c)
+{
+    return c->adds ? c->adds : adds;
+}
 
 static bool ok(VkResult result, const char *what)
 {
@@ -506,8 +521,8 @@ static bool submit(void)
            ok(vkWaitForFences(device, 1, &fence, VK_TRUE, FENCE_TIMEOUT_NS), "vkWaitForFences");
 }
 
-/* One round of <c>: the texel set to 0, <adds> adds, the texel read back
- * into <sum>. */
+/* One round of <c>: the texel set to 0, case_adds() adds, the texel read
+ * back into <sum>. */
 static bool run_round(const struct atomic_case *c, bool first, uint64_t *sum)
 {
     VkCommandBufferBeginInfo begin = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -543,7 +558,7 @@ static bool run_round(const struct atomic_case *c, bool first, uint64_t *sum)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1,
                             c->mode == MODE_3D_SLICE ? &volume_set : &layered_set, 0, NULL);
     vkCmdPushConstants(cmd, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(mode), &mode);
-    vkCmdDispatch(cmd, adds / GROUP_SIZE, 1, 1);
+    vkCmdDispatch(cmd, case_adds(c) / GROUP_SIZE, 1, 1);
     barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
     vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_GENERAL, readback.handle, 1, &region);
@@ -554,10 +569,11 @@ static bool run_round(const struct atomic_case *c, bool first, uint64_t *sum)
     return true;
 }
 
-/* Runs the rounds of one case; returns 0 when every round summed to <adds>,
- * 1 when one did not, 2 when a round could not run. */
+/* Runs the rounds of one case; returns 0 when every round summed to
+ * case_adds(), 1 when one did not, 2 when a round could not run. */
 static int run_case(const struct atomic_case *c, bool first)
 {
+    const uint32_t want = case_adds(c);
     uint64_t sum, low = UINT64_MAX;
     unsigned lost = 0, round;
     struct timespec start, end;
@@ -567,7 +583,7 @@ static int run_case(const struct atomic_case *c, bool first)
     for (round = 0; round < ROUNDS; round++)
     {
         if (!run_round(c, first && !round, &sum)) return 2;
-        if (sum != adds)
+        if (sum != want)
         {
             lost++;
             if (sum < low) low = sum;
@@ -578,10 +594,10 @@ static int run_case(const struct atomic_case *c, bool first)
     if (lost)
     {
         printf("vkatomic64: %s: %u of %u rounds did not sum to %u, the lowest to %llu (%.0f ms)\n",
-               c->name, lost, ROUNDS, adds, (unsigned long long)low, ms);
+               c->name, lost, ROUNDS, want, (unsigned long long)low, ms);
         return 1;
     }
-    printf("vkatomic64: %s: ok, %u rounds of %u adds (%.0f ms)\n", c->name, ROUNDS, adds, ms);
+    printf("vkatomic64: %s: ok, %u rounds of %u adds (%.0f ms)\n", c->name, ROUNDS, want, ms);
     return 0;
 }
 
