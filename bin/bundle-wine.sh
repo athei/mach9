@@ -2445,7 +2445,11 @@ check_wmadec_runs() {
 # limits are lower than the 120 seconds of the other runs. The slowest clean
 # runs, cross_process_write_race included, took about 1.9, 4.8, 1.9, 1.3 and
 # 4.3 seconds on a busy current Mac, and small programs take up to 4 times as
-# long on a hosted runner, so the limits are 2 to 3 times that.
+# long on a hosted runner, so the limits are 2 to 3 times that. The two
+# FEX_DISKCACHE=1 runs took up to 3.4 and 11.3 seconds on hosted runners, and
+# cross_process_write_race races up to 2 seconds longer in them when no write
+# landed in its first rounds, so their limits are about 3 times 5.4 and 13.3
+# seconds.
 check_fex_runs() {
     local arch
     for arch in x86_64 i686; do
@@ -2454,7 +2458,7 @@ check_fex_runs() {
         run_fex "$arch" FEX_SMCCHECKS=full 40 "$@" FEX_SMCCHECKS=full
         run_fex "$arch" "full precision x87" 20 "$@" FEX_X87REDUCEDPRECISION=0
         rm -rf "$TMP_DIR"/prefix/drive_c/users/*/AppData/Local/fex-emu/DiskCache
-        run_fex "$arch" FEX_DISKCACHE=1 15 "$@" FEX_DISKCACHE=1 \
+        run_fex "$arch" FEX_DISKCACHE=1 16 "$@" FEX_DISKCACHE=1 \
             -- cross_process_protect decommit_race rwx_write_race cross_process_write_race rx_to_rwx_race
         check_fex_disk_cache "$arch"
         rm -rf "$TMP_DIR"/prefix/drive_c/users/*/AppData/Local/fex-emu/DiskCache
@@ -2535,6 +2539,8 @@ run_fex() {
         exit 1
     fi
     grep "$want" "$log" | sed 's/^/    /'
+    # The race cases' counts, so that a passing run shows how often they raced
+    grep -e "landed in the call" -e "ran inside a call" -e "began in the call" "$log" | tr -d '\r' | sed 's/^/    /'
 }
 
 # check_exceptflags_runs <env-command>...: build smoke/exceptflags.c for x86_64

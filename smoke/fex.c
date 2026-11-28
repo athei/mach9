@@ -73,12 +73,17 @@
  * compile takes, the size of each, the offset of its mov and its addps count,
  * lower under FEX_SMCCHECKS=full, which takes about 80 times as long to
  * compile each. A compile of either takes 0.5 ms or more on a current Mac, and
- * the child's write about 0.15 ms. */
+ * the child's write about 0.15 ms. With FEX_DISKCACHE=1 it races on after
+ * WRITE_RACE_ROUNDS until a write has landed in a call, for at most
+ * WRITE_RACE_MAX_ROUNDS rounds and WRITE_RACE_SECONDS: on a hosted runner the
+ * child's protect and write can take most of a compile. */
 #define WRITE_RACE_SLEDS 3
 #define WRITE_RACE_SIZE (4 * PAGE)
 #define WRITE_RACE_MOV (8 * 15)
 #define WRITE_RACE_ADDS 4800
 #define WRITE_RACE_ADDS_FULL 1200
+#define WRITE_RACE_MAX_ROUNDS 500
+#define WRITE_RACE_SECONDS 2.0
 
 static const char *current = "startup";
 
@@ -1730,13 +1735,15 @@ static void race_fill(BYTE *p, int value, int adds)
 
 /* The child of cross_process_write_race, started as "write_child <pid> <sleds>
  * <range> <times>": in each round, once that process signals, writes 2 * i + 1
- * over the mov's immediate in sled i of the round, after a spin below <range>,
- * stores the QueryPerformanceCounter values from before and after the write
- * at <times> in that process, 2 per round, and signals back. It makes the page
- * PAGE_EXECUTE_READWRITE for the write and gives it back PAGE_EXECUTE_READ, as
- * kernelbase's WriteProcessMemory does for such a page but without its
- * cross-process notices of the protects, so that only the write itself is
- * between the two values. Returns the exit code. */
+ * over the mov's immediate in sled i of the round, in every other round after a
+ * spin below <range> and in the others at once, the earliest the write can
+ * come, stores the QueryPerformanceCounter values from before and after the
+ * write at <times> in that process, 2 per round, and signals back, until that
+ * process signals the end. It makes the page PAGE_EXECUTE_READWRITE for the
+ * write and gives it back PAGE_EXECUTE_READ, as kernelbase's WriteProcessMemory
+ * does for such a page but without its cross-process notices of the protects,
+ * so that only the write itself is between the two values. Returns the exit
+ * code. */
 static int write_child(char **argv)
 {
     DWORD pid = strtoul(argv[2], NULL, 0);
@@ -1745,10 +1752,10 @@ static int write_child(char **argv)
     LONGLONG *times = (LONGLONG *)(ULONG_PTR)strtoull(argv[5], NULL, 0);
     LARGE_INTEGER before, after;
     LONGLONG pair[2];
-    HANDLE process, turn, written, waits[2];
+    HANDLE process, turn, end, written, waits[3];
     char name[64];
     SIZE_T size;
-    DWORD old;
+    DWORD old, wait;
     BYTE *addr;
     int i, value;
 
@@ -1757,15 +1764,20 @@ static int write_child(char **argv)
     if (!process) return 2;
     snprintf(name, sizeof(name), "fex-smoke-turn-%lu", pid);
     if (!(turn = OpenEventA(SYNCHRONIZE, FALSE, name))) return 3;
+    snprintf(name, sizeof(name), "fex-smoke-end-%lu", pid);
+    if (!(end = OpenEventA(SYNCHRONIZE, FALSE, name))) return 3;
     snprintf(name, sizeof(name), "fex-smoke-written-%lu", pid);
     if (!(written = OpenEventA(EVENT_MODIFY_STATE, FALSE, name))) return 3;
     waits[0] = turn;
-    waits[1] = process;
-    for (i = WRITE_RACE_SLEDS; i < WRITE_RACE_SLEDS + WRITE_RACE_ROUNDS; i++)
+    waits[1] = end;
+    waits[2] = process;
+    for (i = WRITE_RACE_SLEDS; i < WRITE_RACE_SLEDS + WRITE_RACE_MAX_ROUNDS; i++)
     {
         /* Ends with that process, which a failed round ends */
-        if (WaitForMultipleObjects(2, waits, FALSE, 20000) != WAIT_OBJECT_0) return 4;
-        spin_below(range);
+        wait = WaitForMultipleObjects(3, waits, FALSE, 20000);
+        if (wait == WAIT_OBJECT_0 + 1) return 0;
+        if (wait != WAIT_OBJECT_0) return 4;
+        if (i % 2) spin_below(range);
         value = 2 * i + 1;
         addr = race_sled(sleds, i) + WRITE_RACE_MOV + 1;
         if (!VirtualProtectEx(process, addr, sizeof(value), PAGE_EXECUTE_READWRITE, &old)) return 7;
@@ -1796,34 +1808,41 @@ static int compare_times(const void *a, const void *b)
  * instruction cache flush kernelbase queues for it drops the block once its
  * compile is done. Each round compiles a sled of its own, as the disk cache
  * would load the block of an earlier round instead. The child spins below what
- * half the first compiles of a sled took before it writes, and apc_sleeper runs
- * its protects meanwhile, so a write can land in the compile after it decoded
- * the mov. The disk cache must then not keep the block under the bytes as they
- * are after the write: the call after the write would load it and return the
- * old value. A write counts as landed in the call when it began after the call
- * began and ended before it returned; the child's protect comes first, so the
- * write is past the decode of the mov. With FEX_DISKCACHE=1 the case fails
- * when no write landed, as it then checked nothing. It prints how many did,
+ * half the first compiles of a sled took before it writes in every other round
+ * and writes at once in the others, and apc_sleeper runs its protects
+ * meanwhile, so a write can land in the compile after it decoded the mov. The
+ * disk cache must then not keep the block under the bytes as they are after
+ * the write: the call after the write would load it and return the old value.
+ * A write counts as landed in the call when it began after the call began and
+ * ended before it returned, and the call returned the old value, so its compile
+ * read the mov before the write; under FEX_SMCCHECKS=full the block checks its
+ * code when it runs and is compiled again, so there the times alone count. The
+ * child's wake and protect come before the write, which puts even a write at
+ * once past the decode of the mov.
+ * With FEX_DISKCACHE=1 the case races on until a write has landed, within
+ * WRITE_RACE_MAX_ROUNDS and WRITE_RACE_SECONDS, and fails when none did, as it
+ * then checked nothing. It prints how many did in how many rounds and seconds,
  * the compile time and what the writes took. */
 static void cross_process_write_race(void)
 {
-    static LONGLONG times[2 * WRITE_RACE_ROUNDS], took[WRITE_RACE_ROUNDS];
-    const int count = WRITE_RACE_SLEDS + WRITE_RACE_ROUNDS;
+    static LONGLONG times[2 * WRITE_RACE_MAX_ROUNDS], took[WRITE_RACE_MAX_ROUNDS];
+    const int count = WRITE_RACE_SLEDS + WRITE_RACE_MAX_ROUNDS;
     BYTE *sleds = new_pages((SIZE_T)count * WRITE_RACE_SIZE, PAGE_READWRITE);
     const char *disk_cache = getenv("FEX_DISKCACHE"), *smc = getenv("FEX_SMCCHECKS");
-    HANDLE waiter, turn, written, waits[2];
+    const int full = smc && !strcmp(smc, "full"), cached = disk_cache && !strcmp(disk_cache, "1");
+    HANDLE waiter, turn, end, written, waits[2];
     STARTUPINFOA si = {sizeof(si)};
     PROCESS_INFORMATION pi;
     char path[MAX_PATH], cmd[MAX_PATH + 128], name[64];
     double compile_time = 1e9, elapsed, ms;
-    LARGE_INTEGER start, call_start, call_end, freq;
+    LARGE_INTEGER start, race_start, call_start, call_end, freq;
     volatile LONG done_sleeping = 0;
     unsigned int range;
-    int i, k, r, in_call, landed = 0;
+    int i, k, r, in_call, rounds, landed = 0;
     DWORD code;
 
     for (i = 0; i < count; i++)
-        race_fill(race_sled(sleds, i), 2 * i, smc && !strcmp(smc, "full") ? WRITE_RACE_ADDS_FULL : WRITE_RACE_ADDS);
+        race_fill(race_sled(sleds, i), 2 * i, full ? WRITE_RACE_ADDS_FULL : WRITE_RACE_ADDS);
     protect(sleds, (SIZE_T)count * WRITE_RACE_SIZE, PAGE_EXECUTE_READ);
     set_code(sleds, (SIZE_T)count * WRITE_RACE_SIZE);
 
@@ -1843,6 +1862,8 @@ static void cross_process_write_race(void)
 
     snprintf(name, sizeof(name), "fex-smoke-turn-%lu", GetCurrentProcessId());
     if (!(turn = CreateEventA(NULL, FALSE, FALSE, name))) FAIL("CreateEvent: %lu", GetLastError());
+    snprintf(name, sizeof(name), "fex-smoke-end-%lu", GetCurrentProcessId());
+    if (!(end = CreateEventA(NULL, TRUE, FALSE, name))) FAIL("CreateEvent: %lu", GetLastError());
     snprintf(name, sizeof(name), "fex-smoke-written-%lu", GetCurrentProcessId());
     if (!(written = CreateEventA(NULL, FALSE, FALSE, name))) FAIL("CreateEvent: %lu", GetLastError());
     if (!(waiter = CreateThread(NULL, 0, apc_sleeper, (void *)&done_sleeping, 0, NULL)))
@@ -1856,17 +1877,19 @@ static void cross_process_write_race(void)
     waits[1] = pi.hProcess;
     QueryPerformanceFrequency(&freq);
     ms = 1000.0 / freq.QuadPart;
+    QueryPerformanceCounter(&race_start);
     for (i = WRITE_RACE_SLEDS; i < count; i++)
     {
         int (*fn)(void) = (void *)race_sled(sleds, i);
 
         k = i - WRITE_RACE_SLEDS;
+        if (k >= WRITE_RACE_ROUNDS && (landed || !cached || seconds_since(race_start) > WRITE_RACE_SECONDS)) break;
         QueryPerformanceCounter(&call_start);
         SetEvent(turn);
         r = fn();
         QueryPerformanceCounter(&call_end);
         if (WaitForMultipleObjects(2, waits, FALSE, 20000) != WAIT_OBJECT_0) FAIL("round %d: the child did not write", i);
-        in_call = times[2 * k] > call_start.QuadPart && times[2 * k + 1] < call_end.QuadPart;
+        in_call = times[2 * k] > call_start.QuadPart && times[2 * k + 1] < call_end.QuadPart && (full || r == 2 * i);
         landed += in_call;
         took[k] = times[2 * k + 1] - times[2 * k];
         compile_new_code();
@@ -1876,16 +1899,20 @@ static void cross_process_write_race(void)
                  (times[2 * k] - call_start.QuadPart) * ms, (times[2 * k + 1] - call_start.QuadPart) * ms,
                  (call_end.QuadPart - call_start.QuadPart) * ms, landed, k + 1);
     }
+    rounds = i - WRITE_RACE_SLEDS;
+    elapsed = seconds_since(race_start);
+    SetEvent(end);
     if (WaitForSingleObject(pi.hProcess, 20000)) FAIL("the child did not end");
     if (!GetExitCodeProcess(pi.hProcess, &code) || code) FAIL("the child exited with %lu", code);
-    qsort(took, WRITE_RACE_ROUNDS, sizeof(took[0]), compare_times);
-    printf("wine-build smoke test: %s cross_process_write_race %d of %d writes landed in the call, compile %.2f ms,"
-           " writes took %.2f to %.2f ms, median %.2f\n", ARCH, landed, WRITE_RACE_ROUNDS, compile_time * 1000,
-           took[0] * ms, took[WRITE_RACE_ROUNDS - 1] * ms, took[WRITE_RACE_ROUNDS / 2] * ms);
-    if (!landed && disk_cache && !strcmp(disk_cache, "1")) FAIL("no write of the child landed in a call");
+    qsort(took, rounds, sizeof(took[0]), compare_times);
+    printf("wine-build smoke test: %s cross_process_write_race %d of %d writes landed in the call in %.2f s, compile"
+           " %.2f ms, writes took %.2f to %.2f ms, median %.2f\n", ARCH, landed, rounds, elapsed,
+           compile_time * 1000, took[0] * ms, took[rounds - 1] * ms, took[rounds / 2] * ms);
+    if (!landed && cached) FAIL("no write of the child landed in a call in %d rounds", rounds);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     CloseHandle(turn);
+    CloseHandle(end);
     CloseHandle(written);
     done_sleeping = 1;
     if (!QueueUserAPC(end_sleep, waiter, 0)) FAIL("QueueUserAPC: %lu", GetLastError());
