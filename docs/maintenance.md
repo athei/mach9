@@ -791,7 +791,8 @@ Vulkan loader.
 
 FEX is our fork at the ref in [`fex-src.ref`](../pins/fex-src.ref)
 ([FEX](internals.md#fex)). It moves from one upstream release tag
-(`FEX-YYMM`) to the next, as our Wine series on
+(`FEX-YYMM`, or a point release `FEX-YYMM.N`) to the next, as our
+Wine series on
 [`arm64-patched`](https://github.com/athei/wine/tree/arm64-patched) moves
 from one upstream `wine-X.Y` tag to the next. To move FEX to a newer tag:
 
