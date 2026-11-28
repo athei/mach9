@@ -1287,6 +1287,7 @@ smoke_test() {
     check_vkinvariance_host
     check_vkr64view_host
     check_vkatomic64_host
+    check_vkhidden_host
     check_gst_host
 
     # wineboot creates the prefix here, so the limit is generous. Only the
@@ -2218,6 +2219,46 @@ check_vkatomic64_host() {
         exit 1
     fi
     echo "    KosmicKrisp: $(grep -c '^vkatomic64: .*: ok' "$log") cases of 64-bit image atomics on one texel add up"
+}
+
+# check_vkhidden_host: build smoke/vkhidden.m for the host and run it on the
+# bundle's lib/external/libvulkan.1.dylib as check_vkalias_host runs
+# smoke/vkalias.c. Exit unless 100 rounds of presents to a window that is
+# ordered out right after it was shown, each swapchain destroyed right after
+# its present, keep the device: the present blit to such a window is still
+# waiting for its drawable then, and a KosmicKrisp that frees what the blit
+# uses loses the device (mach9 #236), in about one round in five. The
+# program opens windows and stops at the first lost device. A clean run
+# takes 2 to 3 seconds; the limit is about three times that. Skipped like
+# check_vkalias_host on a Mac without a Metal 4 GPU.
+check_vkhidden_host() {
+    local log="$TMP_DIR/vkhidden.log"
+    local headers="$MESA_BUILD_DIR/vulkan-headers-install/include"
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host hidden window present check: it needs a KosmicKrisp device."
+        return 0
+    fi
+    if [ ! -f "$headers/vulkan/vulkan_core.h" ]; then
+        echo "Error: no Vulkan headers in $headers for smoke/vkhidden.m; bin/build-mesa.sh installs them"
+        exit 1
+    fi
+    xcrun clang -O2 -I "$headers" -framework AppKit -framework Metal -framework QuartzCore \
+        -o "$TMP_DIR/vkhidden" "$REPO_DIR/smoke/vkhidden.m"
+    echo "  Running the host hidden window present check on lib/external/libvulkan.1.dylib..."
+    run_limited 10 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/vkhidden" "$EXT_DIR/libvulkan.1.dylib" 100
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/vkhidden.m did not exit within 10 seconds"
+    elif [ "$RUN_STATUS" -eq 1 ]; then
+        echo "Error: the bundle's KosmicKrisp lost the device after a present to a hidden window"
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/vkhidden.m could not run its presents on the bundle's KosmicKrisp (status $RUN_STATUS)"
+    else
+        echo "    KosmicKrisp: $(sed -n 's/^vkhidden: \([0-9]*\) rounds.*/\1/p' "$log") rounds of presents to hidden windows keep the device"
+        return 0
+    fi
+    cat "$log"
+    exit 1
 }
 
 # check_gl_host <program> <what> [validation]: build smoke/<program>.c for the
