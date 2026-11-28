@@ -1,8 +1,9 @@
 /* GPU time of KosmicKrisp on the patterns behind the Enshrouded gap (#36):
  * indirect-count draws with a large maxDrawCount (#61), buffer loads under
  * robust buffer access (#62) and chains of compute barriers (#63); of
- * timestamps written outside render passes (#117); and
- * whether fragment shaders with 64-bit atomics lose the device. It runs
+ * timestamps written outside render passes (#117); whether fragment shaders
+ * with 64-bit atomics lose the device; and what locked 64-bit atomics cost
+ * in compute shaders, with and without contention on one word. It runs
  * natively, outside Wine, on the Vulkan loader it is given, which takes the
  * driver from VK_DRIVER_FILES. Build and run it with kk.sh next to it:
  *
@@ -12,8 +13,8 @@
  * two Mesa builds without a bundle step. --case runs only the named cases;
  * the default runs all timed cases.
  *
- * The atomic64 cases are not timed and run only when named. Each draws for
- * STRESS_SECONDS with 64-bit atomics in the fragment shader, which
+ * The atomic64 draw cases are not timed and run only when named. Each draws
+ * for STRESS_SECONDS with 64-bit atomics in the fragment shader, which
  * KosmicKrisp runs under spin locks from a table of lock words, one submit
  * per draw, on a device of its own, and prints whether the device was lost
  * (a lock that times out loses it) and whether the counters hold what the
@@ -27,7 +28,19 @@
  *
  * A draw that does not finish within STRESS_FENCE_TIMEOUT_NS ends the
  * program. A lost device can make other processes' work on the GPU fail too,
- * so run these cases with nothing else on the GPU.
+ * so run these cases with nothing else on the GPU: a fragment pass whose
+ * tile runs for about 80 ms ends in a restart of the GPU that the other
+ * processes on it see as well (#194).
+ *
+ * atomic64-one-word is timed but also runs only when named: one dispatch
+ * per arm, 4096 to 65536 invocations that each add 1 to one 64-bit word of a
+ * storage buffer, all on one lock word (#194). Each arm runs alone, checked
+ * and then timed, and prints its line before the next starts; a dispatch
+ * that does not finish within WORDS_FENCE_TIMEOUT_NS ends the program, so
+ * the lines before it say how the cost grows. atomic64-words, a timed case of
+ * the default set, is its uncontended counterpart: WORDS_INVOCATIONS
+ * invocations, each adding WORDS_ADDS times to a word of its own. Both run
+ * on a device of their own with 64-bit atomics.
  *
  * Each case has arms that differ in one setting, such as the robustness
  * features of the device. An arm records a fixed load and then its work
@@ -62,6 +75,8 @@
  * | dispatch-loads-wide | the same | the same with four storage and two uniform buffer loads per iteration, each from a buffer of its own |
  * | barrier-chain | barriers on, off | CHAIN_LENGTH single-workgroup dispatches, with a compute-to-compute vkCmdPipelineBarrier2 between each or none |
  * | timestamps | TIMESTAMP_COUNT timestamps, 1 timestamp | vkCmdWriteTimestamp into each query of a pool of that size, in order, then one vkCmdCopyQueryPoolResults of them all |
+ * | atomic64-words | one | one dispatch of WORDS_INVOCATIONS invocations, WORDS_ADDS locked 64-bit atomicAdd each on its own word |
+ * | atomic64-one-word | 4096, 8192, 16384, 32768 and 65536 invocations | one dispatch, one locked 64-bit atomicAdd each, all on one word; only when named |
  *
  * - A robustness setting is a device feature, so each setting has a device
  *   of its own. The pipelineRobustness arm enables only the feature; its
@@ -137,6 +152,7 @@
 
 #include "shaders/atomic64_exchange.frag.h"
 #include "shaders/atomic64_texel.frag.h"
+#include "shaders/atomic64_words.comp.h"
 #include "shaders/chain.comp.h"
 #include "shaders/count.frag.h"
 #include "shaders/draw.frag.h"
@@ -183,6 +199,13 @@
 #define STRESS_HEIGHT 1440
 #define STRESS_SECONDS 30
 #define STRESS_FENCE_TIMEOUT_NS 60000000000ull
+/* atomic64-words: invocations, each adding to its own word this often. A
+ * dispatch of the atomic64 compute cases that does not finish within
+ * WORDS_FENCE_TIMEOUT_NS ends the program. */
+#define WORDS_INVOCATIONS 65536
+#define WORDS_ADDS 256
+#define WORDS_GROUP 64
+#define WORDS_FENCE_TIMEOUT_NS 2000000000ull
 
 #define INSTANCE_FUNCS(X)                                                                          \
     X(vkDestroyInstance)                                                                           \
@@ -288,6 +311,7 @@ enum kind
     KIND_CHAIN,
     KIND_TIMESTAMPS,
     KIND_ATOMIC64,
+    KIND_WORDS,
 };
 
 /* What a fragment of an atomic64 case does. */
@@ -339,6 +363,10 @@ struct arm
     enum pattern pattern;
     /* timestamps: the timestamps written between the two of the interval. */
     uint32_t timestamps;
+    /* The atomic64-words and atomic64-one-word cases: the invocations of the
+     * dispatch, the adds of each, and whether all add to one word. */
+    uint32_t invocations, adds;
+    bool one_word;
 
     bool selected, ready, failed;
     /* A draw arm's check: the occlusion query missed the expected count. */
@@ -379,6 +407,8 @@ struct arm
 #define CHAIN(on) { .name = "barrier-chain", .kind = KIND_CHAIN, .barriers = on }
 #define TIMESTAMPS(n) { .name = "timestamps", .kind = KIND_TIMESTAMPS, .timestamps = n }
 #define ATOMIC64(case_name, what) { .name = case_name, .kind = KIND_ATOMIC64, .pattern = what }
+#define WORDS(case_name, one, count, each)                                                         \
+    { .name = case_name, .kind = KIND_WORDS, .one_word = one, .invocations = count, .adds = each }
 
 static struct arm arms[] = {
     DRAW("draw-indexed-count", KIND_INDEXED, ROBUST_OFF, MAX_DRAWS, 0),
@@ -416,6 +446,12 @@ static struct arm arms[] = {
     ATOMIC64("atomic64-exchange", PATTERN_EXCHANGE),
     ATOMIC64("atomic64-one-texel", PATTERN_ONE_TEXEL),
     ATOMIC64("atomic64-own-texel", PATTERN_OWN_TEXEL),
+    WORDS("atomic64-words", false, WORDS_INVOCATIONS, WORDS_ADDS),
+    WORDS("atomic64-one-word", true, 4096, 1),
+    WORDS("atomic64-one-word", true, 8192, 1),
+    WORDS("atomic64-one-word", true, 16384, 1),
+    WORDS("atomic64-one-word", true, 32768, 1),
+    WORDS("atomic64-one-word", true, 65536, 1),
 };
 #define ARM_COUNT (sizeof(arms) / sizeof(arms[0]))
 
@@ -439,6 +475,10 @@ static struct device devices[ROBUST_COUNT];
 /* The device of the atomic64 case that runs, one per case, since a case can
  * lose it. */
 static struct device atomic64_device;
+/* The device of the atomic64 compute cases, with 64-bit atomics and no
+ * robustness, and its load. */
+static struct device words_device;
+static struct arm words_load = LOADS("load", ROBUST_OFF, false);
 
 /* Whether <result> is VK_SUCCESS, after a line naming <what> when it is not. */
 static bool ok(VkResult result, const char *what)
@@ -493,7 +533,23 @@ static void settings(const struct arm *arm, char *out, size_t size)
         snprintf(out, size, "draw=%ux%u seconds=%u", atomic64_width(arm), atomic64_height(arm),
                  STRESS_SECONDS);
         break;
+    case KIND_WORDS:
+        snprintf(out, size, "invocations=%u adds=%u words=%s", arm->invocations, arm->adds,
+                 arm->one_word ? "one" : "own");
+        break;
     }
+}
+
+/* The device an arm runs on and the load that device runs before each timed
+ * interval. */
+static struct device *device_of(const struct arm *arm)
+{
+    return arm->kind == KIND_WORDS ? &words_device : &devices[arm->robustness];
+}
+
+static struct arm *load_of(const struct arm *arm)
+{
+    return arm->kind == KIND_WORDS ? &words_load : &loads[arm->robustness];
 }
 
 static int find_memory_type(uint32_t bits, VkMemoryPropertyFlags flags)
@@ -963,6 +1019,8 @@ static size_t result_size(const struct arm *arm)
         return 32 * sizeof(uint32_t);
     case KIND_TIMESTAMPS:
         return arm->timestamps * sizeof(uint64_t);
+    case KIND_WORDS:
+        return (arm->one_word ? 1 : arm->invocations) * sizeof(uint64_t);
     default:
         return sizeof(uint32_t);
     }
@@ -1141,6 +1199,17 @@ static bool check_timestamps(struct arm *arm, char *wrong, size_t size)
 out:
     free(read);
     return good;
+}
+
+static bool setup_words(struct arm *arm)
+{
+    const struct buffer *buffers[] = { &arm->result };
+
+    return create_buffer(arm->dev, result_size(arm), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, NULL,
+                         &arm->result) &&
+           create_set(arm, buffers, 1) &&
+           create_compute_pipeline(arm, atomic64_words_comp, sizeof(atomic64_words_comp),
+                                   2 * sizeof(uint32_t));
 }
 
 /* The descriptor set of an atomic64 image case: its storage image at
@@ -1415,6 +1484,7 @@ static void record_dispatches(struct arm *arm, VkCommandBuffer cmd, uint32_t cou
                               uint32_t groups)
 {
     const uint32_t params[2] = { LOAD_ITERATIONS, SOURCE_VEC4S - 1 };
+    const uint32_t words[2] = { arm->one_word, arm->adds };
     VkMemoryBarrier2 memory = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
                                 .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                 .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -1432,6 +1502,8 @@ static void record_dispatches(struct arm *arm, VkCommandBuffer cmd, uint32_t cou
     if (arm->kind == KIND_LOADS)
         vkCmdPushConstants(cmd, arm->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(params),
                            params);
+    else if (arm->kind == KIND_WORDS)
+        vkCmdPushConstants(cmd, arm->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(words), words);
     for (i = 0; i < count; i++)
     {
         vkCmdDispatch(cmd, groups, 1, 1);
@@ -1476,7 +1548,7 @@ static bool run(struct arm *arm, bool check, double *ms)
     {
         /* The first timestamp waits for the work before it, so the load is
          * outside the interval. */
-        record_dispatches(&loads[arm->robustness], dev->cmd, LOAD_DISPATCHES, LOAD_GROUPS);
+        record_dispatches(load_of(arm), dev->cmd, LOAD_DISPATCHES, LOAD_GROUPS);
         vkCmdWriteTimestamp(dev->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, dev->timestamps, 0);
     }
     /* Reset by the GPU, since the slot still holds the count of the previous
@@ -1487,6 +1559,8 @@ static bool run(struct arm *arm, bool check, double *ms)
         record_draws(arm, dev->cmd, check);
     else if (arm->kind == KIND_TIMESTAMPS)
         record_timestamps(arm, dev->cmd);
+    else if (arm->kind == KIND_WORDS)
+        record_dispatches(arm, dev->cmd, 1, arm->invocations / WORDS_GROUP);
     else
         record_dispatches(arm, dev->cmd, arm->kind == KIND_LOADS ? DISPATCHES : CHAIN_LENGTH, 1);
     if (check)
@@ -1494,9 +1568,25 @@ static bool run(struct arm *arm, bool check, double *ms)
     else
         vkCmdWriteTimestamp(dev->cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, dev->timestamps, 1);
     if (!ok(vkEndCommandBuffer(dev->cmd), "vkEndCommandBuffer") ||
-        !ok(vkQueueSubmit(dev->queue, 1, &submit, dev->fence), "vkQueueSubmit") ||
-        !ok(vkWaitForFences(dev->device, 1, &dev->fence, VK_TRUE, UINT64_MAX),
-            "vkWaitForFences"))
+        !ok(vkQueueSubmit(dev->queue, 1, &submit, dev->fence), "vkQueueSubmit"))
+        return false;
+    if (arm->kind == KIND_WORDS)
+    {
+        VkResult result = vkWaitForFences(dev->device, 1, &dev->fence, VK_TRUE,
+                                          WORDS_FENCE_TIMEOUT_NS);
+        if (result == VK_TIMEOUT)
+        {
+            char what[160];
+            settings(arm, what, sizeof(what));
+            /* The device cannot be destroyed while the dispatch runs. */
+            printf("kk: FAIL %s %s: the dispatch did not finish within %llu s\n", arm->name,
+                   what, WORDS_FENCE_TIMEOUT_NS / 1000000000ull);
+            exit(1);
+        }
+        if (!ok(result, "vkWaitForFences")) return false;
+    }
+    else if (!ok(vkWaitForFences(dev->device, 1, &dev->fence, VK_TRUE, UINT64_MAX),
+                 "vkWaitForFences"))
         return false;
 
     if (check)
@@ -1535,6 +1625,19 @@ static bool run(struct arm *arm, bool check, double *ms)
                 printf("kk: FAIL %s %s: %s\n", arm->name, what, wrong);
                 return false;
             }
+        }
+        else if (arm->kind == KIND_WORDS)
+        {
+            const uint64_t *words = arm->result.map;
+            const uint64_t want = (uint64_t)arm->adds * (arm->one_word ? arm->invocations : 1);
+            uint32_t i;
+            for (i = 0; i < (arm->one_word ? 1 : arm->invocations); i++)
+                if (words[i] != want)
+                {
+                    printf("kk: FAIL %s %s: word %u is %llu, not %llu\n", arm->name, what, i,
+                           (unsigned long long)words[i], (unsigned long long)want);
+                    return false;
+                }
         }
         else
         {
@@ -1584,15 +1687,16 @@ static bool run(struct arm *arm, bool check, double *ms)
 
 static bool setup(struct arm *arm)
 {
-    struct device *dev = &devices[arm->robustness];
+    struct device *dev = device_of(arm);
     double unused;
 
     if (!dev->created)
     {
-        struct arm *load = &loads[arm->robustness];
+        struct arm *load = load_of(arm);
 
         load->dev = dev;
-        if (create_device(dev, arm->robustness, false) && !setup_loads(load)) dev->failed = true;
+        if (create_device(dev, arm->robustness, arm->kind == KIND_WORDS) && !setup_loads(load))
+            dev->failed = true;
     }
     if (dev->failed) return false;
     arm->dev = dev;
@@ -1610,6 +1714,9 @@ static bool setup(struct arm *arm)
         break;
     case KIND_TIMESTAMPS:
         if (!setup_timestamps(arm)) return false;
+        break;
+    case KIND_WORDS:
+        if (!setup_words(arm)) return false;
         break;
     case KIND_ATOMIC64:
         /* Not timed: stress() runs them on a device of their own. */
@@ -1724,6 +1831,42 @@ out:
     /* So that main's teardown passes over the arm. */
     arm->dev = NULL;
     return good;
+}
+
+static void report(struct arm *arm, unsigned rounds);
+
+/* Runs one arm of atomic64-one-word alone: its check, then its warm-up and
+ * timed rounds, and prints its line, so the arms before one whose dispatch
+ * does not finish have their line. */
+static bool scale(struct arm *arm, unsigned rounds)
+{
+    char what[160];
+    unsigned round;
+
+    settings(arm, what, sizeof(what));
+    if (!setup(arm))
+    {
+        printf("%s %s: FAIL, not timed\n", arm->name, what);
+        return false;
+    }
+    if (!(arm->samples = calloc(rounds, sizeof(double))))
+    {
+        printf("kk: out of memory\n");
+        return false;
+    }
+    for (round = 0; round < WARMUP_ROUNDS + rounds; round++)
+    {
+        double ms;
+        if (!run(arm, false, &ms))
+        {
+            printf("kk: %s %s stopped in round %u\n", arm->name, what, round);
+            return false;
+        }
+        if (round >= WARMUP_ROUNDS) arm->samples[round - WARMUP_ROUNDS] = ms;
+    }
+    report(arm, rounds);
+    fflush(stdout);
+    return true;
 }
 
 static int compare(const void *a, const void *b)
@@ -1870,11 +2013,13 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-    /* The atomic64 cases run only when named: they draw for STRESS_SECONDS
-     * each, and a lost device can take other processes' work on the GPU
-     * with it. */
+    /* The atomic64 draw cases and atomic64-one-word run only when named: the
+     * draw cases draw for STRESS_SECONDS each, a contended dispatch can take
+     * up to WORDS_FENCE_TIMEOUT_NS, and a lost device can take other
+     * processes' work on the GPU with it. */
     if (!any_case)
-        for (i = 0; i < ARM_COUNT; i++) arms[i].selected = arms[i].kind != KIND_ATOMIC64;
+        for (i = 0; i < ARM_COUNT; i++)
+            arms[i].selected = arms[i].kind != KIND_ATOMIC64 && !arms[i].one_word;
 
     if (!(loader = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL)))
     {
@@ -1903,7 +2048,7 @@ int main(int argc, char **argv)
     for (i = 0; i < ARM_COUNT; i++)
     {
         struct arm *arm = &arms[i];
-        if (!arm->selected || arm->kind == KIND_ATOMIC64) continue;
+        if (!arm->selected || arm->kind == KIND_ATOMIC64 || arm->one_word) continue;
         if (!setup(arm))
         {
             char what[160];
@@ -1943,6 +2088,9 @@ int main(int argc, char **argv)
         if (arms[i].ready) report(&arms[i], rounds);
 
     for (i = 0; i < ARM_COUNT; i++)
+        if (arms[i].selected && arms[i].one_word && !scale(&arms[i], rounds)) failed = true;
+
+    for (i = 0; i < ARM_COUNT; i++)
         if (arms[i].selected && arms[i].kind == KIND_ATOMIC64 && !stress(&arms[i]))
             failed = true;
 
@@ -1952,6 +2100,8 @@ int main(int argc, char **argv)
         teardown(&loads[i]);
         destroy_device(&devices[i]);
     }
+    teardown(&words_load);
+    destroy_device(&words_device);
     vkDestroyInstance(instance, NULL);
     return failed;
 }
