@@ -116,6 +116,12 @@
  *                    for a triangle strip with adjacency of 6 and of 64
  *                    vertices: it runs for 1 and 30 triangles, none past the
  *                    end of the strip
+ *   geometry-adjacency-strip-odd  a geometry shader that stores the index
+ *                    of each of its inputs into a UAV per primitive, for
+ *                    triangle strips with adjacency of 7 and 35 vertices:
+ *                    every triangle has Direct3D's inputs, 0, 1, 2, 5, 4, 3
+ *                    for the one of 7, and the last never the final vertex
+ *                    of the odd count
  *   geometry-shapes  a triangle strip of 4 vertices without a cut, a line
  *                    strip, and a geometry shader of 4 instances are written
  *                    as lists, the instances in order
@@ -143,8 +149,9 @@
  *                    stream's points and queries
  *
  * Every case runs on a device of its own, of feature level 11_0, or 11_1 for
- * geometry-uav, geometry-vs-uav, geometry-vs-uav-strips and
- * geometry-adjacency-strip-end, which gives geometry and vertex shaders UAVs.
+ * geometry-uav, geometry-vs-uav, geometry-vs-uav-strips and the two
+ * geometry-adjacency-strip cases, which gives geometry and vertex shaders
+ * UAVs.
  * Every buffer but the targets of geometry-large and geometry-streams-blocks
  * starts filled with a pattern.
  * The cases up to geometry-strips read their targets back between draws,
@@ -1999,20 +2006,21 @@ static const uint32_t custom_isgn[] = {
    threadgroup of a triangle strip, which ends at 31 */
 #define STRIP_UAV_CUT 40
 
+#define UAV_WORDS 96
+
 /* Draws <count> vertices, or the <count> indices of <indices> (R16) when it
  * is not NULL, in <instances> instances of <topology> through <vertex> and
- * <geometry>, with a raw UAV of 4 zeroed words at u1 of the output merger
- * and <so> as the target of slot 0, or none. Returns the UAV's first word
- * after the draw. */
-static uint32_t draw_uav_vertices(ID3D11VertexShader *vertex, ID3D11GeometryShader *geometry,
-                                  D3D11_PRIMITIVE_TOPOLOGY topology, UINT count, ID3D11Buffer *indices,
-                                  UINT instances, ID3D11Buffer *so)
+ * <geometry>, with a raw UAV of UAV_WORDS zeroed words at u1 of the output
+ * merger and <so> as the target of slot 0, or none. Reads the UAV's words
+ * back into <words> after the draw. */
+static void draw_uav_words(ID3D11VertexShader *vertex, ID3D11GeometryShader *geometry,
+                           D3D11_PRIMITIVE_TOPOLOGY topology, UINT count, ID3D11Buffer *indices, UINT instances,
+                           ID3D11Buffer *so, uint32_t words[UAV_WORDS])
 {
-    static const uint32_t zero[4] = { 0 };
+    static const uint32_t zero[UAV_WORDS] = { 0 };
     D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
     ID3D11UnorderedAccessView *uav;
     ID3D11Buffer *buffer;
-    uint32_t counter[4];
 
     buffer = create_data_buffer(zero, sizeof(zero), D3D11_BIND_UNORDERED_ACCESS,
                                 D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS);
@@ -2039,11 +2047,21 @@ static uint32_t draw_uav_vertices(ID3D11VertexShader *vertex, ID3D11GeometryShad
     {
         ID3D11DeviceContext_DrawInstanced(context, count, instances, 0, 0);
     }
-    read_buffer_size(buffer, counter, sizeof(counter));
+    read_buffer_size(buffer, words, sizeof(zero));
     ID3D11DeviceContext_ClearState(context);
     ID3D11UnorderedAccessView_Release(uav);
     ID3D11Buffer_Release(buffer);
-    return counter[0];
+}
+
+/* draw_uav_words, returning the UAV's first word */
+static uint32_t draw_uav_vertices(ID3D11VertexShader *vertex, ID3D11GeometryShader *geometry,
+                                  D3D11_PRIMITIVE_TOPOLOGY topology, UINT count, ID3D11Buffer *indices,
+                                  UINT instances, ID3D11Buffer *so)
+{
+    uint32_t words[UAV_WORDS];
+
+    draw_uav_words(vertex, geometry, topology, count, indices, instances, so, words);
+    return words[0];
 }
 
 /* A vertex shader that adds 1 to a UAV for each vertex, through a geometry
@@ -2182,6 +2200,98 @@ static void geometry_adjacency_strip_end_case(void)
     if (correct != ARRAY_SIZE(counts))
         fail(1, "geometry shader runs for %u and %u vertices %u and %u (want %u and %u)", counts[0], counts[1],
              counter[0], counter[1], counts[0] / 2 - 2, counts[1] / 2 - 2);
+}
+
+/* The shader chunk of a geometry shader that stores the index of each of its
+ * six input vertices, as id_vs_code passes it on, into a UAV at the place of
+ * its primitive and emits nothing, assembled here as gs_5_0 with the ISGN
+ * chunk of count_gs and the OSGN chunk of triangle_gs_code:
+ * RWByteAddressBuffer indices : register(u1);
+ * [maxvertexcount(1)]
+ * void main(triangleadj float4 input[6] : custom, uint id : SV_PrimitiveID,
+ *           inout PointStream<float4 : SV_POSITION> output)
+ * { for (uint i = 0; i < 6; i++) indices.Store(24 * id + 4 * i, asuint(input[i].x)); } */
+#define STORE_INPUT_INDEX(i)                                                                                 \
+    0x08000023, 0x00100012, 0x00000000, 0x0000b001, 0x00004001, 24, 0x00004001, 4 * (i), /* imad r0.x, vPrim, l(24), l(4 * i) */ \
+    0x080000a6, 0x0011e012, 0x00000001, 0x0010000a, 0x00000000, 0x0020100a, i, 0x00000000 /* store_raw u1.x, r0.x, v[i][0].x */
+static const uint32_t triadj_inputs_gs_shdr[] = {
+    0x58454853, 0x000001d8, 0x00020050, 0x00000076,
+    0x0300009d, 0x0011e000, 0x00000001,                         /* dcl_uav_raw u1 */
+    0x0200005f, 0x0000b000,                                     /* dcl_input vPrim */
+    0x0400005f, 0x002010f2, 0x00000006, 0x00000000,             /* dcl_input v[6][0].xyzw */
+    0x02000068, 0x00000001,                                     /* dcl_temps 1 */
+    0x0100385d,                                                 /* dcl_inputprimitive triangleadj */
+    0x0100085c,                                                 /* dcl_outputtopology pointlist */
+    0x04000067, 0x001020f2, 0x00000000, 0x00000001,             /* dcl_output_siv o0.xyzw, position */
+    0x0200005e, 0x00000001,                                     /* dcl_maxout 1 */
+    STORE_INPUT_INDEX(0), STORE_INPUT_INDEX(1), STORE_INPUT_INDEX(2),
+    STORE_INPUT_INDEX(3), STORE_INPUT_INDEX(4), STORE_INPUT_INDEX(5),
+    0x0100003e,                                                 /* ret */
+};
+#undef STORE_INPUT_INDEX
+
+/* Input <k> of triangle <i> of a triangle strip with adjacency of <triangles>
+ * triangles, by the table of Vulkan's "Triangle Strips With Adjacency", which
+ * the examples of the D3D11.3 functional spec (13.10) follow: the last
+ * triangle takes 2i + 5 as input[3], since an odd count's final vertex
+ * belongs to no triangle, and the first takes vertex 1 as input[1] */
+static unsigned triadj_strip_input(unsigned i, unsigned k, unsigned triangles)
+{
+    unsigned across = i == triangles - 1 ? 2 * i + 5 : 2 * i + 6;
+    const unsigned even[6] = { 2 * i, i ? 2 * i - 2 : 1, 2 * i + 2, across, 2 * i + 4, 2 * i + 3 };
+    const unsigned odd[6] = { 2 * i, 2 * i + 3, 2 * i + 4, across, 2 * i + 2, 2 * i - 2 };
+
+    return i & 1 ? odd[k] : even[k];
+}
+
+/* Triangle strips with adjacency of 7 and 35 vertices, one and 15 triangles,
+ * through a geometry shader that stores the index of each of its inputs: all
+ * of them are those of Direct3D. DXMT's object threadgroups take 14
+ * triangles, so triangle 14 of 35 vertices is the first of the second
+ * threadgroup and the last of the strip, whose final vertex it must not
+ * take as input[3]; DXMT takes input[1] of each threadgroup's first triangle
+ * from a slot of its own. */
+static void geometry_adjacency_strip_odd_case(void)
+{
+    static const UINT counts[] = { 7, 35 };
+    static uint32_t code[CONTAINER_WORDS];
+    ID3D11GeometryShader *triadj_gs;
+    ID3D11VertexShader *id_vs;
+    uint32_t size, words[UAV_WORDS];
+    unsigned c, i, k, triangles, wrong = 0;
+    unsigned want[6];
+    float input[6];
+
+    check_hr(ID3D11Device_CreateVertexShader(device, id_vs_code, sizeof(id_vs_code), NULL, &id_vs),
+             "CreateVertexShader");
+    size = build_container(code, count_gs_isgn, ARRAY_SIZE(count_gs_isgn), TRIANGLE_GS_OSGN,
+                           TRIANGLE_GS_SIGNATURE_WORDS, triadj_inputs_gs_shdr, ARRAY_SIZE(triadj_inputs_gs_shdr));
+    check_hr(ID3D11Device_CreateGeometryShader(device, code, size, NULL, &triadj_gs), "CreateGeometryShader");
+    for (c = 0; c < ARRAY_SIZE(counts); c++)
+    {
+        triangles = counts[c] / 2 - 2;
+        draw_uav_words(id_vs, triadj_gs, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ, counts[c], NULL, 1, NULL, words);
+        for (i = 0; i < triangles; i++)
+        {
+            int same = 1;
+
+            memcpy(input, words + 6 * i, sizeof(input));
+            for (k = 0; k < 6; k++)
+            {
+                want[k] = triadj_strip_input(i, k, triangles);
+                same &= input[k] == (float)want[k];
+            }
+            if (same) continue;
+            say("%u vertices, triangle %u: inputs %g %g %g %g %g %g (want %u %u %u %u %u %u)", counts[c], i,
+                input[0], input[1], input[2], input[3], input[4], input[5], want[0], want[1], want[2], want[3],
+                want[4], want[5]);
+            wrong++;
+        }
+        say("%u vertices: %u triangles checked", counts[c], triangles);
+    }
+    ID3D11GeometryShader_Release(triadj_gs);
+    ID3D11VertexShader_Release(id_vs);
+    if (wrong) fail(1, "%u triangles with other inputs than Direct3D's", wrong);
 }
 
 /* Bind id_vs_code and count_gs streaming out into <so> at offset 0, and
@@ -3364,6 +3474,7 @@ static const struct
     { "geometry-vs-uav", geometry_vs_uav_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-vs-uav-strips", geometry_vs_uav_strips_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-adjacency-strip-end", geometry_adjacency_strip_end_case, D3D_FEATURE_LEVEL_11_1 },
+    { "geometry-adjacency-strip-odd", geometry_adjacency_strip_odd_case, D3D_FEATURE_LEVEL_11_1 },
     { "geometry-shapes", geometry_shapes_case },
     { "geometry-strips", geometry_strips_case },
     { "geometry", geometry_case },
