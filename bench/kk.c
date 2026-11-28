@@ -25,6 +25,7 @@
  * | atomic64-exchange | 248x248 | exchanges its own 64-bit guard in a storage buffer, then its neighbour's, the pattern of #91 |
  * | atomic64-one-texel | 2560x1440 | adds 1 to texel (0, 0) of an R64_UINT storage image: every fragment on one lock |
  * | atomic64-own-texel | 2560x1440 | adds 1 to its own texel of an R64_UINT storage image of the draw's size |
+ * | atomic64-one-texel-sizes | 64x64, 320x180, 640x360, 1280x720, 1920x1080 | as atomic64-one-texel, smallest draw first; the arms after one that loses the device do not run |
  *
  * A draw that does not finish within STRESS_FENCE_TIMEOUT_NS ends the
  * program. A lost device can make other processes' work on the GPU fail too,
@@ -361,6 +362,10 @@ struct arm
     /* dispatch-loads-wide: loads_wide.comp instead of loads.comp. */
     bool wide;
     enum pattern pattern;
+    /* atomic64-one-texel-sizes: the draw's size instead of the case's. */
+    uint32_t width, height;
+    /* An atomic64 case's draw lost the device. */
+    bool lost;
     /* timestamps: the timestamps written between the two of the interval. */
     uint32_t timestamps;
     /* The atomic64-words and atomic64-one-word cases: the invocations of the
@@ -407,6 +412,9 @@ struct arm
 #define CHAIN(on) { .name = "barrier-chain", .kind = KIND_CHAIN, .barriers = on }
 #define TIMESTAMPS(n) { .name = "timestamps", .kind = KIND_TIMESTAMPS, .timestamps = n }
 #define ATOMIC64(case_name, what) { .name = case_name, .kind = KIND_ATOMIC64, .pattern = what }
+#define ONE_TEXEL(w, h)                                                                            \
+    { .name = "atomic64-one-texel-sizes", .kind = KIND_ATOMIC64, .pattern = PATTERN_ONE_TEXEL,     \
+      .width = w, .height = h }
 #define WORDS(case_name, one, count, each)                                                         \
     { .name = case_name, .kind = KIND_WORDS, .one_word = one, .invocations = count, .adds = each }
 
@@ -446,6 +454,11 @@ static struct arm arms[] = {
     ATOMIC64("atomic64-exchange", PATTERN_EXCHANGE),
     ATOMIC64("atomic64-one-texel", PATTERN_ONE_TEXEL),
     ATOMIC64("atomic64-own-texel", PATTERN_OWN_TEXEL),
+    ONE_TEXEL(64, 64),
+    ONE_TEXEL(320, 180),
+    ONE_TEXEL(640, 360),
+    ONE_TEXEL(1280, 720),
+    ONE_TEXEL(1920, 1080),
     WORDS("atomic64-words", false, WORDS_INVOCATIONS, WORDS_ADDS),
     WORDS("atomic64-one-word", true, 4096, 1),
     WORDS("atomic64-one-word", true, 8192, 1),
@@ -497,11 +510,13 @@ static uint32_t draw_count(const struct arm *arm)
 /* The size of an atomic64 case's draw. */
 static uint32_t atomic64_width(const struct arm *arm)
 {
+    if (arm->width) return arm->width;
     return arm->pattern == PATTERN_EXCHANGE ? EXCHANGE_SIZE : STRESS_WIDTH;
 }
 
 static uint32_t atomic64_height(const struct arm *arm)
 {
+    if (arm->height) return arm->height;
     return arm->pattern == PATTERN_EXCHANGE ? EXCHANGE_SIZE : STRESS_HEIGHT;
 }
 
@@ -1803,6 +1818,7 @@ static bool stress(struct arm *arm)
     {
         printf("%s %s: FAIL, device lost in draw %u after %.1f s\n", arm->name, what, draws + 1,
                seconds_since(&start));
+        arm->lost = true;
         goto out;
     }
     if (result != VK_SUCCESS)
@@ -2090,9 +2106,24 @@ int main(int argc, char **argv)
     for (i = 0; i < ARM_COUNT; i++)
         if (arms[i].selected && arms[i].one_word && !scale(&arms[i], rounds)) failed = true;
 
+    /* A loss restarts the GPU for every process on it, so the larger draws of
+     * a case whose draw lost the device do not run. */
     for (i = 0; i < ARM_COUNT; i++)
-        if (arms[i].selected && arms[i].kind == KIND_ATOMIC64 && !stress(&arms[i]))
+    {
+        bool skip = false;
+        if (!arms[i].selected || arms[i].kind != KIND_ATOMIC64) continue;
+        for (j = 0; j < i; j++)
+            if (arms[j].lost && !strcmp(arms[j].name, arms[i].name)) skip = true;
+        if (skip)
+        {
+            char what[160];
+            settings(&arms[i], what, sizeof(what));
+            printf("%s %s: not run, a smaller draw lost the device\n", arms[i].name, what);
             failed = true;
+        }
+        else if (!stress(&arms[i]))
+            failed = true;
+    }
 
     for (i = 0; i < ARM_COUNT; i++) teardown(&arms[i]);
     for (i = 0; i < ROBUST_COUNT; i++)
