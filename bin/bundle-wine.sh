@@ -2611,11 +2611,13 @@ check_terminate_runs() {
 # log unless every case passed: LDT selector queries, and on aarch64 and x86_64
 # WriteProcessMemory(), through the pseudo handle and a real one, and ReadFile()
 # into a page of the process that native code ran on after it was made writable
-# and executable, the reads while another thread runs that code (smoke/ntdll.c
-# says how). A failed
-# case prints why and ends the program. It has no waits and makes a few hundred
-# system calls, so the limit only catches a hang of Wine itself; it is that of
-# check_exceptflags_runs, whose alarm counts whole seconds the same way.
+# and executable, the reads while another thread runs that code, and on aarch64
+# NtWriteVirtualMemory() from a source overlapping from above and from below
+# into a range that runs from a writable page into such a page (smoke/ntdll.c
+# says how). A failed case prints why and ends the program. It has no waits and
+# makes a few hundred system calls, so the limit only catches a hang of Wine
+# itself; it is that of check_exceptflags_runs, whose alarm counts whole seconds
+# the same way.
 check_ntdll_runs() {
     local arch exe log want last
     for arch in $SMOKE_PE_ARCHS; do

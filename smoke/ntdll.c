@@ -23,6 +23,19 @@
  *              process, writing the code unchanged on aarch64 too, and then a
  *              write through a handle without PROCESS_VM_WRITE, which has to
  *              fail with ERROR_ACCESS_DENIED.
+ *   own-write-split  NtWriteVirtualMemory(GetCurrentProcess()) of SPLIT_SIZE
+ *              bytes that run from a writable page into such a page, from a
+ *              source SPLIT_SHIFT bytes after the destination, so that it
+ *              overlaps the part in the writable page (aarch64 only). The
+ *              wineserver writes that part, fails on the other page, and
+ *              ntdll writes the rest after flipping it. The bytes have to be
+ *              those of a single copy and the count the whole size. ntdll
+ *              wrote the whole buffer again, from a source the first write had
+ *              changed (mach9 #227).
+ *   own-write-split-below  the same from a source SPLIT_SHIFT bytes before
+ *              the destination, so that the rest ntdll writes starts in the
+ *              part the wineserver wrote. ntdll read that rest after the first
+ *              write had changed it (mach9 #227).
  *   own-read   ReadFile() into such a page, READ_ROUNDS times, while another
  *              thread runs the page's code: on aarch64 into the page's data
  *              after its code, on x86_64 the code's own bytes. NtReadFile()
@@ -58,6 +71,8 @@
 #define STATUS_NO_LDT ((LONG)0xc0000117)
 #define WRITE_ROUNDS 3
 #define READ_ROUNDS 2000
+#define SPLIT_SIZE 32
+#define SPLIT_SHIFT 8
 
 static const char *current = "startup";
 
@@ -270,6 +285,46 @@ static void own_write_handle(void)
     VirtualFree(page, 0, MEM_RELEASE);
 }
 
+static void write_split(int shift)
+{
+    LONG (WINAPI *pNtWriteVirtualMemory)(HANDLE, void *, const void *, SIZE_T, SIZE_T *) =
+        ntdll_proc("NtWriteVirtualMemory");
+    BYTE *base = VirtualAlloc(NULL, 0x2000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE), *dst;
+    BYTE want[SPLIT_SIZE];
+    SIZE_T written = 0;
+    UINT32 *code;
+    LONG status;
+    int i;
+
+    if (!base) FAIL("VirtualAlloc: error %lu", GetLastError());
+    for (i = 0; i < 0x2000; i++) base[i] = (BYTE)(i * 7 + 3);
+    /* code in the second page, run once, which makes Wine map that page executable; the first page
+     * runs no code and stays writable */
+    code = (UINT32 *)(base + 0x1800);
+    put_code(code, 0);
+    FlushInstructionCache(GetCurrentProcess(), code, 8);
+    run_code(code, 0);
+    dst = base + 0x1000 - SPLIT_SIZE / 2;
+    memcpy(want, dst + shift, SPLIT_SIZE);
+    status = pNtWriteVirtualMemory(GetCurrentProcess(), dst, dst + shift, SPLIT_SIZE, &written);
+    if (status) FAIL("NtWriteVirtualMemory to %p: status %#lx", dst, status);
+    if (written != SPLIT_SIZE) FAIL("NtWriteVirtualMemory to %p wrote %lu of %u bytes", dst, (ULONG)written, SPLIT_SIZE);
+    for (i = 0; i < SPLIT_SIZE; i++)
+        if (dst[i] != want[i]) FAIL("byte %d at %p is %#x, wanted %#x", i, dst + i, dst[i], want[i]);
+    run_code(code, 0);
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+static void own_write_split(void)
+{
+    write_split(SPLIT_SHIFT);
+}
+
+static void own_write_split_below(void)
+{
+    write_split(-SPLIT_SHIFT);
+}
+
 static UINT32 *read_page;
 
 static void run_native(void)
@@ -389,6 +444,10 @@ static const struct
 #ifndef __i386__
     { "own-write", own_write },
     { "own-write-handle", own_write_handle },
+#if defined(__aarch64__) && !defined(__arm64ec__)
+    { "own-write-split", own_write_split },
+    { "own-write-split-below", own_write_split_below },
+#endif
     { "own-read", own_read },
 #endif
 };
