@@ -1287,6 +1287,7 @@ smoke_test() {
     check_vkinvariance_host
     check_vkr64view_host
     check_vkatomic64_host
+    check_vkatomic64lanes_host
     check_vkhidden_host
     check_gst_host
 
@@ -2222,6 +2223,56 @@ check_vkatomic64_host() {
         exit 1
     fi
     echo "    KosmicKrisp: $(grep -c '^vkatomic64: .*: ok' "$log") cases of 64-bit image atomics on one texel add up"
+}
+
+# check_vkatomic64lanes_host: build smoke/vkatomic64lanes.c for the host and
+# run it as check_vkatomic64_host runs smoke/vkatomic64.c. Exit unless 64-bit
+# adds, maximums and compare-exchanges of every invocation of a compute
+# dispatch on one buffer word, shared word or texel leave the right word and
+# return values that fit a serial order of all the operations, also with
+# lanes that leave a loop one after another, lanes that returned early and a
+# last subgroup of 16 lanes. KosmicKrisp applies the operations of a subgroup
+# whose lanes all target one address under one lock, from the lanes its
+# SIMD-group functions see as active (#240). The program also checks that it
+# does so in lane order (its exit status 3): that check pins the order of
+# KosmicKrisp's subgroup lock, the only sign that the buffer and shared cases
+# ran it, and has to change with the lowering. Clean runs with no shader
+# cache took 0.63 and 0.23 s; the limit is a few times that, and the probe's
+# watchdog ends a hang before it. Skipped like check_vkalias_host on a Mac
+# without a Metal 4 GPU.
+check_vkatomic64lanes_host() {
+    local log="$TMP_DIR/vkatomic64lanes.log"
+    local headers="$MESA_BUILD_DIR/vulkan-headers-install/include"
+    if [ "$METAL4" -eq 0 ]; then
+        echo "  Skipping the host check of 64-bit atomics on one word per subgroup: it needs a KosmicKrisp device."
+        return 0
+    fi
+    if [ ! -f "$headers/vulkan/vulkan_core.h" ]; then
+        echo "Error: no Vulkan headers in $headers for smoke/vkatomic64lanes.c; bin/build-mesa.sh installs them"
+        exit 1
+    fi
+    xcrun clang -std=c11 -O2 -I "$headers" -o "$TMP_DIR/vkatomic64lanes" "$REPO_DIR/smoke/vkatomic64lanes.c"
+    echo "  Running the host check of 64-bit atomics on one word per subgroup on lib/external/libvulkan.1.dylib..."
+    run_limited 10 "$log" env -i PATH=/usr/bin:/bin VK_DRIVER_FILES="$WINE_DIR/share/vulkan/icd.d" \
+        "$TMP_DIR/vkatomic64lanes" "$EXT_DIR/libvulkan.1.dylib"
+    if [ "$RUN_STATUS" -eq 142 ]; then
+        echo "Error: smoke/vkatomic64lanes.c did not exit within 10 seconds"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -eq 1 ]; then
+        echo "Error: 64-bit atomics on one word gave a wrong word or wrong returned values on the bundle's KosmicKrisp"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -eq 3 ]; then
+        echo "Error: the bundle's KosmicKrisp gave 64-bit atomics on one word results that fit a serial order, but not the lane order of its subgroup lock; smoke/vkatomic64lanes.c pins that order and has to change with kk_nir_lower_atomic64.c"
+        cat "$log"
+        exit 1
+    elif [ "$RUN_STATUS" -ne 0 ]; then
+        echo "Error: smoke/vkatomic64lanes.c could not run a case on the bundle's KosmicKrisp, a missing feature, a failed setup, submit or wait or its watchdog included (status $RUN_STATUS)"
+        cat "$log"
+        exit 1
+    fi
+    echo "    KosmicKrisp: $(grep -c '^vkatomic64lanes: .*: ok' "$log") cases of 64-bit atomics on one word fit a serial order and the lane order of the subgroup lock"
 }
 
 # check_vkhidden_host: build smoke/vkhidden.m for the host and run it on the

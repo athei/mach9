@@ -1,0 +1,106 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_atomic_int64 : require
+#extension GL_EXT_shader_image_int64 : require
+#extension GL_KHR_shader_subgroup_basic : require
+// The 64-bit atomics of smoke/vkatomic64lanes.c, every invocation on one
+// word: the 64-bit word of a storage buffer, a word of shared memory per
+// workgroup, or texel (0, 0) of an R64_UINT image. Each invocation stores
+// what its atomics returned and which subgroup and lane it ran in.
+// vkatomic64lanes.comp.h is its SPIR-V:
+// glslangValidator -V --target-env vulkan1.3 --vn vkatomic64lanes_comp -o vkatomic64lanes.comp.h vkatomic64lanes.comp
+
+layout(local_size_x_id = 0) in;
+
+layout(set = 0, binding = 0) buffer Words
+{
+    uint64_t word;
+    // The shared word of each workgroup after its atomics.
+    uint64_t shared_words[];
+};
+layout(set = 0, binding = 1, r64ui) uniform u64image2D texel;
+// What each atomic returned: invocation * MAX_TRIPS + iteration.
+layout(set = 0, binding = 2) buffer Results
+{
+    uint64_t results[];
+};
+// The subgroup (numbered across the dispatch) and lane of each invocation.
+layout(set = 0, binding = 3) buffer Lanes
+{
+    uvec2 lanes[];
+};
+
+layout(push_constant) uniform Case
+{
+    uint op;
+    uint target;
+    uint pattern;
+};
+
+const uint OP_ADD = 0u;   // atomicAdd of lane + 1
+const uint OP_MAX = 1u;   // atomicMax of a value that differs per invocation
+const uint OP_CHAIN = 2u; // atomicCompSwap of the invocation's index to the next
+const uint TARGET_BUFFER = 0u;
+const uint TARGET_SHARED = 1u;
+const uint TARGET_IMAGE = 2u;
+const uint PATTERN_ALL = 0u;   // one atomic per invocation
+const uint PATTERN_LOOP = 1u;  // lane % MAX_TRIPS + 1 atomics, in a loop
+const uint PATTERN_EARLY = 2u; // every third invocation returns first
+const uint MAX_TRIPS = 5u;
+
+shared uint64_t shared_word;
+
+uint64_t value(uint index)
+{
+    uint h = index * 0x9e3779b1u;
+    h ^= h >> 15;
+    h *= 0x85ebca77u;
+    h ^= h >> 13;
+    return (uint64_t(h) << 32) | uint64_t(index);
+}
+
+uint64_t atomic(uint64_t data, uint64_t compare)
+{
+    if (target == TARGET_SHARED)
+    {
+        if (op == OP_ADD) return atomicAdd(shared_word, data);
+        if (op == OP_MAX) return atomicMax(shared_word, data);
+        return atomicCompSwap(shared_word, compare, data);
+    }
+    if (target == TARGET_IMAGE)
+    {
+        if (op == OP_ADD) return imageAtomicAdd(texel, ivec2(0), data);
+        if (op == OP_MAX) return imageAtomicMax(texel, ivec2(0), data);
+        return imageAtomicCompSwap(texel, ivec2(0), compare, data);
+    }
+    if (op == OP_ADD) return atomicAdd(word, data);
+    if (op == OP_MAX) return atomicMax(word, data);
+    return atomicCompSwap(word, compare, data);
+}
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint lane = gl_SubgroupInvocationID;
+    uint local = target == TARGET_SHARED ? gl_LocalInvocationIndex : index;
+
+    lanes[index] = uvec2(gl_WorkGroupID.x * gl_NumSubgroups + gl_SubgroupID, lane);
+    if (target == TARGET_SHARED)
+    {
+        if (gl_LocalInvocationIndex == 0u) shared_word = 0ul;
+        barrier();
+    }
+    if (pattern == PATTERN_EARLY && index % 3u == 0u) return;
+
+    uint64_t data = op == OP_MAX ? value(index) : op == OP_CHAIN ? uint64_t(local + 1u)
+                                                                  : uint64_t(lane + 1u);
+    uint trips = pattern == PATTERN_LOOP ? lane % MAX_TRIPS + 1u : 1u;
+    for (uint i = 0u; i < trips; i++)
+        results[index * MAX_TRIPS + i] = atomic(data, uint64_t(local));
+
+    if (target == TARGET_SHARED)
+    {
+        barrier();
+        if (gl_LocalInvocationIndex == 0u) shared_words[gl_WorkGroupID.x] = shared_word;
+    }
+}
